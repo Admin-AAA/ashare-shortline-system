@@ -1,7 +1,7 @@
 id: small-cap-thematic-momentum
 name: 小盘题材动量
 enabled: true
-weight: 1.0
+weight: 1.2
 
 meta:
   author: system
@@ -86,6 +86,24 @@ prefilter:
         reason: "trend_broken"
 
 phases:
+  # 长周期RSI低位毒区（2026-09-12 LIVE 去重241验证）：rsi_24<48 n=38 WR27.0% avg-1.41（<45更毒15%/-2.07）
+  # 跨regime一致，对照>=56 WR47.2%。24日RSI低位=中期下跌接飞刀。软cap58；与强势多头正交。
+  # 置于phases最前，not(...) 让位所有 hard_veto。
+  - name: 长周期RSI低位毒区
+    when: "(rsi_24 > 0 and rsi_24 < 48) and not (max_dd20 < -14 or (off_high_pct < -12 and pct < 0))"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["24日RSI<48中期弱势接飞刀（LIVE 27%WR/-1.41avg），降权"]
+
+  # 短线龙头低分降权（2026-09-12 LIVE 去重241验证）：shortline_leader_score<=35 底三分位逐月全差
+  # （5月40/6月0/7月36/8月25/9月21%），对照>52逐月50-69%。非龙头缺接力，软cap62温和降权。
+  # 置于phases最前，not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 短线龙头低分降权
+    when: "(shortline_leader_score > 0 and shortline_leader_score <= 35) and not (max_dd20 < -14 or (off_high_pct < -12 and pct < 0))"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["短线龙头分<=35（非龙头缺接力，低桶逐月全差），温和降权"]
+
   - name: 破位回避
     when: "max_dd20 < -14 or (off_high_pct < -12 and pct < 0)"
     score_cap: 32
@@ -102,7 +120,6 @@ phases:
     when: "free_mv_yi < 50 and pos20 >= 70 and rsi_12 >= 60 and is_main_theme == true and dist20 < 10 and turnover_rate < 8"
     score_cap: 90
     hard_veto: false
-
 setups:
   - name: 小盘题材动量启动
     when: "free_mv_yi < 50 and pos20 >= 70 and rsi_12 >= 60 and is_main_theme == true and dist20 < 10 and turnover_rate < 8"

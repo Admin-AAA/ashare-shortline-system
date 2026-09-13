@@ -80,6 +80,24 @@ prefilter:
         reason: "limit_up_overheat"
 
 phases:
+  # 强势多头发散毒区（2026-09-12 LIVE 去重241验证）：dsa_trend_score==30（=trend_status强势多头/均线发散上行）
+  # n=17 WR17.6% avg-2.83，逐月全差、chg20<40子集反而0%——形态本身即末端反转。软cap58不hard_veto。
+  # 置于phases最前但用 not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 强势多头发散毒区
+    when: "(dsa_trend_score == 30) and not (market_regime == '弱势') and not (max_dd20 < -18 or (off_high60_pct < -8 and breakout60 == false))"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["强势多头均线发散上行（LIVE 17.6%WR/-2.83avg 末端反转毒区），降权不追"]
+
+  # 短线龙头低分降权（2026-09-12 LIVE 去重241验证）：shortline_leader_score<=35 底三分位逐月全差
+  # （5月40/6月0/7月36/8月25/9月21%），对照>52逐月50-69%。非龙头缺接力，软cap62温和降权。
+  # 置于phases最前，not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 短线龙头低分降权
+    when: "(shortline_leader_score > 0 and shortline_leader_score <= 35) and not (market_regime == '弱势') and not (max_dd20 < -18 or (off_high60_pct < -8 and breakout60 == false))"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["短线龙头分<=35（非龙头缺接力，低桶逐月全差），温和降权"]
+
   # 弱市毒区硬否决：弱市(regime=弱势)追高突破确定性亏损
   # LIVE 验证（2026-07 第142轮失败归因闭环）：弱市 n=11，WR=18.2%，avg=-2.11%，6笔大亏(>3%)
   # 因果：弱市 up_ratio<0.35，追高突破当日冲高回落、次日跳空跌破，trailing_stop/stop_loss 高发
@@ -117,7 +135,6 @@ phases:
     score_cap: 82
     hard_veto: false
     risk_flags: ["接近阶段高点但未实际突破，需等待承接确认"]
-
 setups:
   - name: 60日新高放量突破
     when: "breakout60 == true and pos120 >= 70 and vol5_20 >= 1.15 and pct >= 1.5"

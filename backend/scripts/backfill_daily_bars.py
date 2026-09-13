@@ -204,6 +204,21 @@ def main() -> int:
                 print(f"  [{i + 1}/{total}] {code} {name} — ERROR: {exc}")
 
         db.commit()
+        # L-093：日K同步后，幂等补齐近两月 daily_kbars.ivol20（个股20日特质波动，供 v3
+        # 强牛×高ivol否决）。仅补 NULL；失败不阻断日K回填主流程。
+        try:
+            from scripts.backfill_ivol20 import fill_chunk as _fill_ivol
+            import pandas as _pd
+            _end = _pd.Timestamp(f"{latest_allowed[:4]}-{latest_allowed[4:6]}-{latest_allowed[6:]}")
+            for _m in (0, 1):
+                _c = _end - _pd.offsets.MonthBegin(_m)
+                _c0 = _c.strftime("%Y-%m-%d")
+                _c1 = ((_c + _pd.offsets.MonthBegin(1)) - _pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+                _n = _fill_ivol(db, _c0, min(_c1, _end.strftime("%Y-%m-%d")), only_missing=True)
+                if _n:
+                    print(f"ivol20 增量 {_c0}..{_c1}: 补 {_n} 行")
+        except Exception as _exc:  # noqa: BLE001
+            print(f"ivol20 增量跳过（不影响日K回填）: {_exc}")
         elapsed = time.monotonic() - t0
         print()
         print(f"完成: ok={ok} short={short} fail={failed}, 总耗时 {elapsed:.0f}s")

@@ -196,8 +196,11 @@ def test_regime_sentiment_line_overrides_precision() -> None:
             "limit_up_count": lu, "limit_down_count": ld,
         }
 
-    policy = DEFAULT_PRODUCTION_SELECTION_POLICY
+    from app.engine.production_policy import load_production_selection_policy
+    # 本测试钉住 v2（L-070）组合线契约；v3 原样继承这些 override，另加 L-093 ivol 否决。
+    policy = load_production_selection_policy(version=2)
     assert policy.version == 2
+
     # 强牛·高潮: up 76% + 涨停95 → override 64（唯一保留的高潮放行）
     c = resolve_score_line_context(72.0, market_snapshot=_snap(3800, 95, 3), selection_policy=policy)
     assert (c["market_base"], c["market_sentiment"]) == ("强牛", "高潮")

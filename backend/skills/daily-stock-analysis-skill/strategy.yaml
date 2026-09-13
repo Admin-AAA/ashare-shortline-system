@@ -1,7 +1,7 @@
 id: daily-stock-analysis-skill
 name: 基础短线策略
 enabled: true
-weight: 1.0
+weight: 0.3
 
 meta:
   author: system
@@ -84,6 +84,33 @@ prefilter:
       # 且数据证明 avg_cost>200 的科创板高价龙头 WR 76.8% avg 3.81%，过滤是误杀（第 100 轮 T5 修复）
 
 phases:
+  # 强势多头发散毒区（2026-09-12 LIVE 去重241验证）：dsa_trend_score==30（=trend_status强势多头/均线发散上行）
+  # n=17 WR17.6% avg-2.83，逐月全差、chg20<40子集反而0%——形态本身即末端反转。软cap58不hard_veto。
+  # 置于phases最前但用 not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 强势多头发散毒区
+    when: "(dsa_trend_score == 30) and not (news_risk_count > 1 or (dsa_trend_score <= 4 and dsa_macd_score == 0)) and not (pos60 > 90) and not (vol5_20 >= 3.0 and rsi_12 < 55) and not (off_high_pct >= -10 and off_high_pct < -5) and not (market_regime == '弱势' and market_sentiment_phase != '高潮' and chg20 < 10)"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["强势多头均线发散上行（LIVE 17.6%WR/-2.83avg 末端反转毒区），降权不追"]
+
+  # 长周期RSI低位毒区（2026-09-12 LIVE 去重241验证）：rsi_24<48 n=38 WR27.0% avg-1.41（<45更毒15%/-2.07）
+  # 跨regime一致，对照>=56 WR47.2%。24日RSI低位=中期下跌接飞刀。软cap58；与强势多头正交。
+  # 置于phases最前，not(...) 让位所有 hard_veto。
+  - name: 长周期RSI低位毒区
+    when: "(rsi_24 > 0 and rsi_24 < 48) and not (news_risk_count > 1 or (dsa_trend_score <= 4 and dsa_macd_score == 0)) and not (pos60 > 90) and not (vol5_20 >= 3.0 and rsi_12 < 55) and not (off_high_pct >= -10 and off_high_pct < -5) and not (market_regime == '弱势' and market_sentiment_phase != '高潮' and chg20 < 10)"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["24日RSI<48中期弱势接飞刀（LIVE 27%WR/-1.41avg），降权"]
+
+  # 短线龙头低分降权（2026-09-12 LIVE 去重241验证）：shortline_leader_score<=35 底三分位逐月全差
+  # （5月40/6月0/7月36/8月25/9月21%），对照>52逐月50-69%。非龙头缺接力，软cap62温和降权。
+  # 置于phases最前，not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 短线龙头低分降权
+    when: "(shortline_leader_score > 0 and shortline_leader_score <= 35) and not (news_risk_count > 1 or (dsa_trend_score <= 4 and dsa_macd_score == 0)) and not (pos60 > 90) and not (vol5_20 >= 3.0 and rsi_12 < 55) and not (off_high_pct >= -10 and off_high_pct < -5) and not (market_regime == '弱势' and market_sentiment_phase != '高潮' and chg20 < 10)"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["短线龙头分<=35（非龙头缺接力，低桶逐月全差），温和降权"]
+
   - name: 风险否决
     when: "news_risk_count > 1 or (dsa_trend_score <= 4 and dsa_macd_score == 0)"
     score_cap: 20
@@ -209,11 +236,32 @@ phases:
     hard_veto: true
     risk_flags: ["弱市窄幅横盘（20日涨幅<10%无趋势引擎，市场宽度差无资金接力），技术趋势策略无可跟趋势，入场即套"]
 
+  # ── 资金流毒区（2026-09-12 LIVE 聚合路径验证，525 笔已结算 recs）──
+  # 验证方法：LIVE recs 特征+实盘结果按策略信号（score>=60）分层，门控 capital_flow。
+  # 注意：sim 单策略 top-10 总体与 LIVE 聚合路径总体不同（重叠仅 4.4%），sim 反证不适用于这些规则。
+  # 资金背离：2026-09-12 去重241复核推翻旧 hard_veto（旧证据仅 n=2 WR0%，样本过小）。
+  #   资金背离 n=16 WR=56.2%（触发后60%），主力共振 n=38 WR=52.6%/+0.85，均为正alpha；
+  #   sim pass-3 同向（背离 55.2% n=958、弱市61.4%）。hard_veto 会整票杀掉这些赢家，故移除否决、放行。
+  #   （资金配合/高潮非主力仍是毒区，下方两条 cap 保留。）
+
+  # 资金配合降权：LIVE n=38 WR5.3% avg-3.19 vs 其余 29.9%/avg-1.16
+  - name: 资金配合降权
+    when: "capital_resonance_source == 'capital_flow' and capital_resonance_signal == '资金配合'"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["资金仅配合未共振（LIVE 5.3% WR）"]
+
+  # 高潮无主力共振毒区：LIVE n=12 WR8.3% avg-1.88 vs 其余 26.7%/avg-1.49
+  - name: 高潮无主力共振毒区
+    when: "capital_resonance_source == 'capital_flow' and market_sentiment_phase == '高潮' and capital_resonance_signal != '主力共振'"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["高潮情绪但无主力共振（追高毒区，LIVE 8.3% WR）"]
+
   - name: 趋势跟踪
     when: "dsa_trend_score >= 18"
     score_cap: 100
     hard_veto: false
-
 setups:
   - name: 缩量回踩
     # Alpha 衰减警告（T1 第81轮检测）：
@@ -299,12 +347,22 @@ scoring:
       delta: 3
       reason: 机构调研密集（近30天≥3次且有基金访客，stk_surv）
 
+    # ── pass-4：真实资金流回测验证后保留/新增 ──
+    # 基本面强度（LIVE 赢家中位 70.8% vs 输家 10.2%）；sim top-10 无影响，保留
+    - when: "net_profit_yoy >= 30"
+      delta: 4
+      reason: 净利高增（基本面强度过滤题材噪音）
+
 risk:
   rules:
     - when: "news_risk_count > 0"
       level: high
       flag: 新闻或公告风险
       score_delta: -18
+    - when: "capital_resonance_source == 'capital_flow' and capital_resonance_signal == '资金配合'"
+      level: medium
+      flag: 资金仅配合未共振（LIVE 5.3% WR）
+      score_delta: -6
     - when: "rsi_12 > 70"
       level: medium
       flag: RSI 超买

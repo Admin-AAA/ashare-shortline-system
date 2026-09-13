@@ -1,7 +1,7 @@
 id: chao-gu-yang-jia-skill
 name: 炒股养家大局观
 enabled: true
-weight: 1.2
+weight: 1.1
 
 meta:
   author: system
@@ -64,6 +64,33 @@ prefilter:
       # 且数据证明 avg_cost>200 的科创板高价龙头 WR 76.8%，过滤是误杀（第 100 轮 T5 修复）
 
 phases:
+  # 强势多头发散毒区（2026-09-12 LIVE 去重241验证）：dsa_trend_score==30（=trend_status强势多头/均线发散上行）
+  # n=17 WR17.6% avg-2.83，逐月全差、chg20<40子集反而0%——形态本身即末端反转。软cap58不hard_veto。
+  # 置于phases最前但用 not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 强势多头发散毒区
+    when: "(dsa_trend_score == 30) and not ((dist20 < 0 and chg20 < 0) or max_dd20 < -15) and not (market_regime == '弱势' and rsi_12 >= 60) and not (dist60 > 30 and pos60 > 90 and is_main_theme == false)"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["强势多头均线发散上行（LIVE 17.6%WR/-2.83avg 末端反转毒区），降权不追"]
+
+  # 长周期RSI低位毒区（2026-09-12 LIVE 去重241验证）：rsi_24<48 n=38 WR27.0% avg-1.41（<45更毒15%/-2.07）
+  # 跨regime一致，对照>=56 WR47.2%。24日RSI低位=中期下跌接飞刀。软cap58；与强势多头正交。
+  # 置于phases最前，not(...) 让位所有 hard_veto。
+  - name: 长周期RSI低位毒区
+    when: "(rsi_24 > 0 and rsi_24 < 48) and not ((dist20 < 0 and chg20 < 0) or max_dd20 < -15) and not (market_regime == '弱势' and rsi_12 >= 60) and not (dist60 > 30 and pos60 > 90 and is_main_theme == false)"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["24日RSI<48中期弱势接飞刀（LIVE 27%WR/-1.41avg），降权"]
+
+  # 短线龙头低分降权（2026-09-12 LIVE 去重241验证）：shortline_leader_score<=35 底三分位逐月全差
+  # （5月40/6月0/7月36/8月25/9月21%），对照>52逐月50-69%。非龙头缺接力，软cap62温和降权。
+  # 置于phases最前，not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 短线龙头低分降权
+    when: "(shortline_leader_score > 0 and shortline_leader_score <= 35) and not ((dist20 < 0 and chg20 < 0) or max_dd20 < -15) and not (market_regime == '弱势' and rsi_12 >= 60) and not (dist60 > 30 and pos60 > 90 and is_main_theme == false)"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["短线龙头分<=35（非龙头缺接力，低桶逐月全差），温和降权"]
+
   - name: 退潮
     when: "(dist20 < 0 and chg20 < 0) or max_dd20 < -15"
     score_cap: 35
@@ -116,7 +143,6 @@ phases:
     when: "dist20 < 15 and chg20 < 25 and pos20 < 85"
     score_cap: 90
     hard_veto: false
-
 setups:
   - name: 分歧低吸
     when: "is_main_theme == true and off_high_pct < -3 and pct < 0"

@@ -1,7 +1,7 @@
 id: sector-relative-strength-leader
 name: 主线相对强度龙头
 enabled: true
-weight: 1.06
+weight: 1.5
 
 meta:
   author: system
@@ -66,6 +66,33 @@ prefilter:
         reason: "relative_strength_lost"
 
 phases:
+  # 强势多头发散毒区（2026-09-12 LIVE 去重241验证）：dsa_trend_score==30（=trend_status强势多头/均线发散上行）
+  # n=17 WR17.6% avg-2.83，逐月全差、chg20<40子集反而0%——形态本身即末端反转。软cap58不hard_veto。
+  # 置于phases最前但用 not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 强势多头发散毒区
+    when: "(dsa_trend_score == 30) and not (is_main_theme == false and sector_ladder_completeness_score < 50) and not (market_sentiment_phase == '冰点' and sector_ladder_completeness_score < 50)"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["强势多头均线发散上行（LIVE 17.6%WR/-2.83avg 末端反转毒区），降权不追"]
+
+  # 长周期RSI低位毒区（2026-09-12 LIVE 去重241验证）：rsi_24<48 n=38 WR27.0% avg-1.41（<45更毒15%/-2.07）
+  # 跨regime一致，对照>=56 WR47.2%。24日RSI低位=中期下跌接飞刀。软cap58；与强势多头正交。
+  # 置于phases最前，not(...) 让位所有 hard_veto。
+  - name: 长周期RSI低位毒区
+    when: "(rsi_24 > 0 and rsi_24 < 48) and not (is_main_theme == false and sector_ladder_completeness_score < 50) and not (market_sentiment_phase == '冰点' and sector_ladder_completeness_score < 50)"
+    score_cap: 58
+    hard_veto: false
+    risk_flags: ["24日RSI<48中期弱势接飞刀（LIVE 27%WR/-1.41avg），降权"]
+
+  # 短线龙头低分降权（2026-09-12 LIVE 去重241验证）：shortline_leader_score<=35 底三分位逐月全差
+  # （5月40/6月0/7月36/8月25/9月21%），对照>52逐月50-69%。非龙头缺接力，软cap62温和降权。
+  # 置于phases最前，not(...) 让位所有 hard_veto（永不架空否决）。
+  - name: 短线龙头低分降权
+    when: "(shortline_leader_score > 0 and shortline_leader_score <= 35) and not (is_main_theme == false and sector_ladder_completeness_score < 50) and not (market_sentiment_phase == '冰点' and sector_ladder_completeness_score < 50)"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["短线龙头分<=35（非龙头缺接力，低桶逐月全差），温和降权"]
+
   - name: 非主线孤票回避
     when: "is_main_theme == false and sector_ladder_completeness_score < 50"
     score_cap: 28
@@ -108,7 +135,6 @@ phases:
     when: "sector_ladder_completeness_score >= 75 and shortline_leader_score >= 68"
     score_cap: 92
     hard_veto: false
-
 setups:
   - name: 主线龙头突破
     when: "is_main_theme == true and breakout20 == true and primary_excess20 >= 8 and sector_ladder_completeness_score >= 50"

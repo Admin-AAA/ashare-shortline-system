@@ -674,7 +674,247 @@
 - 修复：`scripts/research_intraday_portfolio_levers.py`（`_bar_obj`/`_simulate_card` 补 amount、顺序算 pct_chg）、`scripts/winrate_scoreline_prod_backtest.py`（`_to_bar_obj`/`simulate` 同款修复）；生产同构双窗口证据 `output/research/v2_policy_two_window_evidence.json`（v2 训练段与 v1 逐笔相同、validation/OOS 同升），脚本 `scripts/research_v2_policy_evidence.py`、`scripts/research_canonical_policy_batch.py`、`scripts/research_forward_weakclimax_check.py`。
 - 相关：L-070（v2 高潮硬排除，本条是其口径前提）、L-058（窗口/口径偏差）、L-015（组合级度量）。
 
-## L-072 入场口径必须由策略显式声明，未成交反事实不得进入收益列
+## L-072 v2 经生产同构 canonical harness 双窗口复核成立；其余选股层杠杆（额外毒格/格内分数带/广度 abstain/出票上限）系统性证伪
+
+- 状态：active（一条 encoded 确认 + 一组否定性 FINDING）
+- 适用：任何想在 v2 之外再做 regime×情绪格否决、格内分数线微调、大盘广度择时 abstain、每日出票数调整的尝试
+- 背景：L-070 的 v2 证据部分来自手写日度 cohort；按 L-071，政策级结论只信生产同构 canonical harness。本轮建 `research_canonical_two_window.py`：冻结窗走 `ProductionPolicyBacktestRunner._run_arm`（真实 evaluate_selection_policy→apply_pool_rules + simulation.simulate，sellable=tradable），前瞻窗（canonical run btr_fa625，score≥70）用真实 evaluate_selection_policy 重放"选哪些"再 join canonical 净收益（精简卡缺 chg20/support_ma5/旧regime串，单票惩罚无法复现，但 v1/v2 差异只来自 override 组合，缺字段只让 v1 侧偏宽松，结论偏保守）。
+- v2 canonical 确认（v1→v2）：冻结窗逐笔 +0.164→+0.206、胜率 53.8%→54.0%、PF 1.084→1.107，validation/OOS 逐笔与日 cohort 同升、train 逐笔不变；前瞻窗逐笔 -0.471→-0.352、胜率 50.1%→51.9%、PF 0.782→0.833，日 cohort cum -9.50%→-3.89%、MDD -13.79%→-8.26%，配对 29 个变化日 CI[+0.263,+2.175] 下界>0，top4/6/8/10 CI 下界全>0；被拦 139 票均 -1.09（偏多·高潮 -1.25、弱势·高潮 -2.06）。三个高潮格在冻结【全候选】各分数带单调为负（偏多·高潮 -0.08/-0.40/-0.69、震荡·高潮 -1.11/-0.62/-0.82、弱势·高潮 -0.22/-0.87/-0.82，高分更差），证明 120 硬排除不是误伤、没有可保留的赢家分数带。
+- 系统性证伪（均双窗口 canonical，脚本可复现）：①额外毒格否决——震荡·平淡前瞻选中 10 笔 win0%/-7.33 看似剧毒，实为**单日 2026-07-16 聚集**，冻结全候选 n=292 均 +1.32/win59%（[72,76)+0.80）为正，否决会砍均值回归边，拒；偏多·活跃/强牛·活跃/弱势·活跃前瞻为负但冻结为正（偏多·活跃冻结选中 +0.94/PF1.64 vs 前瞻 -2.30/PF0.275），属跨窗冲突格，整格或抬线都会砍冻结正期望票（L-071 已证），拒。②格内分数带——冲突格内部不存在"两窗口都负"的低分带（偏多·活跃冻结各带全正、高分更优），无可外科收紧处。③大盘广度 abstain——当日 up_ratio<.20 冻结 +0.15/前瞻 -0.57 翻号；3/5 日滚动 ma3/ma5 弱区同样冻结为正、前瞻为负，各阈值冻结配对 CI 下界全≤0，拒（弱势低广度是 2025 有效的反转票，2026 失效＝regime beta）。④每日出票上限 topK——冻结 top3-5 最优（集中）、前瞻 top10 最优（分散），方向相反，维持 daily_output_limit=10。⑤分策略桶否决——冻结快照卡只有匿名 strategy_signals、无 strategy_id，无法双窗口对照，单窗口即过拟合，不做。
+- 永久规则：**(a) 2025 冻结窗与 2026 前瞻窗是两种 regime，几乎一切"收紧/放松"都"利一窗、伤另一窗"；唯一可落地的是在【两个窗口、且全候选各分数带】都为负的格做外科否决（v2 三高潮格即此类），单窗口负、另一窗口正一律视为 regime 暴露，禁止削。(b) 某格"剧毒"先查是否单日/少数日聚集（L-058），再查另一窗口同格，两步都过才谈否决。(c) 选股层在现有日线+市场广度数据下已到局部最优，再提风险调整后收益必须引新数据维度（分时/盘口/L2/北向，见 L-065），不得在同一批特征上换名字重挖。**
+- 复现：`scripts/research_canonical_two_window.py`（双窗口 v1/v2 canonical 对照，证据 output/research/canonical_two_window_v1v2.json）、`research_canonical_cell_map.py`（选中层16格）、`research_cell_osc_plain_deep.py`（震荡·平淡单日聚集证伪）、`research_breadth_abstain.py`/`research_weak_breadth_abstain.py`/`research_multiday_breadth.py`（广度择时证伪）、`research_band_and_count.py`（格内分数带+出票上限证伪）。
+- 待 live_forward：v2 三高潮硬排除的长期效果；震荡·高潮选中层前瞻 +0.195 与冻结全候选 -0.77 的轻微张力（现按"冻结为负+安全"保留硬排除，若 live_forward 累积其选中层稳定为正再议）。
+- 相关：L-071（canonical 口径前提）、L-070（v2）、L-058（窗口/单日偏差）、L-060（regime×情绪分工）、L-065（日线 alpha 挖尽须换数据）、L-015（abstain 组合级度量）。
+
+## L-073 出票端结构与单卡惩罚杠杆双窗口系统证伪；"放松弱市低 chg20 惩罚"是冻结窗假 alpha，真前瞻反转（接飞刀前提成立）
+
+- 状态：active（否定性 FINDING，本轮不改生产、v2 维持）
+- 适用：任何想在 v2 之上调 climax_output_divisor / daily_output_limit / weak_ice_output_limit / 动态软降线 / 四个单卡惩罚（strong、support_ma5、weak_low_chg20、panic）/ weak_regime_score_cap / 活跃档分数线 / 行业分散上限，或想靠"日内 final_score 排名"集中出票的尝试
+- 方法：全部走生产同构 canonical harness（`ProductionPolicyBacktestRunner._run_arm`，真实 evaluate_selection_policy→apply_pool_rules + simulation.simulate），冻结 holdout_244d 分 train/validation/OOS + 真前瞻 117d（canonical run btr_fa625，score≥70，调参时未见）；逐笔等权 + 日度 cohort 等权（空仓记 0）双口径，配对日差 bootstrap 5000 次 95% CI、逐月同号、单日聚集、rank 分层。
+- 头条证伪——放松 weak_low_chg20_penalty（12→0）：**冻结窗极其诱人**，ALL 逐笔 +0.206→+0.381、日 cohort +0.061→+0.244（约 4 倍），train/val/OOS 三段全升，新增 354 笔均 +0.491/胜率 62.1%，且 chg20 越低越高（[0,5)+0.965 > [5,10)+0.637 > [10,15)+0.225），看似干净的"弱市超跌反转"。**真前瞻决定性反转**：被放松放进来的边际票 98 笔均 **-0.836/胜率 45.9%**、三个 chg20 档全负、6 个月里 5 个月负（2/6/7 月 -4.8/-4.2/-4.7），配对日差 Δ-0.043 CI[-0.161,+0.070]、逐月为正率 0.29，放松后日 cohort -0.153→-0.196 更差。前瞻【弱市·非涨停全候选】按 chg20 单调——chg20 越低越差（[-∞,0) -0.621、[0,5) -0.370、[10,15) -0.302、[15,25) -0.257、[25,+∞) -0.122），正是第 150 轮 LIVE formal 的"弱市低 chg20 半强股继续跌"前提；对照【强牛·非涨停】各 chg20 档全正（+0.39~+0.99），说明该惩罚 regime-conditional 设计正确，**必须维持 12，不得放松**。冻结窗的"超跌反弹"是该段特有的非平稳 regime（与 L-072(a) 同一机理的又一具体实例）。惩罚值网格 pen12/8/4/0 在冻结非单调（8 最好），进一步说明冻结最优值不可外推。
+- 其余出票/单卡杠杆一并证伪（均双窗口，数字为冻结 canonical，前瞻同向否决或不可验）：①climax_output_divisor 2→1（v2 后只作用于强牛·高潮）——冻结逐笔 +0.206→+0.229、OOS 升，但配对日 cohort 差 train/val/OOS/ALL 的 CI **全部跨 0**、逐月同号仅 0.77、新增票仅 50% 的天为正、最大单日占 36.1%；前瞻 cap5→6/8/10 的 CI 全跨 0 且更多天数变差（11~12 优/16~17 劣），rank6 单独 -0.721、rank 收益非单调。②日内 final_score 排名在选中池无区分度（前瞻 rank1-3 -0.164、rank4-5 -0.475 最差、rank9-10 +0.303，非单调，再证 L-061）。③daily_output_limit 6/8/15 两窗口非单调（再证 L-072④），维持 10。④weak_ice_output_limit 2→4/10 完全 inert（冻结 cap2 下弱势·冰点选中 0 笔，前瞻 ≥70 也无）。⑤关动态软降线：OOS 逐笔 +0.106→+0.063 变差，保留。⑥strong_score_penalty / strong_support_ma5_penalty 归零：冻结完全 inert（当前候选从不触发），属纵深防御，保留。⑦panic 阈值 100→90/80、惩罚 12→20：冻结仅 2 天 ld>100、80-100 区间 0 天，已饱和、中性，保留。⑧活跃档线微调（震荡·活跃 70/74/76、偏多·活跃 70/74）：放松变差或 inert、收紧无候选，72/71.4 已局部最优。⑨weak_regime_score_cap 60→55 在冻结复制出与 weakchg 同款的"弱市反弹"改善（日 cohort +0.061→+0.243），同属冻结假 alpha，且作用分 ≤65 前瞻 run（≥70）不可验，否决；65 无收益。⑩行业分散 _MAX_PER_INDUSTRY 3/8/999 与去惩罚：收紧到 3 明确变差（ALL 逐笔 +0.206→+0.127，印证第 79 轮"误杀"），放松中性偏负，维持 max5、pen{2:5,3:10}。⑪选中池内"新逐卡因子"（pos60 六十日位置、amount_yi 成交额、evidence_quality_score）五分位在 train/val/OOS 全部非单调、Spearman ρ≈0 且翻号（pos60 -0.028/-0.025/+0.064，amount -0.034/+0.016/-0.099），最优分位各段不一致，连单窗口单调性都不满足，选中池内无 limit_up_open_times>0 票；即新日线横截面因子在选中池同样无稳定信息（再证 L-061），不值得进前瞻。
+- 永久规则：**(a) 冻结 244d 内含一段"弱市超跌反弹"regime，会让一切"放进更多弱市低分/低 chg20 票"的放松（弱市 chg20 惩罚、weak cap、弱市分数线）在冻结窗虚高；该人群在 2026 真前瞻为负且按 chg20 单调更差。禁止仅凭冻结证据放松任何弱市闸门，必须真前瞻同向；弱市低 chg20=接飞刀的 LIVE 前提在前瞻成立，weak_low_chg20_penalty=12 是被前瞻验证的有效否决，不得再以"超跌反转"名义删改。(b) v2 后 climax divisor 只砍强牛·高潮，"最强日别砍半"逐笔好看但组合层两窗口都不显著、收益靠少数日聚集、日内排名无单调性，不追。(c) 从不触发的单卡惩罚（strong/support）与已饱和的 panic 闸门是纵深防御，不因"当前无效果"而清理；真正绑定的 weak chg20 反而是有效的。(d) 继 L-072 后，出票结构层（除数/上限/冰点限/软降线/单卡惩罚/弱市 cap/活跃线/行业分散/日内排名）也到局部最优，现有日线+市场广度数据下不再有稳健风险调整后收益，下一步只能引新数据维度（分时/盘口/L2/北向，L-065），禁止在同一批旋钮上换名重挖。**
+- 复现：`scripts/research_output_structure_forward.py`（前瞻 rank-decay/强牛高潮 top-N）、`scripts/research_output_levers_grid.py`（冻结 canonical 单规则杠杆网格）；佐证日志 `output/research/`：output_struct_fwd.log、output_levers_grid.log、h1_frozen.log/h1_robust.log（强牛高潮除数）、weakchg_deep.log/weakchg_fwd.log（弱市 chg20，含前瞻 chg20 单调梯度）、lastgrid_frozen.log（panic/活跃线/weakcap）、industry_frozen.log（行业分散）、cardfactor_frozen.log（选中池 pos60/amount/evidence_quality 五分位证伪）。
+- 相关：L-072（格/分数带/广度/topK 证伪，本条补全出票结构与单卡惩罚层，并为其 (a) 提供 weakchg 具体实例）、L-071（canonical 口径前提）、L-061/L-065（日线横截面 alpha 挖尽、排名无区分度）、L-058（窗口偏差）、L-070（v2）、L-039/L-004（单日聚集伪 alpha）。
+
+## L-074 分时新维度首测：信号日"下午追高"(pm_ret) 在选中池双窗口同向、经济意义明确但配对日 CI 临界，列 live_forward 影子候选、本轮不落地硬否决
+
+- 状态：active（一条"有前景但未达落地门槛"的新数据维度 FINDING + 一组分时特征阴性结果）；生产政策维持 v2 不改。
+- 适用：任何想把分时/盘口特征接进选股否决或打分的尝试；尤其"尾盘/下午涨幅、收盘位置、日内波动"类。
+- 数据口径（新维度覆盖，先记清）：minute_kbars 中 **15min 密覆盖 2024-02~2026-05（冻结窗全、前瞻仅 2-5 月，约 2599 股，冻结候选匹配率 49.4%，匹配/未匹配净收益 +0.193/+0.219 无覆盖偏差）**；**5min 密覆盖 2026-01-30~09（前瞻窗全、5221 股、匹配 99.6%）**；1min 稀疏 89 天；auction_data 仅 24 天不可用；capital_flow/dragon_tiger 仅 2026 段无法双窗口。把 5min 三根合一根重采样为 15min 等价序列（09:35/40/45→09:45 桶，open=first/high=max/low=min/close=last/量额求和），即可让两窗口特征口径一致。
+- 测了什么：对 v2 选中候选，用信号日 15min 等价序列构造 12 个分时特征（隔夜跳空 gap、上午收益 am_ret、下午收益 pm_ret、上午-下午差、振幅 amplitude、bar 波动 rvol、日内最大回撤、上午量占比、VWAP 上方量占比、收盘离高点 close_off_high、尾盘 30 分、量价相关），日度横截面 Spearman IC+三分/五分位+月度同号双窗口筛选。**只有"下午追高"家族（pm_ret 为主，rvol/close_off_high 辅）两窗口 IC 同向为负**；gap/am_ret/am_minus_pm/振幅/日内回撤/量占比/VWAP/量价相关均跨窗翻号或非单调（再证 L-061，且与上一轮 6 个收盘类分时特征阴性一致）。
+- pm_ret 机制与增量：pm_ret=信号日 13:15 开盘→15:00 收盘涨幅。五分位 Q4（下午最追高）两窗都最差（冻结 +0.31→Q4 -0.74/胜43%，前瞻 -0.38→Q4 -0.80）。**控制信号日全天 pct_chg 双排序后增量仍在且单调**：冻结中涨档 pm 高 -0.67 vs 低 +0.46、高涨档 -1.04 vs +0.71；前瞻三个涨幅档都是 pm 高更差——不是"当天涨多了"的代理，而是"涨幅集中在尾盘追进收盘"的独立 fade 信号。分格：弱势·活跃/强牛·活跃/强牛·高潮 的 pm 顶档两窗皆毒；偏多·活跃（冻结 +0.54 正）、震荡·活跃/弱势·平淡（前瞻为正）冲突，不可一刀切。
+- canonical 终审（生产同构，真实 evaluate_selection_policy 两臂=全卡 vs 排序前剔除追高卡让第 11 名递补，冻结走 _simulate_card 真实因果出场、前瞻 join canonical 净收益；缺 pm_ret 的卡保守保留）：最稳配置=**仅在 {弱势·活跃,强牛·高潮} 格内否决 pm_ret>T，T∈[1.25,1.75]% 为连续高原**。以 T=1.25 为例：冻结逐笔 +0.206→+0.269、胜 .540→.552、PF1.107→1.143、日 cum+1.29→+3.17、MDD 改善，配对 42 日 CI[+0.008,+0.522]（下界微正），砍 67 笔均 -1.04/胜39%；前瞻逐笔 -0.352→-0.249、PF0.833→0.881、cum -3.89→-1.84、MDD -8.26→-6.97、**7 个月全正**，但配对 33 日 CI[-0.004,+0.743] 下界微负；替换机制（被砍 vs 递补）冻结 -1.04/胜39% vs -0.14/胜58%、前瞻 -1.46/胜45% vs -0.10/胜48%，替换增益 +0.90/+1.36pp 但 bootstrap CI[-0.86,+2.62]/[-0.80,+3.47] 跨 0。
+- 为何本轮**不落地**：方向、逐笔/PF/MDD、被砍≪递补、控制涨幅后增量、前瞻全月正——这些两窗全部同向；但项目铁律要求"双窗口配对日差 CI 下界都>0 且不阈值敏感"，而 canonical 配对日/替换 CI 下界贴 0（一窗微正一窗微负）、T 相邻档位即转负、冻结分时匹配仅 49%、弱市递补票本身仍为负稀释日级效果。手写 cohort（不递补）此前显示两窗 CI 都>0，canonical 一加"第 11 名递补"就降到临界——正是 L-071 警告的口径差，故以 canonical 为准，判为**经济真实、统计未定论**，不做硬否决、不与显著项捆绑。
+- 永久规则：**(a) 分时"下午追高"是日线 alpha 挖尽后（L-065）第一个在【选中池】两窗口同向的新维度信号，方向=尾盘追进收盘者未来 5 日 fade，作用格=弱势·活跃/强牛·高潮，阈值 pm_ret≈1.25-1.75%，复现脚本齐备；它应走 live_forward 影子观测累积，达到 release_gate（≥100 笔、≥20 信号日、前瞻 canary 同向、配对日 CI 下界稳定>0）后再议绑定，禁止现在凭单窗/手写 cohort 落地。(b) 分时特征筛选必须两窗口口径一致（5min 重采样 15min），且先控制信号日全天涨幅再谈增量，否则会把"当日动量"当新因子。(c) 其余 11 个分时特征已跨窗证伪，勿换名重挖。**
+- 复现：`scripts/research_intraday_selected_panel.py`（选中池 12 特征面板，5min→15min）、`research_intraday_selected_screen.py`（双窗 IC/分位筛选）、`research_intraday_chase_deep/threshold/conditional/grid/robust.py`（复合/控制涨幅/分格/高原/稳健性）、`research_intraday_pmret_universe.py`（全宇宙 pm_ret 查找）、`research_intraday_chase_canonical.py`（**canonical 终审**，证据 output/research/intraday_chase_canonical.json）、`research_intraday_chase_swap.py`（被砍 vs 递补）、`research_intraday_chase_joint.py`（pm×当日涨幅联合：加 conjunct 使被砍票更毒但样本骤减、canonical CI 仍跨 0，不能救回显著性，停止继续挖阈值以免过拟合）。
+- 待 live_forward：把 pm_ret 接进 feature_builder/return_improvement_shadow 做**非绑定影子标注**（production_effect_applied=False，热路径目前无分时数据，需先接 15min/5min 读取），累积弱势·活跃/强牛·高潮 格内 pm_ret>1.25% 的 would-veto 票的真实 5 日净收益，达标后再决定 v3。
+- 相关：L-065（须换新数据维度，本条是其首个两窗同向候选）、L-071（canonical vs 手写 cohort 口径差，本条被其拦下）、L-058（窗口/阈值过拟合）、L-072/L-073（日线选股/出票层已局部最优）、L-069（涨停微观情绪择时证伪）、L-061（横截面排名无区分度）。
+
+## L-075 新数据维度解锁后首测：daily_basic(规模/换手/PE)与 limit_up_board 个股封板属性双窗口全部证伪；"极端高换手"毒格已被现有流动性闸门短路，不落地
+
+- 状态：active（FINDING，否定性 + 数据工程解锁）；生产政策维持 v2 不改，无 v3。
+- 适用：任何想用估值/规模/换手率/连板高度/炸板/封单额做横截面选股或否决的尝试；评估"辅助表是否够做双窗口"前先查覆盖矩阵。
+- 数据覆盖矩阵（本轮先立的前提，冻结=2025-01-15~2026-01-16 共244日，前瞻=2026-02-09~2026-08-05 共117日，≥100/≥80 日才算覆盖）：开工时**只有 daily_kbars、index_daily、stk_limits 真正跨双窗口**；daily_basic 仅冻结、capital_flow 仅前瞻、limit_up_board/dragon_tiger/auction_data/margin_detail 等全部单窗或零星。stk_limits 只有 up/down_limit 涨跌停价（由价格确定性推导，零新信息）；index_daily 仅 000300/000905 覆盖全冻结（其余指数 2025-05-06 起），风格轮动本质是给规模因子择时，低优先。**结论：辅助数据覆盖断档才是"新因子无法双窗口验证"的真实瓶颈，不是没想到因子。**
+- 数据工程解锁（幂等、增量、不删旧，已实际写入本地 MySQL）：①`scripts/backfill_daily_basic.py` 回填 2026-01-19~2026-09-08 共 **858348 行/156 交易日**，daily_basic 从此跨双窗口；②`scripts/backfill_limit_up_history.py --start 2025-01-01 --end 2026-03-20` 回填 limit_up_board 冻结窗，成功 **135/244 交易日/16056 行**（其余日因 `state_adapters.py:309` 把 tushare 偶发超长 last_time 直接 str() 超 `tables.py:265` String(8) 整日回滚跳过——数据管道健壮性小 bug，属他人 data-pipeline 范畴，本轮不改，仅记录；不影响 135 日大样本结论）。资金流因 L-064 已全市场证伪方向，不回填、不重挖。
+- 全市场 strictly-prior 五分位双窗口筛（`scripts/research_newfactor_fullmarket.py`，T收盘已知、T+1open→T+5close 毛 fwd5 仅用于快速杀因子，缓存 output/research/newfactor_fullmarket.pkl 200万行）：
+  1. **规模 log circ_mv 方向两窗反转→否决**：冻结 Q0(小)+1.154→Q4(大)+0.690（Q5-Q1=-0.464、逐月同号0.77、小盘占优），前瞻翻为 Q0-0.372→Q4-0.146（Q5-Q1=**+0.226**、大盘更抗跌）。典型 regime beta，复刻 L-072(a)；极端尾部同样反转（最大5%档冻结-0.43、前瞻+0.27）。
+  2. **换手率 turnover_rate 无单调、驼峰→否决斜率**：冻结中段最好(Q2+1.125)、两端差，Q5-Q1+0.027/同号0.46（本就无信号）；前瞻 Q5-Q1-0.092/同号0.29。
+  3. **估值 pe_ttm 两窗翻号→否决**：冻结 Q5-Q1+0.392（成长占优），前瞻-0.084；极端尾部两窗差≈0。
+  4. **limit_up_board 个股封板属性两窗方向全反转→否决**（仅当日涨停股，冻结n14948/前瞻n11147）：连板高度 limit_times——冻结 1板+2.45 最好、4板-4.42 最差，前瞻反过来 1板-0.91、4板+1.94/5板+1.28（高连板龙头仅稀疏 n90/35 为正）；炸板次数 open_times 冻结 0炸+0.69→5炸+3.83 递增、前瞻无此梯度且多为负；封单额 fd_amount 冻结小封单最好(Q0+2.87>Q2+0.38)、前瞻小封单最差(Q0-1.39)；首次封板时间 first_time——09:30前秒板/一字两窗最强(+1.105/+1.872)但属 T+1 开盘买不进、胜率仅0.40-0.45的彩票尾，14-15尾盘偷封冻结+0.053(持平)、前瞻-2.200(仅前瞻弱、非同向)，中段10-11/13-14档两窗翻号、尾盘-早封逐月同号仅0.62/0.57。全部 regime 依赖，与 L-069 微观情绪证伪一致。
+- "极端高换手否决"的生产同构终审（唯一全市场两窗同向的线索，`scripts/research_turnover_veto_canonical.py`，真实 evaluate_selection_policy 两臂=全卡 vs 排序前剔除高换手卡让下一名递补，冻结 _simulate_card 因果、前瞻 join canonical 净，配对日差 bootstrap5000）：全市场层面日截面 topX% 换手桶两窗同向最差且阈值单调（top1% 冻结差-1.39/85%月份为负、前瞻差-0.93；越极端越差）。**但选中池经 v2 流动性/质量闸门后换手分位极少触顶**（冻结选中 max pct0.960、仅15张>0.95；前瞻选中 max0.938、>0.95 为 0 张）：阈值 pct>0.95 时冻结剔15张毒卡（均-3.095/胜0.267、递补+1.317、日cohort +0.0364→+0.0639、配对CI[+0.006,+0.056] 下界微正），**前瞻却 0 剔卡完全空转，无法双窗口验证**；放宽到两窗都剔卡的 pct>0.90，两窗 Δcohort 虽为正(+0.082/+0.035)但配对 CI 全跨0（[-0.034,+0.202]/[-0.062,+0.131]）、逐月正占比仅0.46/0.43；pct>0.88 前瞻翻负(-0.021)、pct>0.85 冻结被砍票均收益转正(+0.163，开始砍赢家)。**非单调、不显著、靠砍正期望票换数字→否决，不落地。**
+- 永久规则：**(a) 估值/规模/换手水平/连板高度/炸板次数/封单额/首次封板时间这一族 daily_basic+limit_up_board 横截面因子，在当前两窗口下方向被 regime 主导（2025 趋势上行 vs 2026 震荡走弱，斜率两窗必翻；唯一两窗都强的"秒板/一字"买不进且胜率<0.5），禁止换名重挖；要挖必须先证明它在选中池两窗同向且 canonical 配对 CI 下界>0。(b) 全市场成立的"极端尾部毒格"不等于选中池可改：生产既有闸门可能已把该尾部挡在门外（高换手即如此，前瞻选中池根本到不了 top5%），canonical 终审必须先报告选中池在该因子上的实际分位分布与剔卡数，空转的否决不许落地。(c) 新增辅助因子研究前先跑双窗口覆盖矩阵，单窗覆盖的表只能做探索、不得作为改生产阈值依据（L-071/L-058）。(d) limit_up_board 历史回填受 last_time 超长 bug 污染会整日缺数，复现封板类结论前先 COUNT(DISTINCT trade_date) 确认覆盖。**
+- 复现：覆盖矩阵=对 information_schema/各表 `COUNT(DISTINCT trade_date)`；`scripts/research_newfactor_fullmarket.py`（全市场五分位双窗口，删 newfactor_fullmarket.pkl 可重建，扫 daily_kbars 约1-2分钟）；`scripts/research_turnover_veto_canonical.py`（高换手否决 canonical 终审，阈值在 THRS）；日志 output/research/newfactor_fullmarket{,2,3}.log、turnover_veto_canonical{,2}.log、backfill_daily_basic_fwd.log、backfill_limitup_frozen.log。
+- 相关：L-064（资金流全市场方向反转，故不回填资金流）、L-069（涨停微观情绪择时证伪，本条补个股封板属性横截面同样证伪）、L-061/L-065（日线横截面 alpha 挖尽、量比类已封死）、L-072(a)/L-073（regime 翻号、出票/单卡层局部最优）、L-074（分时 pm_ret 是唯一两窗同向但 CI 临界的影子候选，与本条互补：一个走分时、本条封死日级估值/封板）、L-071（canonical 口径为政策级唯一依据）、L-062（辅助数据覆盖前提）。
+
+## L-076 第三段真前瞻窗（08-07~09-02，从未分析）复核：v2 未失效；三窗口证明无稳定毒格、"新毒格/状态转移"是跨窗翻号+单日聚集双重伪信号；pm_ret 第三窗验证被分钟覆盖堵死
+
+- 状态：active（验证性 + 否定性 FINDING）；生产政策维持 v2 不改，无 v3。
+- 适用：任何想"再找一个 regime×情绪毒格做外科否决"、或用 regime 状态转移（前一日→当日）做择时门控、或想给 L-074 pm_ret 补第三窗的尝试。
+- 第三窗来源与可信度：旧 canonical run btr_fa625 止于 2026-08-05；新 run **btr_2bec6fed（03-09~09-02，23765 候选全带净收益）与旧 run 在 22361 个重叠 (日,股) 键上净收益差恒为 0**，证明同一因果引擎的一致超集，可取 08-07~09-02 共 19 交易日作真正未见窗（市场快照由日线广度构建，19 日全有）。
+- v1 vs v2（未见窗，生产同构 evaluate_selection_policy 重放+join canonical 净）：v1 n130 逐笔 -0.426/胜.454/PF.808/日cum-8.53/MDD-18.20/出票19天；v2 n95 逐笔 -0.558/胜.442/PF.764/**日cum-8.07/MDD-18.16/出票仅12天**。这是普跌弱市窗，两版都亏；v2 靠门控少出票（12 vs 19 天）使日度 cohort/MDD 略优，逐笔均值反而更低（留下的票在普跌日同样跌）。**结论：v2 未失效，其价值在弱市主动收缩，不在于逐笔选股更准；不要因弱市逐笔为负就回退 v2。** 机会成本拆解：两版共同出票的 12 天选股逐笔完全一致（均 -0.558，override 只在空仓日起作用）；v2 少出的 7 天里 v1 共 35 笔平均 **-0.066/胜.49（近乎打平、略负，含 08-31 +3.04 与 08-27/09-01 各-1.7）**——收缩躲的是近零期望日、方向正确且未系统性错杀正期望票。
+- 三窗口格地图（v2 选中逐笔，冻结/原前瞻/第三窗 avg·win）——**没有任何一格三窗同负**：弱势·平淡 冻结-0.66/.53(n17)→原前瞻**+0.32/.64(n74)**→第三窗-4.84/.00(n10)；震荡·活跃 原前瞻**+0.38/.61(n104)**→第三窗-3.54/.10(n10)（冻结选中无此格）；弱势·活跃 +0.07→-0.38→**+0.77/.63(n40)**；偏多·活跃 +0.94→-2.30→+2.76；强牛·高潮 +0.05→-0.06→-1.11。每个看似"新毒格"的格都在另一窗为正，整格否决必砍他窗正期望票（复刻 L-072①）。
+- **单日聚集证伪（决定性）**：第三窗两个"灾难格"全部是单日聚集——弱势·平淡 10 笔全在 **2026-08-19**、震荡·活跃 10 笔全在 **2026-08-21**，即这两天全市场普跌、当日 10 张票一起亏（L-039/L-004/L-072 震荡·平淡 07-16 同款单日伪 alpha）。regime"状态转移"分解同理，最负的转移 n 都=5/10 且落在这两天，样本由 output_limit 凑成整十、不具独立性。
+- pm_ret 第三窗为何做不了：第三窗选中候选 281 笔，但分钟线 5 月后采集退化——15min 仅 08-03/04、5min 在 08-07 后仅零散 8 天、1min 只覆盖约 300 只**固定样本**（跨各板块、非指数成分，与选中中小盘 08-07~09-02 的 score≥70 候选匹配率仅 **1%**，281 笔只匹配 3 笔）。数据覆盖不足，**不得用 1% 匹配的样本硬造 pm_ret 第三窗结论**；这是数据工程堵点（分钟源 xiaoshi_minute_source 在改），需先把选中宇宙的分钟线补齐到日频全市场，L-074 的 live_forward/第三窗才成立。
+- 永久规则：**(a) 三窗口（冻结2025趋势、原前瞻2026震荡、第三窗08-07~09-02普跌）一致表明 regime×情绪格的期望符号由大盘 regime 决定、格级/格转移否决不存在三窗稳定毒格，禁止再以"某格在最近弱市亏"为由整格否决或抬线；判毒格必须同时过三窗同向 + 非单日聚集（亏损分散在≥5 个独立交易日）两关。(b) 评估某格前先按日展开，若该格亏损 n 集中在 1-2 天即判单日聚集伪信号，不进入 canonical 终审。(c) 新 canonical run 与旧 run 重叠键净收益必须逐键一致（差=0）才可作外延窗，否则先排查口径。(d) 分钟/新维度第三窗先查选中宇宙匹配率，匹配率过低（如<50%）直接判数据不足、不得结论。**
+- 复现：`scripts/research_third_window.py`（第三窗 v1/v2 对照+格+状态转移，证据 output/research/run3_canonical.pkl、run3_v2_selected.pkl）；三窗格地图由 canon_frozen_v2_selected.pkl/canon_forward_v2_selected.pkl/run3_v2_selected.pkl 现算；run 一致性=对 backtest_candidates⋈backtest_trades 按(日,股)配对 AVG(net_new-net_old)。
+- 相关：L-072①（格级否决跨窗冲突、震荡·平淡单日聚集，本条用第三独立窗再证并补"状态转移同样伪"）、L-039/L-004（单日聚集伪 alpha）、L-074（pm_ret 唯一同向影子候选，本条量化其第三窗数据堵点）、L-075（覆盖矩阵/辅助数据瓶颈）、L-071（canonical 口径）、L-058（窗口偏差，第三窗是防过拟合的真正未见样本）。
+
+## L-077 信号新鲜度（重复/连续入选）三窗口证伪；并精确定位 pm_ret 第三窗的分钟数据缺口
+
+- 状态：active（否定性 FINDING + 数据缺口清单）；生产维持 v2 不改。
+- 适用：任何想用"该股前几日是否已在候选池/是否连续多日入选"做新鲜度加分或陈旧否决的尝试；以及评估分钟线能否支撑新第三窗。
+- 假设：信号日 T 前 k 个交易日内该股出现在 score≥70 候选池的天数 prev_k；首次出现=新鲜突破，连续出现=陈旧/延伸，预期二者净收益有别。三窗口（冻结/原前瞻/第三窗，候选历史分别取 holdout 快照全卡、两个 canonical run 的 backtest_candidates 并集）。
+- 证据（v2 选中逐笔，新鲜 prev=0 vs 重复 prev≥1 的 avg/胜）：**方向三窗翻号、各 k 非单调**。prev1：冻结 新鲜+0.252 vs 重复-0.267（新鲜好），前瞻 -0.572 vs -0.173（重复好，翻），第三窗 -0.504 vs -0.719（新鲜略好）；prev3：冻结+0.234 vs +0.087、前瞻-0.284 vs -0.379、第三窗-0.841 vs -0.185（第三窗重复明显更好，又翻）；prev5 冻结重复更好(+0.304 vs +0.171)、前瞻新鲜更好、第三窗重复更好。prev3 逐档（0/1/2/3）每窗都非单调（冻结 +0.234/-0.058/+0.420/+3.14，前瞻 -0.284/-0.041/-0.809/-0.345）。无稳定符号、无单调性，否决。
+- 永久规则：**信号新鲜度/重复入选（含连板式"连续 N 日在候选池"）在选中池无三窗稳定信息，禁止换名（"首板入选/老票/持续强势"）重挖；这与 L-061/L-073 一致——经 v2 选出后，任何由历史入选记录派生的横截面标签都不再有单调区分度。**
+- pm_ret 第三窗分钟缺口（精确清单，解锁 L-074 的前置数据任务）：5min 在 2026-06（21日/5209 只）、07（23日/5206）仍是全市场；**08 月起变间歇——全市场 5min 仅 08-19/08-20/08-28 三天，09 月退化为约 300 只**；15min 2026-05 后基本停止（07/08 各 1-2 个零散日）；1min 全程只有约 400-560 只固定子集、从非全市场。故第三窗 08-07~09-02 用 5min 最多覆盖 3 个独立日（且 08-19 正是 L-076 的单日普跌聚集日），独立日不足，pm_ret 第三窗不可结论。**要解锁：回填 2026-08-07 起缺测交易日的【全市场 5min】（数据管线 xiaoshi_minute_source 域），回填后重跑 research_intraday_chase_canonical 把第三窗并入，检验配对日 CI 下界能否稳定>0。**
+- 复现：`scripts/research_signal_freshness.py`（三窗新鲜度，缓存 output/research/freshness_{frozen,forward,run3}.pkl）；分钟缺口=对 minute_kbars `LEFT(trade_date,7),freq` 聚合 COUNT(DISTINCT code/trade_date)。
+- 相关：L-061/L-073（选中池横截面/历史标签无区分度）、L-076（第三窗与单日聚集）、L-074（pm_ret 影子候选与其数据堵点）、L-075（辅助数据覆盖矩阵）、L-058（多窗口防过拟合）。
+
+## L-078 解锁龙虎榜/两融双窗口全量回填后，连同集合竞价一起在生产同构选中池三方向全部证伪；并记录"覆盖不全假阳性"与"事件表过稀"两条数据教训；v2 维持不改
+
+- 状态：active（否定性 FINDING + 数据工程沉淀）；生产维持 v2，不出 v3。
+- 适用：任何想用龙虎榜上榜/买卖比、两融融资买入拥挤度、集合竞价（竞价换手/竞价跳空/竞价额/竞价量比）做选股否决或加分的尝试；以及评估"按交易日接口的辅助表"历史回填是否可信。
+- 数据工程（本轮把三张按交易日接口的辅助表回填到双窗口，幂等增量、0 删除）：dragon_tiger 冻结 244/前瞻 117 日全跨（28966 个(date,code)）；margin_detail 冻结 244/前瞻 117 全跨（冻结 1217485+前瞻 504071 行）；auction_data(stk_auction) 因 tushare 限速 8-20s/日、circuit_open 瞬时空返回、官方偶发同(code,date)多行，只回填到冻结约 43 日/前瞻约 81 日（部分覆盖，但已足够在选中池做结构性否决，见下）。驱动脚本：`backfill_aux_dataset.py`（通用，经 run_auxiliary_application）、`backfill_auction_direct.py`（直连 stk_auction、按 ts_code 去重、删当日再插、已填充日>5000 行跳过可续跑、空结果退避重试 3 次）。
+- 龙虎榜：**全市场"上榜后 fade"两窗同向为真**（冻结上榜 n13397 均-0.470/胜.399 vs 非+0.942，日差-1.38、逐月同号仅.08=92%月份为负；前瞻 n6975 均-1.299 vs 非-0.299，日差-0.91）；榜内买卖比 bs=buy/sell 两窗都是 Q0 最差/Q4 最好（冻结 Qhi-Qlo+1.07、前瞻+1.70）。**但传不进 v2 选中池**（基线冻结 n1010 均+0.206/cohort+0.0364；前瞻 n721 均-0.352/cohort-0.2007）：①一刀切上榜否决，冻结剔18(-0.94)但递补12(-1.645)更差、Δcohort+0.0062/CI[-0.020,+0.033]跨0、逐月.38，前瞻剔7张均**+0.494（赢家）**、Δ-0.0018/CI跨0；②只剔弱势榜 bs<1，冻结剔7(-3.427 毒)、Δ+0.0127/CI[-0.005,+0.034]跨0，前瞻仅剔2张均**+3.491（赢家）**、Δ-0.0033；bs<0.7 前瞻剔到的唯一一张是 +5.824 赢家。全部两窗冲突/CI 跨 0/样本极小，否决。
+- 两融：标的 vs 非无差异（日差-0.018/+0.126）。**融资买入额 rzmre 的全市场负斜率是"覆盖不全假阳性"**：前瞻只回填约 60 日时曾见 Qhi-Qlo≈-0.61（高融资买入=拥挤=差），补齐到 117 日后斜率消失为 -0.009（冻结-0.329/前瞻-0.009）；rzmre_norm(买入/余额)两窗都≈0（-0.027/-0.025），rzye_chg(余额环比)两窗翻号（-0.068/+0.325）。canonical 否决同样不过：rzmre top5% 冻结 Δcohort **-0.0215 反而变差**（剔的232张均+0.128 是赢家、递补147张-0.236），前瞻 Δ+0.0724/CI[-0.061,+0.207]跨0、剔的71张均+0.469 仍是赢家；top10% 两窗 CI 全跨0（冻结[-0.10,+0.23]/前瞻[-0.09,+0.18]）、前瞻剔的108张均+0.326 为赢家。否决。
+- 集合竞价（部分覆盖：冻结约43日/前瞻约81日，全市场毛 fwd5）："有无竞价数据"事件差冻结+4.13/前瞻+1.56、逐月同号1.00，**但这是可交易性/覆盖伪影**——有 stk_auction 行的都是当日正常可交易票，停牌/代码不匹配的无行且未来收益差；而 v2 选中卡 T+1 open 必可交易、必然都有竞价行，在选中池零区分度，不可用。子集内：log_auc_amt 两窗翻号（-0.22/+0.65，Spearman≈0）、volume_ratio 翻号（-0.21/+0.19）；auc_turn 冻结非单调（Qhi-Qlo+0.19 但 Spearman-0.044）、前瞻+0.62；auc_gap 两窗尾部略正（+0.30/+0.35）但 Spearman≈0.01（仅尾差、非单调），且 auc_gap≈开盘跳空，L-074 已在选中池证伪。canonical 否决（缺竞价数据保守保留）：**auc_turn 对选中池几乎无咬口**——bottom10% 两窗各仅剔2张、bottom5% 剔0张（动量入选票结构性地不在全市场竞价换手尾部，此性质不随覆盖增加改变）；auc_gap bottom10% 冻结剔的5张**全是赢家(均+5.824)、Δ-0.0082 有害**，前瞻剔104(-0.494) Δ+0.0167/CI[-0.087,+0.125]跨0/逐月.43，bottom5% 同样冻结剔赢家、前瞻 CI 跨0。否决。
+- 其余事件表评估为"过稀/单窗不可用"：holder_trades（重要股东增减持，冻结628行仅67股/前瞻197行31股）、repurchases（冻结11750行仅50股、前瞻0）、share_floats（冻结207行12股、前瞻0）、block_trades（冻结129行61股/前瞻627行197股）——独立个股数太少或只单窗，无法在选中池做稳健双窗口，不回填不重挖。
+- 永久规则：①**龙虎榜全市场 fade 真实存在，但与 L-064 资金流、L-075 换手/规模同一性质——全市场横截面异象经 v2 强势动量+质量筛选后被选择效应抵消甚至反向，禁止再以"上榜=出货/弱势榜=毒"做选中池否决（除非有榜内席位级、且双窗 CI 下界>0 的新机制证据）。**②**任何按交易日回填的辅助表，因子斜率必须在窗口覆盖补齐后复核；覆盖不全（尤其前瞻只填几十日）会制造跨窗假阳性，rzmre 从-0.61 变-0.009 即铁证。**③**"某表有无数据"的事件差在选股系统里几乎必然是可交易性/存活伪影（选中票都可交易→都有数据→零区分度），不得当作 alpha。**④动量入选票在"全市场低位尾部"类因子（竞价换手/换手/融资买入）上结构性缺咬口，这类"否决底部"思路在选中池反复失败，不要再换同义因子。**
+- 数据管道已知 bug（属 data-pipeline 域，本轮未改生产代码，仅记录）：state_adapters.py limit_up `last_time` 直接 str() 超 tables.py String(8) 会整日回滚；stk_auction adapter 未按(code,trade_date)去重，官方多行触发 duplicate natural key 整日失败（backfill_auction_direct.py 在脚本侧绕过）。
+- 复现：`scripts/backfill_aux_dataset.py`、`scripts/backfill_auction_direct.py`（回填）；`scripts/research_newfactor2_aux.py`（三表全市场双窗口五分位，面板缓存 output/research/newfactor2_aux_panel.pkl，权威日志 newfactor2_aux_now.log）；`scripts/research_aux_veto_canonical.py`（龙虎榜一刀切/bs<1/bs<0.7 + rzmre top5/10% 生产同构终审，日志 aux_veto_canonical_final.log）；`scripts/research_auction_canonical.py`（竞价换手/跳空选中池尾部否决，日志 auction_canonical_now.log）。
+- 相关：L-064（资金流全市场反向、选择效应）、L-075（规模/换手/PE/封板证伪、辅助数据覆盖矩阵）、L-074（开盘跳空/分时在选中池证伪、pm_ret 影子候选）、L-061/L-065/L-073（日线横截面 alpha 挖尽、选中池历史标签无区分度）、L-071（研究口径必须与生产同构）、L-058（多窗口/覆盖防过拟合）。
+
+## L-079 解锁 L-077 分钟缺口后，pm_ret 尾盘追高否决经【第三真前瞻窗】翻号证伪，正式退役 L-074 影子候选；v2 维持不改
+
+- 状态：active（否定性 FINDING，关闭一个挂起的 live_forward 影子候选）；生产维持 v2，不出 v3。
+- 适用：任何想用"信号日午后涨幅 pm_ret（15:00 收/13:15 开-1）在特定 regime·情绪格内过高→尾盘追高→否决"做硬否决/择时的尝试，以及评估 L-074 遗留影子候选是否落地。
+- 数据解锁（完成 L-077 指定的前置任务）：baostock 源对 2026-08-07~09-02 有完整 5min（8 股可行性测试 0 失败）；写 `backfill_5min_codes.py` 只对第三窗 run3(btr_2bec6fed) 全候选 774 只按股幂等回填，共存 704160 行、跳过 1、0 失败、56 分钟。回填后第三窗 1375 个候选对、95 个 v2 选中对的 5min 覆盖率均 100%（每对≥45 根），结论无覆盖伪影。
+- 三窗口 canonical（生产同构 evaluate_selection_policy 两臂：全卡 vs 排序前硬否决 cell∈{弱势·活跃,强牛·高潮} 且 pm_ret>T，第 11 名递补；冻结因果出场、前瞻/run3 join canonical 净）：
+  - 冻结 244d（旧）：T1.25 逐笔 +0.206→+0.269、cohort 日均 +0.061→+0.137、配对 CI[**+0.008**,+0.522]（下界刚过 0），被砍 67 张均 **-1.04（毒）**。
+  - 前瞻 117d（旧）：T1.25 -0.352→-0.249、cohort -0.267→-0.122、CI[**-0.004**,+0.743]（下界刚破 0），被砍 56 张均 **-1.46（毒）**。
+  - **第三窗 19d（本轮新，真前瞻）：T1.25 逐笔 -0.558→-0.961（更差）、win.442→.410、PF.764→.617、cohort 日均 -0.673→-0.986，配对 6 变化日 Δ均-0.628、CI[-2.04,+0.72]跨0、better-day.33、月正 0-2；被砍 10 张均 +3.15、win.70（弱势·活跃 +8.01/n4、强牛·高潮 -0.08/n6）——砍的是赢家。**T1.5/T1.75 同向有害（Δ-0.817/-0.536，被砍均 +3.15/+2.79）。
+- 判读：被砍卡条件均值从冻结/前瞻的 -1.0/-1.46（毒）在最新真前瞻窗翻成 +3.15（赢家），符号反转且跨阈值一致；尤其"弱势·活跃"格内午后拉升的票在 08-09 窗次日强势反弹（+8%），否决正好砍掉最大赢家。冻结/前瞻那点临界 CI 本就贴着 0，是特定 regime 的样本噪声，第三窗证伪。这与 L-058（多窗口防过拟合）、L-076（毒格/状态跨窗翻号）同一性质。
+- 永久规则：**pm_ret 尾盘追高否决（含"午后涨幅过大=追高=次日回落"及其在弱势·活跃/强牛·高潮格内的任何变体）三窗口证伪、正式退役，不再作为 live_forward 影子候选，禁止换名（"尾盘拉升/午后冲高/日内追涨惩罚"）重挖；高 pm_ret 的次日方向是 regime 条件量、无稳定符号。** 至此 L-074 的分时线索全部关闭（其余分时特征 L-074 已证伪，pm_ret 本条证伪）。
+- 复现：`scripts/backfill_5min_codes.py --pairs-pkl output/research/run3_canonical.pkl --start 2026-08-07 --end 2026-09-02`（回填，日志 backfill_5min_run3.log）；`scripts/research_pmret_run3_canonical.py`（第三窗终审，日志 pmret_run3_canonical.log）；旧两窗对照 output/research/intraday_chase_canonical.json；第三窗候选/净收益来自 scripts/research_third_window.py 的 load_run3（run btr_2bec6fed）。
+- 相关：L-074（pm_ret 影子候选出处、其余分时证伪）、L-077（定位本窗分钟缺口）、L-076（第三窗与毒格翻号）、L-058（多窗口防过拟合）、L-071（生产同构）、L-069（涨停微观情绪择时证伪）。
+
+## L-080 外部指数慢趋势门控（000905 价格 vs MA20/10日动量）三窗口证伪：冻结/前瞻显著改善、第三窗砍超跌反弹赢家而翻号；"急跌豁免"不同步，不落地
+
+- 状态：active（否定性 FINDING，关闭一个看似最有希望的独立数据源择时门控）；生产维持 v2，不出 v3。
+- 动机与独立性：生产 `_market_base` regime **只用当日横截面上涨家数 up_ratio（snapshot 无任何指数价格字段）**，L-072③测的广度 ma3/ma5 仍是内部广度；本方向首次用**独立外部数据源** index_daily（000905 中证500 贴近选中中小盘，2023-05 起 801 日三窗全覆盖）构造慢趋势：收盘 vs MA20/MA60、MA20 斜率、5/10/20 日指数收益、20 日回撤。假设慢趋势不像当日广度那样逐日翻号，或能稳健识别"退潮期"收缩。
+- 探索层（v2 选中逐笔）：above20（指数在 MA20 上/下）冻结 +0.335/-0.098、前瞻 +0.210/-0.730（上方明显好），**但第三窗硬翻：上方 -2.264/胜.25（8 天见顶回落，含 08-19/21 崩盘）、下方 +2.367/胜.77（4 天超跌反弹）**；ix_ret10 三分位冻结/前瞻单调（越高越好）、第三窗 Q0（10 日最跌）+1.942 最好，同样翻号。
+- canonical 全日门控终审（门控日整日不选出、空日记 0；逐笔/日 cohort SLEEVE/配对日差 bootstrap5000）：
+  - **above20 门控（只在 MA20 上出票）**：冻结逐笔 +0.206→+0.335、cum+1.48→+4.38，但配对 CI[-0.62,+1.48]跨0、月正4-5；**前瞻 -0.352→+0.210（由负转正）、cum-3.91→+1.52、配对 CI[+0.012,+1.273] 下界>0、月正5-2**；**第三窗 -0.558→-2.265、cum-1.34→-3.03，空出的 4 天恰是 +2.367/胜.77 的反弹赢家，配对 Δ-2.52**。
+  - **ix_ret10≥-3% 门控**：冻结 +0.312、前瞻 -0.352→+0.015、CI[+0.018,+1.515]，第三窗却 -0.558→-2.234、空出 3 天 **+4.135/胜.88** 的赢家、CI[-5.77,-2.76] 显著为负。
+  - strong_down（双均线下方空仓）冻结空到的是 +0.266 赢家、第三窗空到 +2.367 赢家，两窗有害；dist20≥-2% 前瞻 CI[-0.014] 贴 0、第三窗仅动 1 天。
+- 判读：**这是"双窗口会错误放行、第三窗拦下"的教科书案例**——above20/ix_ret10 门控仅凭冻结+前瞻本应落地（前瞻还由负转正、CI 下界>0），但 2026-08 下旬是超跌反弹 regime：指数跌破 MA20、10 日最跌的日子次日反弹最猛，门控正好砍掉最大赢家。顺势/逆势的有效性本身随 regime 切换，MA20 状态无法事前区分。
+- "急跌豁免"救不回（关键反证）：试图只空"阴跌破位"、保留"近 3 日急跌 capitulation 反弹"。ret3≤-4% 深急跌在冻结 +1.485/胜.72(n18/3天)、前瞻 +0.253/胜.60(n94/11天) 确同向为正，但**第三窗无此日**；而第三窗反弹赢家（08-24~26）发生在急跌窗口之后、ret3 已修复，被归为"阴跌"，与冻结/前瞻"阴跌该空"矛盾；ret3≤-2% 档第三窗反而是 -2.05 的输家。不存在三窗自洽的豁免阈值。深急跌反弹仅 3+11 个日簇（L-039 单日聚集风险）、第三窗不可验、且方向是"在最恐慌日加仓"无可执行选股动作，不采用。
+- 永久规则：**(a) 外部指数价格趋势（价 vs MA20/MA60、指数 N 日动量/回撤）做全日择时门控，与内部广度门控同属 regime beta，三窗翻号，禁止以"趋势向上才出票/跌破均线空仓"及其斜率/动量变体落地；双窗口（含 CI 下界>0）不足以放行，必须第三独立窗同向。(b) 一个门控若在某窗"由负转正、CI>0"而在另一窗砍掉正期望赢家，即判 regime 条件量、不是 alpha。(c) 用"急跌/超跌豁免"修补趋势门控前，必须证明豁免条件在三窗命中同一批赢家；只在历史两窗同向、第三窗 0 命中的，属不可验，不落地。**
+- 复现：`scripts/research_index_trend_gate.py`（三窗指数慢趋势分层，缓存 ixgate_*.pkl）、`scripts/research_index_gate_canonical.py`（全日门控终审，日志 output/research/index_gate_canonical.log）；指数源 index_daily 000905.SH。
+- 相关：L-072③（内部广度 abstain 翻号，本条换独立外部指数源仍翻号）、L-076（第三窗毒格/状态翻号、08-19/21 与 08-24/26 行情结构）、L-058（多窗口防过拟合，本条是第三窗价值的直接例证）、L-079/L-074（分时门控翻号退役）、L-071（canonical 口径）。
+
+## L-081 板块/行业横截面（动量/广度/涨停拥挤/板块内相对强弱）与 daily_kbars 残余日线列三窗口证伪；北向两表覆盖即死；v2 维持不改
+
+- 状态：active（否定性 FINDING，关闭"板块轮动/拥挤"与最后一批未测日线列）；生产维持 v2，不出 v3。
+- 适用：任何想用"个股所属行业的近期动量/当日强度/上涨广度/涨停家数拥挤/板块内相对强弱"做选股否决或加分，以及想再从 daily_kbars 找漏网日线因子的尝试。
+- 数据：code→industry 取 stocks 表（112 行业、5527/5527 全覆盖），板块特征由 newfactor_fullmarket.pkl 全市场面板（412 日、毛 fwd5=T+1open→T+5close）按 (日,行业) 现算，三窗＝冻结 2025-01-15~2026-01-16 / 前瞻 2026-02-09~08-05 / run3 2026-08-07~09-02。concept_sector(_stock) 成员表 2026-05 才建、冻结窗缺失，不可用，故用 stocks.industry 标签。
+- 全市场三窗快筛（L-065 门槛逐月同号≥0.8，无一达标）：行业当日均涨幅 sec_today 三窗 -0.08/+0.63/**-0.82 翻号**、同号 .62/.71/.50；上涨广度 sec_upfrac -0.16/+0.37/-0.69 翻号；行业 20 日动量 -0.23/+0.73/**-1.71 翻号**；板块内相对强弱 rs5 -0.27/+0.32/+0.12 弱且翻；行业 5 日动量 sec_ret5 冻结 +0.12（平、非单调）、前瞻 +0.96（同号.71）、run3 +0.41（同号 1.00）但 Spearman≈0（.03/.006）、冻结非单调，仍不过门槛；**行业当日涨停家数 sec_nlu：冻结 +0.69（正）、前瞻 -6.77（顶部档 -7.09）、run3 -2.29（负），两近窗同向为负但冻结反向。**
+- 生产同构三窗 canonical（base vs 排序前硬否决、第 11 名递补；冻结因果、前瞻/run3 join canonical 净）：①涨停拥挤 top10% 否决——冻结剔 599 张均 +0.214（赢家）、n1010→571、cohort 日均 +0.061→-0.083（Δ-0.152）重创出票，前瞻剔 237 张 -0.693（毒、Δ+0.081/CI 跨0），run3 Δ-0.262 变差；top5% 更极端——冻结仍剔 495 张赢家（Δ-0.092），前瞻 Δ+0.093/CI[-0.20,+0.37]跨0，run3 Δ+0.451/CI[-0.031,+0.99]下界仍破0。②弱势行业动量 bottom10%/5% 否决——冻结剔 +0.158/+1.297 赢家、run3 剔 +2.825/+4.322 赢家，三窗冲突/CI 全跨0。**结论：板块"涨停高潮后崩塌"只在 2026 震荡退潮市成立，2025 强势市拥挤=动量本身、否决会大面积砍掉 v2 选出的赢家并饿毙出票，是 regime 条件量不是稳定 alpha（同 L-080/L-058），双窗规则下冻结反向即否决落地。**
+- daily_kbars 残余日线列三窗快筛（补 L-061/065 漏网）：chip_winner_rate 获利盘比例 冻结 +0.12（非单调）/前瞻 +0.56（同号.67）/run3 +0.07（平）、Spearman≈0；profit_efficiency、atr **全空（未计算）**；upper_shadow_count20 冻结/run3 单档常量、仅前瞻有值（-0.27/同号.5）；holder_pct 三窗同号仅 .46/.50/.50、前瞻覆盖仅 33%。全部不达标。
+- 北向数据覆盖即死（无需回填即排除）：hk_holdings 全表仅 132 只、冻结 4 日/前瞻 2 日/第三窗 0；hsgt_top10 设计上每日仅约 10 只、冻结窗仅 1 日 20 股；hsgt_flows 是大盘级总量（无 code，属 L-080/L-060 已证伪的 regime beta 择时）。北向个股维度无法做三窗选中池检验，不回填。
+- 永久规则：**(a) 板块/行业横截面（动量/广度/涨停拥挤/板块内相对强弱/行业分散已在 L-073）在 v2 选中池无三窗稳定信息，"行业涨停拥挤=高潮崩塌"是 2026 退潮市专属、2025 强势市反向，禁止不做三窗就把近窗规律当 alpha 落地；这与 L-065"板块联动补涨已证伪"、L-080"指数趋势门控三窗翻号"共同关闭板块/择时门控族。(b) daily_kbars 现有列（含筹码分布 chip_winner_rate、holder_pct、上影计数）已逐一筛过，无漏网日线横截面因子；profit_efficiency/atr 是未计算空列，要用先补数据且仍须过三窗。(c) 北向个股级数据当前覆盖不足以研究，hsgt 总量不做选股信号。**
+- 复现：`scripts/research_sector_factor_screen.py`（板块八因子三窗全市场快筛，缓存 sector_factor_panel.pkl，日志 sector_factor_screen.log）、`scripts/research_sector_veto_canonical.py`（拥挤/弱势三窗 canonical，日志 sector_veto_canonical.log）、`scripts/research_daily_residual_screen.py`（残余日线列快筛）。
+- 相关：L-065（日线横截面/板块联动系统性挖尽）、L-061（价格技术因子）、L-080（外部指数趋势门控三窗翻号）、L-072/L-073（regime 门控/行业分散上限/出票结构）、L-058（多窗口防过拟合）、L-064/L-078（全市场→选中池选择效应）、L-071（canonical 口径）。
+
+## L-082 全库三窗覆盖普查：冻结窗可用数据源已穷尽；唯一漏测的 stk_limits（板型/距涨停）三窗翻号证伪；v2 维持不改
+
+- 状态：active（否定性 FINDING + 数据源穷尽地图，防止后续换名重挖无冻结覆盖的表）；生产维持 v2，不出 v3。
+- 动机：L-058~L-081 逐轴证伪后，系统回答"是否还有冻结窗有足量数据、却没筛过的数据源"。对全部 87 张表按日期列统计三窗行数（脚本 `research_coverage_sweep.py`，日志 coverage_sweep.log）。
+- 冻结窗（2025-01-15~2026-01-16）行数>1000、可做三窗 canonical 的表及其归宿：daily_kbars（L-061/063/065/081）、daily_basic（L-075）、stk_limits（本条）、limit_up_board（L-075）、dragon_tiger / margin_detail / auction_data（L-078）、minute_kbars（L-074/079）、index_daily（L-080）、stocks.industry 板块（L-081）。**至此全部筛完。**
+- 唯一漏测的 stk_limits：仅 up_limit/down_limit 两列，衍生①板型宽度 bw=(up-down)/(up+down) 归并 ST5/main10/gemstar20(20cm)/bse30，②收盘距涨停 dist_up=(up_limit/close-1)。三窗全市场：20cm-vs-10cm 均 fwd5 差 冻结 +0.31、前瞻 +0.17、**run3 -0.57 翻号**；dist_up 五分位 Qhi-Qlo 冻结 +0.449（同号.69）、前瞻 -0.200（.43）、run3 -0.018（.50），且 dist_up 本质是 pct_chg 的单调变换（L-061 已证伪价格动量）。板型 beta 全市场存在但跨窗翻号、选中池已被 quality_cap/score 过滤，不落地。
+- 覆盖即死、不回填的表（冻结 0 或单窗/过稀，无法满足三窗 canonical）：capital_flow/concept_sector(_stock)/news_announcement/llm_review_cache/stock_quotes/recommendation(s) 冻结 0（news_announcement 仅 2026-03-10 起、negative 标签全库仅 1114 条≈3.4%）；hk_holdings/hsgt_top10/hsgt_flows 北向（L-081）；institutional_surveys（冻结1120/前瞻342/run3 0，日均≈4 条）、broker_recommends（月度稀疏）、pledge_stats/repurchases/share_floats/stock_fina_indicator/holder_numbers/holder_trades/block_trades 单窗或 run3 0。
+- 永久规则：**(a) 选股因子研究只允许在"冻结窗有足量覆盖"的表上做三窗 canonical；冻结 0 / 单窗 / 日均个位数的表先解决覆盖再谈因子，禁止用近两窗规律绕过冻结窗落地（L-058）。(b) 板型（10/20/30cm）与"距涨停距离"无三窗稳定 alpha，后者是 pct_chg 变换，不再重测。(c) 新增数据源要先过 `research_coverage_sweep.py` 的覆盖门：三窗都得有足量选中池交集，否则直接记覆盖即死。**
+- 复现：`scripts/research_coverage_sweep.py`（全表三窗覆盖普查 + stk_limits 板型/dist_up 快筛，缓存日志 output/research/coverage_sweep.log）。
+- 相关：L-081（板块/残余日线/北向）、L-065（日线横截面挖尽）、L-075（daily_basic/limit_up_board）、L-078（事件三表）、L-061（pct_chg 价格动量）、L-058（多窗口）、L-071（canonical 口径）。
+
+## L-083 信号"自身质量/置信度"轴（数据完整度/真实性/缺失字段数、confidence/setup_quality/独立性/risk_flags）证伪；并记录候选快照持久化 schema 不对称；v2 维持不改
+
+- 状态：active（否定性 FINDING，关闭 meta-quality / per-signal confidence 方向）；生产维持 v2，不出 v3。
+- 动机：L-082 穷尽外部数据源后，转向"信号自身可靠性"这一不依赖新行情数据的框架轴——直觉上数据越全、置信度越高、风险标记越少的信号应越可靠。两类字段分别存在于两套快照（持久化 schema 不对称）：A 冻结聚合卡上的 data_completeness_score/data_authenticity/evidence_quality_score/data_quality.missing_fields；B 前瞻/run3 backtest_candidates.signal_json 单策略信号上的 confidence/setup_quality/strategy_independence/risk_flags。
+- A 冻结选中池（n=1010，因果净）：data_completeness/evidence_quality 都只有二元、Spearman ±0.04；data_authenticity **常量无区分**；missing_fields 数 nmiss 仅取 {5,6,7}，nmiss=5 +0.388 / nmiss=6 +0.200 / nmiss=7（120 张，12%）-0.219，弱单调但 rho 仅 -0.042。**nmiss 本质是"信号生成当时哪些数据管道已上线"的覆盖伪影**：L-078 已向冻结窗回填 dragon_tiger/margin、L-079 回填 5min，历史"缺失"状态已被当前库污染、不可还原；且 signal_json 根本没持久化这些字段，前瞻/run3 无法对齐，三窗不可复现，判死。
+- B 两个 2026 窗（signal_json，选中=run 内全候选 score≥70）：confidence Spearman +0.007/+0.011、risk_flags 数 +0.009/+0.007≈0 且非单调；strategy_independence **常量**；setup_quality 仅二元、rho +0.027/+0.032（高档 +0.22/+0.26 vs 低档 -0.28/-0.34），方向两窗一致但极弱，且 setup_quality 本就是 final_score 的上游输入（再用=重复计数），冻结快照又未持久化、无法三窗。整体无独立信息，即使补冻结持久化也救不活。
+- 永久规则：**(a) 信号 meta-quality（数据完整度/真实性/缺失字段数/置信度/独立性/risk_flags 数）在选中池无 |Spearman|≥0.05 的稳定区分度，不作为选股否决/加分；"缺数据=信号差"是管道上线进度的覆盖伪影，禁止用当前库反推历史缺失态。(b) 候选/信号快照持久化 schema 不对称（冻结聚合卡 vs 前瞻 signal_json 字段不同），任何想跨三窗用的卡级字段，必须先确认三套快照都持久化了它，否则在研究脚本里就判覆盖即死，不要做到一半发现对齐不了。(c) 已经喂给 final_score 的上游子分（如 setup_quality/evidence）再做否决属重复计数，除非能证明其残差方向三窗稳定。**
+- 复现：`scripts/research_signal_quality_screen.py`（A 冻结因果 + B 两窗 signal_json，自包含）。
+- 相关：L-073⑪（evidence_quality_score 冻结五分位已证伪，本条补全同族字段并扩到两窗）、L-082（覆盖门/快照源）、L-078/L-079（回填污染历史缺失态的具体来源）、L-065（选中池横截面无信息）、L-071（canonical 口径）。
+
+## L-084 信号日隔夜跳空 gap（open/前收-1）：唯一通过廉价三窗同号+条件独立初筛的日线特征，在生产同构"真实递补"canonical 下被第三窗翻号否决；并记录评分内部三杠杆因快照 schema 不可三窗
+
+- 状态：active（否定性 FINDING + 一条 L-071 的强例证）；生产维持 v2，不出 v3。
+- 背景：L-082 已普查冻结窗数据源穷尽、L-083 记录快照持久化 schema 不对称。本轮先复核"评分内部"三个杠杆，均在数据层不可三窗、不进入检验：①组件聚合权重再校准——回测/纯规则路径（无 agent review）在 aggregator 里被强制固定为 strategy_rule.55/market.20/risk.15/evidence.10，regime 权重被覆盖，且冻结卡 raw_component_scores 只存 evidence、canonical run signal_json 是逐策略单分，缺其余分量，无法离线重算 final_score；②逐策略 strategy_id 毒格——冻结 strategy_signals 匿名无 id（L-072⑤已判），canonical run 每(日,股)仅一行、strategy_id 全同；③单卡策略共识数/信号离散度——canonical run 入库前已把多策略折叠成每(日,股)一行，仅冻结保留多信号，而冻结单窗 n_sig≥3 非单调（n_sig=2 最差）、corr 仅 +0.04，单窗假相。三者要做只能整条重放打分管线且前瞻窗与生产不同构，不满足 L-071，放弃。
+- 廉价初筛（手写 cohort，仅探索）：对选中池补算 daily_kbars 残余 OHLC 衍生特征（ivol/atr/bias/rsi/wr/max_dd/chip/上影/量比/换手/gap/收盘位置clr/振幅/ret5/vol20）三窗 Spearman IC + 三分位单调。绝大多数三窗翻号或近 0；**唯一幸存者 gap=信号日 open/前收-1**：IC 三窗全正（+0.055/+0.110/+0.136）、三分位三窗全单调向上（冻结 -0.14/-0.015/+0.773，前瞻 -0.858/-0.488/+0.287，run3 -1.06/-1.03/+0.397），跨 120/71/9 个交易日非单日聚集。
+- 条件独立性（看似很强）：gap 与信号日 pct_chg 相关仅 0.28/0.43、与 chg20≈0；**控制 pct_chg 双重排序后"高开优于平/低开"在三窗 9/9 档全成立**，控制 chg20 后 8/9 成立；gap>0 vs gap≤0 简单拆分三窗逐笔 +0.557/-0.053、+0.250/-0.641、+0.081/-0.799，0 为天然非拟合阈值。经济叙事（隔夜仍敢高开=真买盘 conviction）成立。
+- 但两道稳健性检查已现裂痕：①regime 格内翻号——冻结"强牛·活跃"高开 -0.197 反不如平低开 +1.248，run3 唯一足量格"弱势·活跃"高开 +0.384 也不如平低开 +0.981（run3 总效果靠格间 Simpson 构成）；②日聚集——冻结配对日 59 正/60 负近掷币、前 3 日贡献 54%，前瞻前 3 日贡献 74%，run3 日配对总和为负。
+- **生产同构 canonical 终审（硬预过滤 gap≤thr 等价硬池否决，由真实 evaluate_selection_policy/_run_arm 自然递补下一张卡，不人为留空）——决定性否决，thr=0**：冻结逐笔 +0.206→+0.436、日cum(SLEEVE)+1.29→+13.48、MDD -9.57→-5.91、配对日差 **CI[+0.155,+0.870] 下界>0**、月正 11/13（强）；**前瞻仅 -0.352→-0.106（仍负）、cum -3.89→-3.01、配对 CI[-0.452,+0.549] 跨 0 不显著**；**第三窗翻号：逐笔 -0.558→-0.565、cum -1.35→-2.48 反而更差、日配对 Δ-0.578**（超跌反弹日里 gap≤0 的反而是反弹赢家，剔掉后递补不上、组合更差）。thr=-0.01/-0.02 更弱或反向（thr=-0.02 冻结砍到 +0.694 的赢家）。
+- 关键教训（L-071 直接例证）：**手写 cohort"剔掉就留空"把 gap 前瞻虚高成由负转正(+0.25)、run3 虚高成 +0.08；一旦让生产代码按分数递补真实候选，前瞻增益缩到不显著、第三窗直接翻负。** 廉价三窗同号+控制动量 9/9 同号+天然阈值，全都不足以放行；软重排序杠杆在 v2（每日极少>10 候选）inert，regime 条件化也被第三弱势窗翻号。
+- 永久规则：**(a) 信号日隔夜跳空/开盘强弱（open/前收、距涨停开盘、集合竞价跳空同族）不得作为选股硬否决或加分落地：它在选中池的表观优势=格间 regime 构成(Simpson)+手写留空偏差，真实递补下第三窗翻号。(b) 任何特征即使过了"三窗 IC 同号+三分位单调+控制已知动量后仍成立+天然阈值"这一整串廉价初筛，仍必须过生产同构【含候选递补】canonical 的三窗配对 CI 下界>0；手写 leave-empty cohort 只能用于预筛、永远不能作为落地依据（再次固化 L-071）。(c) 评分内部（组件聚合权重/逐策略标签/单卡共识数）在当前持久化快照 schema 下不可三窗复现，禁止凭单窗或两窗改这些旋钮；要改须先改造快照持久化全分量并证明三窗可对齐。**
+- 复现：`scripts/research_selected_daily_feat_screen.py`（残余日线特征三窗 IC/单调扫描）、`research_signal_consensus.py`（共识数，证明 run 端折叠）、`research_gap_robust.py`（gap 条件独立/格内/聚集）、`research_gap_levers.py`（手写留空杠杆，展示虚高）、`research_gap_canonical.py`（真实递补 canonical 终审，结果 output/research/gap_canonical.json）。
+- 相关：L-071（canonical/递补口径，本条是其最直接例证）、L-058（多窗口防过拟合）、L-080（外部门控第三窗翻号，同型）、L-083（快照 schema 不对称，本条补全评分内部三杠杆不可复现）、L-081（残余日线列已扫，gap 为其漏网且终审证伪）、L-061/065（选中池横截面无 edge）、L-073（出票结构/日内排名 inert）。
+
+## L-089 LIVE 聚合路径上的三层"末端反转/非龙头"毒区：强势多头发散、长周期 RSI 低位、短线龙头低分，软 cap 重排序把 top30 WR +8.3pp（生产yaml权重）且零整票剔除
+
+- 状态：active（LIVE 已结算路径的正向 FINDING，已落地生产 12 个 strategy.yaml，2026-09-13 随 `feat/strong-bull-ivol-veto-v3` 合入 `main`）；与 L-058~L-084 的"冻结三窗证伪"轨道互补——本条用的是 LIVE 真实已结算推荐（去重 241、已结算 205），仲裁的是生产聚合排序而非全市场因子。 **合并时修订（2026-09-13）：规则随 `feat/strong-bull-ivol-veto-v3` 合入 `main` 后，`backend/skills/*/strategy.yaml` 对三层毒区 phase 名命中 **12/13** 个文件，"已落地"声明成立；但本条头条 "+8.3pp" 只在含 `historical_reconstruction` 的汇总上成立，canonical `live_forward` 层增量为精确 0（分层审计见 L-096）。故本条只背书"规则已落地"，不背书该收益数字。**
+- 三层毒区（已结算 205，全样本 WR45.9/avg-0.72）：①`dsa_trend_score==30`（=trend_status 强势多头/均线完全发散）n15 WR20.0/avg-3.21，逐月 25/0/16.7/33 全差，形态最强实为延伸末端反转，cap58；②`rsi_24∈(0,48)`（中期趋势偏弱、反弹缺支撑）n29 WR34.5/avg-1.97，对照 rsi24>=56 n108 WR53.7/+0.19，cap58；③`shortline_leader_score∈(0,35]`（非板块真龙头缺接力）在前两层残差上仍单调、对照 >52 n75 WR53.3/+0.20，温和 cap62。三层均 soft（hard_veto:false），只把毒区票排到真龙头之后。
+- 金标准（对每笔 rec×背书策略真实 run_strategy 取新鲜分、**逐策略权重直接取 run_strategy 返回的 yaml weight**——生产 `aggregator._compute_strategy_rule_score` 用 signal['weight']，不是任何离线硬编码字典）反事实（当前 yaml 权重）：top 半区 46.7→48.3、top40 47.9→52.1、**top30 48.6→56.9（+8.3pp）**，hard_veto 整票剔除 0。三套权重（HEAD/旧PROD/当前yaml）下每个口径都为正、top30 治疗后收敛到同一 56.9，证明增益不依赖权重调参。收益集中在 top40/top30（生产每日只取最前几只）。
+- 权重口径坑：离线若用过时硬编码权重会得到偏乐观数字（旧字典口径 49.2/55.2/58.3）；stored brk 里的 weight 是推荐当时的冻结值，又与当前 yaml 不同。**离线评估一律用当前 run_strategy 返回的权重。**
+- 停在三层防过拟合：剥净后残差基线已升到 49.6/+0.21；第四层候选（price_volume_fallback 月度反转、放量上涨/high_volume_days 不在白名单且桶小、中单流入非单调、breakout60/上影/broker_rec 小桶疑已被捕获）全部否决。
+- 永久规则：**(a) LIVE 排序优化优先用 soft score_cap 重排序而非 hard_veto 整票杀——主线充足时毒区自然落选、主线不足时仍可补位，下行可控。(b) 一个毒区要同时满足"逐月无强势月 + 跨 regime 同向 + 与已落地因子正交"，且必须在剥掉前序毒区的残差上仍成立才算增量。(c) 阈值/成员集用反事实金标准选（≤35 vs ≤40、full7 vs 去 small-cap、cap58/60/62），不看单桶边际 WR 就拍板。**
+- 复现：离线 `/tmp/live_dedup_data.json`（241 笔）、`/tmp/live_gold_wcmp.py`（base/treat 金标准，yaml 权重）、`/tmp/live_gold_w3.py`（三套权重稳健性）、`/tmp/live_gold4.py`（四向 guard 对比）、`/tmp/live_lomo.py`（逐月留一月稳健性：top30/top40 无任何月份变差）、`/tmp/rebuild_poison_front.py`（幂等重建）；报告 `docs/LIVE路径仲裁-三层毒区相位排序纠错-2026-09-12.md`。
+- 相关：L-090（让本条真正生效的 phase 排序/白名单/缺字段机制）、L-091（金标准 vs 冻结分、小样本 veto 翻案）、L-071（canonical 口径）、L-073（出票结构/重排序杠杆）。
+
+## L-090 策略 phases 是"首个 when 命中即 break"：新增软规则必须置 phases 最前、用 not(hard_veto) 让位、对缺字段加 >0 守卫；evaluator 白名单外字段静默 False
+
+- 状态：active（引擎机制 FINDING，解释了为何"写了规则却不生效"，已据此修正 L-089 落地方式）。
+- 首命中 break 陷阱：`strategy_runner` 对 phases 从上到下找第一个 when 为真者、命中即 break、只应用一个 phase。把新软 cap 按惯例插在 setups 前（phases 末尾）会被更早的宽松软 cap（弱市降权 cap68、趋势跟踪 cap100）抢占——L-089 三层最初因此大量不生效（强势 16 中 7、RSI 41 中 15、leader 34 中 24 被抢占），"对每策略取 min(各 cap)"的离线算法会高估（预测 52.5 实际 50.0）。**新增 phase 若要优先，必须显式放到 phases 最前。**
+- hard_veto 让位：前置软 cap 会反过来抢到既有 hard_veto 前面、架空核心风控（raw 纯条件金标略优但非法覆盖 532 处 veto，多为 high-range 弱市追高否决）。规则：**新软 phase 的 when 必须 `and not(<每个既有 hard_veto 的 when>)`，保证永不覆盖绝对否决；普通软 cap 之间交错顺序差异仅几分、可不让位。** 改共享引擎做"两遍扫描 veto 优先"会改动 125 处现有行为，否决，只在 yaml 内局部 guard。
+- evaluator 两个静默陷阱：①`ALLOWED_NAMES` 白名单外的名字（如字符串字段 trend_status/ma_alignment/volume_status）raise 后被 `evaluate()` 静默吞成 False，规则永远不命中且不报错——必须改用白名单内数值字段（dsa_trend_score==30 严格替代 trend_status=='强势多头'，先验证枚举一一对应、零 null）。②缺失字段被 `_coerce(None)=0.0`，"X<=阈值/ X<阈值"类条件会把缺数据误判成最低值而误触发；生产稳健写法是 `X > 0 and X < 阈值`（真实 LIVE 三字段零缺失，但两个回归测试 fixture 不设字段即暴露此问题）。等值条件 `X==30` 对缺失天然安全。
+- 永久规则：**(a) 改任何 strategy.yaml 的 phases 前，先确认引擎是"首命中 break"还是"全量叠加"；要让某 phase 优先就放最前，并离线逐笔统计它被更早 phase 抢占的比例。(b) 任何前置/新加软 cap 必须对同策略全部既有 hard_veto 做 not(...) 让位，并逐笔验证"我首命中时后续无 hard_veto 命中"的风险数=0。(c) when 里只用 evaluator 白名单内字段，字符串枚举先找对应数值分；所有"小于/低于阈值"条件对可能缺失的字段加 `>0` 数据有效性守卫。**
+- 复现：`/tmp/live_faithful_sim.py`（冻结分首命中模拟，暴露抢占）、`/tmp/live_phase_preempt.py`（抢占诊断）、`app/engine/{strategy_runner,evaluator}.py`。
+- 相关：L-089（被本机制救活的三层毒区）、L-091（冻结分与真实 run 的分歧）、L-071（口径必须与生产同构）。
+
+## L-091 离线评估必须用"真实 run_strategy 金标准"而非历史冻结分；小样本 hard_veto（n=2 WR0%）会被去重大样本（n=16 WR56%）推翻
+
+- 状态：active（方法 FINDING + 一条小样本风控翻案）。
+- 冻结分歧义：recommendations 里逐策略 brk 分数是**历史各版本冻结输出**，不是当前 yaml 重算结果；用 min(冻结分, 新 cap) 或"冻结分首命中"模拟新规则，会与"当前 yaml 首命中"不一致（本轮 33 处），且偏乐观。**权威做法是金标准：对每笔 rec×每个背书策略用当前代码真实调用 `run_strategy` 取新鲜分**（StrategySkill 是 frozen dataclass，做变体用 `dataclasses.replace(sk, contract=con)`），彻底绕开冻结分歧义。本轮最终数字一律以金标准为准。
+- 小样本 hard_veto 翻案：DSA 旧「资金背离否决」证据仅 n=2/WR0%；去重 241 大样本复核资金背离 n=16 **WR56.2%**、主力共振 n=38 WR52.6/+0.85，方向反了（都是正 alpha），遂删除该 hard_veto。hard_veto 是整票杀、代价最高，最不该由个位数样本立。
+- 永久规则：**(a) 评估策略改动对历史推荐的影响，必须用当前生产代码逐笔真实重跑（金标准），禁止用入库冻结分做 min/首命中推算并据此下结论。(b) 任何 hard_veto 立项要求足量去重样本 + 逐月/跨 regime 一致；个位数样本（n<~10）只能做观察标记、不得整票否决，已立的小样本 veto 要在样本扩大后主动复核翻案。(c) 去重口径按生产 `(trade_date,code)` 同 code 合并，未去重的重复推荐会同时虚增样本、扭曲 WR。**
+- 复现：`/tmp/live_gold_wcmp.py`、`/tmp/live_gold_w3.py`、`/tmp/live_gold4.py`（金标准，权重取 run_strategy 返回值）；DSA strategy.yaml 原位保留资金背离翻案注释。
+- 相关：L-089/L-090（同轮落地与机制）、L-071（生产同构口径）、L-058（多窗口/样本量防过拟合）。
+
+## L-092 三层毒区参数平台稳健性确认；三个后续杠杆（chip/dsa 归零、强势 hard_veto、breakout60 加分）逐一证伪——边际 churn 不落地
+
+- 状态：active（否定性 FINDING + 已上线参数的稳健性背书）；生产维持 L-089 三层毒区现状，本轮不改任何生产策略。
+- 平台扫描（内存构造参数化变体跑金标准，不动文件）：rsi 阈值 48 落在 48–52 平台（g30 同为 56.9）、leader 阈值 35 落在 33–38 平台中央、毒区 cap 58/62 落在 55–58 平台、强势 cap 在 48–58 完全无 flip——**已上线参数都在平台而非刀尖，前向 OOS 稳健，无需调参。**
+- 证伪①chip/dsa 权重归零：chip 唯一背书 0/3 全亏、dsa 无 HQ 组 WR31 看似该砍，但金标准 flip 显示归零只是"移出 1 输家+1 中性、却放进另一输家 -3.09"的边界 churn（全局 +0.8pp=1 票噪声），不是干净的赢家替换；**判据：权重/阈值改动必须看 top 集合的逐笔进出，净换入赢家/换出输家才算 alpha，只动 1–2 张边界票且含换入输家=过拟合，不落地。**
+- 证伪②强势毒区改 hard_veto：会整票剔 16 张，其中误杀 3 个赢家（+5.79/+8.99/+1.0），g30/lomo 反降；soft cap58 在 48–58 任意档结果相同。**再次固化 L-089：末端反转毒区用软降权、不用整票否决，给少数真突破留活口。**
+- 证伪③breakout60 正向加分：全样本 breakout60=True n21 WR62/+1.72 vs False WR44/-1.00 看似强正 alpha，但卡级 +4 模拟的增益来自绕过 phase cap（不该顶破毒区）；按生产真实路径在 scoring.rules 逐策略 +4（L122 min(score,cap) 之前、被毒区 cap 罩住）后只剩全局 g30 +1.4（1 票）、g40/LOMO/逐月全不变，为 1 票动 10 个 yaml 不划算。**判据：卡级/聚合层模拟出的增益必须用"能真正写进 strategy.yaml、且不绕过 score_cap"的实现复算一遍，复算后增益消失即证伪。**
+- 成员集复核：S8/R7 被排除的声明式策略在对应毒区队列零背书（limit-up/overnight/small-cap/weak 等），high-position 是 imperative 无 strategy.yaml 无法加 phase，weak-market rsi 仅 n1——成员集完整无遗漏。
+- 永久规则：**(a) 已上线规则要做参数平台扫描（±2~4 档），落在平台中央才算稳健、落在单点尖峰要回退到平台中心。(b) 任何后续杠杆先看 top 集合逐笔 flip 与逐月 LOMO：换入输家或仅 1 票 churn、LOMO/逐月不升的，一律不落地，无论全样本单桶 WR 多好看。(c) 聚合层/card 级"如果加 X 分"的模拟只用于预筛，落地前必须等价改写到 strategy.yaml 评分路径并保留 score_cap 约束再复算。**
+- 复现：`/tmp/live_sens.py`（阈值/cap 平台）、`/tmp/live_wgrid_iso.py`+`/tmp/live_wgrid_lq.py`（chip/dsa 权重网格与逐月）、`/tmp/live_strong_scan.py`（强势强度/hard_veto）、`/tmp/live_breakout_boost.py`（卡级）与 `/tmp/live_bk_impl.py`（忠实 yaml 实现复算，证伪）。
+- 相关：L-089（被背书的三层毒区）、L-090（phase/cap 机制）、L-091（金标准口径）、L-058/L-071（多窗口与生产同构防过拟合）。
+
+## L-093【正面 FINDING，已落地 v3】强牛 regime × 高特质波动 ivol20 横截面尾部硬否决+自然递补：三窗口生产同构 Δcohort 全正；首个通过"含真实递补 canonical"的日线横截面风险否决
+
+- 状态：active（正面 FINDING，production_selection 升 v3 并设为默认；v1/v2 artifact 保留可复现）。
+- 因子构造（非存量列、可从日线严格自构、2021 起全覆盖、T 收盘可得无前视）：ivol20 = 个股日收益 r=pct_chg/100 对中证500(000905.SH)收益 m 做 20 日滚动回归 beta=Cov(r,m)/Var(m)（min_periods16）后的残差 e=r−beta·m 的 20 日标准差，即剔除市场 beta 后的**个股特质波动**；落库为 daily_kbars.ivol20（`scripts/backfill_ivol20.py`，月分块幂等，挂在 backfill_daily_bars 末尾增量），决策时取**当日全市场横截面 pct rank**（`app/services/risk_features.py`；绝对阈值跨日漂移 0.025~0.045 不可用，必须横截面分位）。规则：仅当决策时 `_market_base(market_snapshot)=="强牛"`，把 ivol20_pct≥0.80（top20%）的候选硬剔、由其后按 final_score 的下一名自然递补（不空仓、不整日 abstain）。
+- 与既往证伪的显式切割（务必区分，勿当重复重测）：①**不是 L-080 指数趋势择时门控**——L-080 用外部指数价格趋势决定"整日是否出票"，在 W3 超跌反弹日空掉最大赢家而翻号；本规则只用决策时内部广度 regime 标签决定"在哪些日子做横截面剔除"，强牛日照样出票、只换票，且 W3 为正（+0.363）不翻号。②**不是 L-081 的存量列筛查**——L-081 只筛 daily_kbars 已存储列；ivol20 是用 pct_chg+指数新回归构造的衍生因子。③**不是 L-084 廉价初筛里的 ivol**：那是在 v2 选中池上做"不分 regime 的 Spearman IC + 三分位单调"，实测 IC −0.026/+0.012/+0.056 翻号、三分位('.','UP','.')非单调被正确否决；本规则是**全市场日截面分位 × 仅强牛 × top20% 尾部 × 真实递补**，非线性、regime 条件化——不分 regime 的一刀切在 W1 反而有害（强趋势牛市高波动是领涨赢家），这正解释了线性筛查为何看着弱。同数据、不同假设，是干净对照而非矛盾。④同族 carrier（总波动 vol20/MAX1/偏度 skew/60 日动量）做同样门控更弱或会砍到 W1 正期望票，ivol 机制最干净。
+- 三窗口生产同构终审（**用真实生产代码** evaluate_selection_policy：base=v2，对照=给同一批卡附持久化 ivol20 分位后跑 v3，apply_pool_rules 内部否决+自然递补；冻结 holdout 用 _simulate_card 因果出场，前瞻/第三窗 join canonical run 净收益；脚本 `scripts/verify_v3_production_canonical.py`）：
+  - 冻结 W1（244d，n1010）：cohort +0.0364→+0.1110，**Δ+0.0746**，PF1.11→1.17，被砍 93 张均 −0.296、递补 86 张均 +0.848；配对日 CI[−0.012,+0.166]（下界微破 0，见弱点）。
+  - 前瞻 W2（n721）：cohort −0.2007→−0.0579，**Δ+0.1429**，PF0.83→0.88，配对日 CI[+0.006,+0.298] **下界>0**，被砍 54 均 −0.726、递补 52 均 +0.746。
+  - 第三 W3（n95）：cohort −0.4247→−0.0622，**Δ+0.3626**，PF0.76→0.91，被砍 10 均 −3.156、递补 10 均 +0.288。
+  - 三窗 Δ 全正、被砍组三窗全负、递补组三窗全正。研究手筛口径（top20%、强牛）为 +0.079/+0.155/+0.288，生产值与之吻合（差异来自生产回填用 120 日 warmup、早期稀疏日覆盖更全）。
+- 稳健性（研究阶段全部通过）：5 种构造（20/30/40 日窗 × 中证500/沪深300/等权市场）强牛门控下 Δcohort **15/15 全正、被砍单元 15/15 全负**，原始 20 日×中证500 综合最优；三窗合并日 bootstrap CI[+0.059,+0.295]、分层 block-bootstrap CI[+0.088,+0.490]、P(Δ>0)=1.000；阈值 0.75–0.80 为高原；ivol 分位与 final_score 相关仅 −0.031、在每个 score 档内高 ivol 都更差（85+档差 −1.42），不与评分冗余；76–88% 强牛出票日触发、砍 25–29% 强牛卡；W1 被砍约 95 张散在约 50 个交易日、非单日聚集。持久化值与研究面板逐格 corr≈1（max|diff|5e-7，仅 round6 误差）。
+- 机制（为何只在强牛、为何是左尾）：生产为非对称因果出场（+6% 止盈/移动止盈截断赢家、−4.5% 止损+隔夜跳空放大输家，冠军基线亏损集中在 stop_loss_gap）。强牛高潮单元追的是高 beta 高弹性票，其中**剔除市场 beta 后的个股特质风险**最高的一档，次日个股层面崩塌/跳空止损概率显著更高（全市场 Q1→Q5 的"5 日内≤−5% 大亏率"三窗单调 4%→23%/14%→35%/4%→26%）；弱市/偏多/震荡里高 ivol 反而常是超跌反弹弹性来源，故必须强牛门控。
+- 诚实残留弱点（落地时一并记录，不夸大）：①W1 单窗配对 CI 下界 −0.012 略破 0，强证据主要靠三窗同向 + W2 CI 严格为正 + 合并/block bootstrap；②W3 仅 3–4 个改动日、n=10，单窗不显著（CI 下界贴 0）；③规则只在强牛生效（1826 选中卡里约 587 为强牛），对非强牛出票零影响；④本地库 2025-02 前日线覆盖稀疏，冻结窗最前几周 ivol 覆盖低（缺字段的卡保守不剔，不影响 v1/v2 行为）。
+- 永久规则：**(a) 日线横截面并非全部穷尽——L-061~L-085 证伪的是"存量列 + 不分 regime 的线性/单调关联 + 整日择时门控"；用日线自构的衍生风险因子（对基准回归取残差）、做"regime 条件化 + 极端尾部 + 真实递补"仍可能有 edge，但必须过含候选递补的三窗生产同构 canonical（L-071/L-084 终审口径），廉价 IC/三分位同号不足为据。(b) 风险否决优先用"全市场当日横截面分位"而非绝对阈值（跨日分布漂移）；缺该字段的卡保守放行，保证旧版本逐位可复现。(c) 新版本策略 dataclass 新规则默认必须关闭，仅在新 version JSON 打开，v1/v2 artifact 永不改，loader 显式放开版本号。**
+- 复现：`scripts/research_anomaly_factors.py`（异象族面板+三窗快筛）、`build_ivol_variants.py`（5 构造）、`research_risk_regime_diagnose.py`（regime×ivol 交叉，定强牛门控）、`research_riskveto_canonical.py`（手筛终审）、`research_riskveto_pooled.py`（合并 bootstrap）、`verify_v3_production_canonical.py`（**生产代码 v3 三窗终审**，结果 output/research/v3_production_canonical.json）；生产：`app/services/risk_features.py`、daily_kbars.ivol20 列 + `scripts/backfill_ivol20.py`、`app/engine/{production_policy,aggregator}.py`、两咽喉 `services/runs/stages/adapters.py` 与 `services/backtest/policy_experiment.py`、policy artifact `app/policies/production_selection.v3.json`、测试 `tests/test_strong_high_ivol_veto.py`。
+- 相关：L-070（唯一稳健胜利同为负向否决/硬排除）、L-080（指数趋势择时门控翻号，本条与其切割）、L-081（存量列挖尽，本条是新构造衍生因子）、L-084（隔夜 gap 真实递补终审翻号 + 廉价 ivol 线性筛查证伪，本条用更锐利的条件化尾部假设通过同一终审）、L-071（生产同构/真实递补口径）、L-065（日线横截面"穷尽"结论的边界）、L-058（多窗口防过拟合）、L-061（价格动量/总波动线性轴证伪）。
+
+## L-094 对 L-093（v3 强牛高 ivol 否决）的独立终审背书：政策级真实代码三窗复现 + 月 block bootstrap 合并显著 + 尾部有界非对称 + live 数据就绪与回退判据
+
+- 状态：active（独立复核 FINDING，结论与 L-093 一致：支持默认 v3，但给出单窗弱点、尾部标尺与 live 回退条件）；本轮不改任何生产代码/政策（v3 已由并行线程落地为默认），只新增两个只读复核脚本与本条。
+- 复核动机：L-093 由作者自证并切默认，需用"另一条独立路径、直接加载真实 v2/v3 政策（非研究重构，符合 L-088 金标准）"终审，重点回答三问：①三窗是否真同向、②合并显著性能否扛住同月日相关（block bootstrap）、③最坏单日/途中逆向是否有界。
+- 政策级复现（`scripts/research_v3_policy_audit.py`，冻结走 `_run_arm` 自动注入 ivol、前瞻/第三窗给真实卡 `attach_ivol20_pct` 后走真实 evaluate_selection_policy，thr=0.8）：逐笔等权 冻结 +0.2061→+0.3077(n1010→1003)、前瞻 −0.3522→−0.2447(n721→719)、第三 −0.5580→−0.1955(n95)；日 cohort(SLEEVE) 累计 +1.29→+4.42、−3.89→−1.18、−1.35→−0.21；被砍票三窗均负（−0.296/−0.726/−3.156）、递补票三窗均正（+0.848/+0.746/+0.288）。与 L-093 数字吻合（差异仅回填 warmup 口径），证明非研究重构假象。
+- 阈值敏感性（0.70/0.75/0.80/0.85/0.90，同脚本）：方向在所有阈值×三窗全正（非 knife-edge、非翻号），但**没有任何单一阈值让三个单窗配对 CI 下界同时>0**——0.70 让冻结显著(CI[+0.13,+1.07]、月正0.85)却打坏前瞻/第三窗，0.85/0.90 衰减（0.90 冻结递补均−0.604、月正0.38）。**0.80 是最佳平衡（前瞻/第三窗 CI 下界>0、冻结仅微破），落在 L-092 所说的高原中央，无需调参。**
+- 合并显著性与尾部（`scripts/research_v3_tail_pooled.py`）：三窗合并 76 个变动日，日Δ均 +0.550，普通 bootstrap CI[+0.188,+0.920]、**按月 block-bootstrap（整月重采样，扛同月日相关）CI[+0.218,+0.836] 下界仍>0**，月正 0.737（14/19 月）。分窗：冻结 46 变动日 Δ+0.396、普通/block CI 均微跨0（[−0.046,+0.849]/[−0.039,+0.813]）、月正0.69，拖累集中在 2025-04-10(−4.88)、04-14(−2.20) 两日；前瞻 27 日 Δ+0.619、block CI[+0.298,+0.880] 下界>0；第三窗 3 日全正零负日、CI[+0.299,+3.394]。**尾部有界且非对称**：最差单日 −4.88pp vs 最佳 +5.72pp；累计日 cohort 差 +18.2/+16.7/+6.9pp，途中最大逆向偏移仅冻结 −7.68pp（最终回正）、前瞻 −2.21pp、第三窗 0。
+- 情绪定位（强牛内部按 sentiment 分解变动日）：收益集中在**强牛·高潮**（冻结 36 日 23好/13坏 Δ+0.476、前瞻 22 日 12/10 Δ+0.734、第三窗 3 日全好），强牛·活跃近掷币（冻结 10 日 4/6 Δ+0.109、前瞻 5 日 Δ+0.115）。经济上自洽（强牛高潮的高特质波动彩票票次日崩塌概率最高）；但活跃样本过小（10/5）、第三窗无活跃变动日，**不再叠加"仅高潮"二次条件——那是在已欠功效数据上再加自由度，属过拟合，保持对全部强牛生效。**
+- live 数据就绪核查：daily_kbars.ivol20 已回填至 2026-09-11（最新日线日），近月每日 5190+/5546 ≈94% 覆盖（缺口为新股/北交所，本就排除），冻结窗 2025-02 前稀疏（缺字段卡保守放行=v2 行为，已在 L-093 记录）；两咽喉（live adapters / 回测 policy_experiment）均会附 ivol20_pct，**2026-09-14 起 v3 会在强牛日真实触发，无静默失效**。
+- 诚实弱点（维持 L-093 披露，不夸大）：①冻结单窗配对 CI 下界微破 0（−0.046），单窗显著性靠合并 block bootstrap + 前瞻/第三窗补；②第三窗仅 3 个变动日、n=10，单窗功效弱；③规则只在强牛生效，对非强牛零影响。**与 L-080/L-084 的本质区别：那些是"某窗方向翻负"（regime flip），本规则无任何一窗点估计变负、被砍组三窗全负、合并 block CI 严格为正，故判为"真实但欠功效"而非"翻号假阳性"，支持保留默认 v3。**
+- 永久规则：**(a) 作者自证的政策升级，须由独立路径直接加载真实版本政策（非研究重构）复算，并补"按月 block bootstrap"（普通日 bootstrap 会低估同月日相关导致 CI 偏窄）；合并 block CI 下界>0 且无任一窗点估计翻负，才可背书为默认。(b) 单窗 CI 微破 0 但合并 block CI 为正、方向三窗一致、被砍/递补经济方向一致、尾部有界非对称（最差单日与途中逆向可列示且被累计覆盖）时，可保留为默认，但必须写明 live 回退判据，不得宣称"已证显著"。(c) live 回退判据（v3→v2）：规则上线后，若强牛日"剔除高 ivol"的月度 cohort Δ 连续 2 个强牛月为负，或累计 Δ 的途中逆向超过 −8pp 且月末未回正，或 live 结算显示被砍票均值≥递补票均值，则回退默认 v2；在此之前标"待 live_forward 确认"。(d) 数据列驱动的否决上线前必须核查该列已回填到最新交易日且覆盖率达标，否则规则会静默不触发。**
+- 复现：`scripts/research_v3_policy_audit.py`（真实 v2/v3 政策三窗 + 阈值 0.7–0.9 敏感性，结果 output/research/v3_policy_audit.json）、`scripts/research_v3_tail_pooled.py`（合并/月 block bootstrap + 逐日最好最差/途中逆向，结果 v3_tail_pooled.json）。
+- 相关：L-093（被独立背书的 v3 强牛高 ivol 否决）、L-088/L-091（金标准、禁用研究重构下结论）、L-058（多窗口/block 重采样防过拟合）、L-092（参数高原 vs 刀尖）、L-080/L-084（对照：真正的第三窗翻号证伪）、L-071（生产同构/真实递补）。
+
+## L-095 入场口径必须由策略显式声明，未成交反事实不得进入收益列
 
 - 状态：encoded（已修 + 回归测试）
 - 适用：策略信号、历史重建、outcome 模拟、复盘页收益展示
@@ -682,7 +922,7 @@
 - 永久规则：**每个 setup 必须用结构化 `entry_mode` 声明可回放的成交方式；outcome 只按持久化的入场方式执行。未触发记录的 `executed_return` 永远不可展示为收益，也不得用推荐价反事实替代。** 缺失旧字段时只能依据已持久化的策略身份做确定性迁移，其余保留旧口径；不得修改已封印的推荐快照。
 - 回归验证：策略信号契约、次日开盘成交模拟、历史收益纯函数和前端生产构建。
 
-## L-094 发布证据不得跨 `evidence_class` 汇总：非 canonical 层可把 canonical 层的 0.0pp 放大到 +13.7pp
+## L-096 发布证据不得跨 `evidence_class` 汇总：非 canonical 层可把 canonical 层的 0.0pp 放大到 +13.7pp
 
 - 状态：active（A 级测量/口径 FINDING，可作当前约束，不声称收益提升）。
 - 适用：所有 challenger 的晋级/发布证据审计；金标准反事实；凡以"去重生产口径 N 笔（已结算 M）"这类**跨来源汇总**样本得出增益的结论。
@@ -695,6 +935,6 @@
   - **基线敏感性**：同一脚本、同一 population，在特征分支（`feat/strong-bull-ivol-veto-v3`）与 `main` 上各跑一次（treat 侧注入相同，差异只来自 base 侧 yaml 组成），`ALL` top30 dWR 从 **+3.9pp 摆到 +13.7pp（3.5×）**；而 canonical 层的 **0.0pp 与命中模式（dsa=0 / rsi=3 / leader=0）在两种基线下完全一致**。
 - 永久规则：**(a) 晋级/发布证据必须按 `evidence_class` 分层报告，并以 canonical `live_forward` 单独结果为准；跨类汇总（含"去重生产口径 N 笔已结算 M"）不得作为发布依据——它是 L-001"不同 source 禁算差值"在 provenance 轴上的同一条规则。(b) 判定"非 canonical"不能只看 `evidence_class` 标签，必须同时核 `actual_generated_at` 相对 `trade_date` 的滞后；显著滞后本身就是事后重建的机制证据（本案例 median 30 天）。(c) 当 canonical 层增量精确为 0 且条件命中数为 0 时，唯一正确的结论是"该层既不能证真也不能证伪"（记 MEASUREMENT_FIX / 待样本积累），**既不得因非 canonical 层的正增量而发布，也不得据此宣称规则已被证伪。**(d) 增益对评测基线组成敏感（同一改动在两个分支上摆动 3.5×）是污染信号；真实因子应在两种基线下同号同量级。(e) 审计工具必须自带方向相反的**可证伪性对照**——既能报正增益、也能报精确 0——否则无法区分"确实无效应"与"审计本身失灵"。**
 - 复现：`backend/scripts/si_l086_caliber_audit.py`（分层金标准反事实，三层定义内联于 `POISON_DEF`，treat 侧跨分支一致）、`backend/scripts/si_probe_l086_population.py`（分层构成 + 生成时点滞后 + `data_as_of` 因果性）、`backend/tests/test_si_l086_caliber_audit.py`（**15 passed**，在 `0bb5140` 与 `667d357` 两个基线上各跑一次均通过，含上述两个方向相反的可证伪性对照）、报告 `backend/scripts/si_l086_caliber_audit_report.md`、结果 `output/l086_caliber_audit_{main_667d357,feat_0bb5140}.json`。
-- 相关：L-001（跨 source 禁算差值——本条是其延伸并给出量化机制）、L-002（口径变化旧 champion 失效）、L-072（入场口径/反事实不得进收益列，同为"口径隔离"家族）、L-058（窗口/口径偏差）。
-- **登记册编号提示（合并时须处理）**：本条目在 `main` 上直接跳到 **L-094**，因为 `main` 的 `docs/lessons/LESSONS.md` **只到 L-072**，而 **L-073~L-092（20 条）只存在于未合并分支 `feat/strong-bull-ivol-veto-v3`**（该分支的 `LESSONS.md` 为 884 行、main 为 683 行）；工作区另有一条未提交的 L-093。选 L-094 是为避开与分支 L-073~L-093 的编号冲突。**该分支合并时必须把两份登记册归并、校验编号唯一性。**
-- **须在合并时修订 L-089**：分支上的 L-089 原文称三层毒区"**已落地生产 12 个 strategy.yaml**"，但 2026-09-13 核验：`main` 的 `backend/skills/*/strategy.yaml` 对三层毒区 phase 名 `git grep` **命中 0 文件**，它们只在 `feat/strong-bull-ivol-veto-v3`（`83b98b1`→`695674d`，与 main 双向分叉 16/16）。该状态声明与 main 实际不符，且其 +8.3pp 在 canonical 口径上不可复现（见上）。归并时应把 L-089 的状态改为"已落地于待合并分支、未进 main，头条增益待 canonical 重验"，其永久规则 (a)(b)(c)（soft cap 优先于 hard_veto、毒区需逐月+跨 regime+正交、阈值用反事实金标准选）**方法学部分仍然有效，保留**。
+- 相关：L-001（跨 source 禁算差值——本条是其延伸并给出量化机制）、L-002（口径变化旧 champion 失效）、L-095（入场口径/反事实不得进收益列，同为"口径隔离"家族）、L-058（窗口/口径偏差）。
+- **登记册编号（已于 2026-09-13 合并时归并，本节为合并记录）**：本条在 `main` 上原编 **L-094**，其"相关"引用的"入场口径"条目在 `main` 上原编 **L-072**（当时 `main` 登记册只到 L-072）。2026-09-13 合并 `feat/strong-bull-ivol-veto-v3` 时按登记册规则校验编号唯一性，发现 **2 处碰撞**：①**L-072**——分支同号条目为"v2 经生产同构 canonical harness 双窗口复核"（与本条引用的入场口径条目内容不同）；②**L-094**——分支同号条目为"对 L-093 的独立终审背书"。处理原则：**分支链 L-072~L-094 保持原号**（分支内 13+ 处交叉引用 L-072 系列，改号风险最高）；**`main` 独有的两条让号并依"新条目追加到末尾"追加**——入场口径条目 → **L-095**，本条目 → **L-096**。归并后全册编号唯一，分支的 L-093/L-094"候选"引用无需改动。
+- **L-089 状态修订（已于 2026-09-13 合并时执行）**：`main` 曾核验 `backend/skills/*/strategy.yaml` 对三层毒区 phase 名命中 0 文件、与 L-089 原文"已落地生产 12 个 strategy.yaml"不符。合并 `feat/strong-bull-ivol-veto-v3` 后重跑核验：**12/13 个 `strategy.yaml` 已含三层毒区 phase，L-089 的"已落地"声明成立**；但其头条 **+8.3pp 只在含 `historical_reconstruction` 的汇总上成立，canonical `live_forward` 层增量为精确 0（见本条）**。故 L-089 状态已同步修订为"规则已落地（12 个 yaml，2026-09-13 合入 `main`）；头条增益未获 canonical 背书"，其永久规则 (a)(b)(c)（soft cap 优先于 hard_veto、毒区需逐月+跨 regime+正交、阈值用反事实金标准选）**方法学部分保留不变**。
