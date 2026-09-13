@@ -542,16 +542,21 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
         )
         _sel_date = str(snapshot.get("trade_date") or "")
         if _sel_date:
-            # L-093：附加当日全市场 ivol20 横截面分位，供 v3 强牛×高特质波动否决；
-            # 规则关闭（v1/v2）时该字段不影响任何选择，保持逐位可复现。读取失败（如迁移
-            # 0018 尚未执行、列暂缺）时保守降级为不带 ivol 字段，否决自然不触发、等同 v2，
-            # 绝不因风险特征缺失而中断整轮选股。
+            # L-093/L-109：附加当日全市场 ivol20 / ivol_dn20 横截面分位，供 v3 强牛×高特质
+            # 波动否决、v4 弱势×低特质下行波动否决使用；规则关闭（v1/v2/v3）时这两个字段
+            # 不影响任何选择，保持逐位可复现。读取失败（如迁移 0018/0019 尚未执行、列暂缺）
+            # 时保守降级为不带风险字段，对应否决自然不触发，绝不因风险特征缺失而中断整轮选股。
             try:
-                from app.services.risk_features import load_ivol20_pct_map, attach_ivol20_pct
+                from app.services.risk_features import (
+                    load_ivol20_pct_map, attach_ivol20_pct,
+                    load_ivol_dn20_pct_map, attach_ivol_dn20_pct,
+                )
                 _ivol_map = load_ivol20_pct_map(self._db, [_sel_date])
                 attach_ivol20_pct(scored_cards, _sel_date, _ivol_map)
+                _ivoldn_map = load_ivol_dn20_pct_map(self._db, [_sel_date])
+                attach_ivol_dn20_pct(scored_cards, _sel_date, _ivoldn_map)
             except Exception as _ivol_exc:  # noqa: BLE001
-                logger.warning("ivol20 分位附加失败，本轮保守不做强牛高ivol否决: %s", _ivol_exc)
+                logger.warning("风险特征分位附加失败，本轮保守不做风险否决: %s", _ivol_exc)
         policy_result = evaluate_selection_policy(
             scored_cards,
             SelectionPolicyContext(

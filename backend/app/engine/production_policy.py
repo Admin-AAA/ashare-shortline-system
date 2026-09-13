@@ -78,12 +78,21 @@ class ProductionSelectionPolicy:
     # 尾部（direction=high 取 ≥thr；low 取 ≤thr）的候选硬剔除、由下一名自然递补。
     # 卡片分位由选择咽喉（live adapters / 回测 policy_experiment）预附；缺字段保守放行。
     # 具体启用哪个因子由版本化 artifact 声明，便于把"已过 canonical 三窗"的因子升为生产
-    # 而不改代码分支。机制与等价性证明见 docs/lessons L-097；本轮用它做的三窗证伪见 L-095/L-096。
+    # 而不改代码分支。机制与等价性证明见 docs/lessons L-108；本轮用它做的三窗证伪见 L-106/L-107。
     extra_tail_veto_enabled: bool = False
     extra_tail_veto_field: str = "extra_tail_veto_pct"
     extra_tail_veto_regimes: tuple[str, ...] = ("强牛",)
     extra_tail_veto_direction: str = "high"
     extra_tail_veto_pct_threshold: float = 0.80
+
+    # L-109 弱势 regime × 低特质下行半波动横截面风险否决（默认关闭，仅 v4 打开）：
+    # 与 L-093 同构但方向相反、regime 不同——在弱势（可配 regime）当日，把全市场 ivol_dn20
+    # 分位 <= 阈值的候选卡硬剔除、由下一名自然递补。机制：弱势市无承接盘，"残差下行半波动
+    # 极低"的安静票缺反转弹性、易被止损/隔夜跳空砍掉（被砍卡三窗均收益 -0.9~-1.4%）。
+    # 卡片须由选择咽喉预先附加 ivol_dn20_pct；缺该字段的卡不参与否决（保守）。详见 L-109。
+    weak_low_ivoldn20_veto_enabled: bool = False
+    weak_low_ivoldn20_regimes: tuple[str, ...] = ("弱势",)
+    weak_low_ivoldn20_pct_threshold: float = 0.25
 
     def canonical_payload(self) -> dict[str, Any]:
         return {
@@ -123,6 +132,9 @@ class ProductionSelectionPolicy:
             "extra_tail_veto_regimes": list(self.extra_tail_veto_regimes),
             "extra_tail_veto_direction": self.extra_tail_veto_direction,
             "extra_tail_veto_pct_threshold": self.extra_tail_veto_pct_threshold,
+            "weak_low_ivoldn20_veto_enabled": self.weak_low_ivoldn20_veto_enabled,
+            "weak_low_ivoldn20_regimes": list(self.weak_low_ivoldn20_regimes),
+            "weak_low_ivoldn20_pct_threshold": self.weak_low_ivoldn20_pct_threshold,
         }
 
     @property
@@ -147,6 +159,7 @@ class ProductionSelectionPolicy:
             "dynamic_soft_floor_disabled_regimes",
             "strong_high_ivol_regimes",
             "extra_tail_veto_regimes",
+            "weak_low_ivoldn20_regimes",
         }
         if field_name in tuple_string_fields:
             if not isinstance(value, (list, tuple)):
@@ -174,16 +187,19 @@ _POLICY_ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "policies"
 
 def load_production_selection_policy(
     policy_id: str = "production-selection",
-    version: int = 3,
+    version: int = 4,
 ) -> ProductionSelectionPolicy:
     """Load the repository-owned artifact used by production and backtests.
 
     v1 保留以复现历史；v2 = L-070 偏多/震荡/弱势·高潮硬排除（双窗口因果重放）；
-    v3 为当前默认 = v2 全部规则 + L-093 强牛×高特质波动横截面风险否决（三窗口
-    canonical Δcohort 全正 +0.075/+0.143/+0.363，生产代码同构复核，见 L-093）。
-    需要严格复现旧口径时显式传 version=1/2。
+    v3 = v2 全部规则 + L-093 强牛×高特质波动横截面风险否决（三窗口 canonical Δcohort 全正
+    +0.075/+0.143/+0.363，生产代码同构复核，见 L-093）；
+    v4 为当前默认 = v3 全部规则 + L-109 弱势×低特质下行半波动横截面风险否决（三窗口
+    canonical Δcohort 全正 +0.056/+0.116/+0.077，合并月 block CI 下界 >0、逐月同号 18/21，
+    被砍卡三窗均收益 -0.9~-1.4%，见 L-109）。
+    需要严格复现旧口径时显式传 version=1/2/3。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -207,6 +223,9 @@ def load_production_selection_policy(
     )
     payload["extra_tail_veto_regimes"] = tuple(
         str(value) for value in payload.get("extra_tail_veto_regimes") or ("强牛",)
+    )
+    payload["weak_low_ivoldn20_regimes"] = tuple(
+        str(value) for value in payload.get("weak_low_ivoldn20_regimes") or ("弱势",)
     )
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:
