@@ -36,6 +36,23 @@ from scripts.self_improve_state import (
 from app.services.backtest.policy_experiment import RELEASE_POLICY_FINGERPRINT
 
 
+@pytest.fixture(autouse=True)
+def _clean_tree(monkeypatch):
+    """状态工具逻辑测试统一假定干净执行树；脏树守卫有专属测试文件。"""
+    import scripts.self_improve_state as _sis
+
+    monkeypatch.setattr(
+        _sis,
+        "_identity_context",
+        lambda: {
+            "tree_root": "/clean",
+            "commit": "clean-commit",
+            "backend_dirty": False,
+            "recorded_at": "2026-09-13T00:00:00+00:00",
+        },
+    )
+
+
 def _canonical_policy_evidence(champion: str, challenger: str) -> dict:
     return {
         "schema_version": 2,

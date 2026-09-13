@@ -79,6 +79,8 @@ python self_improve_state.py with-publish-lock --cmd 'git -C <主仓库> pull --
 ```
 或 `export VENV_PY=/Users/wangao/Desktop/ashare-shortline-system/backend/.venv/bin/python`。
 
+注意：migrate/refresh/reanchor 会用「脚本所在树」计算 policy 指纹；脏树（未提交 backend 改动）的 WIP 指纹不是 repo-owned 真值，不得重绑治理状态（L-102）。开局的状态工具必须从自己的干净 worktree 内执行（`backend/.env` 需从主仓预载：`set -a; source 主仓/backend/.env; set +a`），不要从主工作树跑。
+
 ## 状态文件字段
 
 `self-improve-state.json` 顶层：

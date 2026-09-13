@@ -475,6 +475,27 @@ def _identity_context() -> dict[str, Any]:
     return context
 
 
+def _resolve_policy_identity(
+    policy_loader: Callable[[], dict[str, Any]] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
+    """Resolve policy identity plus the executing-tree context.
+
+    Returns ``(identity, identity_context, repo_owned)``. ``repo_owned`` is
+    False when the executing tree's backend is dirty or git is unavailable:
+    the fingerprint computed there reflects uncommitted WIP rather than the
+    repository-owned artifact, and must not rebind governance state
+    (observed 2026-09-13: ``migrate-state`` executed from the main working
+    tree parked on ``feat/strong-bull-ivol-veto-v3`` with uncommitted policy
+    semantics flipped ``policy_artifact_mismatch`` to true via the WIP
+    fingerprint 9707a4ca, while the clean main tree yields 8c4821b9 for the
+    same v3 artifact).
+    """
+    context = _identity_context()
+    identity = dict((policy_loader or _current_policy_identity)())
+    repo_owned = context.get("backend_dirty") is False and "error" not in context
+    return identity, context, repo_owned
+
+
 def migrate_state(
     memory_dir: Path | None = None,
     *,
@@ -490,7 +511,7 @@ def migrate_state(
     state_path = directory / "self-improve-state.json"
     with _locked(directory):
         state = _read_json(state_path)
-        identity = dict((policy_loader or _current_policy_identity)())
+        identity, identity_ctx, repo_owned = _resolve_policy_identity(policy_loader)
         if set(identity) != {"policy_id", "version", "fingerprint"}:
             raise ValueError("policy_loader must return policy_id/version/fingerprint")
         champion = dict(state.get("canonical_production") or {})
@@ -505,7 +526,10 @@ def migrate_state(
                 "legacy_rules_fingerprint": sha256(legacy_payload).hexdigest(),
             }
         existing = champion.get("selection_policy")
-        if not isinstance(existing, dict) or set(existing) != set(identity):
+        needs_bind = not isinstance(existing, dict) or set(existing) != set(identity)
+        if needs_bind and (repo_owned or not isinstance(existing, dict)):
+            # 缺失/畸形时总是补绑（bootstrap 依赖它）；已注册身份只在干净树上
+            # 重绑——脏树的 WIP 指纹不得覆盖既有注册。
             champion["selection_policy"] = identity
         else:
             state.setdefault("state_migration", {"migrated_at": _now_iso()})
@@ -518,12 +542,13 @@ def migrate_state(
         governance["phase"] = phase
         governance["audit_only"] = phase != "production"
         governance.setdefault("strategy_inactive", False)
-        governance.setdefault("policy_artifact_fingerprint", identity["fingerprint"])
-        governance["identity_context"] = _identity_context()
-        governance["policy_artifact_mismatch"] = (
-            governance.get("policy_artifact_fingerprint") != identity["fingerprint"]
-            or champion.get("selection_policy", {}).get("fingerprint") != identity["fingerprint"]
-        )
+        if repo_owned:
+            governance.setdefault("policy_artifact_fingerprint", identity["fingerprint"])
+            governance["policy_artifact_mismatch"] = (
+                governance.get("policy_artifact_fingerprint") != identity["fingerprint"]
+                or champion.get("selection_policy", {}).get("fingerprint") != identity["fingerprint"]
+            )
+        governance["identity_context"] = identity_ctx
         state["selection_policy_governance"] = governance
         state.setdefault("release_state", {"status": "draft"})
         state.setdefault("holdout_ledger", {"consumed": {}})
@@ -561,9 +586,20 @@ def reanchor_policy_identity(
     state_path = directory / "self-improve-state.json"
     with _locked(directory):
         state = _read_json(state_path)
-        identity = dict((policy_loader or _current_policy_identity)())
+        identity, identity_ctx, repo_owned = _resolve_policy_identity(policy_loader)
         if set(identity) != {"policy_id", "version", "fingerprint"}:
             raise ValueError("policy_loader must return policy_id/version/fingerprint")
+        if not repo_owned:
+            return {
+                "ok": False,
+                "error": "DIRTY_TREE",
+                "message": (
+                    "reanchor 拒绝在脏执行树上运行：当前树 backend 存在未提交改动"
+                    "（或 git 不可用），其指纹不是 repo-owned 真值，"
+                    "重锚会把 WIP 指纹写入治理状态。请切到干净 main 树后重试。"
+                ),
+                "identity_context": identity_ctx,
+            }
         champion = dict(state.get("canonical_production") or {})
         governance = dict(state.get("selection_policy_governance") or {})
         stored_gov_fp = str(governance.get("policy_artifact_fingerprint") or "")
@@ -591,7 +627,7 @@ def reanchor_policy_identity(
             "to_selection_policy": dict(identity),
             "reason": reason,
             "researcher_id": researcher_id,
-            "identity_context": _identity_context(),
+            "identity_context": identity_ctx,
         }
         champion["selection_policy"] = dict(identity)
         champion["policy_reanchor"] = reanchor_record
@@ -1583,7 +1619,17 @@ def refresh_policy_health(
         governance["phase"] = phase
         governance["audit_only"] = phase != "production"
         governance.update(health)
-        governance["identity_context"] = _identity_context()
+        identity, identity_ctx, repo_owned = _resolve_policy_identity()
+        if repo_owned:
+            # Clean-tree self-heal: recompute the mismatch flag against the
+            # repo-owned identity so a dirty-tree run from another parallel
+            # instance cannot leave a stale/poisoned flag behind.
+            champion = dict(state.get("canonical_production") or {})
+            governance["policy_artifact_mismatch"] = (
+                governance.get("policy_artifact_fingerprint") != identity["fingerprint"]
+                or champion.get("selection_policy", {}).get("fingerprint") != identity["fingerprint"]
+            )
+        governance["identity_context"] = identity_ctx
         governance["health_checked_at"] = _now_iso()
         state["selection_policy_governance"] = governance
         _atomic_write_json(state_path, state)

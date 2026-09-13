@@ -12,9 +12,26 @@ from pathlib import Path
 
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import self_improve_state as sis
+
+
+@pytest.fixture(autouse=True)
+def _clean_tree(monkeypatch):
+    """reanchor/migrate 的逻辑测试统一假定干净执行树；脏树守卫有专属测试。"""
+    monkeypatch.setattr(
+        sis,
+        "_identity_context",
+        lambda: {
+            "tree_root": "/clean",
+            "commit": "clean-commit",
+            "backend_dirty": False,
+            "recorded_at": "2026-09-13T00:00:00+00:00",
+        },
+    )
 
 
 def _loader(fingerprint: str, version: int = 1):
