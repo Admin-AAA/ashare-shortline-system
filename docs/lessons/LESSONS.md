@@ -681,3 +681,20 @@
 - 证据：R6 历史重建把所有策略统一按「未来两日低点触碰全局理想买点」判定入场，导致强势高开票未回踩即记为 missed、下跌票穿过低吸价反而成交；复盘页又按推荐价为 missed 生成不含成本的虚拟观察收益，与真实成交净收益同列展示，形成「未触发普遍大赚、触发普遍失败」的选择偏差。
 - 永久规则：**每个 setup 必须用结构化 `entry_mode` 声明可回放的成交方式；outcome 只按持久化的入场方式执行。未触发记录的 `executed_return` 永远不可展示为收益，也不得用推荐价反事实替代。** 缺失旧字段时只能依据已持久化的策略身份做确定性迁移，其余保留旧口径；不得修改已封印的推荐快照。
 - 回归验证：策略信号契约、次日开盘成交模拟、历史收益纯函数和前端生产构建。
+
+## L-094 发布证据不得跨 `evidence_class` 汇总：非 canonical 层可把 canonical 层的 0.0pp 放大到 +13.7pp
+
+- 状态：active（A 级测量/口径 FINDING，可作当前约束，不声称收益提升）。
+- 适用：所有 challenger 的晋级/发布证据审计；金标准反事实；凡以"去重生产口径 N 笔（已结算 M）"这类**跨来源汇总**样本得出增益的结论。
+- 证据（2026-09-13，纯只读审计，0 LLM 调用）：把 L-089 三层毒区（强势多头发散 `dsa_trend_score==30` cap58 / 长周期 RSI 低位 `rsi_24∈(0,48)` cap58 / 短线龙头低分 `shortline_leader_score∈(0,35]` cap62，均 soft）的证据样本**按 `evidence_class` 分层**重做金标准反事实。population 从 DB 重建 **215 pair / 已结算 172**，与 L-089 的 `/tmp/live_dedup_data.json`（241 对）交叉核对命中 **89.2%**。
+  - **构成**：canonical `live_forward` 只占已结算 population **9/172 = 5.2%**；**80.8%（139/172）是 `historical_reconstruction`**，另有 `None` 17、`unverified` 7。L-089 的"已结算 205"里约八成属 §2 明确不接受的类别。
+  - **机制（关键：类别标签不够，必须核生成时点）**：`historical_reconstruction` 的 `actual_generated_at − trade_date` **median 30 天**（min 2 / max 93，332 行**无一条当日生成**）；`live_forward` 为 **median 0、9/9 当日生成**；`unverified` 恒 1 天。（`data_as_of <= trade_date` 在所有层都是 100%——**声明的**新鲜度都因果，差异只在**真实生成时点**。）
+  - **分层反事实**（base=剥离三层 / treat=前置三层，含 `not(hard_veto)` 让位与 `>0` 数据守卫）：`ALL` top30 dWR **+3.9pp**；`historical_reconstruction` top30 **+9.7pp**；**canonical `live_forward` 三个窗口（top_half/top40/top30）dWR 全 = +0.0pp、dAvg 全 = +0.000**。
+  - **为何恰为 0**：canonical 层第 1 层（`dsa_trend_score==30`）与第 3 层（`leader∈(0,35]`）**命中数为 0**；第 2 层命中 3 笔，但把其分数压到 cap58 后**没有任何一只跨过窗口边界**。即三层在 canonical population 上**一个选股决策都没改变**。
+  - **符号反转**：同三个"毒"条件在 `None` 层胜率分别为 **100% / 75% / 66.7%**（均值 +0.93 / −0.2 / +0.198）——三层里两层在该层是**正**的。真实微观结构毒性不会因推荐来源类别而反号 ⇒ 分层产物而非市场事实。
+  - **基线敏感性**：同一脚本、同一 population，在特征分支（`feat/strong-bull-ivol-veto-v3`）与 `main` 上各跑一次（treat 侧注入相同，差异只来自 base 侧 yaml 组成），`ALL` top30 dWR 从 **+3.9pp 摆到 +13.7pp（3.5×）**；而 canonical 层的 **0.0pp 与命中模式（dsa=0 / rsi=3 / leader=0）在两种基线下完全一致**。
+- 永久规则：**(a) 晋级/发布证据必须按 `evidence_class` 分层报告，并以 canonical `live_forward` 单独结果为准；跨类汇总（含"去重生产口径 N 笔已结算 M"）不得作为发布依据——它是 L-001"不同 source 禁算差值"在 provenance 轴上的同一条规则。(b) 判定"非 canonical"不能只看 `evidence_class` 标签，必须同时核 `actual_generated_at` 相对 `trade_date` 的滞后；显著滞后本身就是事后重建的机制证据（本案例 median 30 天）。(c) 当 canonical 层增量精确为 0 且条件命中数为 0 时，唯一正确的结论是"该层既不能证真也不能证伪"（记 MEASUREMENT_FIX / 待样本积累），**既不得因非 canonical 层的正增量而发布，也不得据此宣称规则已被证伪。**(d) 增益对评测基线组成敏感（同一改动在两个分支上摆动 3.5×）是污染信号；真实因子应在两种基线下同号同量级。(e) 审计工具必须自带方向相反的**可证伪性对照**——既能报正增益、也能报精确 0——否则无法区分"确实无效应"与"审计本身失灵"。**
+- 复现：`backend/scripts/si_l086_caliber_audit.py`（分层金标准反事实，三层定义内联于 `POISON_DEF`，treat 侧跨分支一致）、`backend/scripts/si_probe_l086_population.py`（分层构成 + 生成时点滞后 + `data_as_of` 因果性）、`backend/tests/test_si_l086_caliber_audit.py`（**15 passed**，在 `0bb5140` 与 `667d357` 两个基线上各跑一次均通过，含上述两个方向相反的可证伪性对照）、报告 `backend/scripts/si_l086_caliber_audit_report.md`、结果 `output/l086_caliber_audit_{main_667d357,feat_0bb5140}.json`。
+- 相关：L-001（跨 source 禁算差值——本条是其延伸并给出量化机制）、L-002（口径变化旧 champion 失效）、L-072（入场口径/反事实不得进收益列，同为"口径隔离"家族）、L-058（窗口/口径偏差）。
+- **登记册编号提示（合并时须处理）**：本条目在 `main` 上直接跳到 **L-094**，因为 `main` 的 `docs/lessons/LESSONS.md` **只到 L-072**，而 **L-073~L-092（20 条）只存在于未合并分支 `feat/strong-bull-ivol-veto-v3`**（该分支的 `LESSONS.md` 为 884 行、main 为 683 行）；工作区另有一条未提交的 L-093。选 L-094 是为避开与分支 L-073~L-093 的编号冲突。**该分支合并时必须把两份登记册归并、校验编号唯一性。**
+- **须在合并时修订 L-089**：分支上的 L-089 原文称三层毒区"**已落地生产 12 个 strategy.yaml**"，但 2026-09-13 核验：`main` 的 `backend/skills/*/strategy.yaml` 对三层毒区 phase 名 `git grep` **命中 0 文件**，它们只在 `feat/strong-bull-ivol-veto-v3`（`83b98b1`→`695674d`，与 main 双向分叉 16/16）。该状态声明与 main 实际不符，且其 +8.3pp 在 canonical 口径上不可复现（见上）。归并时应把 L-089 的状态改为"已落地于待合并分支、未进 main，头条增益待 canonical 重验"，其永久规则 (a)(b)(c)（soft cap 优先于 hard_veto、毒区需逐月+跨 regime+正交、阈值用反事实金标准选）**方法学部分仍然有效，保留**。
