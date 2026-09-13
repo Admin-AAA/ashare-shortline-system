@@ -209,6 +209,12 @@ class DailyKbar(Base):
     # 度量剔除市场beta后的个股特质风险；L-093 强牛regime横截面风险否决使用。T收盘可得，无前视。
     ivol20: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # 特质下行半波动（本地计算）：同一残差序列的下行半标准差 sqrt(mean(min(e,0)^2, 20))。
+    # 与 ivol20 同源同窗，但只计左尾——生产出场是非对称的（+6% 止盈截断赢家 / -4.5% 止损+
+    # 隔夜跳空放大输家），真正驱动大亏的是**下行**特质波动。L-099 弱势 regime 低波动毒格
+    # （分位 <= 0.25）横截面否决使用。T收盘可得，无前视。
+    ivol_dn20: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     # 来源标记
     source: Mapped[str] = mapped_column(String(16), default="tushare")
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)

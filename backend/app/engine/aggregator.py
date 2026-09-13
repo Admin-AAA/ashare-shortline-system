@@ -1050,6 +1050,41 @@ def apply_pool_rules(
                 continue
             kept_after_ivol.append(card)
         deduped = kept_after_ivol
+    # L-099 弱势 regime × 低特质下行半波动（"安静票"）横截面风险否决：弱势当日把全市场
+    # ivol_dn20 分位最低的一档候选硬剔除、由其后按 final_score 排序的下一名自然递补。
+    # 机制：弱势市没有承接盘，个股特质路径"一路小幅阴跌、残差下行半波动极低"的安静票
+    # 既没有反转弹性、又极易被 -4.5% 止损或隔夜跳空砍掉；三窗口 canonical 上被砍卡均收益
+    # -0.9~-1.4%、Δcohort 全正，而反向（低 ivol20 双侧低波）与总量低波均无效。
+    # 卡片 ivol_dn20_pct 由选择咽喉经 risk_features.attach_ivol_dn20_pct 预附；缺字段
+    # （数据不全）保守不动，保证规则关闭时逐位可复现。「低分位」故比较方向为 <=。
+    if (
+        selection_policy is not None
+        and getattr(selection_policy, "weak_low_ivoldn20_veto_enabled", False)
+        and _ctx_base in tuple(getattr(selection_policy, "weak_low_ivoldn20_regimes", ()) or ())
+    ):
+        _dn_thr = float(selection_policy.weak_low_ivoldn20_pct_threshold)
+        kept_after_dn: list[dict[str, Any]] = []
+        for card in deduped:
+            _dn_pct = card.get("ivol_dn20_pct")
+            if _dn_pct is None:
+                kept_after_dn.append(card)
+                continue
+            try:
+                _dn_pct = float(_dn_pct)
+            except (TypeError, ValueError):
+                kept_after_dn.append(card)
+                continue
+            if _dn_pct <= _dn_thr:
+                card["policy_drop_owner"] = "weak_low_ivoldn20_veto"
+                card.setdefault("policy_verdict_steps", []).append({
+                    "rule_id": "weak_low_ivoldn20_veto",
+                    "action": "drop",
+                    "reason": f"{_ctx_base}低特质下行波动 ivol_dn20 分位 {_dn_pct:.2f}≤{_dn_thr:.2f}",
+                    "eliminated": True,
+                })
+                continue
+            kept_after_dn.append(card)
+        deduped = kept_after_dn
     result: list[dict[str, Any]] = []
     watchlist: list[dict[str, Any]] = []
     top_final_score = 0.0
