@@ -1016,6 +1016,40 @@ def apply_pool_rules(
         if code:
             seen_codes.add(code)
         deduped.append(card)
+    # 通用横截面尾部否决（本轮新增，默认关闭）：与 L-093 强牛 ivol 否决同构，但因子/方向/阈值
+    # 由 policy artifact 声明（extra_tail_veto_field/direction/pct_threshold）。卡片分位由选择
+    # 咽喉预附到 extra_tail_veto_field；缺字段（数据不全）保守放行。
+    if (
+        selection_policy is not None
+        and getattr(selection_policy, "extra_tail_veto_enabled", False)
+        and _ctx_base in tuple(getattr(selection_policy, "extra_tail_veto_regimes", ()) or ())
+    ):
+        _etv_field = str(getattr(selection_policy, "extra_tail_veto_field", "extra_tail_veto_pct"))
+        _etv_thr = float(getattr(selection_policy, "extra_tail_veto_pct_threshold", 0.80))
+        _etv_dir = str(getattr(selection_policy, "extra_tail_veto_direction", "high"))
+        kept_after_etv: list[dict[str, Any]] = []
+        for card in deduped:
+            _etv_pct = card.get(_etv_field)
+            if _etv_pct is None:
+                kept_after_etv.append(card)
+                continue
+            try:
+                _etv_pct = float(_etv_pct)
+            except (TypeError, ValueError):
+                kept_after_etv.append(card)
+                continue
+            _etv_hit = (_etv_pct >= _etv_thr) if _etv_dir == "high" else (_etv_pct <= _etv_thr)
+            if _etv_hit:
+                card["policy_drop_owner"] = "extra_tail_veto"
+                card.setdefault("policy_verdict_steps", []).append({
+                    "rule_id": "extra_tail_veto",
+                    "action": "drop",
+                    "reason": f"{_ctx_base}{_etv_field} 分位 {_etv_pct:.2f} 落在 {_etv_dir} 尾 ({_etv_thr:.2f})",
+                    "eliminated": True,
+                })
+                continue
+            kept_after_etv.append(card)
+        deduped = kept_after_etv
     # L-093 强牛 regime × 高特质波动横截面风险否决：强牛当日把全市场 ivol20 分位最高的
     # 一档候选硬剔除、由其后按 final_score 排序的下一名自然递补（不空仓、不整日 abstain）。
     # 机制：强牛高潮单元里个股特质风险（剔除市场 beta 后的残差波动）越高，次日跳空止损/

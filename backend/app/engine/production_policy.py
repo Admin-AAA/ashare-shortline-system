@@ -73,6 +73,18 @@ class ProductionSelectionPolicy:
     strong_high_ivol_regimes: tuple[str, ...] = ("强牛",)
     strong_high_ivol_pct_threshold: float = 0.80
 
+    # 通用横截面尾部否决（本轮新增，默认关闭；与 strong_high_ivol_veto 同构但参数化）：
+    # 在指定 regime 当日，把卡片上已持久化的因子全市场分位（extra_tail_veto_pct）落在
+    # 尾部（direction=high 取 ≥thr；low 取 ≤thr）的候选硬剔除、由下一名自然递补。
+    # 卡片分位由选择咽喉（live adapters / 回测 policy_experiment）预附；缺字段保守放行。
+    # 具体启用哪个因子由版本化 artifact 声明，便于把"已过 canonical 三窗"的因子升为生产
+    # 而不改代码分支。机制与等价性证明见 docs/lessons L-097；本轮用它做的三窗证伪见 L-095/L-096。
+    extra_tail_veto_enabled: bool = False
+    extra_tail_veto_field: str = "extra_tail_veto_pct"
+    extra_tail_veto_regimes: tuple[str, ...] = ("强牛",)
+    extra_tail_veto_direction: str = "high"
+    extra_tail_veto_pct_threshold: float = 0.80
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -106,6 +118,11 @@ class ProductionSelectionPolicy:
             "strong_high_ivol_veto_enabled": self.strong_high_ivol_veto_enabled,
             "strong_high_ivol_regimes": list(self.strong_high_ivol_regimes),
             "strong_high_ivol_pct_threshold": self.strong_high_ivol_pct_threshold,
+            "extra_tail_veto_enabled": self.extra_tail_veto_enabled,
+            "extra_tail_veto_field": self.extra_tail_veto_field,
+            "extra_tail_veto_regimes": list(self.extra_tail_veto_regimes),
+            "extra_tail_veto_direction": self.extra_tail_veto_direction,
+            "extra_tail_veto_pct_threshold": self.extra_tail_veto_pct_threshold,
         }
 
     @property
@@ -129,6 +146,7 @@ class ProductionSelectionPolicy:
             "excluded_20cm_buckets",
             "dynamic_soft_floor_disabled_regimes",
             "strong_high_ivol_regimes",
+            "extra_tail_veto_regimes",
         }
         if field_name in tuple_string_fields:
             if not isinstance(value, (list, tuple)):
@@ -186,6 +204,9 @@ def load_production_selection_policy(
     )
     payload["strong_high_ivol_regimes"] = tuple(
         str(value) for value in payload.get("strong_high_ivol_regimes") or ("强牛",)
+    )
+    payload["extra_tail_veto_regimes"] = tuple(
+        str(value) for value in payload.get("extra_tail_veto_regimes") or ("强牛",)
     )
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:
