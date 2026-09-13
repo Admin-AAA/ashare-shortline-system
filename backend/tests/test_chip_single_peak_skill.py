@@ -67,17 +67,31 @@ def test_chip_skill_when_exprs_use_allowed_names():
 
 @pytest.mark.integration
 def test_chip_skill_signal_grounded_in_history():
-    """回归护栏：核心因子 chip_concentration>=20 & 突破 必须在历史 formal 推荐中显著优于基线。"""
+    """回归护栏：核心因子 chip_concentration ∈ (4,10]（90%成本带宽窄=单峰密集）
+    & 突破 必须在历史 formal 推荐中显著优于基线。
+    2026-09-13 语义修复（深审 A3-1）：原判定 c>=20 实际选中带宽≥20% 的分散股
+    （方向反了），现改为修复后的密集带宽口径。历史推荐多按旧口径产生，
+    样本不足时按设计 skip（等待前瞻数据），禁止用小样本 claim lift。
+
+    R3 修正 (Sep 2026): 历史测试必须限定 canonical 前瞻及有效结算身份。
+    仅筛 run_mode='formal' 会混入 historical_replay、实验性 run、重复结果及未结算样本，
+    不能作为发布证据 (L-096 证明 canonical vs 混合口径可使精确 0 的效果被放大)。
+    本测试为工程回归 (边界锁定)，不替代路径 A 三窗验证。测试通过不等于策略已验证；
+    历史统计需使用样本身份、执行政策、结算有效性、配对日 CI 的证据输出。
+    """
     from app.db.session import SessionLocal
     from sqlalchemy import text
     import json
 
     db = SessionLocal()
+    # R3: 限定 live_forward (canonical)、有效结算标签、非 provisional
     rows = db.execute(text(
         'SELECT r.feature_snapshot_json, o.outcome_label FROM recommendations r '
         'JOIN recommendation_runs u ON r.run_id=u.run_id '
         'LEFT JOIN recommendation_outcomes o ON o.recommendation_id=r.recommendation_id '
-        'WHERE u.run_mode="formal" AND r.feature_snapshot_json IS NOT NULL'
+        'WHERE u.run_mode="formal" AND u.evaluation_scope="live_forward" '
+        'AND r.feature_snapshot_json IS NOT NULL '
+        'AND o.outcome_label IN ("success", "failed")'
     )).fetchall()
 
     def num(d, k):
@@ -98,7 +112,7 @@ def test_chip_skill_signal_grounded_in_history():
             lab += 1
             succ += label == "success"
             bo = d.get("breakout20") in (1, True) or d.get("breakout60") in (1, True)
-            if c is not None and c >= 20 and bo:
+            if c is not None and 4 < c <= 10 and bo:
                 sig_n += 1
                 sig_s += label == "success"
     base_wr = succ * 100 / lab if lab else 0
