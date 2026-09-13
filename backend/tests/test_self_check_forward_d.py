@@ -64,3 +64,27 @@ def test_empty_window_returns_none():
     """无样本窗口返回 None（self_check 打印"样本不足"而非崩溃）。"""
     res = self_check._compute_d_window(_ROWS, since_date="2030-01-01")
     assert res is None
+
+
+# ── L-099：D 项待结算管道（防「n 不变 = 系统停摆/闸门饿死」误读）─────────────
+
+def test_pending_pipeline_stats_basic():
+    rows = [("2026-09-09", 7), ("2026-09-10", 8), ("2026-09-11", 10)]
+    st = self_check._pending_pipeline_stats(rows)
+    assert st == {
+        "total_n": 25, "n_days": 3,
+        "first_date": "2026-09-09", "last_date": "2026-09-11",
+        "by_day": {"2026-09-09": 7, "2026-09-10": 8, "2026-09-11": 10},
+    }
+
+
+def test_pending_pipeline_stats_empty_and_zero():
+    assert self_check._pending_pipeline_stats([]) is None
+    assert self_check._pending_pipeline_stats([("2026-09-09", 0)]) is None
+
+
+def test_pending_pipeline_stats_sorts_and_coerces():
+    st = self_check._pending_pipeline_stats(
+        [("2026-09-11", "10"), ("2026-09-09", 7)])
+    assert st["first_date"] == "2026-09-09"
+    assert st["by_day"]["2026-09-11"] == 10

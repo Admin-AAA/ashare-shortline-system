@@ -980,3 +980,16 @@
 - 永久规则：**(a) 凡经审查证据（三窗 canonical + 独立复核）把新政策版本设为 repo 默认的落地，同轮必须在发布锁下执行 `reanchor-policy` 把 champion 身份重绑到新默认，否则状态机死锁、后续所有发布被冻结。(b) 政策指纹只在"同一代码版本内"可比；跨代码版本比较或复现旧指纹前，先确认 dataclass payload 未变，变了就重锚而非硬比。(c) 状态机新增任何"当前值 vs 存储值"一致性门禁时，必须同时提供 CAS 守卫的重绑命令，不允许出现唯一写入者被门禁挡住的环形依赖。(d) 重锚必须留痕（from/to/reason/researcher_id + history），且不得改写 champion commit/metrics/rollback_point。**
 - 复现：`backend/scripts/self_improve_state.py reanchor-policy --from-fingerprint <旧指纹> --reason <证据引用> --researcher-id <id>`；测试 `backend/tests/test_self_improve_state_reanchor.py`（3 用例：重锚+历史留痕+migrate 不回退、CAS 拒错指纹、已锚定拒绝）。
 - 相关：L-093/L-094（v3 落地，触发本死锁的合并）、L-096/L-097（state canonical_production 为基线单一事实源，指纹身份是它的键）、L-092（政策版本平台）。
+
+## L-099 D 项前瞻 n「不变」必须先看待结算管道：2026-09-13 实测停滞是 horizon=5 结算滞后 + 08-27~09-08 无 live run，不是政策闸门饿死
+
+- 状态：active（测量能力修复 MEASUREMENT_FIX：self_check 新增待结算管道诊断；本轮不改生产策略、不声称提高收益）。
+- 假设与证伪：本轮主假设「canonical 前瞻样本被政策闸门饿死（近 5 opportunity days 全 `policy_blocked=true`）」**被数据否决**。只读 DB 实测：strict `live_forward` 口径 09-09/09-10/09-11 三日共有 **25 笔独立票（dedup 后仍 25，无跨 run 重复）尚未结算**（horizon=5，最早 09-16 前后才结算）；n=9 自 09-11 零增长是**结算滞后**，不是闸门。`refresh-policy-health` 的 `policy_blocked=true` 记录的是 08-05~08-14 的陈旧 opportunity days，不能用来推断当前。
+- 真正的两个缺口（如实报告）：
+  1. **08-27~09-08 共约 9 个交易日零 live_forward formal run**（08-20 起 formal run：`historical_replay` 57 个 vs `live_forward` 12 个）。09-02~09-04 的"正式推荐"全部是 `REPLAY-历史推荐重建`，被硬门禁正确排除——这段窗口**不可恢复为 live_forward**，是 OOS 样本的真实损失。
+  2. **run 失败静默吞样本**：09-11 有 3 个 live run 产出 0 票，其中 2 个 `status='failed'`（驾驶舱·手动推荐）。12 个 live run 里 3 个零产出（25%）——失败 run 不产生推荐也不报警，直接减少前瞻样本。
+- 永久规则：**(a) 解读 D 项前瞻 n 变化前必须先看待结算管道：n 停滞可能只是 horizon 未到，勿据此判"系统停摆"或"闸门饿死"，更勿据此加规则/放松闸门（那是把结算滞后误诊成策略问题，重蹈 L-058 时间窗选择偏差）。(b) run `status='failed'` 且 0 出票必须被视为前瞻样本损失的一等公民，与零出票健康日区分（`classify_zero_output_health` 的 pipeline_fault 分支）。(c) 系统停机期间产生的 `historical_replay` 样本按 L-096 永不回填 live_forward，缺窗要如实报告而不是想办法补。**
+- 落地：`scripts/self_check.py` 新增 `_pending_pipeline_stats()`（纯函数）/`_fetch_pending_pipeline()`/`_print_pending_pipeline()`，D 项输出新增「D 项(待结算管道)」行：待结算独立票数、按日分布、以及"n 不变 ≠ 停摆/饿死"的显式提示；三种情形（有待结算 / 无待结算且无 run / 无待结算且刚结算）分别给结论。
+- 证据：`test_self_check_forward_d.py` 新增 3 例（基础/空/排序与类型强转）；`test_self_check_forward_d.py + test_self_check_canonical_baseline.py` **37 passed**。真实 DB 实测输出：`25 笔独立票未结算，分布于 2026-09-09~2026-09-11（3 个交易日）| 按日 2026-09-09:7, 2026-09-10:8, 2026-09-11:10`。
+- 复现：`SELECT` 见 `_fetch_pending_pipeline`；待结算=OFFICIAL_SAMPLE_SQL 同口径 + outcome 未结算的反转。
+- 相关：L-058（时间窗选择偏差）、L-096（live_forward 唯一发布口径，replay 不回填）、L-097/L-098（D 项基线守卫与诊断注册表）、L-067（大表无索引聚合会拖垮诊断链路）。

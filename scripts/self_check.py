@@ -1734,6 +1734,69 @@ def _resolve_forward_epoch(db) -> str:
 FORWARD_EPOCH: str | None = None
 
 
+def _pending_pipeline_stats(rows: list) -> dict | None:
+    """纯函数：待结算管道汇总（便于单测锁定，防「n 不变=系统停摆」误读）。
+
+    输入 rows: [(trade_date_str, n_dedup)]；返回 None 表示无可报（无待结算样本）。
+    背景（2026-09-13 实测）：canonical strict 前瞻 n=9 自 09-11 起"零增长"，容易被
+    误读成闸门把样本饿死或系统停摆；真相是 09-09~09-11 的 25 笔尚未到 horizon=5
+    结算窗。没有这一项，D 项的「n 不变」不可解释。
+    """
+    if not rows:
+        return None
+    by_day = {str(d): int(n) for d, n in rows if n}
+    if not by_day:
+        return None
+    days = sorted(by_day)
+    return {
+        "total_n": sum(by_day.values()),
+        "by_day": by_day,
+        "first_date": days[0],
+        "last_date": days[-1],
+        "n_days": len(days),
+    }
+
+
+def _fetch_pending_pipeline(db) -> list:
+    """live_forward formal 尚未结算的样本，按 trade_date 汇总（dedup 口径）。
+
+    与 _fetch_dedup_live_formal 同套 OFFICIAL_SAMPLE_SQL，只是把「已结算」反转成
+    「未结算」（outcome 缺失或 label 不在 success/failed）。用于解释 D 项前瞻
+    样本「n 不变」：是结算滞后（健康）还是无 run/全被拦（饥饿）。
+    """
+    return db.execute(text(f"""
+        SELECT r.trade_date, COUNT(DISTINCT CONCAT(r.code,'_',r.trade_date)) AS n
+        FROM recommendations r
+        JOIN recommendation_runs u ON r.run_id = u.run_id
+        LEFT JOIN recommendation_outcomes o ON r.recommendation_id = o.recommendation_id
+        WHERE (o.outcome_label IS NULL OR o.outcome_label NOT IN ('success', 'failed'))
+          AND {OFFICIAL_SAMPLE_SQL}
+        GROUP BY r.trade_date
+        ORDER BY r.trade_date
+    """)).fetchall()
+
+
+def _print_pending_pipeline(db) -> None:
+    """D 项待结算管道诊断（接 DB）。
+
+    结论分三种，明写避免误读：
+      - 有待结算 → 报样本数/窗口，标注「n 将在结算后增长，勿据此判停滞」；
+      - 无待结算且近期无 run → 才是真正的饥饿信号；
+      - 无待结算但近期有 run 结算 → n 已收敛，属正常。
+    """
+    rows = _fetch_pending_pipeline(db)
+    stats = _pending_pipeline_stats([tuple(r) for r in rows])
+    if stats is None:
+        print('  D 项(待结算管道): 无待结算样本 —— 若近期也无新 run，才是真饥饿信号；'
+              '若刚结算完则属正常收敛')
+        return
+    span = f'{stats["first_date"]}~{stats["last_date"]}（{stats["n_days"]} 个交易日）'
+    detail = ', '.join(f'{d}:{n}' for d, n in stats["by_day"].items())
+    print(f'  D 项(待结算管道): {stats["total_n"]} 笔独立票未结算，分布于 {span} '
+          f'| 按日 {detail} | horizon=5 内陆续结算，D 项前瞻 n 将增长——'
+          f'「n 不变」≠ 系统停摆/闸门饿死，勿据此误判')
+
+
 def _fetch_dedup_live_formal(db) -> list:
     """LIVE formal 成功/失败样本，按 (code, trade_date) 去重。
     返回 [(code, trade_date_str, label, executed_return), ...]。
@@ -2795,6 +2858,9 @@ def check_d_item(db) -> None:
     PL_BASELINE_CANONICAL: float | None = _cb_base["profit_factor"] if _cb_base else None
     if not _cb["ok"]:
         print(f'  ⛔ D 项基线不可用（{_cb["reason"]}）——只报数、不算 Δ')
+
+    # 待结算管道：解释前瞻 n 的变化（增长=结算推进；停滞=结算滞后或真饥饿）
+    _print_pending_pipeline(db)
 
     # 胜率按 (code, trade_date) 去重：同一交易日同一只股票常被多个 formal run 重复推荐
     # （2026-07-08 单日 14 个 run，松发股份被推荐 7 次全部 -5.69% 止损）。去重后反映
