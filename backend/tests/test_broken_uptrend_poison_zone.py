@@ -3,7 +3,9 @@
 T3 2026-07-21：LIVE formal 全策略 off_high∈[-30,-15] 区间 n=28 netWR=32.1% netPL=0.44
 totNet=-62.4（净负），跨 8 个交易日分布，非单日 regime 噪声。该区间属上升趋势破位/高位派发区，
 非健康回踩（健康回踩 off_high>-15；极端超跌 off_high<-30 反有企稳反弹）。集中在 limit-up-reseal-relay
-(n=7, totNet=-19.75) 与 dragon-tiger-smart-money (n=7, totNet=-40.63, WR0%) 两个策略。
+(n=7, totNet=-19.75) 与当时仍在线的 dragon-tiger-smart-money (n=7, totNet=-40.63, WR0%)。
+2026-09-15 dragon-tiger-smart-money 退役（docs/strategy-retire-2026-09-15.md），本守卫只保留
+仍在线的 limit-up-reseal-relay。
 反事实验证（全量 LIVE rec_ n=467）：剔除该区间 → 净收益率 +62.4（delta_net_return>0，过拟合护栏通过），
 剩余 netWR 67.7%→69.9% / netPL 2.15→2.47（双升）。仅作用于两策略（chao-gu 等有意买深跌，不动）。
 """
@@ -19,7 +21,7 @@ from app.engine.skill_loader import load_skills
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
 PHASE_NAME = "距高点回撤15%-30%断裂区(毒区)"
 WHEN = "off_high_pct >= -30 and off_high_pct < -15"
-AFFECTED = ["limit-up-reseal-relay", "dragon-tiger-smart-money"]
+AFFECTED = ["limit-up-reseal-relay"]
 
 
 def _yaml(skill_id: str) -> dict:

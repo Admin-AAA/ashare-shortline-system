@@ -1,32 +1,23 @@
-"""T1 端到端验证：龙虎榜聪明钱因子 + 新策略 dragon-tiger-smart-money。
+"""龙虎榜聪明钱因子/特征装配的端到端验证。
 
 背景（第一性原理已验证）：
 - 2026-09-13 修复（深审 A3-2）：此前把总净买额赋给 dragon_tiger_institution_net_buy_yi
   冒充机构净买，使 inst_buy_ratio 恒为 ±1（净买方向冒充机构身份）。现已撤除代理：
   top_inst 席位明细接入前该比例恒为 0，chen-xiaoqun / dragon-tiger 的"机构确认"
   类规则已从 YAML 删除；net_buy_ratio（净买占成交额）是唯一诚实可用的强度口径。
+- 2026-09-15：策略 dragon-tiger-smart-money 因三窗生产同构消融全过 challenger 闸门退役
+  （见 docs/strategy-retire-2026-09-15.md）。本文件保留仍在线运行的**因子/特征**部分：
+  龙虎榜标记注入、净买比例口径、机构比例不被净买方向污染。
 - dragon_tiger_net_buy_ratio = 龙虎榜净买占当日成交额比例（聪明钱强度）。
   回测 357 个上榜样本：净买≥5% -> WR 85.6% / avg+4.82%（远强于 69.8% 基线）。
-- 策略 dragon-tiger-smart-money 在 prefilter 前注入龙虎榜标记（同 limit_up 机制），
-  使其 universe 能被正确命中。
 """
-from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import select
-
-from app.core.time import utcnow_naive
-from app.engine.aggregator import aggregate
 from app.engine.skill_loader import load_skill
 from app.engine.strategy_runner import run_strategy
-from app.models.tables import DragonTiger
 from app.services.factors import FactorContext
 from app.services.factors.shortline import DragonTigerFactor
-from app.services.feature_builder import _enrich_with_auxiliary_data, build_features
-from app.services.auxiliary.application import (
-    inject_auxiliary_prefilter_flags,
-    load_auxiliary_feature_views,
-)
+from app.services.feature_builder import _enrich_with_auxiliary_data
 
 
 def _apply_dragon_tiger_factor(stock: dict) -> None:
@@ -35,7 +26,6 @@ def _apply_dragon_tiger_factor(stock: dict) -> None:
     stock.update(DragonTigerFactor().compute(stock, FactorContext()))
 
 SKILLS_DIR = Path(__file__).resolve().parent.parent / "skills"
-NEW_SKILL_DIR = SKILLS_DIR / "dragon-tiger-smart-money"
 
 
 def _stock(code="600519", name="测试龙虎", **kw):
@@ -161,43 +151,6 @@ def test_feature_builder_net_buy_ratio_clamped():
     assert stock["dragon_tiger_net_buy_ratio"] == 1.0
 
 
-def test_new_strategy_loads():
-    skill = load_skill(NEW_SKILL_DIR)
-    assert skill.skill_id == "dragon-tiger-smart-money"
-    assert skill.executable is True
-    assert skill.contract.get("weight") == 0.6
-    # 应能被推荐管线识别（contract 存在且 executable）
-    assert skill.contract.get("contract", {}).get("executable") is True
-
-
-def test_new_strategy_produces_signal_for_net_buy():
-    skill = load_skill(NEW_SKILL_DIR)
-    stock = _stock(
-        dragon_tiger_is_on_list=True,
-        dragon_tiger_net_buy_ratio=0.12,
-        dragon_tiger_inst_buy_ratio=1.0,
-        dragon_tiger_net_amount_yi=1.2,
-    )
-    signal = run_strategy(skill, stock, ["半导体", "电子"])
-    assert signal is not None
-    assert signal.get("hard_veto") is not True
-    # 强聪明钱（净买≥5%）应得高分；命中“强聪明钱接力”阶段
-    assert signal.get("score", 0) >= 80
-    assert signal.get("phase") == "强聪明钱接力"
-
-
-def test_new_strategy_vetoes_net_sell():
-    skill = load_skill(NEW_SKILL_DIR)
-    stock = _stock(
-        dragon_tiger_is_on_list=True,
-        dragon_tiger_net_buy_ratio=-0.05,
-        dragon_tiger_inst_buy_ratio=-1.0,
-        dragon_tiger_net_amount_yi=-0.5,
-    )
-    signal = run_strategy(skill, stock, ["半导体", "电子"])
-    assert signal.get("hard_veto") is True
-
-
 def test_chen_no_fake_institution_scoring():
     """深审 A3-2：chen 的 inst_buy_ratio>=0.5/+0.7 两规则（原净买时合计 +10、
     冒充"机构净买入"）已删除——inst_buy_ratio 取值不再影响 chen 评分，
@@ -244,108 +197,3 @@ def test_chen_no_fake_institution_scoring():
     assert sig_on["score"] == sig_off["score"]
     evidence_on = " ".join(sig_on.get("evidence") or [])
     assert "机构净买入" not in evidence_on
-
-
-def test_e2e_signal_reaches_skill_breakdown(db):
-    """端到端：龙虎榜标记注入(prefilter 前) → build_features → 新策略 → aggregate
-    → strategy_signals（即 skill_breakdown_json 内容）含 dragon-tiger-smart-money。
-
-    验证真实管线顺序：feature_builder 在 prefilter 之后才运行，若无 inject_dragon_tiger_flags
-    前置注入，dragon-tiger-smart-money 的 universe（dragon_tiger_is_on_list==true）在 prefilter
-    阶段永远 0 命中，信号无法进入 skill_breakdown_json。
-    """
-    code = "609999"
-    from app.engine.trading_calendar import latest_allowed_bar_date
-
-    dt_date = latest_allowed_bar_date()
-    # 在 dragon_tiger 表注入一只龙虎榜股（测试后随事务回滚，不影响生产数据）
-    existing = db.scalar(
-        select(DragonTiger).where(DragonTiger.code == code, DragonTiger.trade_date == dt_date)
-    )
-    if not existing:
-        db.add(DragonTiger(
-            code=code,
-            trade_date=dt_date,
-            name="E2E龙虎",
-            buy_amount_yi=2.0,
-            sell_amount_yi=0.8,
-            net_amount_yi=1.2,
-            created_at=utcnow_naive(),
-        ))
-        db.commit()
-
-    stock = _stock(code=code, amount_yi=10.0, dragon_tiger_is_on_list=False)
-    # 1) prefilter 前注入龙虎榜标记（真实管线：inject_dragon_tiger_flags 在 apply_prefilters 之前）
-    auxiliary_views = load_auxiliary_feature_views(db, [code], trade_date=dt_date)
-    hit = inject_auxiliary_prefilter_flags([stock], auxiliary_views)
-    assert hit == 1
-    assert stock["dragon_tiger_is_on_list"] is True
-    assert abs(stock["dragon_tiger_net_buy_ratio"] - 0.12) < 1e-6
-    # 2026-09-13 修复（深审 A3-2）：prefilter 注入同样不再用总净买冒充机构净买
-    assert stock.get("dragon_tiger_institution_net_buy_yi") in (None, 0.0)
-
-    # 2) build_features（无 aux，不应覆盖已注入的龙虎榜字段）
-    from app.services.factors.registry import bootstrap_default_factor_registry
-
-    bootstrap_default_factor_registry()
-    build_features([stock], _snapshot())
-    assert stock["dragon_tiger_is_on_list"] is True
-    assert abs(stock["dragon_tiger_net_buy_ratio"] - 0.12) < 1e-6
-
-    # 3) 运行新策略
-    skill = load_skill(NEW_SKILL_DIR)
-    signal = run_strategy(skill, stock, ["半导体", "电子"])
-    assert signal.get("strategy_id") == "dragon-tiger-smart-money"
-    assert signal.get("hard_veto") is not True
-    assert signal.get("score", 0) >= 80
-    assert signal.get("phase") == "强聪明钱接力"
-
-    # 4) aggregate → strategy_signals（即推荐落库的 skill_breakdown_json 内容）
-    card = aggregate(
-        stock=stock,
-        signals=[signal],
-        market_score=72.0,
-        agent_review_score=72.5,
-        risk_template="balanced",
-    )
-    strat_sigs = card.get("strategy_signals") or []
-    assert any(s.get("strategy_id") == "dragon-tiger-smart-money" for s in strat_sigs)
-
-
-def test_dragon_tiger_in_formal_opening_preset(db):
-    """回归保护：dragon-tiger-smart-money 必须在 preset_formal_opening 里。
-
-    第149轮 T1 发现：策略已注册（skill_registry mode=formal）+ strategy.yaml 声明
-    default_preset_groups: formal_opening，但 preset_skills 表没记录→从未被 formal run 选中。
-    _default_preset_skill_rows 同步逻辑只在 preset 无 skill_rows 时触发，已存在的 preset
-    不会自动加新策略。修复：直接 INSERT preset_skills。
-
-    第N+8轮 T5 发现：preset_skills 曾有孤儿记录 preset_id='formal_opening'（无前缀，
-    presets 表无此 preset），导致 dragon-tiger 关联到不存在的 preset，test 查
-    'preset_formal_opening' 找不到。修复：UPDATE preset_id 加 'preset_' 前缀。
-    """
-    from app.models.tables import PresetSkill
-
-    row = db.scalar(
-        select(PresetSkill).where(
-            PresetSkill.preset_id == "preset_formal_opening",
-            PresetSkill.skill_id == "dragon-tiger-smart-money",
-        )
-    )
-    assert row is not None, (
-        "dragon-tiger-smart-money 必须在 preset_formal_opening 里，否则 formal run 永远不会选中它"
-    )
-    assert float(row.weight) > 0
-
-    # 孤儿 preset_id 检测：'formal_opening'（无 preset_ 前缀）不应存在，
-    # 否则 dragon-tiger 会关联到不存在的 preset 而被 formal run 跳过。
-    orphan = db.scalar(
-        select(PresetSkill).where(
-            PresetSkill.preset_id == "formal_opening",
-            PresetSkill.skill_id == "dragon-tiger-smart-money",
-        )
-    )
-    assert orphan is None, (
-        "发现孤儿 preset_id='formal_opening'（无前缀），应为 'preset_formal_opening'。"
-        "这是手动 INSERT 用错 preset_id 的残留，会导致 dragon-tiger 关联到不存在的 preset。"
-    )
