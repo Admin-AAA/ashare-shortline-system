@@ -55,6 +55,24 @@ SOURCES = (
     ("hsgt_top10", "trade_date", "code"),
     ("news_announcement", "announce_date", "code"),
 )
+# 候选生成层重建的可行性：每个 skill 的 universe/规则依赖哪些辅助字段，
+# 以及这些字段的来源表在 W1 是否有数据（L-062：辅助数据只覆盖近 4-5 个月，
+# 缺字段会让依赖它的策略被系统性误判为"不出票"）。
+SKILL_AUX_PATTERNS = (
+    "announcement_negative_count", "news_risk_count", "dragon_tiger_",
+    "capital_flow_", "limit_up_", "twenty_cm_risk_gate", "hsgt_", "auction_", "holder_",
+)
+AUX_SOURCE_TABLE = {
+    "announcement_negative_count": "news_announcement",
+    "news_risk_count": "news_announcement",
+    "dragon_tiger_": "dragon_tiger",
+    "capital_flow_": "capital_flow",
+    "limit_up_": "limit_up_board",
+    "twenty_cm_risk_gate": "limit_up_board",
+    "auction_": "auction_data",
+    "hsgt_": "hsgt_top10",
+    "holder_": "holder_trades",
+}
 
 
 def _selected_codes(windows, iv20map, ivdnmap):
@@ -140,6 +158,44 @@ def main() -> None:
             else:
                 gate = "PASS" if ok else "FAIL(触发<20)"
             print(f"{table:20s} " + " | ".join(parts) + f"  → {gate}")
+
+    # 3. 候选生成层重建的可行性：skill 依赖的辅助字段 vs 来源表在 W1 的可用性
+    print("\n=== 3. 候选生成层重建可行性（skill 辅助字段依赖 × W1 数据可用性）===")
+    skills_dir = B / "skills"
+    w1_rows = {}
+    with SessionLocal() as s:
+        for tbl, dcol, _ccol in SOURCES:
+            if tbl not in have:
+                w1_rows[tbl] = 0
+                continue
+            w1_rows[tbl] = s.execute(
+                text(f"select count(*) from {tbl} where {dcol} between :a and :b"),
+                {"a": WINDOWS["W1"][0], "b": WINDOWS["W1"][1]},
+            ).scalar()
+        if "limit_up_board" in have:
+            w1_rows["limit_up_board"] = s.execute(
+                text("select count(*) from limit_up_board where trade_date between :a and :b"),
+                {"a": WINDOWS["W1"][0], "b": WINDOWS["W1"][1]},
+            ).scalar()
+    blocked, ok_skills = [], []
+    for skill_dir in sorted(p for p in skills_dir.iterdir() if p.is_dir()):
+        yml = skill_dir / "strategy.yaml"
+        if not yml.exists():
+            continue
+        body = yml.read_text(encoding="utf-8")
+        deps = sorted({p for p in SKILL_AUX_PATTERNS if p in body})
+        if not deps:
+            continue
+        missing = sorted({AUX_SOURCE_TABLE[p] for p in deps if p in AUX_SOURCE_TABLE
+                          and w1_rows.get(AUX_SOURCE_TABLE[p], 0) == 0})
+        if missing:
+            blocked.append((skill_dir.name, missing))
+        else:
+            ok_skills.append(skill_dir.name)
+    for name, miss in blocked:
+        print(f"  BLOCKED {name:34s} W1 缺表数据: {miss}")
+    print(f"  → W1 可重建: {len(ok_skills)} 个 skill；W1 被辅助数据阻塞: {len(blocked)} 个")
+    print("  → 结论：候选生成层重建在 W1 不可行（依赖 news/announcement 字段，该表 W1 为 0 行，L-062 同源）")
 
 
 if __name__ == "__main__":
