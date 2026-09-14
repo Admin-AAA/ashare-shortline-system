@@ -633,18 +633,27 @@ class ExecutionPolicy(CanonicalValue):
         })
 
     def runtime_constant_projection(self) -> Mapping[str, Any]:
-        """Immutable legacy-formal constants derived from this policy."""
+        """Immutable legacy-formal constants derived from this policy.
+
+        2026-09-15：补入三个 enabled 开关。原因——这些常数会被
+        `app/services/outcome_simulation.py`（实盘 outcome 结算路径）读取，
+        而该路径原先只读数值、不读 enabled，导致"关掉止盈/止损/trailing"
+        在实盘结算里被**静默忽略**（v3 出场策略发布时发现的真实缺口）。
+        """
 
         return MappingProxyType({
             "ENTRY_LOOKAHEAD_DAYS": self.entry.max_entry_trade_days,
             "ENTRY_SLIPPAGE_BPS": self.slippage.entry_bps,
             "EXIT_SLIPPAGE_BPS": self.slippage.exit_bps,
+            "STOP_LOSS_ENABLED": self.stop_loss.enabled,
             "DEFAULT_STOP_LOSS_PCT": -self.stop_loss.default_loss_pct,
             "MAX_STOP_LOSS_PCT": -self.stop_loss.maximum_loss_pct,
+            "TAKE_PROFIT_ENABLED": self.take_profit.enabled,
             "DEFAULT_TAKE_PROFIT_PCT": self.take_profit.default_gain_pct,
             "MAX_TAKE_PROFIT_PCT": self.take_profit.maximum_gain_pct,
             "STOP_LOSS_GAP_CAP_PCT": -self.gap_risk.stop_gap_loss_cap_pct,
             "MAX_ENTRY_GAP_PCT": self.gap_risk.max_entry_gap_up_pct,
+            "TRAILING_ENABLED": self.trailing.enabled,
             "TRAILING_STOP_ACTIVATE_PCT": self.trailing.activation_gain_pct,
             "TRAILING_STOP_CALLBACK_PCT": self.trailing.callback_pct,
             "TRAILING_STOP_MIN_LOCK_PCT": self.trailing.minimum_lock_gain_pct,
@@ -658,6 +667,22 @@ def render_execution_policy_markdown(policy: ExecutionPolicy) -> str:
     if not isinstance(policy, ExecutionPolicy):
         raise TypeError("policy must be an ExecutionPolicy")
     entry_gap = "disabled" if policy.gap_risk.max_entry_gap_up_pct is None else f"{policy.gap_risk.max_entry_gap_up_pct:g}%"
+    # 2026-09-15：enabled=False 时必须显式写 disabled，否则文档会显示一个
+    # 已经失效的阈值（v3 关掉止盈后曾出现"profit 6%"的误导性投影）。
+    stop_txt = (
+        f"{policy.stop_loss.default_loss_pct:g}% (maximum {policy.stop_loss.maximum_loss_pct:g}%)"
+        if policy.stop_loss.enabled else "disabled"
+    )
+    profit_txt = (
+        f"{policy.take_profit.default_gain_pct:g}% (maximum {policy.take_profit.maximum_gain_pct:g}%)"
+        if policy.take_profit.enabled else "disabled"
+    )
+    trailing_txt = (
+        f"`{policy.trailing.mode.value}`, activation {policy.trailing.activation_gain_pct:g}%, "
+        f"callback {policy.trailing.callback_pct:g}%, minimum lock {policy.trailing.minimum_lock_gain_pct:g}%, "
+        f"ratio {policy.trailing.profit_lock_ratio:g}"
+        if policy.trailing.enabled else "disabled"
+    )
     return "\n".join((
         f"# Execution Policy `{policy.policy_id}@{policy.version}`",
         "",
@@ -667,8 +692,8 @@ def render_execution_policy_markdown(policy: ExecutionPolicy) -> str:
         f"- Costs: commission {policy.fees.commission_rate_per_side:g} per side, exit stamp tax {policy.fees.stamp_tax_rate_on_exit:g}; slippage {policy.slippage.entry_bps:g}/{policy.slippage.exit_bps:g} bps.",
         f"- Board/liquidity: {policy.board_limits.main_board_pct:g}/{policy.board_limits.growth_board_pct:g}/{policy.board_limits.beijing_exchange_pct:g}% limits; one-word limit-up blocks entry and one-word limit-down defers exit.",
         f"- Position: default {policy.position.default_fraction:g}, high-score cap {policy.position.high_score_cap:g} from score {policy.position.high_score_threshold:g}, composition `{policy.position.cap_composition.value}`.",
-        f"- Stops: loss {policy.stop_loss.default_loss_pct:g}% (maximum {policy.stop_loss.maximum_loss_pct:g}%), profit {policy.take_profit.default_gain_pct:g}% (maximum {policy.take_profit.maximum_gain_pct:g}%).",
-        f"- Trailing: `{policy.trailing.mode.value}`, activation {policy.trailing.activation_gain_pct:g}%, callback {policy.trailing.callback_pct:g}%, minimum lock {policy.trailing.minimum_lock_gain_pct:g}%, ratio {policy.trailing.profit_lock_ratio:g}.",
+        f"- Stops: loss {stop_txt}, profit {profit_txt}.",
+        f"- Trailing: {trailing_txt}.",
         f"- Gap risk: max entry gap {entry_gap}, stop gap cap {policy.gap_risk.stop_gap_loss_cap_pct:g}%, same-bar priority `{policy.intraday_exit_priority.value}`.",
         "",
     ))

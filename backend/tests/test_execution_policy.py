@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 import pytest
 
+from app.services import outcome_simulation
 from app.api.backtests import ExecutionPolicyRequest
 from app.engine.board_rules import limit_pct_for_code, limit_pct_for_stock
 from app.engine.execution_policy import (
@@ -54,6 +55,10 @@ from app.services.outcome_simulation import (
 
 _EXPECTED_V1_FINGERPRINT = "e0ba29df487228c25628297e8d70fbc64928504f980de10abfaf5851c94a60c5"
 _EXPECTED_V2_FINGERPRINT = "b79ec9f6e5a4b99a69268d7362865df076d0612508a09abc01b52151d9982810"
+# v3（2026-09-15 发布）：关掉 +6% 止盈、trailing 触发从 +2.0% 提前到 +1.5%、
+# 止损从 −4.5% 放宽到 −5.5%。三窗 canonical 复算：WR/avg/PF/sum 全部改善、
+# 三窗累计收益首次全部为正（详见 docs/execution-policy-v3-2026-09-15.md）。
+_EXPECTED_V3_FINGERPRINT = "86553a1fcd4a92d97b0395cd71caae1a11b6090360686b9ee75077db943e6824"
 _POLICY_DIR = Path(__file__).resolve().parents[1] / "app" / "policies"
 
 _CAP_FIELD_NAMES = (
@@ -97,7 +102,7 @@ def test_default_policy_is_complete_immutable_and_canonically_fingerprinted() ->
 
     assert DEFAULT_EXECUTION_POLICY_REGISTRY.current is policy
     assert policy.policy_id == "a-share-shortline"
-    assert policy.version == "2.0.0"
+    assert policy.version == "3.0.0"
     assert policy.schema_version == 1
     assert policy.entry.max_entry_trade_days == 2
     assert policy.t_plus_one is True
@@ -113,11 +118,14 @@ def test_default_policy_is_complete_immutable_and_canonically_fingerprinted() ->
     assert policy.position.net_exposure_cap == pytest.approx(0.80)
     assert policy.position.industry_cap == pytest.approx(0.40)
     assert policy.position.theme_cap == pytest.approx(0.40)
-    assert policy.stop_loss == StopLossPolicy(enabled=True, default_loss_pct=4.5, maximum_loss_pct=4.7)
-    assert policy.take_profit.default_gain_pct == 6.0
+    # v3 出场策略：放宽止损、关闭止盈、trailing 更早触发
+    assert policy.stop_loss == StopLossPolicy(enabled=True, default_loss_pct=5.5, maximum_loss_pct=5.7)
+    assert policy.take_profit.enabled is False
+    assert policy.take_profit.default_gain_pct == 6.0  # 数值保留但不再生效
+    assert policy.trailing.activation_gain_pct == 1.5
     assert policy.trailing.profit_lock_ratio == 0.5
     assert policy.gap_risk.stop_gap_loss_cap_pct == 15.0
-    assert policy.fingerprint() == _EXPECTED_V2_FINGERPRINT
+    assert policy.fingerprint() == _EXPECTED_V3_FINGERPRINT
     assert " " not in policy.to_canonical_json()
     assert "\n" not in policy.to_canonical_json()
 
@@ -128,21 +136,21 @@ def test_default_policy_is_complete_immutable_and_canonically_fingerprinted() ->
 
 
 
-def test_default_request_resolves_exact_registry_current_v2() -> None:
+def test_default_request_resolves_exact_registry_current_v3() -> None:
     request = ExecutionPolicyRequest()
 
     resolved = request.to_domain()
 
     assert resolved is DEFAULT_EXECUTION_POLICY
-    assert resolved.version == "2.0.0"
-    assert resolved.fingerprint() == _EXPECTED_V2_FINGERPRINT
+    assert resolved.version == "3.0.0"
+    assert resolved.fingerprint() == _EXPECTED_V3_FINGERPRINT
     assert resolved.position.cap_composition is PositionCapComposition.MIN_ALL_APPLICABLE
     assert tuple(getattr(resolved.position, name) for name in _CAP_FIELD_NAMES) == pytest.approx(
         (0.35, 0.60, 0.80, 0.80, 0.40, 0.40)
     )
 
 
-def test_flat_override_gets_deterministic_derived_identity_and_retains_v2_caps() -> None:
+def test_flat_override_gets_deterministic_derived_identity_and_retains_v3_caps() -> None:
     payload = dict(DEFAULT_EXECUTION_POLICY.config_projection())
     payload["horizon_days"] = 7
 
@@ -154,7 +162,7 @@ def test_flat_override_gets_deterministic_derived_identity_and_retains_v2_caps()
 
     assert first == second
     assert first.policy_id == "a-share-shortline-derived"
-    assert first.version.startswith("2.0.0-cfg-")
+    assert first.version.startswith("3.0.0-cfg-")
     assert first.version != DEFAULT_EXECUTION_POLICY.version
     assert first.version != another.version
     assert first.fingerprint() != DEFAULT_EXECUTION_POLICY.fingerprint()
@@ -183,7 +191,32 @@ def test_canonical_fingerprint_is_invariant_to_every_mapping_order() -> None:
 
     assert loaded == policy
     assert loaded.to_canonical_json() == policy.to_canonical_json()
-    assert loaded.fingerprint() == _EXPECTED_V2_FINGERPRINT
+    assert loaded.fingerprint() == _EXPECTED_V3_FINGERPRINT
+
+
+def test_outcome_settlement_honours_disabled_exit_switches(monkeypatch) -> None:
+    """结算路径必须尊重 enabled 开关，否则 v3 的"关止盈"会静默失效。
+
+    2026-09-15：发布 execution_policy v3 时发现 outcome_simulation 只读数值常数、
+    并把 dynamic_trailing 写死 True → "关掉止盈/止损/trailing"在实盘结算里无效。
+    本测试锁住修复：投影必须带三个 enabled 标志，且结算读取它们。
+    """
+    projection = DEFAULT_EXECUTION_POLICY.runtime_constant_projection()
+    assert projection["TAKE_PROFIT_ENABLED"] is False
+    assert projection["STOP_LOSS_ENABLED"] is True
+    assert projection["TRAILING_ENABLED"] is True
+
+    snap = {"stop_loss": 0.0, "take_profit": 0.0}
+    # 默认（v3，止盈关闭）：止盈价被推成"永不触发"
+    assert outcome_simulation._resolve_take_profit_price(10.0, snap) == 1e308
+    # 止损开启：仍按 −5.5% 解析出停止价
+    assert outcome_simulation._resolve_stop_loss_price(10.0, snap) == pytest.approx(9.45, abs=0.01)
+
+    # 反向：显式打开止盈 / 关掉止损时，两个解析器必须跟着变
+    monkeypatch.setattr(outcome_simulation, "TAKE_PROFIT_ENABLED", True)
+    monkeypatch.setattr(outcome_simulation, "STOP_LOSS_ENABLED", False)
+    assert outcome_simulation._resolve_take_profit_price(10.0, snap) == pytest.approx(10.6, abs=0.01)
+    assert outcome_simulation._resolve_stop_loss_price(10.0, snap) == 0.0
 
 
 def test_flat_research_adapter_projects_into_canonical_fields_only() -> None:
@@ -347,13 +380,16 @@ def test_runtime_config_and_documentation_projections_match_policy_snapshot() ->
         "ENTRY_LOOKAHEAD_DAYS": 2,
         "ENTRY_SLIPPAGE_BPS": 10.0,
         "EXIT_SLIPPAGE_BPS": 10.0,
-        "DEFAULT_STOP_LOSS_PCT": -4.5,
-        "MAX_STOP_LOSS_PCT": -4.7,
+        "STOP_LOSS_ENABLED": True,
+        "DEFAULT_STOP_LOSS_PCT": -5.5,
+        "MAX_STOP_LOSS_PCT": -5.7,
+        "TAKE_PROFIT_ENABLED": False,
         "DEFAULT_TAKE_PROFIT_PCT": 6.0,
         "MAX_TAKE_PROFIT_PCT": 15.0,
         "STOP_LOSS_GAP_CAP_PCT": -15.0,
         "MAX_ENTRY_GAP_PCT": 10.0,
-        "TRAILING_STOP_ACTIVATE_PCT": 2.0,
+        "TRAILING_ENABLED": True,
+        "TRAILING_STOP_ACTIVATE_PCT": 1.5,
         "TRAILING_STOP_CALLBACK_PCT": 0.8,
         "TRAILING_STOP_MIN_LOCK_PCT": 0.3,
         "TRAILING_STOP_PROFIT_LOCK_RATIO": 0.5,
@@ -362,12 +398,15 @@ def test_runtime_config_and_documentation_projections_match_policy_snapshot() ->
         "ENTRY_LOOKAHEAD_DAYS": ENTRY_LOOKAHEAD_DAYS,
         "ENTRY_SLIPPAGE_BPS": ENTRY_SLIPPAGE_BPS,
         "EXIT_SLIPPAGE_BPS": EXIT_SLIPPAGE_BPS,
+        "STOP_LOSS_ENABLED": outcome_simulation.STOP_LOSS_ENABLED,
         "DEFAULT_STOP_LOSS_PCT": DEFAULT_STOP_LOSS_PCT,
         "MAX_STOP_LOSS_PCT": MAX_STOP_LOSS_PCT,
+        "TAKE_PROFIT_ENABLED": outcome_simulation.TAKE_PROFIT_ENABLED,
         "DEFAULT_TAKE_PROFIT_PCT": DEFAULT_TAKE_PROFIT_PCT,
         "MAX_TAKE_PROFIT_PCT": MAX_TAKE_PROFIT_PCT,
         "STOP_LOSS_GAP_CAP_PCT": STOP_LOSS_GAP_CAP_PCT,
         "MAX_ENTRY_GAP_PCT": MAX_ENTRY_GAP_PCT,
+        "TRAILING_ENABLED": outcome_simulation.TRAILING_ENABLED,
         "TRAILING_STOP_ACTIVATE_PCT": TRAILING_STOP_ACTIVATE_PCT,
         "TRAILING_STOP_CALLBACK_PCT": TRAILING_STOP_CALLBACK_PCT,
         "TRAILING_STOP_MIN_LOCK_PCT": TRAILING_STOP_MIN_LOCK_PCT,
@@ -398,15 +437,15 @@ def test_runtime_config_and_documentation_projections_match_policy_snapshot() ->
     }) == 0.2
 
     assert render_execution_policy_markdown(policy) == (
-        "# Execution Policy `a-share-shortline@2.0.0`\n"
+        "# Execution Policy `a-share-shortline@3.0.0`\n"
         "\n"
-        "- Schema: `1`; fingerprint: `b79ec9f6e5a4b99a69268d7362865df076d0612508a09abc01b52151d9982810`\n"
+        "- Schema: `1`; fingerprint: `86553a1fcd4a92d97b0395cd71caae1a11b6090360686b9ee75077db943e6824`\n"
         "- Entry: `causal_strategy_entry_v1`, window 2 trading days, source `intraday_snapshot_or_postclose_target`.\n"
         "- Settlement/horizon: T+1 `true`, 5 holding bars.\n"
         "- Costs: commission 0.0001 per side, exit stamp tax 0.0005; slippage 10/10 bps.\n"
         "- Board/liquidity: 10/20/30% limits; one-word limit-up blocks entry and one-word limit-down defers exit.\n"
         "- Position: default 1, high-score cap 0.5 from score 85, composition `min_all_applicable`.\n"
-        "- Stops: loss 4.5% (maximum 4.7%), profit 6% (maximum 15%).\n"
-        "- Trailing: `profit_floor`, activation 2%, callback 0.8%, minimum lock 0.3%, ratio 0.5.\n"
+        "- Stops: loss 5.5% (maximum 5.7%), profit disabled.\n"
+        "- Trailing: `profit_floor`, activation 1.5%, callback 0.8%, minimum lock 0.3%, ratio 0.5.\n"
         "- Gap risk: max entry gap 10%, stop gap cap 15%, same-bar priority `stop_loss`.\n"
     )

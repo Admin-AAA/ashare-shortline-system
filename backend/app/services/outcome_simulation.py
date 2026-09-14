@@ -75,6 +75,11 @@ EXIT_SLIPPAGE_BPS = float(_EXECUTION_RUNTIME["EXIT_SLIPPAGE_BPS"])
 SUCCESS_RETURN_PCT = 3.0
 DEFAULT_STOP_LOSS_PCT = float(_EXECUTION_RUNTIME["DEFAULT_STOP_LOSS_PCT"])
 DEFAULT_TAKE_PROFIT_PCT = float(_EXECUTION_RUNTIME["DEFAULT_TAKE_PROFIT_PCT"])
+# 2026-09-15 补：结算路径原先只读数值、不读 enabled，会把"关掉止盈/止损/trailing"
+# 静默忽略（execution_policy v3 发布时发现的真实缺口）。
+STOP_LOSS_ENABLED = bool(_EXECUTION_RUNTIME.get("STOP_LOSS_ENABLED", True))
+TAKE_PROFIT_ENABLED = bool(_EXECUTION_RUNTIME.get("TAKE_PROFIT_ENABLED", True))
+TRAILING_ENABLED = bool(_EXECUTION_RUNTIME.get("TRAILING_ENABLED", True))
                                  # avg peak 4.27%，33/65 峰值在 3-5%，TP 下修捕获更多止盈窗口
 MAX_STOP_LOSS_PCT = float(_EXECUTION_RUNTIME["MAX_STOP_LOSS_PCT"])
                                  # 第164轮 D 项修复：原 -9% 在实践中只对"高开入场"场景生效
@@ -692,7 +697,7 @@ def _resolve_exit_result(
         take_profit_price,
         code=code,
         entry_price=entry_price,
-        dynamic_trailing=True,
+        dynamic_trailing=TRAILING_ENABLED,
         trailing_policy="profit_floor",
         profit_lock_ratio=TRAILING_STOP_PROFIT_LOCK_RATIO,
     )
@@ -728,6 +733,8 @@ def _resolve_exit(
 
 def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:
     """Resolve a stop price using the canonical default and maximum loss bounds."""
+    if not STOP_LOSS_ENABLED:
+        return 0.0  # 策略显式关闭止损：不设停止价，由其他出场条件决定
     raw_stop = _as_float(feature_snapshot.get("stop_loss"))
     if raw_entry_price is None or raw_entry_price <= 0:
         return round(raw_stop, 2) if raw_stop > 0 else 0.0
@@ -754,6 +761,8 @@ def _resolve_take_profit_price(
     raw_target = _as_float(feature_snapshot.get("take_profit"))
     if raw_entry_price is None or raw_entry_price <= 0:
         return round(raw_target, 2) if raw_target > 0 else 0.0
+    if not TAKE_PROFIT_ENABLED:
+        return 1e308  # 策略显式关闭止盈：等价"永不触发"（与金标准执行核一致）
     fallback = raw_entry_price * (1 + DEFAULT_TAKE_PROFIT_PCT / 100.0)
     if raw_target <= 0:
         return round(fallback, 2)
