@@ -61,14 +61,41 @@ import scripts.research_exit_policy_canonical as exit_harness  # noqa: E402
 
 
 def _load_pool(pool_dir: Path):
-    """每个 json 是一日 ScoredCandidateSnapshot（days 长度 1）。"""
+    """每个 json 是一日 ScoredCandidateSnapshot（days 长度 1）。
+
+    统一表示：{date: {"cards": [...], "ms": {...}, "bars": {code: tuple(BarInput)}}}
+    """
     days = {}
     for p in sorted(pool_dir.glob("*.json")):
         payload = json.loads(p.read_text(encoding="utf-8"))
         snap = ScoredCandidateSnapshot.from_payload(payload)
         day = snap.days[0]
-        days[day.signal_date] = day
+        days[day.signal_date] = {
+            "cards": [dict(c) for c in day.cards],
+            "ms": _thaw_json(day.market_snapshot),
+            "bars": dict(day.outcome_bars),
+            "netmap": None,
+        }
     return days
+
+
+def _load_baseline(kind: str):
+    """既有候选池 → 同一表示。`canon_groups` 的 W2/W3 组自带 netmap（缓存回放净收益）。"""
+    if kind == "frozen":
+        dates, groups = frozen_groups()
+    else:
+        dates, groups = canon_groups("third")
+    out = {}
+    for dt, cards, netmap, day in groups:
+        ms = _thaw_json(getattr(day, "market_snapshot", {}) or {})
+        bars = dict(getattr(day, "outcome_bars", {}) or {})
+        out[dt] = {
+            "cards": [_thaw_json(c) for c in cards],
+            "ms": ms,
+            "bars": bars,
+            "netmap": dict(netmap) if netmap else None,
+        }
+    return out
 
 
 def _metrics(rows, dates):
@@ -93,18 +120,14 @@ def main() -> None:
     if not pool_dir.is_absolute():
         pool_dir = B / pool_dir
     rebuilt = _load_pool(pool_dir)
-    if args.baseline == "frozen":
-        b_dates, b_groups = frozen_groups()
-    else:
-        b_dates, b_groups = canon_groups("third")
-    b_days = {dt: day for dt, _c, _n, day in b_groups}
+    b_items = _load_baseline(args.baseline)
     if args.start:
-        b_days = {d: v for d, v in b_days.items() if d >= args.start}
+        b_items = {d: v for d, v in b_items.items() if d >= args.start}
         rebuilt = {d: v for d, v in rebuilt.items() if d >= args.start}
     if args.end:
-        b_days = {d: v for d, v in b_days.items() if d <= args.end}
+        b_items = {d: v for d, v in b_items.items() if d <= args.end}
         rebuilt = {d: v for d, v in rebuilt.items() if d <= args.end}
-    common = sorted(set(b_days) & set(rebuilt))
+    common = sorted(set(b_items) & set(rebuilt))
     if not common:
         raise SystemExit("没有共同可用交易日")
     print(f"共同交易日 {len(common)}：{common[0]} ~ {common[-1]}", flush=True)
@@ -118,17 +141,13 @@ def main() -> None:
         iv20 = load_ivol20_pct_map(s, common)
         ivdn = load_ivol_dn20_pct_map(s, common)
 
-    def pick_and_sim(days, tag):
+    def pick_and_sim(items, tag):
         picks = {}
-        for dt, day in days.items():
-            ms = dict(getattr(day, "market_snapshot", {}) or {})
+        for dt, item in items.items():
+            ms = dict(item["ms"])
             if not ms.get("main_industries"):
-                try:
-                    ms["main_industries"] = tuple(mi.get(dt, ()))
-                except Exception:
-                    pass
-            # 冻结卡的嵌套值也是 mappingproxy（_freeze_json 产物）→ 深解冻
-            cards = [_thaw_json(c) for c in day.cards]
+                ms["main_industries"] = tuple(mi.get(dt, ()))
+            cards = [dict(c) for c in item["cards"]]
             attach_ivol20_pct(cards, dt, iv20)
             attach_ivol_dn20_pct(cards, dt, ivdn)
             for c in evaluate_selection_policy(
@@ -142,16 +161,22 @@ def main() -> None:
         bars.update(_bars_for(codes, need))
         closes.update(_closes_for(codes, {d for d, _c in picks}))
         rows = []
-        for dt, day in days.items():
+        for dt, item in items.items():
             sel = [(c, picks[(dt, c)]) for (d, c) in picks if d == dt]
             if not sel:
                 continue
-            built = {code: tuple(bars[(code, x)] for x in exit_harness.bars_dates[dt] if (code, x) in bars)
-                     for code, _card in sel}
-            built = {k: v for k, v in built.items() if v}
-            # 冻结快照的 market_snapshot 里有嵌套 mappingproxy：必须深解冻，
-            # 浅 dict() 会在 __post_init__ 的 json.dumps 上炸。
-            use = ScoredCandidateDay(signal_date=dt, market_snapshot=_thaw_json(day.market_snapshot),
+            if item["netmap"] is not None:  # 缓存回放净收益：直接用，不重算出场
+                for code, _card in sel:
+                    v = item["netmap"].get(code)
+                    if v is not None:
+                        rows.append({"dt": dt, "code": code, "net": float(v)})
+                continue
+            built = item["bars"] or {
+                code: tuple(bars[(code, x)] for x in exit_harness.bars_dates[dt] if (code, x) in bars)
+                for code, _card in sel
+            }
+            built = {k: tuple(v) for k, v in built.items() if v}
+            use = ScoredCandidateDay(signal_date=dt, market_snapshot=dict(item["ms"]),
                                      cards=tuple(c for _c, c in sel), outcome_bars=built)
             for code, card in sel:
                 cc = dict(card)
@@ -165,7 +190,7 @@ def main() -> None:
               flush=True)
         return rows, m
 
-    b_rows, b_m = pick_and_sim({d: b_days[d] for d in common}, args.baseline)
+    b_rows, b_m = pick_and_sim({d: b_items[d] for d in common}, args.baseline)
     r_rows, r_m = pick_and_sim({d: rebuilt[d] for d in common}, "rebuilt")
     j = pd.concat([b_m["g"].rename("b"), r_m["g"].rename("r")], axis=1).fillna(0.0)
     dd = (j.r - j.b).values
