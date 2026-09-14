@@ -37,6 +37,12 @@
 | `sector_boards`（行业与概念板块日快照，含 mainline_score / continuity_score / rotation_score） | history_available_from = 2026-08-07 | **只覆盖 W3**，无法三窗检验 |
 | `sector_constituents`（板块成分关系，80505 条） | 下载 manifest 里 sector-constituents 仅 **1 个文件（2026-08-07~08-12）** | **概念/题材轴彻底不可测**（L-081 当年正因概念表缺失才改用 stocks.industry 替代） |
 | `event-timeline`（事件时间线；列含 event_id / event_type / event_time / **reported_available_at** / **available_at** / source / **importance_score** / payload_json） | first=2025-05-14，last=2026-09-12，923 文件 | **W2/W3 全覆盖**；W1 覆盖后 8 个月（缺 2025-01-15~05-13）。**唯一还开着的、带 PIT 可用时间戳的新信息轴** |
+
+**event-timeline 的取数契约（已实测，2026-09-14）**：不走 `/api/v3/quant-data/{dataset}`（会 404），
+走 `/api/v3/history/download-session`，`required=["date=YYYY-MM-DD"]`、`optional=["event_type"]`。
+实测 `date=2026-09-11` 返回按 `date=YYYY-MM-DD/event_type=<类型>` 分区的 parquet 预签名 URL
+（该日只有 `event_type=announcement` 一个分区），有效期 7200s。即**回填成本 ≈ 每天一次
+session 请求 + N 个 parquet 下载**（923 天量级）。
 | `cn-minute`（分钟线） | 2020-01-02~2026-09-11，5810 文件 | 日内维度；但 L-079 已把 pm_ret 尾盘追高在第三真前瞻窗证伪 |
 | `cn-daily` / `adjustment-factors` / `financial-*` | 2020/2021 起 | 本地已有等价表 |
 
