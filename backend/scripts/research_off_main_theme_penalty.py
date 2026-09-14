@@ -23,6 +23,7 @@ from __future__ import annotations
 import json
 import copy
 import sys
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -55,6 +56,65 @@ OUT = B / "output" / "research"
 SCORE_LINE = 72.0
 OUTPUT_COUNT = 10
 PENALTIES = (0.0, 4.0, 6.0, 8.0, 12.0, 16.0)
+# L-112(a)：跑候选前先把基线钉死，与既有 canonical 记录比对，不一致就停下修基线。
+EXPECTED_BASELINE = {
+    "W1": (982, 0.18145064753931692),
+    "W2": (695, 0.05793289258033239),
+    "W3": (95, 0.014854229376842127),
+}
+
+
+def _top_industries(rows) -> list:
+    """生产同源公式（app/services/market_source/snapshot._top_industries_from_quotes）：
+    score[industry] += amount_yi * (1 + clamp(pct/20, -0.2, 0.5))，取前 3。
+
+    用 2026-01-16 校验：本函数复现冻结快照记录的 ('半导体','电气设备','元器件')。
+    """
+    scores = defaultdict(float)
+    for industry, amount, pct in rows:
+        if not industry or industry == "未分类":
+            continue
+        a = max(0.0, float(amount or 0)) / 1e8  # daily_kbars.amount 单位=元
+        p = float(pct or 0)
+        scores[industry] += a * (1 + max(-0.2, min(0.5, p / 20.0)))
+    return [n for n, _ in sorted(scores.items(), key=lambda kv: kv[1], reverse=True)[:3]]
+
+
+def _main_industries_from_db(dates) -> dict:
+    from sqlalchemy import text
+    from app.db.session import SessionLocal
+
+    out = {}
+    with SessionLocal() as s:
+        for d in dates:
+            rows = s.execute(
+                text(
+                    "SELECT st.industry, k.amount, k.pct_chg FROM daily_kbars k "
+                    "JOIN stocks st ON st.code = k.code "
+                    "WHERE k.trade_date = :d AND k.close > 0"
+                ),
+                {"d": d},
+            ).all()
+            if rows:
+                out[d] = _top_industries(rows)
+    return out
+
+
+def _attach_main_industries(groups, db_map) -> int:
+    """只给缺 main_industries 的窗口补该字段。
+
+    刻意**不**补 breadth：`_market_base`/`_market_sentiment` 只读
+    sample_count/up_count/limit_up_count/limit_down_count，因此只补
+    main_industries 对既有基线是数值中性的（脚本会断言这一点）。
+    """
+    injected = 0
+    for dt, _cards, _netmap, dayobj in groups:
+        ms = getattr(dayobj, "market_snapshot", None)
+        if not isinstance(ms, dict) or ms.get("main_industries") or dt not in db_map:
+            continue
+        ms["main_industries"] = tuple(db_map[dt])
+        injected += 1
+    return injected
 
 
 def _main_industries(ms: dict) -> set:
@@ -144,6 +204,9 @@ def main():
     w3_dates, w3_groups = canon_groups("third")
     windows = (("W1", f_dates, f_groups), ("W2", w2_dates, w2_groups), ("W3", w3_dates, w3_groups))
     all_dates = sorted({d for _w, ds, _g in windows for d in ds})
+    mi_map = _main_industries_from_db(all_dates)
+    injected = sum(_attach_main_industries(g, mi_map) for _w, _d, g in windows)
+    print(f"main_industries 注入 {injected} 天（生产同源公式；2026-01-16 复现冻结值）", flush=True)
     from app.db.session import SessionLocal
     with SessionLocal() as s:
         iv20map = load_ivol20_pct_map(s, all_dates)
@@ -174,6 +237,12 @@ def main():
         b = _summary(base_rows[w], dates)
         base_daily[w] = _daily(base_rows[w])
         res["baseline"][w] = b
+        exp_n, exp_cohort = EXPECTED_BASELINE[w]
+        if b["n"] != exp_n or abs(b["cohort"] - exp_cohort) > 1e-9:
+            raise SystemExit(
+                f"[{w}] 基线漂移：n={b['n']}（期望 {exp_n}）cohort={b['cohort']:.6f}"
+                f"（期望 {exp_cohort:.6f}）——先修基线，不得解释候选 Δ（L-112(a)）"
+            )
         print(f"[{w}] base n{b['n']} 胜{b['win']:.3f} 均{b['avg']:+.4f} PF{b['pf']:.3f} "
               f"sum{b['sum_net']:+.2f} cohort{b['cohort']:+.4f} mdd{b['mdd_cohort']:+.2f}", flush=True)
     for p in PENALTIES:
