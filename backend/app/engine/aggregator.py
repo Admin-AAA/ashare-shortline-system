@@ -649,7 +649,7 @@ def _compute_strategy_rule_score(signals: list[dict[str, Any]]) -> float:
         # 策略规则使用原始分数（不经过 stance 调整）
         weighted_total += float(signal.get("score", 0)) * weight
         weight_sum += weight
-    return weighted_total / max(weight_sum, 1.0)
+    return weighted_total / weight_sum if weight_sum > 0 else 50.0
 
 
 # ============================================================================
