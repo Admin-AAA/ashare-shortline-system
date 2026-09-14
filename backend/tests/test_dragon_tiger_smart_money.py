@@ -1,13 +1,14 @@
-"""T1 端到端验证：龙虎榜聪明钱因子修复 + 新策略 dragon-tiger-smart-money。
+"""T1 端到端验证：龙虎榜聪明钱因子 + 新策略 dragon-tiger-smart-money。
 
 背景（第一性原理已验证）：
-- feature_builder 此前从不给 dragon_tiger_institution_net_buy_yi 赋值，导致
-  shortline_factors._apply_dragon_tiger_factor 算出的 dragon_tiger_inst_buy_ratio 恒为 0，
-  令 chen-xiaoqun / limit-up-reseal 的 inst_buy_ratio>=0.5 规则永不起作用（沉睡因子）。
-- 新增 dragon_tiger_net_buy_ratio = 龙虎榜净买占当日成交额比例（聪明钱强度）。
+- 2026-09-13 修复（深审 A3-2）：此前把总净买额赋给 dragon_tiger_institution_net_buy_yi
+  冒充机构净买，使 inst_buy_ratio 恒为 ±1（净买方向冒充机构身份）。现已撤除代理：
+  top_inst 席位明细接入前该比例恒为 0，chen-xiaoqun / dragon-tiger 的"机构确认"
+  类规则已从 YAML 删除；net_buy_ratio（净买占成交额）是唯一诚实可用的强度口径。
+- dragon_tiger_net_buy_ratio = 龙虎榜净买占当日成交额比例（聪明钱强度）。
   回测 357 个上榜样本：净买≥5% -> WR 85.6% / avg+4.82%（远强于 69.8% 基线）。
-- 新增策略 dragon-tiger-smart-money，并在 prefilter 前注入龙虎榜标记（同 limit_up 机制），
-  使其 universe 能被正确命中（此前因 prefilter 阶段 dragon_tiger 字段缺失永远 0 命中）。
+- 策略 dragon-tiger-smart-money 在 prefilter 前注入龙虎榜标记（同 limit_up 机制），
+  使其 universe 能被正确命中。
 """
 from datetime import datetime
 from pathlib import Path
@@ -133,22 +134,24 @@ def test_feature_builder_populates_smart_money_fields_net_buy():
 
     assert stock["dragon_tiger_is_on_list"] is True
     assert stock["dragon_tiger_net_amount_yi"] == 1.2
-    # 修复沉睡因子：institution_net_buy_yi 此前从不赋值 -> inst_buy_ratio 恒为 0
-    assert stock["dragon_tiger_institution_net_buy_yi"] == 1.2
-    # net_buy_ratio = 1.2 / 10.0 = 0.12
+    # 2026-09-13 修复（深审 A3-2）：不再用总净买额冒充机构净买（该代理使比例恒为 ±1，
+    # 机构身份规则被净买方向误触发）；top_inst 席位明细接入前字段保持缺失/为 0。
+    assert stock.get("dragon_tiger_institution_net_buy_yi") in (None, 0.0)
+    # net_buy_ratio = 1.2 / 10.0 = 0.12（诚实口径，仍可用）
     assert abs(stock["dragon_tiger_net_buy_ratio"] - 0.12) < 1e-6
-    # shortline_factors: inst_net / abs(net) = 1.2 / 1.2 = 1.0
+    # 无真实机构净买 -> inst_buy_ratio 输出 0，机构类规则不再被净买方向触发
     _apply_dragon_tiger_factor(stock)
-    assert stock["dragon_tiger_inst_buy_ratio"] == 1.0
+    assert stock["dragon_tiger_inst_buy_ratio"] == 0.0
 
 
-def test_feature_builder_net_sell_gives_negative_ratio():
+def test_feature_builder_net_sell_keeps_inst_ratio_zero():
+    """净卖时机构比例同样不为 -1：无真实席位数据，不再输出方向代理。"""
     stock = _stock(amount_yi=10.0)
     _enrich_with_auxiliary_data([stock], None, _snapshot(), _aux_override=_aux_with_dt(-0.5))
 
     assert stock["dragon_tiger_net_buy_ratio"] == -0.05
     _apply_dragon_tiger_factor(stock)
-    assert stock["dragon_tiger_inst_buy_ratio"] == -1.0
+    assert stock["dragon_tiger_inst_buy_ratio"] == 0.0
 
 
 def test_feature_builder_net_buy_ratio_clamped():
@@ -162,7 +165,7 @@ def test_new_strategy_loads():
     skill = load_skill(NEW_SKILL_DIR)
     assert skill.skill_id == "dragon-tiger-smart-money"
     assert skill.executable is True
-    assert skill.contract.get("weight") == 1.15
+    assert skill.contract.get("weight") == 0.6
     # 应能被推荐管线识别（contract 存在且 executable）
     assert skill.contract.get("contract", {}).get("executable") is True
 
@@ -195,9 +198,10 @@ def test_new_strategy_vetoes_net_sell():
     assert signal.get("hard_veto") is True
 
 
-def test_chen_inst_buy_ratio_revived():
-    """修复前 inst_buy_ratio 恒为 0 -> chen 的 inst_buy_ratio>=0.5 规则永不起作用。
-    修复后 net-buy 龙虎榜 -> inst_buy_ratio=1.0 -> 规则应生效（+6, +4 共 +10）。"""
+def test_chen_no_fake_institution_scoring():
+    """深审 A3-2：chen 的 inst_buy_ratio>=0.5/+0.7 两规则（原净买时合计 +10、
+    冒充"机构净买入"）已删除——inst_buy_ratio 取值不再影响 chen 评分，
+    evidence 也不得再出现"机构净买入"类理由。"""
     chen = load_skill(SKILLS_DIR / "chen-xiaoqun-skill")
     base = dict(
         dragon_tiger_is_on_list=True,
@@ -236,15 +240,10 @@ def test_chen_inst_buy_ratio_revived():
     sig_off = run_strategy(chen, s_off, ["半导体", "电子"])
     assert sig_on.get("hard_veto") is not True
     assert sig_off.get("hard_veto") is not True
-    # 修复后 net-buy 龙虎榜 inst_buy_ratio=1.0 触发 chen 的 inst>=0.5(+6) 与 inst>=0.7(+4) 规则，
-    # 其 reason("机构净买入占比过半" / "机构净买入高度集中") 应出现在 evidence 中；
-    # inst_buy_ratio=0.0（修复前恒为0）时这些规则不触发 -> evidence 中无该理由。
+    # 机构身份规则已删除：inst_buy_ratio 不再产生任何评分差异
+    assert sig_on["score"] == sig_off["score"]
     evidence_on = " ".join(sig_on.get("evidence") or [])
-    evidence_off = " ".join(sig_off.get("evidence") or [])
-    assert "机构净买入占比过半" in evidence_on
-    assert "机构净买入占比过半" not in evidence_off
-    # 分数也应更高（即便被阶段 score_cap 截断，证据差异已证明规则生效）
-    assert sig_on["score"] >= sig_off["score"]
+    assert "机构净买入" not in evidence_on
 
 
 def test_e2e_signal_reaches_skill_breakdown(db):
@@ -282,7 +281,8 @@ def test_e2e_signal_reaches_skill_breakdown(db):
     assert hit == 1
     assert stock["dragon_tiger_is_on_list"] is True
     assert abs(stock["dragon_tiger_net_buy_ratio"] - 0.12) < 1e-6
-    assert stock["dragon_tiger_institution_net_buy_yi"] == 1.2
+    # 2026-09-13 修复（深审 A3-2）：prefilter 注入同样不再用总净买冒充机构净买
+    assert stock.get("dragon_tiger_institution_net_buy_yi") in (None, 0.0)
 
     # 2) build_features（无 aux，不应覆盖已注入的龙虎榜字段）
     from app.services.factors.registry import bootstrap_default_factor_registry

@@ -72,9 +72,9 @@
   "stance": "support",
   "score": 86,
   "confidence": 0.85,
-  "evidence": ["龙虎榜净买占成交额7.2%，强聪明钱", "机构净买占比过半", "主线题材共振"],
+  "evidence": ["龙虎榜净买占成交额7.2%，强聪明钱", "主力日内同向流入", "主线题材共振"],
   "risks": ["次日放量长上影风险", "高换手12%偏热"],
-  "summary": "强聪明钱接力 + 机构确认，可轻仓介入",
+  "summary": "强聪明钱接力，可轻仓介入",
   "market_regime_judgment": "聪明钱主动做多",
   "action": "轻仓试错",
   "position_range": "5-15%",
@@ -103,7 +103,7 @@
 - `support` / `neutral_support` → 优先 "轻仓试错" 或 "观察"
 
 ### evidence vs risks 约束
-- `evidence` = 看多理由（净买占比高、机构确认、主线共振）
+- `evidence` = 看多理由（净买占比高、主力同向、主线共振）
 - `risks` = 看空风险（净卖出、高换手、长上影）
 - 禁止把风险写进 evidence
 
@@ -118,7 +118,7 @@
 5. 不要忽略风险
 6. 不要过度乐观
 7. 不要违反 stance→action 映射
-8. 不要忽略龙虎榜净买/机构占比字段——必须在 evidence 或 risks 中引用
+8. 不要忽略龙虎榜净买字段——必须在 evidence 或 risks 中引用
 9. **score >= 55 时不要给 neutral stance**——铁律
 10. 不要把风险写进 evidence
 

@@ -113,6 +113,10 @@ def load_skill(path: Path) -> StrategySkill:
     if mode == "imperative" and not manifest.get("impl_class"):
         raise SkillManifestError(f"命令式策略 '{manifest['id']}' 缺少 manifest.impl_class。")
 
+    # 2026-09-13 防御（深审 A3-5 双重声明）：此前 enabled 只读 manifest，strategy.yaml
+    # 顶层的 enabled:false 被静默忽略（main-line-leader-resonance 即 YAML 禁、manifest 启）。
+    # 现取 AND：manifest 或 YAML 任一声明禁用即禁用（保守方向），防同类漂移。
+    contract_enabled = True if contract is None else bool(contract.get("enabled", True))
     return StrategySkill(
         skill_id=str(manifest["id"]),
         name=str(manifest["name"]),
@@ -125,7 +129,7 @@ def load_skill(path: Path) -> StrategySkill:
         reference_files=_discover_reference_files(path),
         contract=contract,
         contract_hash=hashlib.sha256(strategy_path.read_bytes()).hexdigest() if strategy_path.exists() else None,
-        enabled=bool(manifest["enabled"]),
+        enabled=bool(manifest["enabled"]) and contract_enabled,
     )
 
 
@@ -153,6 +157,11 @@ def validate_skill(skill: StrategySkill) -> list[str]:
                     f"setup '{setup.get('name', '')}' entry_mode must be one of "
                     f"{sorted(VALID_ENTRY_MODES)}"
                 )
+        # 2026-09-13（深审 A3-5）：YAML enabled 与 manifest enabled 声明不一致时必须
+        # 显性报错，防止加载器静默选择一侧（本 bug 曾令 main-line-leader-resonance
+        # 双重声明各说各话）。
+        if "enabled" in skill.contract and bool(skill.contract["enabled"]) != bool(skill.manifest.get("enabled", True)):
+            errors.append("strategy.yaml enabled 与 manifest.enabled 不一致（声明漂移）")
     return errors
 
 

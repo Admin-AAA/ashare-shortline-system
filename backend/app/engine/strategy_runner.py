@@ -43,14 +43,31 @@ def run_strategy(
     risk_flags: list[str] = []
     evidence: list[str] = []
 
+    # 2026-09-13 修复（深审 A3-3 软阶段遮蔽硬否决）：此前首个命中阶段后立即 break，
+    # 排在其后的硬否决规则不再评估——炒股养家在"弱势+RSI50+非主线+dist60=31+pos60=93"
+    # 输入下命中"弱市降权"（软 cap68）后，本应命中的"非主线加速"（hard_veto）被架空。
+    # 现保留"首个命中阶段定义名称/上限"的既有优先级，但继续扫描其余阶段：
+    # 任何后续 hard_veto 命中都必须生效（并取更严 score_cap）；后续软阶段不重复计，
+    # 以免额外 risk_flags 改变聚合层风险扣分量纲（保持本修复的外科手术性）。
+    phase_matched = False
     for rule in contract.get("phases", []):
-        if evaluate(str(rule.get("when", "")), context):
-            phase = str(rule.get("name", phase))
+        if not evaluate(str(rule.get("when", "")), context):
+            continue
+        rule_name = str(rule.get("name", phase))
+        if not phase_matched:
+            phase = rule_name
             score_cap = float(rule.get("score_cap", score_cap))
             hard_veto = bool(rule.get("hard_veto", False))
             risk_flags.extend(rule.get("risk_flags", []) or [])
             evidence.append(f"阶段命中: {phase}")
-            break
+            phase_matched = True
+            continue
+        if bool(rule.get("hard_veto", False)):
+            hard_veto = True
+            veto_reason = str(rule.get("veto_reason") or f"硬风控阶段命中（曾被软阶段遮蔽）: {rule_name}")
+            score_cap = min(score_cap, float(rule.get("score_cap", 100.0)))
+            risk_flags.extend(rule.get("risk_flags", []) or [])
+            evidence.append(f"阶段命中(遮蔽修复): {rule_name}")
 
     scoring = contract.get("scoring", {})
     score = float(scoring.get("base", 50))

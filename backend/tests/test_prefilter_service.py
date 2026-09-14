@@ -67,8 +67,9 @@ def _positive_stock_for_skill(skill_id: str):
     if skill_id == "sector-relative-strength-leader":
         return _tradeable_stock(primary_excess20=10.0, industry_positive_excess20_count=3)
     if skill_id == "chip-single-peak-breakout":
-        # chip_concentration>=20 (prefilter include 阈值, 与 setups 对齐) + breakout20 放量
-        return _tradeable_stock(chip_concentration=22.0, breakout20=True, vol5_20=1.2, ma5=10.0, ma10=9.9)
+        # 2026-09-13 语义修复（深审 A3-1）：单峰密集 = 90%成本带宽窄 (4,10]
+        # （原 >=20 实为带宽≥20% 的分散股，方向反了）。取 8.0 命中 prefilter 与 setups。
+        return _tradeable_stock(chip_concentration=8.0, breakout20=True, vol5_20=1.2, ma5=10.0, ma10=9.9)
     if skill_id == "trend-pullback-continuation":
         # prefilter include_any: vol5_20<=0.8 and pct<=0 and pct>=-5 (原始字段, 第N+15轮修复死锁)
         return _tradeable_stock(dsa_trend_score=22.0, vol5_20=0.7, pct=-1.0)
@@ -115,6 +116,11 @@ def test_common_tradeability_prefilter_rejects_late_acceleration():
 
 def test_skill_market_prefilters_accept_tradeable_mainline_stock():
     for selected in _selected_skills():
+        # 2026-09-13（深审 A3-5）：loader 现按 manifest∧YAML 双源判定 enabled，
+        # 已停用策略（如 main-line-leader-resonance，未验证）不参与线上选股，
+        # 本测试只约束启用的生产策略。
+        if not selected["skill"].enabled:
+            continue
         stock = _positive_stock_for_skill(selected["skill_id"])
         passed, reason = evaluate_skill_prefilter(selected["skill"], stock, stage="market")
         assert passed is True, (selected["skill_id"], reason)

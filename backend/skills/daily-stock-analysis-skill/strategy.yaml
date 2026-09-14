@@ -322,14 +322,13 @@ scoring:
     # fundamental_score >= 68 已移除：strict_real 模式下分数被 cap 到 50，规则从未触发（0/1585）
     - when: "chip_concentration > 4 and chip_concentration <= 10"
       delta: 6
-      reason: "筹码分散优势（CC 5-10: 70.8% WR, +5.37% 均收益，弱势·冰点主力阶段 106 笔验证）"
+      reason: "筹码窄带宽优势（90%成本带宽 4-10=单峰密集，70.8% WR, +5.37% 均收益，弱势·冰点主力阶段 106 笔验证；2026-09-13 标签修正：原误标'分散'）"
     - when: "resistance_distance_pct >= 0 and resistance_distance_pct <= 3"
       delta: 6
       reason: "贴近阻力位突破前夜（0-3%: 87.5% WR, +7.42% 均收益，56 笔验证）"
-    - when: "resistance_distance_pct > 10"
-      level: medium
-      flag: "远离阻力位（>10%: 43.6% WR, -0.26% 均收益，211 笔验证）"
-      score_delta: -5
+    # 2026-09-13 清理（深审 A3-4）：此处原有"远离阻力位 >10"条目误放在 scoring 段
+    # 且写 score_delta:-5（运行器在 scoring 段只读 delta，实际计 0 分，死条目）。
+    # 风险段已有同条件 score_delta:-5 生效（只扣一次，正确），故整段删除而非改键。
     - when: "turnover_rate >= 5 and turnover_rate <= 10"
       delta: 4
       reason: "换手率适中（5-10%: 61.5% WR, +2.78% 均收益，797 笔验证）"
@@ -406,7 +405,7 @@ risk:
       score_delta: -8
     - when: "chip_concentration > 18 and chip_concentration <= 30"
       level: medium
-      flag: 筹码集中风险（CC 18-30 仅 45.6% WR，集中持仓抛售压力大）
+      flag: 筹码宽带宽风险（90%成本带宽 18-30=发散，仅 45.6% WR，分散持仓抛压大；2026-09-13 标签修正：原误标'集中'）
       score_delta: -5
     - when: "resistance_distance_pct > 10"
       level: medium

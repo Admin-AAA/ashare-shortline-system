@@ -173,8 +173,9 @@ def test_soft_floor_ban_only_oscillation_not_weak():
 def _chip_ctx(chip_concentration: float) -> dict:
     """chip-single-peak universe 全过、无 hard_veto/排除 phase 的 context（真实快照提炼）。
 
-    chip_concentration>=20 才过 prefilter.market.include(chip_loose)；
-    chip_concentration<20 → 生产 prefilter 拦截(chip_loose)，但 run_strategy 的
+    2026-09-13 语义修复（深审 A3-1）：chip_concentration 是 90% 成本带宽%（越大越分散），
+    单峰密集 = 窄带宽 (4,10] 才过 prefilter.market.include(chip_not_dense)；
+    带宽 > 10 → 生产 prefilter 拦截，但 run_strategy 的
     _passes_universe 只查 universe + prefilter.market.exclude，漏 prefilter.market.include
     /include_any → 反事实若不复刻生产 prefilter 会把这笔判为「未覆盖」（漏判）。
     本 ctx 通过全部 universe.include（amount/turnover/chg20/pos60/off_high），
@@ -201,16 +202,17 @@ def test_prefilter_include_coverage_counted():
 
     复刻生产管线（evaluate_skill_prefilter 查 prefilter.market.include/include_any），
     不能只靠 run_strategy._passes_universe（漏 prefilter.market.include/include_any）。
-    chip_concentration=18 < 20 → chip_loose 拦截（生产 prefilter），反事实须判 blocked。
+    chip_concentration=12.0 > 10（带宽发散，超出密集区间 (4,10]）
+    → chip_not_dense 拦截（生产 prefilter），反事实须判 blocked。
     """
     rows = [
-        _row("rec_chip_001", "failed", -3.0, _chip_ctx(18.0), "chip-single-peak-breakout"),
-        _row("rec_chip_002", "success", 5.0, _chip_ctx(25.0), "chip-single-peak-breakout"),
+        _row("rec_chip_001", "failed", -3.0, _chip_ctx(12.0), "chip-single-peak-breakout"),
+        _row("rec_chip_002", "success", 5.0, _chip_ctx(8.0), "chip-single-peak-breakout"),
     ]
     blocked, new_total, wins, total = self_check._classify_failed_coverage(rows, _skills())
     assert total == 2
     assert wins == 1
-    assert blocked == 1  # chip_concentration=18 的失败笔被 prefilter.include 覆盖
+    assert blocked == 1  # chip_concentration=12.0 的失败笔被 prefilter.include 覆盖
     assert new_total == 1  # 剔除被覆盖的 1 笔失败后剩 1 笔（成功笔不计入剔除）
     assert round(wins * 100 / new_total, 1) == 100.0  # 反事实胜率 = 1/1 = 100%
 

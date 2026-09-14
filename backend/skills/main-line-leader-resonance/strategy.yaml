@@ -1,0 +1,278 @@
+# ═══════════════════════════════════════════════════════════════════
+# 主线龙头资金共振（main-line-leader-resonance）
+# ═══════════════════════════════════════════════════════════════════
+# 数据依据：2026-09 LIVE 因子IC分析（rec_* 已结算 n=450，弱市占83%）——
+#   is_main_theme              IC=+0.22  主线 WR≈60% avg+0.94% vs 非主线 30-39% WR avg-1.5~-2.4%
+#   is_shortline_leader_candidate IC=+0.20 龙头 WR≈63% avg+1.70% vs 非龙头负
+#   capital_resonance_signal  '主力共振' WR=62.9% avg+1.61% vs '资金配合' WR=28.6% avg-1.54%
+#   sector_ladder/industry_capacity 板块容量充足 → 正；容量极低（孤票）→ WR 21% avg-2.66%
+#   net_profit_yoy>=30 赢家中位70.8% vs 输家10.2%（基本面强度过滤题材噪音）
+#   is_limit_up 追板（T+1开盘买）WR 34% avg-1.16% → 追板惩罚
+#   off_high>=-3&bias>=6 弱市贴近高点高乖离 → WR≈0%（追高）
+# 策略定位：把 LIVE 最强的 alpha 因子（主线×龙头×资金共振×板块容量×业绩）打包成
+#   一个可解释、可回测的组合策略，与既有单因子策略形成差异化共识来源。
+# 资金源自适应（2026-09-12 schema v7 改造）：
+#   - capital_resonance_source == 'capital_flow'（生产/LIVE 有真实资金流）：资金规则
+#     完全生效（背离硬拒/配合降权/主力共振加分）。
+#   - capital_resonance_source == 'price_volume_fallback'（回测早段无资金流日期）：
+#     资金规则全部跳过，退化为"主线×龙头×强势"可回测口径，避免代理标签反相关误杀。
+# 风险：小样本（LIVE 主线∩龙头 n 约 40-80）可能存在过拟合，用 strict 阈值+硬否决
+#   控制误伤，画像回测验证后方可提升 weight。
+id: main-line-leader-resonance
+name: 主线龙头资金共振
+enabled: false
+weight: 1.0
+
+meta:
+  author: system
+  style: main-line-leader-resonance
+  version: 0.3.0
+  holding_days: [1, 3, 5]
+  strategy_independence: 0.85
+  default_preset_groups:
+    formal_opening:
+      weight: 1.0
+      sort_order: 50
+    formal_trend_core:
+      weight: 1.05
+      sort_order: 50
+    experiment_main_line_resonance:
+      weight: 1.0
+      sort_order: 10
+
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "turnover_rate >= 1.5"
+    - "turnover_rate <= 12"
+    - "free_mv_yi >= 15"
+    - "max_dd20 >= -20"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 1"
+
+prefilter:
+  market:
+    include:
+      # 主线或龙头候选至少满足其一（alpha 核心：IC +0.22/+0.20）
+      - when: "is_main_theme == true or is_shortline_leader_candidate == true"
+        reason: "requires_main_or_leader"
+    include_any:
+      # 真实资金流口径（LIVE/生产）：主力共振 或 主线上资金高分 或 龙头上资金高分
+      - when: "capital_resonance_source == 'capital_flow' and capital_resonance_signal == '主力共振'"
+        reason: "requires_capital_resonance"
+      - when: "capital_resonance_source == 'capital_flow' and capital_resonance_score >= 65 and is_main_theme == true"
+        reason: "requires_strong_capital_on_main"
+      - when: "capital_resonance_source == 'capital_flow' and capital_resonance_score >= 70 and is_shortline_leader_candidate == true"
+        reason: "requires_strong_capital_on_leader"
+      # 回测无资金流日期退化为 主线/龙头 强势形态（可回测口径，source 必须为 fallback）
+      - when: "capital_resonance_source == 'price_volume_fallback' and is_main_theme == true and off_high_pct >= -15"
+        reason: "requires_main_theme_strength"
+      - when: "capital_resonance_source == 'price_volume_fallback' and is_shortline_leader_candidate == true and pct >= 1"
+        reason: "requires_leader_strength"
+    exclude:
+      - when: "is_main_theme == false and is_shortline_leader_candidate == false"
+        reason: "non_main_non_leader_isolated"
+      - when: "off_high_pct < -20"
+        reason: "trend_broken_deep"
+      - when: "limit_up_overheat_score >= 85 and pos60 > 95"
+        reason: "emotion_overheat_late"
+
+phases:
+  # 非主线非龙头：硬否决（alpha 核心，孤票不做）
+  - name: 非主线非龙头否决
+    when: "is_main_theme == false and is_shortline_leader_candidate == false"
+    score_cap: 30
+    hard_veto: true
+    risk_flags: ["非主线且非龙头候选（LIVE WR~30% avg-2%），孤票不做"]
+
+  # 资金背离：聪明钱出逃，硬否决（仅真实资金流口径；fallback 代理与真实语义反相关，不判）
+  - name: 资金背离否决
+    when: "capital_resonance_source == 'capital_flow' and capital_resonance_signal == '资金背离'"
+    score_cap: 30
+    hard_veto: true
+    risk_flags: ["资金共振信号=资金背离（超大单净流出），主力出逃不接力"]
+
+  # 资金仅配合：非主力共振 → cap 62（仅真实资金流口径）
+  - name: 资金配合降权
+    when: "capital_resonance_source == 'capital_flow' and capital_resonance_signal == '资金配合'"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["资金仅配合非主力共振（WR 28.6% vs 主力共振 62.9%），降权"]
+
+  # 高潮追高毒区：情绪高潮 + 高位（pos60>85）→ 散户情绪顶，cap 60
+  - name: 高潮追高毒区
+    when: "market_sentiment_phase == '高潮' and pos60 > 85"
+    score_cap: 60
+    hard_veto: false
+    risk_flags: ["情绪高潮+60日高位（散户情绪顶），不接力"]
+
+  # 弱市近高无主力毒区（仅真实资金流口径）
+  - name: 弱市近高无主力毒区
+    when: "capital_resonance_source == 'capital_flow' and market_regime == '弱势' and off_high_pct >= -5 and capital_resonance_signal != '主力共振'"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["弱市贴近20日高点且无主力共振（追高闷杀），弱市等回踩"]
+
+  # 弱市追板毒区：弱市 + 涨停日（T+1 开盘买入追板）→ cap 62
+  - name: 弱市追板毒区
+    when: "market_regime == '弱势' and is_limit_up == true"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["弱市涨停日追板（T+1追板WR 34% avg-1.16%），弱市不追板"]
+
+  # ── 以下毒区资金无关，两口径均生效（LIVE 数据驱动 + 回测可验证）──
+
+  # 弱市窄幅无动量毒区：弱市·非高潮 + 20日累计涨幅<10%（窄幅横盘无趋势引擎）→ hard_veto
+  # LIVE 验证（2026-07 第173轮，daily-stock-analysis-skill n=138）：n=19 WR=47.4% avg=-1.10%
+  - name: 弱市窄幅无动量毒区
+    when: "market_regime == '弱势' and market_sentiment_phase != '高潮' and chg20 < 10"
+    score_cap: 50
+    hard_veto: true
+    risk_flags: ["弱市窄幅横盘（20日涨幅<10%无趋势引擎），主线龙头无资金接力也闷杀"]
+
+  # 弱市半吊子追高毒区：弱市+当日涨幅 3-5%（尾盘追高半吊子位）→ cap 68
+  # LIVE 验证（2026-07 第144轮）：弱势 & pct∈[3,5]: n=64 WR=23.4% avg=-1.52%
+  - name: 弱市半吊子追高毒区
+    when: "market_regime == '弱势' and pct >= 3 and pct <= 5"
+    score_cap: 68
+    hard_veto: false
+    risk_flags: ["弱市半吊子追高（当日涨3-5%无封板惯性无超跌安全垫），弱市宜等回踩"]
+
+  # 弱市半强势高乖离追高毒区：弱市+当日涨5-9.5%（未封板）+ bias_ma5>=5 → cap 68
+  # LIVE 验证（2026-07 第145轮）：n=16 WR=43.8% avg=-2.21%；对照低乖离 n=4 WR=100%
+  - name: 弱市半强势高乖离追高毒区
+    when: "market_regime == '弱势' and pct > 5 and pct < 9.5 and bias_ma5 >= 5"
+    score_cap: 68
+    hard_veto: false
+    risk_flags: ["弱市半强势高乖离追高（未封板+高乖离），弱市无接力资金高乖离回踩止损"]
+
+  # 弱市近高高乖离毒区：弱市 + 贴近20日高点(off_high>=-3) + bias_ma5>=6 → cap 62
+  # LIVE 验证（2026-09 因子IC分析）：该桶 11 输 0 赢（chip-single-peak-breakout 去重样本）
+  - name: 弱市近高高乖离毒区
+    when: "market_regime == '弱势' and off_high_pct >= -3 and bias_ma5 >= 6"
+    score_cap: 62
+    hard_veto: false
+    risk_flags: ["弱市贴近20日高点且高乖离（bias_ma5>=6），LIVE 该桶 11 输 0 赢"]
+
+setups:
+  # 主线龙头共振：最强 alpha 组合（仅真实资金流口径）
+  - name: 主线龙头共振
+    when: "is_main_theme == true and is_shortline_leader_candidate == true and capital_resonance_source == 'capital_flow' and capital_resonance_signal == '主力共振'"
+    score_delta: 12
+    entry_rule: "主线题材 + 短线龙头候选 + 主力资金共振（最强 alpha 组合），回踩不破分时均线介入"
+    invalid_rule: "资金共振转背离或板块梯队退潮"
+
+  # 主线龙头强势（无资金流日期退化为强势形态 alpha）
+  - name: 主线龙头强势
+    when: "is_main_theme == true and is_shortline_leader_candidate == true and pct >= 2 and off_high_pct >= -10"
+    score_delta: 6
+    entry_rule: "主线题材 + 短线龙头候选 + 当日强势（主线×龙头双因子 IC 最强组合）"
+    invalid_rule: "主线退潮或龙头候选资格失效"
+
+  # 龙头资金回流（仅真实资金流口径）
+  - name: 龙头资金回流
+    when: "is_shortline_leader_candidate == true and capital_resonance_source == 'capital_flow' and capital_resonance_score >= 70 and sector_ladder_completeness_score >= 50"
+    score_delta: 8
+    entry_rule: "龙头候选资金回流（共振分>=70）+ 板块梯队确认，分歧转一致介入"
+    invalid_rule: "资金共振跌破 60 或板块扩散退潮"
+
+  # 主线资金扩散（仅真实资金流口径）
+  - name: 主线资金扩散
+    when: "is_main_theme == true and capital_resonance_source == 'capital_flow' and capital_resonance_signal == '主力共振' and sector_ladder_limit_up_count >= 4"
+    score_delta: 6
+    entry_rule: "主线题材主力共振且板块容量充足（同板块涨停>=4家），跟随容量龙头"
+    invalid_rule: "主线内强势股扩散停滞或容量萎缩"
+
+scoring:
+  base: 40
+  rules:
+    # ── alpha 核心因子（LIVE IC 验证，两口径均生效）──
+    - when: "is_shortline_leader_candidate == true"
+      delta: 12
+      reason: 短线龙头候选（IC+0.20，WR63% avg+1.70%）
+    - when: "is_main_theme == true"
+      delta: 10
+      reason: 当前主线题材（IC+0.22，WR60% avg+0.94%）
+    - when: "is_main_theme == true and is_shortline_leader_candidate == true"
+      delta: 6
+      reason: 主线×龙头组合加成（双 IC 最强叠加）
+    - when: "shortline_leader_score >= 75"
+      delta: 8
+      reason: 龙头候选分高（赢家中位77）
+    # ── 资金共振（仅真实资金流口径）──
+    - when: "capital_resonance_source == 'capital_flow' and capital_resonance_signal == '主力共振'"
+      delta: 14
+      reason: 主力资金共振（WR62.9% avg+1.61% vs 资金配合28.6%）
+    - when: "capital_resonance_source == 'capital_flow' and capital_resonance_score >= 70"
+      delta: 6
+      reason: 资金共振高分
+    # ── 板块容量与梯队 ──
+    - when: "sector_ladder_completeness_score >= 75"
+      delta: 8
+      reason: 板块梯队完整
+    - when: "sector_ladder_completeness_score >= 50"
+      delta: 5
+      reason: 板块梯队展开
+    - when: "sector_ladder_limit_up_count >= 4"
+      delta: 5
+      reason: 板块容量充足（同板块涨停>=4家，容量极低孤票 WR21% avg-2.66%）
+    # ── 基本面强度 ──
+    - when: "net_profit_yoy >= 30"
+      delta: 5
+      reason: 净利高增长（赢家中位70.8% vs 输家10.2%）
+    # ── 位置与形态 ──
+    - when: "off_high_pct >= -15 and off_high_pct < -5"
+      delta: 4
+      reason: 回踩安全垫位（DSA/趋势赢家 off_high 中位-10）
+    - when: "pos60 >= 40 and pos60 <= 85"
+      delta: 3
+      reason: 60日位置适中（高位 pos60>90 追高 WR 33% avg-2.06%）
+    - when: "pos20 >= 80 and pos20 <= 95"
+      delta: 3
+      reason: 20日强势未过热
+    # ── 惩罚 ──
+    - when: "is_limit_up == true"
+      delta: -6
+      reason: 涨停日（T+1开盘追板 WR34% avg-1.16%，追板惩罚）
+    - when: "pos20 > 95"
+      delta: -5
+      reason: 20日位置过热（pos20>95 WR 15-33%）
+    - when: "limit_up_overheat_score >= 70"
+      delta: -6
+      reason: 涨停情绪过热
+    - when: "bias_ma5 >= 6"
+      delta: -4
+      reason: 高乖离追高（弱市贴近高点+高乖离 WR≈0%）
+    - when: "capital_resonance_source == 'capital_flow' and turnover_rate > 10 and capital_resonance_signal != '主力共振'"
+      delta: -6
+      reason: 高换手但资金未共振（资金承接不足）
+
+risk:
+  rules:
+    - when: "is_main_theme == false"
+      level: medium
+      flag: 非主线方向，降低仓位
+      score_delta: -6
+    - when: "is_shortline_leader_candidate == false"
+      level: medium
+      flag: 非龙头候选，降低仓位
+      score_delta: -5
+    - when: "capital_resonance_source == 'capital_flow' and capital_resonance_signal == '资金配合'"
+      level: medium
+      flag: 资金仅配合未共振，降低仓位
+      score_delta: -5
+    - when: "twenty_cm_risk_gate == 'caution'"
+      level: medium
+      flag: 20cm 主线票需降低仓位
+      score_delta: -4
+    - when: "limit_up_overheat_score >= 75"
+      level: medium
+      flag: 主线情绪过热，注意分歧
+      score_delta: -6

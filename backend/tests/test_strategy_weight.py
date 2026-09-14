@@ -34,10 +34,10 @@ def _stock(industry="银行", **kwargs):
 def test_signal_carries_contract_weight():
     """run_strategy 必须把 strategy.yaml 的 weight 注入 signal.weight。"""
     sk = _load("chao-gu-yang-jia-skill")
-    assert sk.contract.get("weight") == 1.20
+    assert sk.contract.get("weight") == 1.1
     out = run_strategy(sk, _stock(main_industries=["银行"]), main_industries=["银行"])
     assert "weight" in out
-    assert out["weight"] == 1.20
+    assert out["weight"] == 1.1
 
 
 def test_vetoed_signal_still_carries_weight():
