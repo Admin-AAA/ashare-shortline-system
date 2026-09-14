@@ -101,6 +101,28 @@ def _grid(stage: str) -> list:
             )
             cfgs.append((f"mge{mge:g}_ml{minlock:g}_prio{prio.value[:4]}_cap15", ep))
         return [("baseline", base)] + cfgs
+    if stage == "wr":
+        # 在 v4 之上继续找"提胜率"的出场轴（v4 = TP off / SL5.5 / trailing act1.5 / min_lock2.5 /
+        # mge6）。本轮扫三根还没碰过的：止损宽度、利润锁利比例、止盈重新开启的档位。
+        # 仍不扫 stop_gap_loss_cap_pct（成交假设，见 gap 段注释）。
+        cfgs = []
+        for sl, lock, tp in itertools.product(
+            (5.5, 6.0, 6.5), (0.4, 0.5, 0.6, 0.7), (None, 8.0, 10.0, 12.0)
+        ):
+            tp_pol = (
+                dataclasses.replace(base.take_profit, enabled=False)
+                if tp is None
+                else dataclasses.replace(base.take_profit, enabled=True, default_gain_pct=tp)
+            )
+            ep = dataclasses.replace(
+                base,
+                stop_loss=dataclasses.replace(base.stop_loss, default_loss_pct=sl,
+                                              maximum_loss_pct=max(5.7, sl + 0.2)),
+                trailing=dataclasses.replace(base.trailing, profit_lock_ratio=lock),
+                take_profit=tp_pol,
+            )
+            cfgs.append((f"sl{sl:g}_lk{lock:g}_tp{tp if tp else 'off'}", ep))
+        return [("baseline", base)] + cfgs
     cfgs = [("baseline", base)]
     tp_opts = [6.0, 8.0, None]
     sl_opts = [4.5, 5.5]
@@ -163,7 +185,7 @@ def _metrics(rows, dates) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", choices=("base", "refine", "gap"), default="base")
+    ap.add_argument("--stage", choices=("base", "refine", "gap", "wr"), default="base")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     out_path = Path(args.out) if args.out else OUT / f"exit_sweep_{args.stage}.jsonl"
@@ -219,6 +241,7 @@ def main() -> None:
     cfgs = _grid(args.stage)
     print(f"[sweep] stage={args.stage} 配置数={len(cfgs)} → {out_path}", flush=True)
     base_metrics, base_g = {}, {}
+    months_pool: dict = {}
     t0 = time.time()
     with out_path.open("w", encoding="utf-8") as fh:
         for ci, (name, ep) in enumerate(cfgs, 1):
@@ -238,6 +261,10 @@ def main() -> None:
                     base_g[w] = g
                 elif w in base_metrics:
                     b = base_metrics[w]
+                    # L-058 门槛所需：逐月 Δ 同号率（候选 − 已发布默认）
+                    dd = (g - base_g[w]).dropna()
+                    for k, v in dd.groupby(dd.index.str[:7]).mean().items():
+                        months_pool.setdefault(k, []).append(float(v))
                     dec = evaluate_challenger(
                         PerformanceSnapshot(b["avg"], b["sum"], b["win"] * 100, b["pf"], b["mdd"]),
                         PerformanceSnapshot(m["avg"], m["sum"], m["win"] * 100, m["pf"], m["mdd"]),
@@ -248,6 +275,11 @@ def main() -> None:
                     rec["windows"][w]["d_win_pp"] = round((m["win"] - b["win"]) * 100, 2)
             # baseline 的行不进结果文件（只做基准）
             if name != "baseline":
+                if months_pool:
+                    flat = [v for vs in months_pool.values() for v in vs]
+                    rec["month_pos"] = round(sum(1 for v in flat if v > 0) / len(flat), 3)
+                    rec["months"] = len(months_pool)
+                months_pool = {}
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
                 fh.flush()
             if ci % 10 == 0 or ci == len(cfgs):
