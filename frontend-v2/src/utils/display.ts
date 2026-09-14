@@ -121,7 +121,6 @@ export const BUCKET_LABELS: Record<string, string> = {
   "high-range-breakout-momentum": "阶段新高放量突破",
   "small-cap-thematic-momentum": "小盘题材动量",
   "trend-pullback-continuation": "强趋势缩量回踩",
-  "weak-market-strong-stock-reversal": "弱市强势股确认回撤",
   "sector-relative-strength-leader": "主线相对强度龙头",
   "overnight-holding-method": "隔夜持股法",
   "limit-up-reseal-relay": "涨停回封接力",

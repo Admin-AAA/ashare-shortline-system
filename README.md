@@ -106,7 +106,6 @@ ashare-shortline-system/
 │   │   ├── chip-single-peak-breakout/  # 芯片单峰突破
 │   │   ├── high-position-volume-stall-warning/ # 高位放量滞涨
 │   │   ├── small-cap-thematic-momentum/ # 小盘题材动量
-│   │   └── weak-market-strong-stock-reversal/ # 弱市强股反转
 │   ├── tests/
 │   ├── scripts/
 │   │   ├── ashare_cli.py        # CLI 底层入口
@@ -296,7 +295,6 @@ skill-name/
 | `chip-single-peak-breakout` | 芯片单峰突破 |
 | `high-position-volume-stall-warning` | 高位放量滞涨 |
 | `small-cap-thematic-momentum` | 小盘题材动量 |
-| `weak-market-strong-stock-reversal` | 弱市强股反转 |
 
 ---
 

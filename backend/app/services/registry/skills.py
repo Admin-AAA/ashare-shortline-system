@@ -154,22 +154,58 @@ def _descriptor_map(skills: list[StrategySkill]) -> dict[str, "StrategyDescripto
     return {descriptor.strategy_id: descriptor for descriptor in registry.list_descriptors()}
 
 
+def _retire_missing_local_skills(db: Session, skills: list[StrategySkill], skills_dir: Path) -> bool:
+    """Disable removed repository skills and prune their preset memberships."""
+    loaded_skill_ids = {skill.skill_id for skill in skills}
+    if not skills_dir.is_dir() or not loaded_skill_ids:
+        return False
+    changed = False
+    stale_local_rows = db.scalars(
+        select(SkillRegistry).where(
+            SkillRegistry.source_type == "local",
+            SkillRegistry.skill_id.not_in(loaded_skill_ids),
+        )
+    ).all()
+    for registry in stale_local_rows:
+        if registry.enabled or registry.has_executable_contract:
+            registry.enabled = False
+            registry.has_executable_contract = False
+            registry.updated_at = datetime.now(timezone.utc).replace(tzinfo=None)
+            changed = True
+        memberships = db.scalars(
+            select(PresetSkill).where(PresetSkill.skill_id == registry.skill_id)
+        ).all()
+        for membership in memberships:
+            db.delete(membership)
+            changed = True
+    return changed
+
+
 def sync_skills(db: Session) -> list[StrategySkill]:
     global _last_skill_sync_time, _cached_skill_cache_key, _cached_skill_list
     settings = get_settings()
     cache_key = (settings.database_url, str(settings.skills_dir.resolve()))
     now = time.time()
     if _is_skill_cache_fresh(now, cache_key):
+        if _retire_missing_local_skills(db, _cached_skill_list or [], settings.skills_dir):
+            db.commit()
+            invalidate_bootstrap_cache()
         return _cached_skill_list
 
     with _skill_sync_lock:
         now = time.time()
         if _is_skill_cache_fresh(now, cache_key):
+            if _retire_missing_local_skills(db, _cached_skill_list or [], settings.skills_dir):
+                db.commit()
+                invalidate_bootstrap_cache()
             return _cached_skill_list
 
         skills = load_skills(settings.skills_dir)
         descriptors = _descriptor_map(skills)
         has_changes = False
+        # Removing a repository skill directory is the retirement signal. Keep
+        # immutable versions but remove executable and preset projections.
+        has_changes = _retire_missing_local_skills(db, skills, settings.skills_dir)
         for skill in skills:
             descriptor = descriptors.get(skill.skill_id)
             if descriptor is None:
