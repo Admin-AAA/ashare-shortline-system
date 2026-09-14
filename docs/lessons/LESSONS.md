@@ -1127,3 +1127,11 @@
 - 处置（可复现）：`bb54bca` 完整 revert 退役提交；`git diff --stat c58854e HEAD` 输出为空，即工作树与被误解前逐字节一致；受影响 30 项定向测试通过。自驱状态追加 `si-20260914-record-correction` 更正记录。`archived_falsified_directions` 中 `retire-daily-stock-analysis-skill` 的**画像依据作废**——该方向本身另有可复现依据成立（`production_selection.v4` 的 `excluded_20cm_buckets` 已含 `daily-stock-analysis-skill`，sha256 `dfdf5b6f…`；删除该 skill 不改变目标 20cm 组合，却会破坏单股分析与研究 API 的默认策略）。
 - 永久规则：**(a) run record / 日报里的每个窗口数字必须附一条本机可执行、可重放出该数字的命令或 artifact 路径；写不出就写 `not-run` 或 `unavailable`，不得填近似值。** **(b) 文档模板里出现的命令必须先确认其真实存在且真能产出该粒度指标，再按它填数；协议模块 ≠ 可执行入口。** **(c) 删除/停用策略前，必须同时查 `archived_falsified_directions`、`scanned_grids`、`published_findings` 与 LESSONS（尤其 L-110）里是否已有该方向的组合级结论；已有 FALSIFIED 记录时，新证据必须解释冲突而非覆盖它。** **(d) "solo 单元差"不构成"移出组合有益"；两者是不同的证据层，组合级必须走生产同构重放。** **(e) 更正类操作要留痕：先 revert 到可复现的树，再追加 correction finding，禁止直接编辑状态文件。**
 - 相关：L-110（整策略剔除/降权三窗消融全否，待其分支合并后以其 canonical 文本为准）、L-009（归档否证方向，不重复同一组参数）、L-010（challenger 判定唯一闸门）、L-012（证据分级/口径）、L-099（canonical 证据口径）、L-016（串行与 champion 重放）。
+
+## L-112【测量口径硬规则】canonical 三窗测量必须显式预附横截面分位，并先断言每个窗口的闸门输入覆盖率；否则测到的是"静默退化基线"
+
+- 状态：active（测量口径硬规则）。
+- 触发：2026-09-14 自建 `scripts/research_off_main_theme_penalty.py` 复现 v4 三窗基线时，第一版没有 `attach_ivol20_pct` / `attach_ivol_dn20_pct`，得到 W1/W2/W3 cohort = **+0.0364 / -0.2007 / -0.4247**，与 L-109 记载的 **v2** 基线逐位相同。原因：v3/v4 的 regime 尾部否决读卡上的 `ivol20_pct` / `ivol_dn20_pct`，缺字段时按设计**保守放行**——于是"v4 基线"实际跑成了 v1/v2 行为。预附分位后同一脚本给出 v4 cohort **+0.1815 / +0.0579 / +0.0149**，W2/W3 与 L-109 逐位一致。
+- 第二个静默失效（同一轮内）：W2 前瞻与 W3 第三窗的 `market_snapshot` 由 `build_market_snapshots` 产出，**只含** `up_count/down_count/limit_up_count/limit_down_count/sample_count`，没有 `main_industries`、没有 `breadth`。任何依赖"当日行业广度/主线"的规则在这两窗覆盖 0/117、0/19 天，Δ 恒为 0。把 Δ≡0 读成"规则无影响"会得出完全错误的方向结论。
+- 永久规则：**(a) 任何 canonical 三窗测量脚本在跑候选前，必须先打印"基线三窗 cohort"，并与已知 canonical 记录（L-109/L-094）比对；不一致先修基线，不得直接解释候选 Δ。** **(b) 候选规则的每一个闸门输入都要打印"覆盖天数/总天数"，覆盖不足的窗口判 `NOT_EVALUABLE`，禁止计入结论、禁止用 Δ≡0 代替"未评估"。** **(c) 分位类输入必须走 `attach_ivol20_pct`/`attach_ivol_dn20_pct` 预附；"缺字段保守放行"是生产安全设计，但在研究脚本里会伪装成"规则无效"。** **(d) 依赖市场广度（main_industries/breadth）的规则，在 W2/W3 落地前必须先补历史快照构造，否则规则只在 W1 生效，天然过不了三窗门禁。**
+- 相关：L-109（v4 基线 canonical 数值与残留风险 ⑤ 的复跑）、L-013（regime 归因口径）、L-071/L-084（生产同构口径）、L-108（声明式规则通道）、L-111（记录可复现）。
