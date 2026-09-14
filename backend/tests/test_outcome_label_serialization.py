@@ -55,8 +55,12 @@ def _make_pending_rec(db: Session, rec_id: str, code: str, trade_date: str = "20
     db.add_all([
         DailyKbar(code=code, trade_date=trade_date, open=10.0, high=10.2, low=9.9, close=10.0, volume=1, amount=10, pct_chg=0.0, turnover_rate=1.0),
         DailyKbar(code=code, trade_date="2026-05-13", open=10.1, high=10.6, low=9.95, close=10.5, volume=1, amount=10, pct_chg=5.0, turnover_rate=1.2),
-        DailyKbar(code=code, trade_date="2026-05-14", open=10.6, high=10.95, low=10.45, close=10.9, volume=1, amount=10, pct_chg=3.0, turnover_rate=1.3),
-        DailyKbar(code=code, trade_date="2026-05-15", open=10.8, high=10.9, low=10.5, close=10.7, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.1),
+        DailyKbar(code=code, trade_date="2026-05-14", open=10.6, high=11.0, low=10.45, close=10.9, volume=1, amount=10, pct_chg=3.8, turnover_rate=1.3),
+        # 2026-09-15（execution_policy v3）：止盈已关闭 → 需要一根明确击穿 profit_floor 的 K
+        # 才能得到 settled（success）而不是 provisional；否则持仓期未跑完会停在临时态。
+        DailyKbar(code=code, trade_date="2026-05-15", open=10.8, high=10.9, low=10.2, close=10.3, volume=1, amount=10, pct_chg=-5.5, turnover_rate=1.1),
+        DailyKbar(code=code, trade_date="2026-05-18", open=10.3, high=10.4, low=10.1, close=10.2, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.0),
+        DailyKbar(code=code, trade_date="2026-05-19", open=10.2, high=10.3, low=10.0, close=10.1, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.0),
     ])
     db.add(Recommendation(
         recommendation_id=rec_id, run_id=run_id, trade_date=trade_date,

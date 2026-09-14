@@ -52,7 +52,7 @@ def test_property_11_execution_policy_identity_is_deterministic_and_versioned(
     assert first == reordered
     assert first.fingerprint() == reordered.fingerprint()
     if payload != dict(DEFAULT_EXECUTION_POLICY.config_projection()):
-        assert first.version.startswith("2.0.0-cfg-")
+        assert first.version.startswith("3.0.0-cfg-")
     assert changed.version != first.version
     assert changed.fingerprint() != first.fingerprint()
 

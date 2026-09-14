@@ -207,8 +207,9 @@ def test_outcome_settlement_honours_disabled_exit_switches(monkeypatch) -> None:
     assert projection["TRAILING_ENABLED"] is True
 
     snap = {"stop_loss": 0.0, "take_profit": 0.0}
-    # 默认（v3，止盈关闭）：止盈价被推成"永不触发"
-    assert outcome_simulation._resolve_take_profit_price(10.0, snap) == 1e308
+    # 默认（v3，止盈关闭）：止盈价返回 None（NULL 语义"无目标价"；
+    # 不能用超大数——outcome 表列是 MySQL FLOAT，1e308 会 DataError 整笔结算失败）
+    assert outcome_simulation._resolve_take_profit_price(10.0, snap) is None
     # 止损开启：仍按 −5.5% 解析出停止价
     assert outcome_simulation._resolve_stop_loss_price(10.0, snap) == pytest.approx(9.45, abs=0.01)
 

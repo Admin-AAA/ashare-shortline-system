@@ -549,8 +549,13 @@ class TestE2ERecommendationFlow:
         db.add_all([
             DailyKbar(code=code, trade_date="2026-05-12", open=10.0, high=10.2, low=9.9, close=10.0, volume=1, amount=10, pct_chg=0.0, turnover_rate=1.0),
             DailyKbar(code=code, trade_date="2026-05-13", open=10.1, high=10.6, low=9.95, close=10.5, volume=1, amount=10, pct_chg=5.0, turnover_rate=1.2),
-            DailyKbar(code=code, trade_date="2026-05-14", open=10.6, high=10.95, low=10.45, close=10.9, volume=1, amount=10, pct_chg=3.0, turnover_rate=1.3),
-            DailyKbar(code=code, trade_date="2026-05-15", open=10.8, high=10.9, low=10.5, close=10.7, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.1),
+            DailyKbar(code=code, trade_date="2026-05-14", open=10.6, high=11.0, low=10.45, close=10.9, volume=1, amount=10, pct_chg=3.8, turnover_rate=1.3),
+            # 2026-09-15（execution_policy v3）：止盈已关闭，+6% 不再提前结算，
+            # 出场由 +1.5% 激活的 profit_floor 决定：入场 10.1、峰值 11.0 →
+            # 地板 ≈ 10.1 + 0.5×(11.0−10.1) = 10.55，本根 low=10.2 明确击穿 → trailing_stop_hit。
+            DailyKbar(code=code, trade_date="2026-05-15", open=10.8, high=10.9, low=10.2, close=10.3, volume=1, amount=10, pct_chg=-5.5, turnover_rate=1.1),
+            DailyKbar(code=code, trade_date="2026-05-18", open=10.3, high=10.4, low=10.1, close=10.2, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.0),
+            DailyKbar(code=code, trade_date="2026-05-19", open=10.2, high=10.3, low=10.0, close=10.1, volume=1, amount=10, pct_chg=-1.0, turnover_rate=1.0),
         ])
         rec = Recommendation(
             recommendation_id=rec_id,
@@ -591,9 +596,12 @@ class TestE2ERecommendationFlow:
         assert outcome is not None
         assert outcome.entry_triggered is True
         assert outcome.entry_date == "2026-05-13"
-        assert outcome.exit_reason in ("take_profit_hit", "trailing_stop_gap", "trailing_stop_hit")
+        # v3：无止盈提前结算，出场来自 profit_floor 触发（或极端情况下的止损/期末）
+        assert outcome.exit_reason in (
+            "trailing_stop_hit", "trailing_stop_gap", "stop_loss_hit", "horizon_close",
+        )
         assert outcome.outcome_label == "success"
-        assert outcome.executed_return > 3.0
+        assert outcome.executed_return > 2.0
         # v2 MIN_ALL_APPLICABLE: min(market 0.55, single-name 0.35, ...)=0.35
         assert outcome.position_size == pytest.approx(0.35)
         assert outcome.weighted_return == pytest.approx(round(outcome.executed_return * 0.35, 2))

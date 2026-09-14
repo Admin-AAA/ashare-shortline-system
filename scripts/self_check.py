@@ -49,6 +49,22 @@ SKILLS_DIR = os.path.join(os.path.dirname(__file__), '..', 'backend', 'skills')
 # 佣金万1双边(0.02%) + 印花税卖出(0.05%) = 0.07%/笔。executed_return 已含滑点但未扣此成本。
 # 北极星 D 项目标定义为"扣费后须达标"(T2 step4)，故 D 项必须呈净成本口径，不能只看毛值。
 ADDITIONAL_COST_PCT = 0.07
+
+
+def _default_stop_loss_pct() -> float:
+    """生产默认止损（负值百分比），从出场策略派生，避免硬编码漂移。
+
+    只依赖纯数据模块 app.engine.execution_policy，不引入 DB/网络依赖；
+    导入失败时回退到 v3 的值并保守继续（D 项守卫会在身份不符时拒绝算 Δ）。
+    """
+    try:
+        from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
+
+        return -float(DEFAULT_EXECUTION_POLICY.stop_loss.default_loss_pct)
+    except Exception:  # noqa: BLE001
+        return -5.5
+
+
 PL_RATIO_BASELINE: float | None = None  # 旧盈亏比基线受历史成交口径污染，禁止继续作为 champion
 PL_RATIO_TARGET = 2.0      # 北极星 D 项目标（朝 2.0 攻击）
 
@@ -70,7 +86,11 @@ CANONICAL_CALIBER_TOKENS = ('canonical', 'live_forward')
 # 基线 JSON 里记录的这三项任一不符，说明基线与当前生产退出状态机脱钩，Δ 不可比。
 PRODUCTION_REPLAY_IDENTITY = {
     'horizon': 5,
-    'production_stop_loss_pct': -4.5,
+    # 2026-09-15：从出场策略派生，不再硬编码。
+    # execution_policy v3 把止损从 -4.5% 放宽到 -5.5%；原先写死 -4.5 会让
+    # "重放身份一致性"守卫永远盯着旧值（tests/test_self_check_canonical_baseline.py
+    # 的守卫用例正是为此存在——它在 v3 发布时抓到了这个漂移）。
+    'production_stop_loss_pct': _default_stop_loss_pct(),
     'net_cost_pct': ADDITIONAL_COST_PCT,
 }
 

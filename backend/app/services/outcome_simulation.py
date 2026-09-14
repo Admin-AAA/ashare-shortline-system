@@ -404,7 +404,10 @@ def _simulate_outcome(
         "entry_slippage_bps": ENTRY_SLIPPAGE_BPS,
         "exit_slippage_bps": EXIT_SLIPPAGE_BPS,
         "stop_loss_price": round(stop_loss_price, 2),
-        "take_profit_price": round(take_profit_price, 2),
+        # 关闭止盈时保持 NULL（DB 列 nullable；写 1e308 会 DataError 1264）
+        "take_profit_price": (
+            None if take_profit_price is None else round(take_profit_price, 2)
+        ),
         "exit_reason": exit_reason,
         "hit_target": hit_target,
         "hit_invalid": hit_invalid,
@@ -577,7 +580,7 @@ def _trailing_stop_return(
 def _resolve_exit_causal_result(
     holding_bars: list[DailyKbar],
     stop_loss_price: float,
-    take_profit_price: float,
+    take_profit_price: float | None,
     *,
     code: str = "",
     entry_price: float = 0.0,
@@ -612,7 +615,8 @@ def _resolve_exit_causal_result(
         core_bars,
         CausalExitConfig(
             stop_loss_price=stop_loss_price,
-            take_profit_price=take_profit_price,
+            # None（策略关闭止盈）在因果核边界转成"永不触发"，与 execution_core 同语义
+            take_profit_price=1e308 if take_profit_price is None else take_profit_price,
             entry_price=entry_price,
             t_plus_one=True,
             dynamic_trailing=dynamic_trailing,
@@ -751,7 +755,7 @@ def _resolve_take_profit_price(
     raw_entry_price: float | None,
     feature_snapshot: dict[str, Any],
     recommend_price: float | None = None,
-) -> float:
+) -> float | None:
     """Resolve take profit relative to actual entry and canonical policy bounds.
 
     When the actual entry gaps away from the recommendation price, preserve the
@@ -762,7 +766,11 @@ def _resolve_take_profit_price(
     if raw_entry_price is None or raw_entry_price <= 0:
         return round(raw_target, 2) if raw_target > 0 else 0.0
     if not TAKE_PROFIT_ENABLED:
-        return 1e308  # 策略显式关闭止盈：等价"永不触发"（与金标准执行核一致）
+        # 策略显式关闭止盈 → 用 NULL 表达"无目标价"。
+        # 注意不能用 1e308：`recommendation_outcomes.take_profit_price` 是 MySQL
+        # FLOAT（上限 ~3.4e38），写 1e308 会 DataError(1264) 整笔结算失败。
+        # 因果退出核在边界处会把 None 当作"永不触发"（与金标准 execution_core 一致）。
+        return None
     fallback = raw_entry_price * (1 + DEFAULT_TAKE_PROFIT_PCT / 100.0)
     if raw_target <= 0:
         return round(fallback, 2)

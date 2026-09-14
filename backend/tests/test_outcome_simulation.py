@@ -35,6 +35,22 @@ from app.services.outcome_simulation import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _enable_all_exit_switches(monkeypatch):
+    """把三个出场开关固定为"全部开启"。
+
+    本模块测的是**出场解析/模拟逻辑本身**（含 take-profit 按实际入场价重算的
+    专项修复），而不是当前生产 artifact 的开关取值。2026-09-15 生产发布
+    execution_policy v3（`take_profit.enabled=false`）后，若不固定开关，
+    这些逻辑用例会因为"止盈被关掉"而失败——那是策略选择，不是逻辑回归。
+    生产开关本身由 tests/test_execution_policy.py 的两个用例锁定
+    （投影必须带 *_ENABLED、结算必须尊重它们）。
+    """
+    monkeypatch.setattr("app.services.outcome_simulation.STOP_LOSS_ENABLED", True)
+    monkeypatch.setattr("app.services.outcome_simulation.TAKE_PROFIT_ENABLED", True)
+    monkeypatch.setattr("app.services.outcome_simulation.TRAILING_ENABLED", True)
+
+
 def _bar(
     *,
     trade_date: str,
@@ -445,8 +461,10 @@ def test_resolve_stop_loss_caps_gap_up_entry_to_max():
 def test_resolve_stop_loss_keeps_inrange_strategy_stop():
     """策略止损落在 [MAX, DEFAULT] 区间内时直接采用，不被归一化篡改。"""
     entry = 100.0
-    # 策略止损 -4.6%（在 -4.7% ~ -4.5% 区间内）
-    raw_stop = entry * (1 - 4.6 / 100.0)
+    # 取"区间中点"而不是写死百分比：v3 把区间从 (-4.7%, -4.5%) 移到 (-5.7%, -5.5%)，
+    # 写死 -4.6% 会落在新区间之外、被 DEFAULT 夹住（那是边界行为，不是本用例要测的）。
+    mid_pct = (abs(MAX_STOP_LOSS_PCT) + abs(DEFAULT_STOP_LOSS_PCT)) / 2.0
+    raw_stop = entry * (1 - mid_pct / 100.0)
     sl = _resolve_stop_loss_price(entry, {"stop_loss": raw_stop})
     assert sl == round(raw_stop, 2)
 
@@ -816,11 +834,18 @@ def test_legacy_momentum_bucket_uses_next_open_without_mutating_snapshot():
     assert explicit_legacy["triggered"] is False
 
 
-def test_simulate_outcome_take_profit_min_return_truncated():
+def test_simulate_outcome_take_profit_min_return_truncated(monkeypatch):
     """take_profit_hit 后 min_return 也只算 entry→exit，不算 exit 后的回撤。
 
     001270 实证：take_profit_hit @ 07-10（+4.79%），旧 min_return=-27.98%（算到 07-14 low）。
+
+    2026-09-15 注：v3 把 trailing 激活从 +2.0% 提前到 +1.5% 后，07-10 这根
+    「high 33.5 / low 29.5」的大幅震荡 K 会先触发 profit_floor（同 bar 内
+    冲高后回落破地板），出场原因变成 trailing_stop_hit。本用例只想验证
+    **止盈后的统计截断**，因此显式关掉 trailing 隔离该逻辑；trailing 自身
+    的语义由 tests/test_execution_policy.py 与因果退出状态机用例覆盖。
     """
+    monkeypatch.setattr("app.services.outcome_simulation.TRAILING_ENABLED", False)
     snapshot_dict = {"ideal_buy": 30.0, "stop_loss": 28.5, "take_profit": 33.0}
     rec = SimpleNamespace(
         code="300270",  # 创业板 20cm，避免 -12.65% 跌幅触发主板除权检测
