@@ -2,8 +2,8 @@
   "registry_schema_version": 1,
   "current": {
     "policy_id": "a-share-shortline",
-    "version": "3.0.0",
-    "fingerprint": "86553a1fcd4a92d97b0395cd71caae1a11b6090360686b9ee75077db943e6824"
+    "version": "4.0.0",
+    "fingerprint": "d0b4fc18c1cc8c683176f4b6db34935a336d2fab06e6c8f61bbcc32664b28470"
   },
   "artifacts": [
     {
@@ -23,6 +23,12 @@
       "policy_id": "a-share-shortline",
       "version": "3.0.0",
       "fingerprint": "86553a1fcd4a92d97b0395cd71caae1a11b6090360686b9ee75077db943e6824"
+    },
+    {
+      "file": "execution_policy.v4.json",
+      "policy_id": "a-share-shortline",
+      "version": "4.0.0",
+      "fingerprint": "d0b4fc18c1cc8c683176f4b6db34935a336d2fab06e6c8f61bbcc32664b28470"
     }
   ]
 }

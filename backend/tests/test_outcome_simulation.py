@@ -24,6 +24,7 @@ from app.services.outcome_simulation import (
     MAX_STOP_LOSS_PCT,
     TRAILING_STOP_ACTIVATE_PCT,
     TRAILING_STOP_CALLBACK_PCT,
+    TRAILING_STOP_MIN_LOCK_PCT,
     _bar_tradeable,
     _resolve_entry,
     _resolve_exit,
@@ -1117,6 +1118,9 @@ def test_causal_profit_floor_locks_fraction_of_prior_peak_profit():
         entry_price=10.0,
         trailing_policy="profit_floor",
         profit_lock_ratio=0.25,
+        # 显式 min_lock=0：本用例验证的是"锁利比例 × 前日峰值"这条机制；
+        # 生产 min_lock 在 v4 提到 2.5% 后会主导地板、掩盖本机制（见下一个用例）。
+        min_lock_pct=0.0,
     )
 
     assert (price, date, reason) == (10.10, "2026-07-03", "trailing_stop_hit")
@@ -1144,8 +1148,12 @@ def test_production_exit_uses_next_day_profit_floor_50_policy():
     """生产默认退出必须是单路径因果的 50% 利润地板，而不是旧两轮事后择优。
 
     利润地板 0.50：entry=10.0，entry_close=10.0(ret 0%)<2%→trailing 不激活。
-    07-02 high=10.4→hwm=4%≥2%→激活，profit_floor max(0.3,4*0.5)=2.0%→prot=10.20。
-    07-03 low=10.15<10.20→trailing_stop_hit@10.20。
+    07-02 high=10.4→hwm=4%≥1.5%(v3 起激活阈值)→激活。
+
+    v4（2026-09-15）把生产 `minimum_lock_gain_pct` 从 0.3% 提到 2.5%：
+    profit_floor = max(2.5%, 4×0.5%) = **2.5%** → 保护价 10.25。
+    07-03 **open=10.25 ≤ 10.25** → 按跳空路径成交（trailing_stop_gap@10.25），
+    而不是盘内回落触发的 trailing_stop_hit。断言随生产语义更新。
     """
     bars = [
         _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.98, close=10.0, pct_chg=0.0),
@@ -1161,14 +1169,15 @@ def test_production_exit_uses_next_day_profit_floor_50_policy():
         entry_price=10.0,
     )
 
-    assert (price, date, reason) == (10.20, "2026-07-03", "trailing_stop_hit")
+    assert (price, date, reason) == (10.25, "2026-07-03", "trailing_stop_gap")
 
 
 def test_simulate_outcome_defaults_to_production_profit_floor_policy():
     """核心模拟入口未注入 resolver 时，也必须走生产利润地板（profit_floor@0.50）。
 
-    利润地板 0.50：entry=10.0，07-02 high=10.4→hwm=4%→profit_floor max(0.3,4*0.5)=2.0%
-    →次日保护价 10.20。07-03 low=10.15<10.20→trailing_stop_hit@10.20。
+    利润地板 0.50：entry=10.0，07-02 high=10.4→hwm=4%。
+    v4 起 `minimum_lock_gain_pct=2.5%` → profit_floor = max(2.5%, 2.0%) = 2.5%
+    → 次日保护价 10.25；07-03 open=10.25 触达 → trailing_stop_gap。
     """
     rec = SimpleNamespace(
         code="000001",
@@ -1192,12 +1201,14 @@ def test_simulate_outcome_defaults_to_production_profit_floor_policy():
     )
 
     assert sim is not None
-    assert sim["exit_reason"] == "trailing_stop_hit"
+    # v4：min_lock 提到 2.5% 后保护价高于当日开盘 → 走跳空成交路径
+    assert sim["exit_reason"] == "trailing_stop_gap"
     assert sim["exit_date"] == "2026-07-03"
     assert sim["canonical_exit_evidence"] is True
     assert sim["intraday_exit_evidence"] == {
         "applied_priority": None,
-        "first_hit": IntradayFirstHit.TRAILING_STOP.value,
+        # 走跳空路径（开盘价已在地板之下）→ 不涉及盘中首次命中
+        "first_hit": IntradayFirstHit.NOT_APPLICABLE.value,
         "same_bar_stop_take_profit_hit": False,
     }
     assert sim["net_return_pct"] == pytest.approx(
@@ -1477,7 +1488,9 @@ def test_resolve_exit_causal_min_lock_pct_parameter():
     # 直接验证 _trailing_stop_return 的 min_lock 行为
     from app.services.outcome_simulation import _trailing_stop_return
     default_lock = _trailing_stop_return(2.0, "profit_floor", 0.5)
-    assert default_lock == 1.0  # max(0.3, 2*0.5)
+    # 默认地板 = max(生产 min_lock, 峰值×锁利比例)。v4 起生产 min_lock=2.5%，
+    # 故 2.0% 的峰值被抬到 2.5%（不再写死 0.3，避免下次调参又漂移）。
+    assert default_lock == max(TRAILING_STOP_MIN_LOCK_PCT, 1.0)
     high_lock = _trailing_stop_return(2.0, "profit_floor", 0.5, min_lock_pct=2.0)
     assert high_lock == 2.0  # max(2.0, 1.0)
     low_lock = _trailing_stop_return(2.0, "profit_floor", 0.5, min_lock_pct=0.1)

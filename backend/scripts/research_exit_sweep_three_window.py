@@ -70,6 +70,37 @@ BAR_HORIZON = 9
 
 def _grid(stage: str) -> list:
     base = ExecutionPolicy()
+    if stage == "gap":
+        # v3 最优点附近的第二轴扫描。
+        #
+        # ⚠️ 刻意**不扫** `gap_risk.stop_gap_loss_cap_pct`：它是**成交假设**而非交易规则
+        # （execution_core: `price = max(bar_open, entry×(1-cap/100))`——把 −20% 的跳空
+        # 按 −8% 记账）。降低它会让回测用更乐观的成交价刷出更高收益，没有任何真实机制，
+        # 属于"改假设出数字"，禁止用于发布。此处固定为生产值 15%。
+        #
+        # 只扫两个**真规则**旋钮：`max_entry_gap_up_pct`（跳空超过阈值就不入场）
+        # 与 `trailing.minimum_lock_gain_pct`（利润地板的最小锁利），外加同 bar 优先级。
+        # v3 = act1.5 / cb0.8 / lock0.5 / TP off / SL5.5。
+        cfgs = []
+        for mge, minlock, prio in itertools.product(
+            (4.0, 5.0, 6.0, 8.0, 10.0), (0.0, 0.3, 0.8, 1.5, 2.5),
+            (base.intraday_exit_priority, __import__(
+                "app.engine.execution_policy", fromlist=["IntradayExitPriority"]
+            ).IntradayExitPriority.TAKE_PROFIT),
+        ):
+            ep = dataclasses.replace(
+                base,
+                take_profit=dataclasses.replace(base.take_profit, enabled=False),
+                stop_loss=dataclasses.replace(base.stop_loss, default_loss_pct=5.5,
+                                              maximum_loss_pct=5.7),
+                trailing=dataclasses.replace(base.trailing, activation_gain_pct=1.5,
+                                             minimum_lock_gain_pct=minlock),
+                gap_risk=dataclasses.replace(base.gap_risk, stop_gap_loss_cap_pct=15.0,  # 固定生产值：不扫成交假设
+                                             max_entry_gap_up_pct=mge),
+                intraday_exit_priority=prio,
+            )
+            cfgs.append((f"mge{mge:g}_ml{minlock:g}_prio{prio.value[:4]}_cap15", ep))
+        return [("baseline", base)] + cfgs
     cfgs = [("baseline", base)]
     tp_opts = [6.0, 8.0, None]
     sl_opts = [4.5, 5.5]
@@ -132,7 +163,7 @@ def _metrics(rows, dates) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", choices=("base", "refine"), default="base")
+    ap.add_argument("--stage", choices=("base", "refine", "gap"), default="base")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     out_path = Path(args.out) if args.out else OUT / f"exit_sweep_{args.stage}.jsonl"

@@ -46,11 +46,13 @@ from scripts.research_exit_policy_canonical import (  # noqa: E402
 import scripts.research_exit_policy_canonical as exit_harness  # noqa: E402
 
 BAR_HORIZON = 9
-# 扫描记录（exit_sweep_refine.jsonl 的 tron_act1.5_cb0.8_lk0.5_tpNone_sl5.5）
+# 扫描记录（v4 = v3 + max_entry_gap_up_pct 6% + trailing.minimum_lock_gain_pct 2.5%；
+# 见 exit_sweep_gap_honest.jsonl 的 mge6_ml2.5_priostop_cap15 与
+# research_exit_robustness_check.py 的稳健性结论：相对 v3 逐月同号 0.82）
 EXPECTED = {
-    "W1": {"n": 982, "win": 0.573, "avg": 0.570, "pf": 1.325, "sum": 559.3},
-    "W2": {"n": 695, "win": 0.568, "avg": 0.033, "pf": 1.016, "sum": 23.0},
-    "W3": {"n": 95, "win": 0.547, "avg": 0.043, "pf": 1.024, "sum": 4.1},
+    "W1": {"n": 981, "win": 0.576, "avg": 0.6448, "pf": 1.374, "sum": 632.6},
+    "W2": {"n": 693, "win": 0.574, "avg": 0.0468, "pf": 1.023, "sum": 32.4},
+    "W3": {"n": 94, "win": 0.553, "avg": 0.2737, "pf": 1.161, "sum": 25.7},
 }
 
 
