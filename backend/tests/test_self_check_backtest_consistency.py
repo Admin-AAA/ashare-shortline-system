@@ -19,10 +19,10 @@ def test_stats_groups_by_strategy():
     trades = [
         ("daily-stock-analysis-skill", "success", 5.0),
         ("daily-stock-analysis-skill", "failed", -5.69),
-        ("synthetic-secondary-skill", "success", 3.0),
+        ("weak-market-strong-stock-reversal", "success", 3.0),
     ]
     stats = self_check._backtest_consistency_stats(trades)
-    assert set(stats.keys()) == {"daily-stock-analysis-skill", "synthetic-secondary-skill"}
+    assert set(stats.keys()) == {"daily-stock-analysis-skill", "weak-market-strong-stock-reversal"}
     # daily-stock: 1 win 1 loss → WR=50%, avg=(5-5.69)/2=-0.345, PL=5/5.69
     assert stats["daily-stock-analysis-skill"]["n"] == 2
     assert stats["daily-stock-analysis-skill"]["wr"] == 50.0

@@ -106,6 +106,7 @@ L12 = {
     "sector-relative-strength-leader",
     "small-cap-thematic-momentum",
     "trend-pullback-continuation",
+    "weak-market-strong-stock-reversal",
 }
 POISON_DEF = {
     "强势多头发散毒区": ("dsa_trend_score == 30", 58, S8),

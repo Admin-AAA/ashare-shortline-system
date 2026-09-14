@@ -963,8 +963,8 @@ def _classify_coverage_blind(
     """覆盖盲区二分类：静默死亡（未进 formal preset）vs 预期稀疏（已注册但仍 0 命中）。
 
     背景（2026-07-21 T3.6）：E 项原把所有 formal 0 命中一律当盲区，会把
-    已进入 formal preset、补跑也跑过但当前 regime/universe 无票的策略，不能和
-    「enabled 但漏注册 preset 静默死亡」
+    weak-market-strong-stock-reversal 这类「已在 preset_formal_opening、补跑也跑过、
+    只是当前 regime/universe 无票」的策略和「enabled 但漏注册 preset 静默死亡」
     混在一起，误导下一轮去放宽 universe（违反准确>可见）。
 
     - silent_death：不在 formal preset → formal 永远不评估，真故障（🚨）

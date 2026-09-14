@@ -87,6 +87,20 @@ def _positive_stock_for_skill(skill_id: str):
     if skill_id == "overnight-holding-method":
         # universe 要求 pct∈[3,5]（隔夜持有需当日有涨幅），override 默认 1.5
         return _tradeable_stock(pct=4.0)
+    if skill_id == "weak-market-strong-stock-reversal":
+        # universe 要求 market_regime=='弱势' + limit_down_count<=100 + chg20>=15 + pos60>=50
+        # + pct∈[0,3) + off_high_pct>=-12；exclude 用 news_risk_count<=1
+        # prefilter market include: max_dd20>=-14 + vol5_20<=1.1 + (support_ma5 or support_ma10)
+        # override 默认 chg20=12.0(<15) / vol5_20=1.2(>1.1)；补齐缺失的市场上下文字段
+        return _tradeable_stock(
+            market_regime="弱势",
+            limit_down_count=20,
+            news_risk_count=0,
+            chg20=20.0,
+            vol5_20=0.9,
+            pct=1.0,
+            off_high_pct=-6.0,
+        )
     return _tradeable_stock()
 
 
