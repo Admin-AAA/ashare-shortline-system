@@ -19,8 +19,16 @@ contract:
   executable: true
   schema_version: 1
 
-# chip_concentration 是 90% 筹码集中度（与 concentration_90 同源，已验证符合 evaluator 白名单）。
-# 因果链：chip_concentration>=20 即上方 90% 筹码压缩在极窄价格带 -> 套牢盘极轻 -> 放量突破阻力小。
+# 2026-09-13 语义修复（深审 A3-1 筹码方向反了）：
+# chip_concentration = (cost85 - cost15) / cost15 × 100 是 15–85 分位相对带宽，
+# 覆盖中间 70% 的成本分布；历史 concentration_90 命名并不代表覆盖 90%。
+# 数值越大 = 成本分布越宽 = 筹码越 **分散**（与"单峰密集"相反）。此前策略以
+# chip_concentration>=20 声称"单峰密集"，实际选出的是 90% 成本带宽≥20% 的
+# **分散**筹码股，方向完全反了；且 DSA 策略 LIVE 验证同一字段 (18,30] 带宽
+# 桶 WR 仅 45.6%（毒区），(4,10] 带宽桶 WR 70.8%（真密集优势）。
+# 修正后研究口径：窄带宽 = chip_concentration ∈ (4, 10]。
+# 带宽不能单独证明峰数、套牢程度或主力行为；更窄分层同样待三窗重放确认。
+# ⚠️ 行为已改变：三窗重放（W1/W2/W3）通过前，本文件修改不得视为已验证候选。
 universe:
   include:
     - "amount_yi >= 3"
@@ -37,19 +45,20 @@ universe:
 
 prefilter:
   market:
-    # chip_concentration 缺失/发散时值为 0，自然不过滤阈值
-    # 第 N+18 轮 T5: >=18 → >=20, 与 setups 阈值一致(避免过 prefilter 但 setup 空的低质量推荐)
+    # chip_concentration 缺失时 strict_missing 判拒绝（生产 prefilter 与
+    # market_data/market_pool 顶层字段缺失即 None），不会放行无真实筹码数据的票。
+    # 2026-09-13 语义修复：密集 = 窄带宽 (4,10]（原 >=20 是带宽≥20% 的分散股，方向反了）。
     include:
       - when: "max_dd20 >= -14"
         reason: "drawdown_too_large"
-      - when: "chip_concentration >= 20"
-        reason: "chip_loose"
+      - when: "chip_concentration > 4 and chip_concentration <= 10"
+        reason: "chip_not_dense"
     include_any:
-      # 核心模式：单峰密集 + 平台/新高突破 + 放量确认（历史验证 WR 83.4% / n=193）
-      - when: "chip_concentration >= 20 and (breakout20 == 1 or breakout60 == 1) and vol5_20 >= 1.1"
+      # 核心模式：单峰密集（窄带宽） + 平台/新高突破 + 放量确认
+      - when: "chip_concentration > 4 and chip_concentration <= 10 and (breakout20 == 1 or breakout60 == 1) and vol5_20 >= 1.1"
         reason: "requires_chip_tight_breakout_vol"
-      # 极 tight 单峰 + 突破（放宽放量要求）
-      - when: "chip_concentration >= 22 and (breakout20 == 1 or breakout60 == 1)"
+      # 更窄带宽 + 突破（放宽放量要求）；子带宽 (4,8] 为研究假设，待三窗重放确认
+      - when: "chip_concentration > 4 and chip_concentration <= 8 and (breakout20 == 1 or breakout60 == 1)"
         reason: "requires_chip_tighter_breakout"
     exclude:
       - when: "dist20 > 18 and rsi_12 > 72"
@@ -134,37 +143,37 @@ phases:
     risk_flags: ["突破已过热，等待回踩"]
 
   - name: 单峰突破确认
-    when: "chip_concentration >= 20 and (breakout20 == 1 or breakout60 == 1) and vol5_20 >= 1.1 and dsa_trend_score >= 18"
+    when: "chip_concentration > 4 and chip_concentration <= 10 and (breakout20 == 1 or breakout60 == 1) and vol5_20 >= 1.1 and dsa_trend_score >= 18"
     score_cap: 90
     hard_veto: false
 setups:
   - name: 单峰放量突破
-    when: "chip_concentration >= 20 and (breakout20 == 1 or breakout60 == 1) and vol5_20 >= 1.1 and ma5 >= ma10"
+    when: "chip_concentration > 4 and chip_concentration <= 10 and (breakout20 == 1 or breakout60 == 1) and vol5_20 >= 1.1 and ma5 >= ma10"
     score_delta: 12
-    entry_rule: "筹码单峰密集且放量突破，次日不追高，等回踩确认或分时转强介入"
+    entry_rule: "筹码单峰密集（窄带宽）且放量突破，次日不追高，等回踩确认或分时转强介入"
     invalid_rule: "跌破密集区上沿且放量，单峰结构破坏"
 
   - name: 单峰缩量企稳再突破
-    when: "chip_concentration >= 22 and breakout20 == 1 and dsa_support_score >= 8"
+    when: "chip_concentration > 4 and chip_concentration <= 8 and breakout20 == 1 and dsa_support_score >= 8"
     score_delta: 9
-    entry_rule: "极 tight 单峰 + 突破后回踩不破，等止跌阳线确认"
+    entry_rule: "更窄带宽单峰 + 突破后回踩不破，等止跌阳线确认"
     invalid_rule: "放量跌破密集区"
 
   - name: 多头结构单峰
-    when: "ma5 > ma10 and ma10 > ma20 and chip_concentration >= 20 and capital_resonance_score >= 55"
+    when: "ma5 > ma10 and ma10 > ma20 and chip_concentration > 4 and chip_concentration <= 10 and capital_resonance_score >= 55"
     score_delta: 6
-    entry_rule: "多头排列 + 单峰筹码 + 资金共振，等突破放量确认"
+    entry_rule: "多头排列 + 单峰筹码（窄带宽）+ 资金共振，等突破放量确认"
     invalid_rule: "多头结构破坏或资金流出"
 
 scoring:
   base: 42
   rules:
-    - when: "chip_concentration >= 20"
+    - when: "chip_concentration > 4 and chip_concentration <= 10"
       delta: 10
-      reason: 筹码单峰密集（上方套牢轻）
-    - when: "chip_concentration >= 24"
+      reason: 15–85分位成本带宽较窄（研究假设）
+    - when: "chip_concentration > 4 and chip_concentration <= 8"
       delta: 6
-      reason: 单峰极 tight
+      reason: 带宽极窄（研究假设分层，待三窗重放确认）
     - when: "(breakout20 == 1 or breakout60 == 1)"
       delta: 8
       reason: 平台/新高突破启动
@@ -198,9 +207,9 @@ scoring:
     - when: "rsi_12 > 72"
       delta: -6
       reason: RSI 过热
-    - when: "chip_concentration < 18"
+    - when: "chip_concentration > 10"
       delta: -8
-      reason: 筹码发散
+      reason: 筹码带宽发散（超出密集区间，prefilter 已拦截时为防御性兜底）
 
 risk:
   rules:

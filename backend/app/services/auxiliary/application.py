@@ -380,7 +380,11 @@ def inject_auxiliary_prefilter_flags(
             amount_yi = float(stock.get("amount_yi") or 0.0)
             stock["dragon_tiger_is_on_list"] = True
             stock["dragon_tiger_net_amount_yi"] = net_amount_yi
-            stock["dragon_tiger_institution_net_buy_yi"] = net_amount_yi
+            # 2026-09-13 修复（深审 A3-2）：不再把总净买额冒充 dragon_tiger_institution_net_buy_yi
+            # （该代理使 inst_buy_ratio 恒为 ±1，机构身份规则被净买方向误触发）。
+            # 真实机构净买需 top_inst 席位明细接入后在此赋值；接入前保持缺失。
+            # R2 修复：显式清理旧字段（若调用方已携带污染输入）
+            stock.pop("dragon_tiger_institution_net_buy_yi", None)
             stock["dragon_tiger_net_buy_ratio"] = round(min(1.0, max(-1.0, net_amount_yi / amount_yi)), 4) if amount_yi else 0.0
         else:
             stock.setdefault("dragon_tiger_is_on_list", False)

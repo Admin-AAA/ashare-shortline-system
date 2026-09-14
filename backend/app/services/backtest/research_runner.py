@@ -11,7 +11,7 @@ It never calls the legacy ``run_backtest`` service and never writes
 """
 from __future__ import annotations
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import date, timedelta
@@ -70,6 +70,7 @@ from app.engine.strategy import (
     validate_backtest_parameter_set,
 )
 from app.models.tables import (
+    CapitalFlow,
     DailyKbar,
     DragonTiger,
     IndexDaily,
@@ -137,7 +138,7 @@ MIN_LOOKBACK_CALENDAR_DAYS = 120
 # 注入逻辑发生向后不兼容变化时递增；strategy_profile._compatible_snapshot_id
 # 用同一常量校验候选快照是否由当前契约生成，避免复用旧字段面快照导致策略
 # prefilter 拿到缺失字段（0 信号）。
-RESEARCH_INPUT_SCHEMA_VERSION = 5
+RESEARCH_INPUT_SCHEMA_VERSION = 8
 RESEARCH_SOURCE_VERSION = f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}"
 RESEARCH_STOCK_METADATA_TEMPORALITY = CURRENT_STATIC
 
@@ -664,6 +665,10 @@ class LocalResearchSnapshotBuilder:
         # 表，回测路径据此复刻生产 build_features 的注入行为。表不存在（本地池
         # 缺表）时回退为空，不影响纯日K策略。
         aux_rows_by_date = self._load_research_aux_rows(dates)
+        # 资金流必须取信号日前一已发布交易日（L-014 strictly-prior-day），不能
+        # 注入信号当日资金流。构造日期映射：signal_date → prior_available_date。
+        capital_rows_by_date = self._load_research_capital_flow_rows(dates)
+        prior_date_map = self._build_prior_date_map(dates, capital_rows_by_date)
         for signal_date in dates:
             raw_signal_rows = rows_at_date.get(signal_date, ())
             readiness = self._data_readiness.assess(
@@ -712,6 +717,12 @@ class LocalResearchSnapshotBuilder:
             # 复刻生产 build_features 的辅助数据注入 + 相对特征（industry 热度排名
             # 依赖同横截面全体股票，不能只对单只股票算）。
             self._inject_research_aux(signal_stocks, aux_rows_by_date.get(signal_date, {}))
+            # 资金流必须使用前一已发布交易日数据（L-014 strictly-prior-day）
+            prior_date = prior_date_map.get(signal_date)
+            prior_flows = capital_rows_by_date.get(prior_date, {}) if prior_date else {}
+            self._inject_research_capital_flow(
+                signal_stocks, prior_flows, source_date=prior_date
+            )
             _apply_relative_features(signal_stocks)
             signal_payload = {
                 "schema_version": 1,
@@ -942,7 +953,9 @@ class LocalResearchSnapshotBuilder:
                     "dragon_tiger_buy_amount_yi": float(row.buy_amount_yi or 0),
                     "dragon_tiger_sell_amount_yi": float(row.sell_amount_yi or 0),
                     "dragon_tiger_net_amount_yi": float(row.net_amount_yi or 0),
-                    "dragon_tiger_institution_net_buy_yi": float(row.net_amount_yi or 0),
+                    # 2026-09-13 修复（深审 A3-2）：回测路径同样不再用总净买冒充机构净买
+                    # （原代理使 inst_buy_ratio 恒为 ±1）；top_inst 席位明细接入前保持 0。
+                    "dragon_tiger_institution_net_buy_yi": 0.0,
                 }
             )
         try:
@@ -959,6 +972,128 @@ class LocalResearchSnapshotBuilder:
                 }
             )
         return rows_by_date
+
+    def _build_prior_date_map(
+        self,
+        dates: Sequence[str],
+        capital_rows_by_date: dict[str, dict[str, dict[str, Any]]],
+    ) -> dict[str, str | None]:
+        """构造信号日→前一可得资金流日期的映射（L-014 strictly-prior-day）。
+
+        来源日期来自实际可得记录，独立于信号日采样及窗口边界。
+        每个信号仅接受严格早于该日的最近记录；没有前置记录则保留缺失。
+        """
+        prior_map: dict[str, str | None] = {}
+        available_dates = sorted(day for day, rows in capital_rows_by_date.items() if rows)
+        for signal_date in dates:
+            index = bisect_left(available_dates, signal_date)
+            prior_map[signal_date] = available_dates[index - 1] if index else None
+        return prior_map
+
+    def _load_research_capital_flow_rows(
+        self, dates: Sequence[str]
+    ) -> dict[str, dict[str, dict[str, Any]]]:
+        """按 signal_date 一次取全本地个股资金流向（tushare moneyflow 落库）。
+
+        让回测的 capital_resonance 因子走真实 ``capital_flow`` 口径而非
+        ``price_volume_fallback`` 代理（代理把涨幅+量比最强的候选标成"资金配合"，
+        与真实资金语义反相关，导致资本类毒区在回测中删除的恰是赢家）。表缺失
+        （本地池未建表）或日期无数据时返回空 dict，纯日K策略不受影响。
+        """
+        rows_by_date: dict[str, dict[str, dict[str, Any]]] = {
+            d: {} for d in dates
+        }
+        if not dates:
+            return rows_by_date
+        try:
+            # 首个信号也需要窗口外的前置输入，不能由请求边界制造数据缺失。
+            prior_date = self._session.scalar(
+                select(CapitalFlow.trade_date)
+                .where(CapitalFlow.trade_date < min(dates))
+                .order_by(CapitalFlow.trade_date.desc()).limit(1)
+            )
+            flow_rows = self._session.scalars(
+                select(CapitalFlow).where(
+                    CapitalFlow.trade_date >= (prior_date or min(dates)),
+                    CapitalFlow.trade_date < max(dates),
+                )
+            ).all()
+        except Exception:
+            flow_rows = ()
+        for row in flow_rows:
+            rows_by_date.setdefault(str(row.trade_date), {})[
+                str(row.code)
+            ] = {
+                "main_net_inflow_yi": float(row.main_net_inflow_yi or 0),
+                "super_large_net_inflow_yi": float(row.super_large_net_inflow_yi or 0),
+                "large_net_inflow_yi": float(row.large_net_inflow_yi or 0),
+                "small_net_inflow_yi": float(row.small_net_inflow_yi or 0),
+                "main_net_inflow_ratio": float(row.main_net_inflow_ratio or 0),
+            }
+        return rows_by_date
+
+    def _inject_research_capital_flow(
+        self,
+        stocks: list[dict[str, Any]],
+        flows: dict[str, dict[str, Any]],
+        *,
+        source_date: str | None = None,
+    ) -> None:
+        """把资金流字段合并进当日 signal stocks，并复刻板块资金排名。
+
+        L-014 strictly-prior-day：资金流必须来自信号日前一已发布交易日，不能注入
+        信号当日资金流。调用方通过 prior_date_map 获取正确的 source_date。
+
+        - 有资金流行的个股：写入 main_net_inflow_yi 等字段、置
+          ``capital_flow_checked=True`` 并移除 missing_fields 中的
+          ``capital_flow``，使 CapitalResonanceFactor 走真实口径。
+        - 无资金流行（数据缺口）的个股保持原样，因子走 price_volume_fallback。
+        - sector_fund_rank：按板块（concept_sector_name/industry）当日主力净流入
+          合计排序（1=最强），复刻生产 build_features 的板块排名语义；无流数据
+          的板块不参与，个股保持 _stock_as_of 的默认值。
+        - source_date：资金流实际来源日期，用于审计和验证；为 None 时表示无可用数据。
+        """
+        if not flows:
+            return
+        # 板块资金排名需要横截面全体：先按板块合计主力净流入，再按 code 映射个股。
+        rank_by_sector: dict[str, int] = {}
+        sector_inflow: dict[str, float] = {}
+        for stock in stocks:
+            code = str(stock.get("code") or "")
+            f = flows.get(code)
+            if not f:
+                continue
+            sector = str(
+                stock.get("concept_sector_name") or stock.get("industry") or "未分类"
+            )
+            sector_inflow[sector] = sector_inflow.get(sector, 0.0) + float(
+                f.get("main_net_inflow_yi") or 0.0
+            )
+        if sector_inflow:
+            ranked = [
+                s
+                for s, _ in sorted(
+                    sector_inflow.items(), key=lambda kv: kv[1], reverse=True
+                )
+            ]
+            rank_by_sector = {s: i + 1 for i, s in enumerate(ranked)}
+        for stock in stocks:
+            code = str(stock.get("code") or "")
+            f = flows.get(code)
+            if not f:
+                continue
+            for key, value in f.items():
+                stock[key] = value
+            sector = str(
+                stock.get("concept_sector_name") or stock.get("industry") or "未分类"
+            )
+            stock["sector_fund_rank"] = int(rank_by_sector.get(sector, 99))
+            data_quality = dict(stock.get("data_quality") or {})
+            missing = set(data_quality.get("missing_fields") or [])
+            missing.discard("capital_flow")
+            data_quality["missing_fields"] = sorted(missing)
+            data_quality["capital_flow_checked"] = True
+            stock["data_quality"] = data_quality
 
     def _inject_research_aux(
         self,
@@ -1681,9 +1816,40 @@ def _stock_as_of(
     dsa_bias = 14 if -2.0 <= _pct_delta(close, ma5) <= 5.0 else 6
     dsa_volume = min(15, int(max(0.0, vol5_20) * 5))
     dsa_support = 10 if close >= ma5 * 0.985 else 3
-    dsa_macd = 10 if _number(row.macd_dif) >= _number(row.macd_dea) else 2
-    rsi = _number(row.rsi_12)
+    # MACD/RSI：列值缺失或为 0（历史批量同步损坏）时按 indicator_computer 口径
+    # 从本地 closes 重算，与生产运行时兜底一致（否则损坏日期上 dsa_macd/dsa_rsi
+    # 恒为最低分，条件如 rsi_12>72 静默失效）。
+    macd_dif_col = _number(row.macd_dif)
+    macd_dea_col = _number(row.macd_dea)
+    if macd_dif_col <= 0 and macd_dea_col <= 0 and len(closes) >= 35:
+        _alpha12 = 2 / 13
+        _alpha26 = 2 / 27
+        _alpha9 = 2 / 10
+        _ema12 = closes[0]
+        _ema26 = closes[0]
+        _dea = 0.0
+        for _c in closes[:-1]:
+            _ema12 = _alpha12 * _c + (1 - _alpha12) * _ema12
+            _ema26 = _alpha26 * _c + (1 - _alpha26) * _ema26
+            _dea = _alpha9 * (_ema12 - _ema26) + (1 - _alpha9) * _dea
+        _ema12 = _alpha12 * closes[-1] + (1 - _alpha12) * _ema12
+        _ema26 = _alpha26 * closes[-1] + (1 - _alpha26) * _ema26
+        macd_dif_col = _ema12 - _ema26
+        macd_dea_col = _alpha9 * macd_dif_col + (1 - _alpha9) * _dea
+    dsa_macd = 10 if macd_dif_col >= macd_dea_col else 2
+    rsi_col = _number(row.rsi_12)
+    if rsi_col <= 0 and len(closes) > 12:
+        _deltas = [closes[i] - closes[i - 1] for i in range(len(closes) - 12, len(closes))]
+        _gains = [d for d in _deltas if d > 0]
+        _losses = [-d for d in _deltas if d < 0]
+        _avg_gain = sum(_gains) / len(_gains) if _gains else 0.0
+        _avg_loss = sum(_losses) / len(_losses) if _losses else 0.0
+        rsi_col = 100.0 if _avg_loss == 0 and _avg_gain > 0 else (50.0 if _avg_loss == 0 else 100 - (100 / (1 + _avg_gain / _avg_loss)))
+    rsi = rsi_col
     dsa_rsi = 10 if 40 <= rsi <= 70 else 4
+    # 乖离率：列缺失时按 (close-ma)/ma*100 计算（生产 bias 口径）
+    bias_ma5 = _pct_delta(close, ma5)
+    bias_ma10 = _pct_delta(close, ma10)
     max_dd20 = _max_drawdown_pct(closes[-20:])
     chip_concentration = _chip_concentration(row, close)
     stock = {
@@ -1706,8 +1872,10 @@ def _stock_as_of(
         "ma20": ma20,
         "ma60": ma60,
         "rsi_12": rsi,
-        "macd_dif": _number(row.macd_dif),
-        "macd_dea": _number(row.macd_dea),
+        "macd_dif": macd_dif_col,
+        "macd_dea": macd_dea_col,
+        "bias_ma5": bias_ma5,
+        "bias_ma10": bias_ma10,
         "breakout20": int(bool(row.breakout20) or close >= recent_high20),
         "breakout60": int(bool(row.breakout60) or close >= recent_high60),
         "max_dd20": max_dd20,

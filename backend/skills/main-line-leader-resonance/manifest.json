@@ -1,0 +1,12 @@
+{
+  "id": "main-line-leader-resonance",
+  "name": "主线龙头资金共振",
+  "version": "0.3.0",
+  "mode": "declarative",
+  "status": "disabled",
+  "requirements": ["stock_feature_context"],
+  "capabilities": ["signal_evaluation", "research_only"],
+  "enabled": false,
+  "source_type": "local",
+  "description": "基于 LIVE 因子IC分析（2026-09）构建的主线+龙头+资金共振组合策略。2026-09-13 对齐双重声明（strategy.yaml enabled:false 与 manifest active 不一致，加载器实际读 manifest）：统一为禁用，与陈小群/相对强度高度共用输入的策略待三窗重放验证后再启用。"
+}

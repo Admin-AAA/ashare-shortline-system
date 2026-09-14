@@ -45,10 +45,12 @@ prefilter:
       - when: "dragon_tiger_is_on_list == true"
         reason: "requires_dragon_tiger_list"
     include_any:
+      # 2026-09-13 修复（深审 A3-2）：删除 inst_buy_ratio>=0.5 分支。此前该比例被
+      # 总净买额代理（净买恒 +1），弱净买(0<net_buy_ratio<0.03)股票借此冒充
+      # "机构净买"进入本策略，绕过下方"弱净买观察"cap58 的设计意图。
+      # 真实机构净买需 top_inst 席位明细接入后恢复该分支。
       - when: "dragon_tiger_net_buy_ratio >= 0.03"
         reason: "requires_smart_money_net_buy"
-      - when: "dragon_tiger_inst_buy_ratio >= 0.5"
-        reason: "requires_institution_net_buy"
 
 phases:
   # 强势多头发散毒区（2026-09-12 LIVE 去重241验证）：dsa_trend_score==30（=trend_status强势多头/均线发散上行）
@@ -137,12 +139,9 @@ setups:
     entry_mode: next_open
     entry_rule: "龙虎榜净买占成交额≥5%；次日开盘可交易且相对推荐价高开不超过10%时介入"
     invalid_rule: "低开低走跌破榜单日最低价"
-  - name: 机构净买确认
-    when: "dragon_tiger_net_buy_ratio >= 0.03 and dragon_tiger_inst_buy_ratio >= 0.5"
-    score_delta: 6
-    entry_mode: next_open
-    entry_rule: "净买且机构买入占比过半；次日开盘可交易且相对推荐价高开不超过10%时介入"
-    invalid_rule: "次日放量长上影"
+  # 2026-09-13 修复（深审 A3-2）：删除"机构净买确认"setup。
+  # dragon_tiger_inst_buy_ratio 此前被总净买额代理（净买恒 +1），该 setup 实际
+  # 等价于弱净买确认，冒充机构席位身份；top_inst 席位明细接入前不设机构类 setup。
 
 scoring:
   base: 45
@@ -160,10 +159,9 @@ scoring:
     - when: "dragon_tiger_net_buy_ratio <= 0"
       delta: -20
       reason: 龙虎榜净卖出(主力出逃)
-    # ── 聪明钱净买占比（修复后字段，此前恒为0）──
-    - when: "dragon_tiger_inst_buy_ratio >= 0.5"
-      delta: 6
-      reason: 聪明钱净买占比过半
+    # 2026-09-13 修复（深审 A3-2）：删除 inst_buy_ratio>=0.5(+6) 规则——该比例被
+    # 总净买额代理（净买恒 +1），实为净买方向重复计分，冒充聪明钱席位占比。
+    # top_inst 席位明细接入后再恢复真实的机构/游资占比规则。
     # ── 资金同向确认 ──
     - when: "main_net_inflow_yi > 0.3"
       delta: 5

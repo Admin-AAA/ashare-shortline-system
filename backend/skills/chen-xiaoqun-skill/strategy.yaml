@@ -198,18 +198,16 @@ scoring:
       delta: 4
       reason: 主力净流入占比超8%
     # ── 龙虎榜买榜质量 ──
+    # 2026-09-13 修复（深审 A3-2）：删除 inst_buy_ratio>=0.5(+6) 与 >=0.7(+4) 两条规则。
+    # 此前 feature 层把总净买额冒充机构净买，净买时该比例恒为 +1，两条规则实际
+    # 等价于"净买方向 +10 分"，冒充"机构净买入占比过半/高度集中"的席位身份声明。
+    # 真实机构净买需接入 top_inst 席位明细（机构专用席位）后才能恢复此类规则。
     - when: "dragon_tiger_is_on_list == true and dragon_tiger_buy_dispersion == '集中'"
       delta: 8
       reason: 龙虎榜买榜集中
     - when: "dragon_tiger_is_on_list == true and dragon_tiger_buy_dispersion == '分散'"
       delta: -6
       reason: 龙虎榜买榜分散，主力分歧
-    - when: "dragon_tiger_is_on_list == true and dragon_tiger_inst_buy_ratio >= 0.5"
-      delta: 6
-      reason: 机构净买入占比过半
-    - when: "dragon_tiger_is_on_list == true and dragon_tiger_inst_buy_ratio >= 0.7"
-      delta: 4
-      reason: 机构净买入高度集中
     # ── 市场情绪 (分层) ──
     - when: "market_sentiment_phase == '高潮'"
       delta: 6

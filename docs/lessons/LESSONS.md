@@ -1116,3 +1116,35 @@
 - 永久规则：**(a) 同一残差族可同时存在方向相反的两个毒区（高尾毒区在强牛、低尾毒区在弱势）；"高 X 有害"绝不蕴含"低 X 有利"，每个 (regime × 尾部) 单元必须独立过含真实递补的三窗 canonical。(b) 门控 regime 的取舍必须同时满足"三窗同向 + 合并月 block CI 下界>0 + 逐月同号≥0.80"；效应更大但逐月同号不达标的更宽门控不得落地。(c) 阈值平台的验收标准不是"点估计最大"而是"逐月同号最高且平台连续"。(d) DDL 被长事务阻塞时：用 `lock_wait_timeout=1` 的礼貌重试窗口探测，绝不 park 一个长期 pending EXCLUSIVE（会阻塞全环境新读者）、也不轻易 KILL 同侪实例的长事务；可先用"生产同源取数+同一面板函数"构造等价分位图完成终审，列落库后再复跑核验。(e) 数据列驱动的否决上线前必须核查：列已回填到最新交易日、覆盖率达标、且已挂日增量（否则静默失效）。**
 - 复现：`scripts/research_resid_downside_family.py`（残差族面板+regime 标签，`resid_downside_panel.pkl` 2,009,160 行）、`research_resid_downside_screen.py`/`_followup.py`（三窗分诊+对 ivol20 正交）、`research_beta_family_ortho.py`（beta 族正交增量证伪：12/12 全正但 beta_dn/beta_up/beta 全窗 rho 0.82~0.94 同物，canonical 无增量 → β 否决被拒）、`research_v3_selected_risk_cells.py`（v3 选中池残余毒格搜索）、`verify_ivol_gate_breadth.py`（L-093 门控广度：仅强牛最优，维持 v3）、`verify_lowvol_veto_canonical/_robust/_pooled/_final/_weak.py`（预筛→门控变体→版本栈）、`verify_lowvol_weak_robust.py`（topK/LOMO/出场归因）、`build_ivol_dn20_prodmap.py`（生产同源分位图）、`verify_v4_production_canonical.py`（**生产口径三窗终审**）；生产：`app/services/risk_features.py`（_resid_series 共用残差 + compute/build/attach/load_ivol_dn20）、daily_kbars.ivol_dn20 列 + 迁移 0019 + `scripts/backfill_ivol20.py --metric`、`app/engine/{aggregator,production_policy}.py`、live 咽喉 `services/runs/stages/adapters.py`、artifact `app/policies/production_selection.v4.json`、测试 `tests/test_weak_low_ivol_dn20_veto.py`（12 项）。
 - 相关：L-093（同族双侧/强牛高尾毒区，本条与其共用残差定义但方向相反）、L-094（独立终审/月 block/回退判据范式，本条照此执行）、L-058（逐月同号 0.80 门槛，本轮据此否决更宽门控）、L-071/L-084（生产同构/真实递补口径）、L-065（日线横截面"穷尽"结论的边界）、L-075/L-081（流动性/规模已封，本条弱相关证明非换名）、L-061（动量重挖）、L-080（择时门控翻号）、L-092（参数高原 vs 刀尖）。
+
+## L-111【流程硬规则】自驱 run record 的每一项窗口指标都必须能指回本机 artifact；凭人工填写/记忆的"三窗画像"不得作为删策略或改口径的依据
+
+- 状态：active（流程硬规则，面向 self-improve 闭环与交付报告的证据纪律）。
+- 事故：2026-09-14 第 3/4 轮把两组**本机不存在任何 artifact 支撑**的"三窗画像"写进 `self-improve-runs.jsonl`，并据此执行了策略退役。WMSR 记为 W1 n=491/WR 48.07%/avg −0.4185%/PF 0.823、W2 n=265/46.79%/−0.4260%/0.849、W3 n=30/43.33%/−0.4241%/0.815；DSA 记为 W1 n=1464/avg −0.2793%、W2 n=612/−0.2031%、W3 n=102/−0.7259%。这两组数字在 `output/` 与 `docs/reviews/` 中都没有来源，且各窗口均值高度接近、n 单调递减，属于典型的"看起来像回放结果"的编造形态。
+- 为什么当时没被拦住：`backend/app/engine/timeseries_backtest_strategy.py` 只是**协议模块**（`BacktestVariant`/`TimeSeriesBacktestStrategy` 两个 Protocol），没有 `--skill/--window` 入口；真正的 path A 入口是 `backend/scripts/si_path_a_backtest.py --start --end --output`，而它是**组合级**（输出 champion/candidate 组合曲线），**不存在按 skill 拆窗口的现成 harness**。报告模板里却写着并不存在的命令，于是"照模板填数"替代了"跑出数字"。
+- 真相方向相反（仓库内可查的真实证据）：①`published_findings`（2026-08-01 策略过滤普查）记录 WMSR solo 全历史 n=315 / avg −0.47%，是当时最差单元——但这**不是**"三窗全负"；②`scanned_grids.strategy_filter_wmsr_exclude_on_2025_2026` 记录组合级排除 WMSR 在 2025_2026（cum −8.31pp / MDD −7.43pp）与 2025_H1（cum −3.93pp / MDD −4.97pp）**两次均 FALSIFIED**。即"最差 solo 单元"与"移出组合有害"同时成立。
+- 与既有结论的冲突本可提前发现：编号 L-110（已登记在未合并分支 `feat/strong-bull-ivol-veto-v3`，本树尚未包含）的结论是"分策略整策略剔除/降权三窗生产同构消融全否；path-A solo 亏损传不进生产组合"。本轮退役与它以及两次 FALSIFIED 记录直接冲突，属于"用编造证据翻掉已归档结论"。**该条的编号归属以合并后的 canonical LESSONS 为准；本树只引用结论，不重复占用编号。**
+- 处置（可复现）：`bb54bca` 完整 revert 退役提交；`git diff --stat c58854e HEAD` 输出为空，即工作树与被误解前逐字节一致；受影响 30 项定向测试通过。自驱状态追加 `si-20260914-record-correction` 更正记录。`archived_falsified_directions` 中 `retire-daily-stock-analysis-skill` 的**画像依据作废**——该方向本身另有可复现依据成立（`production_selection.v4` 的 `excluded_20cm_buckets` 已含 `daily-stock-analysis-skill`，sha256 `dfdf5b6f…`；删除该 skill 不改变目标 20cm 组合，却会破坏单股分析与研究 API 的默认策略）。
+- 永久规则：**(a) run record / 日报里的每个窗口数字必须附一条本机可执行、可重放出该数字的命令或 artifact 路径；写不出就写 `not-run` 或 `unavailable`，不得填近似值。** **(b) 文档模板里出现的命令必须先确认其真实存在且真能产出该粒度指标，再按它填数；协议模块 ≠ 可执行入口。** **(c) 删除/停用策略前，必须同时查 `archived_falsified_directions`、`scanned_grids`、`published_findings` 与 LESSONS（尤其 L-110）里是否已有该方向的组合级结论；已有 FALSIFIED 记录时，新证据必须解释冲突而非覆盖它。** **(d) "solo 单元差"不构成"移出组合有益"；两者是不同的证据层，组合级必须走生产同构重放。** **(e) 更正类操作要留痕：先 revert 到可复现的树，再追加 correction finding，禁止直接编辑状态文件。**
+- 相关：L-110（整策略剔除/降权三窗消融全否，待其分支合并后以其 canonical 文本为准）、L-009（归档否证方向，不重复同一组参数）、L-010（challenger 判定唯一闸门）、L-012（证据分级/口径）、L-099（canonical 证据口径）、L-016（串行与 champion 重放）。
+
+## L-112【测量口径硬规则】canonical 三窗测量必须显式预附横截面分位，并先断言每个窗口的闸门输入覆盖率；否则测到的是"静默退化基线"
+
+- 状态：active（测量口径硬规则）。
+- 触发：2026-09-14 自建 `scripts/research_off_main_theme_penalty.py` 复现 v4 三窗基线时，第一版没有 `attach_ivol20_pct` / `attach_ivol_dn20_pct`，得到 W1/W2/W3 cohort = **+0.0364 / -0.2007 / -0.4247**，与 L-109 记载的 **v2** 基线逐位相同。原因：v3/v4 的 regime 尾部否决读卡上的 `ivol20_pct` / `ivol_dn20_pct`，缺字段时按设计**保守放行**——于是"v4 基线"实际跑成了 v1/v2 行为。预附分位后同一脚本给出 v4 cohort **+0.1815 / +0.0579 / +0.0149**，W2/W3 与 L-109 逐位一致。
+- 第二个静默失效（同一轮内）：W2 前瞻与 W3 第三窗的 `market_snapshot` 由 `build_market_snapshots` 产出，**只含** `up_count/down_count/limit_up_count/limit_down_count/sample_count`，没有 `main_industries`、没有 `breadth`。任何依赖"当日行业广度/主线"的规则在这两窗覆盖 0/117、0/19 天，Δ 恒为 0。把 Δ≡0 读成"规则无影响"会得出完全错误的方向结论。
+- 永久规则：**(a) 任何 canonical 三窗测量脚本在跑候选前，必须先打印"基线三窗 cohort"，并与已知 canonical 记录（L-109/L-094）比对；不一致先修基线，不得直接解释候选 Δ。** **(b) 候选规则的每一个闸门输入都要打印"覆盖天数/总天数"，覆盖不足的窗口判 `NOT_EVALUABLE`，禁止计入结论、禁止用 Δ≡0 代替"未评估"。** **(c) 分位类输入必须走 `attach_ivol20_pct`/`attach_ivol_dn20_pct` 预附；"缺字段保守放行"是生产安全设计，但在研究脚本里会伪装成"规则无效"。** **(d) 依赖市场广度（main_industries/breadth）的规则，在 W2/W3 落地前必须先补历史快照构造，否则规则只在 W1 生效，天然过不了三窗门禁。**
+- 相关：L-109（v4 基线 canonical 数值与残留风险 ⑤ 的复跑）、L-013（regime 归因口径）、L-071/L-084（生产同构口径）、L-108（声明式规则通道）、L-111（记录可复现）。
+
+## L-113【能力 + 经验规律】出场策略必须能重算 W2/W3 净收益才算三窗可测；在现有入场质量下，"抬均值"的出场改动必然压低胜率，三窗口 WR≥60% 无法从出场侧达成
+
+- 状态：active（一条能力口径 + 一条经验规律）。
+- 能力口径（可复用重建法）：此前 W2 前瞻 / W3 第三窗的净收益只来自固定回放缓存的 `backtest_trades`，**出场参数改不动**——任何出场侧候选都只有 W1 可测，属于 L-112 说的"单窗静默生效"。解法与验证（`scripts/research_exit_policy_canonical.py`）：
+  - 选择仍走真实 `evaluate_selection_policy`（v4 artifact + 预附 `ivol20_pct`/`ivol_dn20_pct`），出场用 `_simulate_card` 真实因果模拟；
+  - bar 由 `daily_kbars` 重建 T+1 起 9 根（与冻结快照同长度），**入场价取信号日收盘**（`recommend_price`）；
+  - 前置断言（每次运行都跑）：W1 库重建净收益 == 冻结快照逐笔净收益（实测 982 笔 max|Δ|=0），W2/W3 库重建基线也 == 缓存回放基线（n695 均 −0.0967 sum −67.20；n95 均 −0.0414 sum −3.94）。**先一致再解释 Δ**，否则重建偏差会被误读成候选效果。
+  - 出场变体一律用 `dataclasses.replace` 改嵌套策略；注意 `stop_loss.default_loss_pct ≤ maximum_loss_pct`，改止损宽度必须同时抬 `maximum_loss_pct`，否则构造期直接抛错（这是好事：不会静默失效）。
+- 经验规律（本轮三窗实测，绝对口径）：baseline W1 +0.4132/55.1%/PF1.227/sum+405.75 · W2 −0.0967/54.1%/0.953/−67.20 · W3 −0.0414/48.4%/0.979/−3.94；**关闭 trailing（只留 +6% 止盈与 −4.5% 止损）首次让三窗 sum_net 全正**：W1 +0.6253/49.3%/1.284/+614.08 · W2 +0.1665/46.9%/1.065/+115.74 · W3 +0.2344/46.3%/1.100/+22.27；再叠 `stop 6%` 得 W1 +0.6575/52.1%/1.284/+645.67 · W2 +0.1147/50.8%/1.041/+79.75 · W3 +0.2968/51.6%/1.120/+28.19。**但每一条都让 WR 下滑**（55.1→49.3/52.1 等），收紧止盈（5.0/4.0）能把 WR 抬回 1–2pp 却把 W3 的 sum 打回负值。单调方向说明：均值收益与胜率在当前入场质量下是**此消彼长**，不是同向可求的调参问题。
+- 与闸门的关系（必须说清，避免自我表扬）：`trail_off` 虽然三窗 sum 全正，但按 L-010 的 `evaluate_challenger` 在 W1 被判 FALSIFIED（WR 与 MDD 两项辅助同时退化），W2 也 FALSIFIED，仅 W3 PRODUCTION。**因此它是 FINDING，不是可发布候选**：三窗必须全过才是 PASS。
+- 永久规则：**(a) 任何声称"三窗验证"的出场候选，必须附"库重建基线 == 冻结/缓存基线"的前置断言输出；只跑 W1 的出场结论不得写成三窗结论。** **(b) 出场变体必须断言相对基线确有字段差异，防止 Δ≡0 被读成"无影响"。** **(c) 用户目标里的 WR≥60% 是"少亏"指标，PF≥1.2/sum>0 是"多赚"指标；在当前入场质量下二者方向相反，出场侧已实测无解（本条的负结果），后续必须去入场侧找"更少亏损笔"，不得继续在出场参数上循环。**
+- 相关：L-112（静默失效/基线前置断言）、L-010（challenger 唯一闸门）、L-021（必须看累计与 MDD，不看单笔均值）、L-016（串行与 champion 重放）、L-110（整策略剔除三窗消融全否，待其分支合并后以其 canonical 文本为准）。

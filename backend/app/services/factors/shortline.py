@@ -460,7 +460,14 @@ class LeaderFactor(BaseFactor):
 
 
 class DragonTigerFactor(BaseFactor):
-    """龙虎榜聪明钱：买方席位分散度 + 机构净买占比（净买额为 0 或未上榜时归零）。"""
+    """龙虎榜聪明钱：买方席位分散度 + 机构净买占比（净买额为 0 或未上榜时归零）。
+
+    2026-09-13 修复（深审 A3-2）：dragon_tiger_institution_net_buy_yi 曾被总净买额
+    冒充（聪明钱代理），使 inst_buy_ratio 在净买时恒为 +1、净卖时恒为 -1——不具备
+    席位身份区分力。现已撤除代理：真实机构净买需接入 top_inst 席位明细（机构专用
+    席位）后由 feature 装配赋值；接入前 inst_net 恒为 0，inst_buy_ratio 输出 0.0，
+    机构身份类规则（>=0.5 等）不再被净买方向误触发。
+    """
 
     id = "dragon_tiger"
     output_fields = ("dragon_tiger_buy_dispersion", "dragon_tiger_inst_buy_ratio")
@@ -468,13 +475,23 @@ class DragonTigerFactor(BaseFactor):
     metadata = {
         "logic": "按龙虎榜买方席位数量判定资金分散度，用机构净买占净买额比例度量聪明钱强度。",
         "data_sources": ["Tushare/本地龙虎榜池"],
-        "degradation": "未上榜时输出「未上榜」且比例为 0；净买额为 0 时比例归零。",
+        "degradation": (
+            "未上榜时输出「未上榜」且比例为 0；净买额为 0 时比例归零；"
+            "机构净买字段无真实席位数据源时比例为 0（2026-09-13 撤除总净买代理）。"
+        ),
     }
 
     def compute(self, stock: Mapping[str, Any], ctx: FactorContext) -> dict[str, Any]:
         seats = int(_num(stock.get("dragon_tiger_buy_seat_count"), 0))
         net_amt = _num(stock.get("dragon_tiger_net_amount_yi"))
         inst_net = _num(stock.get("dragon_tiger_institution_net_buy_yi"))
+
+        # R2 修复：只接受带来源验证的机构净买值（防御旧污染输入）。
+        # 当前无真实席位来源，inst_net 应为 0；若调用方携带旧代理值（如 1.2），
+        # 显式清零，确保 ratio 不被污染为 ±1。待 top_inst 接入后移除此守卫。
+        if inst_net != 0 and stock.get("dragon_tiger_institution_source_verified") is not True:
+            inst_net = 0.0
+
         if not stock.get("dragon_tiger_is_on_list"):
             return {
                 "dragon_tiger_buy_dispersion": "未上榜",

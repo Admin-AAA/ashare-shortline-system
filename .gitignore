@@ -27,6 +27,7 @@ backend/logs/
 .worktrees/
 .idea/
 output/
+/backend/output
 .workbuddy/
 overview.md
 test.py

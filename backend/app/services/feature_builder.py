@@ -276,7 +276,11 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
         if chip_cost_15 > 0 and chip_cost_85 > 0:
             profile["cost_90_low"] = chip_cost_15
             profile["cost_90_high"] = chip_cost_85
-            # 集中度 = (85%成本 - 15%成本) / 15%成本 * 100
+            # 15–85分位相对带宽% = (85%分位成本 - 15%分位成本) / 15%分位成本 * 100
+            # 这覆盖中间70%的筹码分布（非90%）。历史字段名 concentration_90 是误称。
+            # ⚠️ 数值越大 = 成本分布越宽 = 筹码越分散；窄带宽对应小数值。
+            # 单峰密集对应窄带宽（小数值）；策略层（chip-single-peak-breakout）按带宽解读。
+            # 两个分位点不足以判断峰数；上方套牢比例还需现价相对成本分布的位置。
             profile["concentration_90"] = round((chip_cost_85 - chip_cost_15) / chip_cost_15 * 100 if chip_cost_15 > 0 else 22.0, 2)
             # 70%成本区间用 50% 为中心估算
             if chip_cost_50 > 0:
@@ -295,6 +299,9 @@ def _apply_context_blocks(item: dict[str, Any], profile: dict[str, Any]) -> None
     item["cost_70_low"] = _num(profile.get("cost_70_low", item.get("cost_70_low")), round(item["avg_cost"] * 0.96, 2))
     item["cost_70_high"] = _num(profile.get("cost_70_high", item.get("cost_70_high")), round(item["avg_cost"] * 1.04, 2))
     item["concentration_70"] = _num(profile.get("concentration_70", item.get("concentration_70")), 8.5 if item.get("is_main_theme") else 15.0)
+    # chip_concentration 实为 15–85分位相对带宽%（concentration_90 别名，历史误称）。
+    # R4 修正：越大越分散（非"集中度"），15–85分位覆盖中间70%分布（非90%），
+    # 两个分位点不足以判断峰数或套牢程度。2026-09-13 深审 A3-1 修正方向。
     item["chip_concentration"] = item["concentration_90"]
     item["chip_health"] = str(profile.get("chip_health") or _chip_health(item))
     item["chip_health_score"] = _chip_health_score(item)
@@ -864,18 +871,22 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["dragon_tiger_sell_amount_yi"] = dt.get("sell_amount_yi", 0)
             net_amount_yi = _num(dt.get("net_amount_yi", 0))
             stock["dragon_tiger_net_amount_yi"] = net_amount_yi
-            # 修复沉睡因子：dragon_tiger_institution_net_buy_yi 此前从未赋值，导致
-            # 龙虎榜因子（factors.shortline.DragonTigerFactor，任务 2.3 前为
-            # shortline_factors._apply_dragon_tiger_factor）算出的 dragon_tiger_inst_buy_ratio
-            # 恒为 0，令 chen-xiaoqun / limit-up-reseal 的 inst_buy_ratio>=0.5 规则永不起作用。
-            # dragon_tiger 表无机构细分列，用净买额作为聪明钱净买代理（龙虎榜席位=机构+游资=聪明钱）。
-            stock["dragon_tiger_institution_net_buy_yi"] = net_amount_yi
+            # 2026-09-13 修复（深审 A3-2 机构净买比例退化为净买方向）：此前把总净买额
+            # 赋给 dragon_tiger_institution_net_buy_yi 作为"聪明钱代理"，使
+            # DragonTigerFactor 算出的 dragon_tiger_inst_buy_ratio 在净买时恒为 +1、
+            # 净卖时恒为 -1——陈小群 inst>=0.5/+0.7 两规则在净买时合计 +10、龙虎榜
+            # "机构净买确认"均被净买方向冒充机构身份触发，无任何席位区分力。
+            # dragon_tiger 表无机构细分列，真实机构净买需接入 top_inst 席位明细
+            # （机构专用席位）后才可赋值；接入前本字段保持缺失（_num 缺省 0，
+            # inst_buy_ratio 输出 0，机构类规则不再生效）。
+            # 聪明钱方向的诚实代理仍是 dragon_tiger_net_buy_ratio（净买占成交额比例）。
             # 聪明钱强度 = 龙虎榜净买占当日成交额比例（已回测验证：>=5% -> WR 85.6% / avg+4.82%）。
-            # 该字段此前完全未使用，现暴露给策略评分（如 dragon-tiger-smart-money）。
             amount_yi = _num(stock.get("amount_yi"))
             stock["dragon_tiger_net_buy_ratio"] = (
                 round(min(1.0, max(-1.0, net_amount_yi / amount_yi)), 4) if amount_yi else 0.0
             )
+            # R2 修复：显式清理旧机构代理字段（若调用方已携带污染输入）
+            stock.pop("dragon_tiger_institution_net_buy_yi", None)
             missing_fields.discard("dragon_tiger")
             data_quality["dragon_tiger_checked_trade_date"] = dt.get("trade_date") or auxiliary_trade_date
         else:
