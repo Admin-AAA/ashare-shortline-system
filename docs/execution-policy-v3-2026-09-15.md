@@ -87,8 +87,53 @@ cd backend
 # 主证据：三窗出场扫描（222 配置约 1.6 分钟）
 .venv/bin/python scripts/research_exit_sweep_three_window.py --stage base
 .venv/bin/python scripts/research_exit_sweep_three_window.py --stage refine
+# 闭环验证：用已发布 artifact（registry current）重算三窗并断言与扫描一致
+.venv/bin/python scripts/research_verify_execution_policy_v3.py
 # L-016 串行 champion 重放
 .venv/bin/python scripts/si_sequential_champion_replay.py --output output/research/seq_champion_replay_v3_20260915.json
 # 受影响测试面
 .venv/bin/pytest tests/test_execution_policy.py tests/test_evidence_identity.py -q
 ```
+
+## 发布后补记：两个必须留下的坑（2026-09-15）
+
+### 坑 1（严重，会让生产结算全线失败）：关止盈不能写超大数
+
+第一版把"止盈关闭"实现成 `_resolve_take_profit_price` 返回 `1e308`（照搬金标准核
+内部的哨兵值）。全量套件立刻暴露 `pymysql.err.DataError: (1264, "Out of range value
+for column 'take_profit_price'")` —— 因为 `recommendation_outcomes.take_profit_price`
+是 MySQL `FLOAT`（上限约 3.4e38），`1e308` 存不进去，**每一笔结算都会失败**。
+
+修法：关止盈时返回 **`None`**（列可空，语义就是"无目标价"），并在因果退出核的
+边界处把 `None` 转成"永不触发"（与 `execution_core` 对 `take_profit_pct is None`
+的处理一致）；结果字典也保持 `NULL`。
+教训：**语义哨兵值必须检查落库列的真实取值范围**，否则"逻辑正确、持久化爆掉"。
+
+### 坑 2：守卫里硬编码的生产常量会漂移
+
+`scripts/self_check.py` 的 D 项"重放身份"守卫把止损写成 `-4.5`；v3 改成 −5.5 后
+`tests/test_self_check_canonical_baseline.py` 立刻失败——这条守卫正是为抓漂移而存在。
+已改为从出场策略派生（`_default_stop_loss_pct()`）。
+
+### 发布后闭环验证（已通过）
+
+`scripts/research_verify_execution_policy_v3.py` 用 **registry current 的
+`DEFAULT_EXECUTION_POLICY`**（而不是扫描脚本里的临时对象）重算三窗：
+
+| 窗口 | n | WR | avg_net | PF | sum_net | 与扫描 |
+| --- | --- | --- | --- | --- | --- | --- |
+| W1 | 982 | 57.3% | +0.5695 | 1.325 | +559.3 | ✓ |
+| W2 | 695 | 56.8% | +0.0331 | 1.016 | +23.0 | ✓ |
+| W3 | 95 | 54.7% | +0.0427 | 1.025 | +4.1 | ✓ |
+
+### 全量测试
+
+`pytest tests/ -q` → **2914 passed / 15 failed / 5 skipped**。
+15 项与本次改动前的既有基线失败**逐项相同**（alembic 迁移版本断言 ×4、
+realtime_quote 环境 ×3、self_check A 项旧行为 ×2、shortline golden ×2、
+data_source_management、production_selection_policy、self_improve_state_dirty_tree_guard、
+strategy_plugin_architecture）：**本次引入的新失败为 0**。
+
+期间有意更新了 6 处"锁旧口径"的测试（版本号/止损值/文档投影 golden、
+outcome 模拟的开关固定、e2e 与并发结算的 K 线长度与断言），并新增 2 个守卫用例
+（结算必须尊重 enabled 开关；投影必须带三个 `*_ENABLED`）。
