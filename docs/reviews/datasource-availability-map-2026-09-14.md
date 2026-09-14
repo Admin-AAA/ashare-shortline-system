@@ -43,6 +43,39 @@
 实测 `date=2026-09-11` 返回按 `date=YYYY-MM-DD/event_type=<类型>` 分区的 parquet 预签名 URL
 （该日只有 `event_type=announcement` 一个分区），有效期 7200s。即**回填成本 ≈ 每天一次
 session 请求 + N 个 parquet 下载**（923 天量级）。
+
+### 3.1 event-timeline 的**真实**时段覆盖（按日抽样 + 单日分区实测）
+
+⚠️ 修正上表把"first=2025-05-14"理解成"事件轴覆盖冻结窗"的乐观读法。实测**事件类型是逐时段递增的**，
+早段只有 `research`，`news` 要等到 2026-02 才出现：
+
+| 抽样交易日 | 该日存在的 event_type |
+| --- | --- |
+| 2025-05-14 | `research` |
+| 2025-08-01 / 2025-11-03 | **请求异常（无数据）** |
+| 2026-01-15 | `research` |
+| 2026-02-02 | `news`, `person` |
+| 2026-03-02 / 2026-05-06 | `news` |
+| 2026-07-01 | `news`, `person` |
+| 2026-08-03 | `announcement`, `future_dynamic`, `news`, `person`, `policy`, `research` |
+| 2026-09-11 | 8 类（再加 `sector`, `sector_constituent`） |
+
+**结论：事件轴对 W1（2025-01-15~2026-01-16）基本不可用**（只有稀疏 `research`，且部分日期直接无数据）；
+`news` 约从 2026-02-02 起可用（W2 后段 + W3），`announcement` 约从 2026-08 起（仅 W3）。
+
+单日分区实测（`2026-09-08`，8 类）：`sector_constituent` **45177 行**、`future_dynamic` **11005 行**、
+`news` 3516 行、`announcement` 1653 行、`sector` 517 行、`person` 18 行、`policy` 8 行、`research` 3 行。
+**前两类体量巨大，且 `future_dynamic` 名字自带 future 语义，因子研究里必须显式排除**，
+只按 `event_type` 取需要的分区。
+
+### 3.2 速率限制（性能约束的实测边界）
+
+为确定事件轴覆盖，我按交易日逐日请求 `download-session`（约 380 天）。跑到中途开始出现
+**HTTP 429**，其后持续 429。说明该接口的速率/配额比想象中紧：
+
+- **不要**为了"扫覆盖"逐日打这个接口；要覆盖请按需只取用到的分区（`event_type` 过滤）；
+- 回填应按日串行 + 明显 sleep（本例 0.25~0.4s 仍触发 429，需要更保守，或分批跨时段）；
+- 已被限流时应停止请求等冷却，而不是重试。
 | `cn-minute`（分钟线） | 2020-01-02~2026-09-11，5810 文件 | 日内维度；但 L-079 已把 pm_ret 尾盘追高在第三真前瞻窗证伪 |
 | `cn-daily` / `adjustment-factors` / `financial-*` | 2020/2021 起 | 本地已有等价表 |
 
