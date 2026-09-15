@@ -93,6 +93,7 @@ _PANEL_CARD_KEYS = (
 )
 PANEL: dict = {"dir": None}
 UNIVERSE: dict = {"mode": "historical"}
+POLICY_VERSION: dict = {"n": None}   # None = 用 default；否则显式加载该版本 artifact
 _IVOL_BY_DATE: dict[str, dict] = {}
 _IVOL_DN_BY_DATE: dict[str, dict] = {}
 
@@ -144,7 +145,11 @@ def _assert_panel_fidelity(panel_path: Path, window: str, tolerance: float = 0.0
         SelectionPolicyContext,
     )
 
-    pol = load_production_selection_policy()
+    pol = (
+        load_production_selection_policy(version=int(POLICY_VERSION["n"]))
+        if POLICY_VERSION.get("n") is not None
+        else load_production_selection_policy()
+    )
     data = json.loads(panel_path.read_text())
     mismatch: list[str] = []
     for day in data["days"]:
@@ -304,10 +309,24 @@ def _set_pct_maps(db, trade_date: str) -> None:
     _IVOL_DN_BY_DATE = {trade_date: dict(ivoldn_map)}
 
 
-def _worker_setup(window: str, arms: list[str], panel_dir: str | None, policy_note: str) -> None:
+def _worker_setup(
+    window: str,
+    arms: list[str],
+    panel_dir: str | None,
+    policy_note: str,
+    policy_version: int | None = None,
+) -> None:
     """每个进程（含主进程）各自准备 builder + session；worker 之间不共享任何对象。"""
     from app.services.factors.registry import bootstrap_default_factor_registry
 
+    # 显式版本：把模块级默认换成该 artifact（aggregate 内部读的就是这个常量）。
+    # 用于在不改生产默认的前提下验证候选版本（例如 v7 = v6 + strong_climax_top_n=2）。
+    if policy_version is not None:
+        import app.engine.production_policy as _pp
+
+        _pp.DEFAULT_PRODUCTION_SELECTION_POLICY = _pp.load_production_selection_policy(
+            version=int(policy_version)
+        )
     bootstrap_default_factor_registry()
     db = SessionLocal()
     event.listen(db.connection(), "before_cursor_execute", _reject_write_statement)
@@ -329,8 +348,14 @@ def _worker_setup(window: str, arms: list[str], panel_dir: str | None, policy_no
     )
 
 
-def _worker_init(window: str, arms: list[str], panel_dir: str | None, policy_note: str) -> None:
-    _worker_setup(window, arms, panel_dir, policy_note)
+def _worker_init(
+    window: str,
+    arms: list[str],
+    panel_dir: str | None,
+    policy_note: str,
+    policy_version: int | None = None,
+) -> None:
+    _worker_setup(window, arms, panel_dir, policy_note, policy_version)
 
 
 def _process_day(signal_date: str) -> dict:
@@ -535,7 +560,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
         with ProcessPoolExecutor(
             max_workers=workers,
             initializer=_worker_init,
-            initargs=(window, arms, panel_dir, policy_note),
+            initargs=(window, arms, panel_dir, policy_note, POLICY_VERSION["n"]),
         ) as pool:
             for res in pool.map(_process_day, trade_dates, chunksize=1):
                 done += 1
@@ -545,7 +570,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
                     print(f"  [{window}] {done}/{len(trade_dates)} 天 {el/60:.1f}min "
                           f"A={len(trades['__all__'])}笔", flush=True)
     else:
-        _worker_setup(window, arms, panel_dir, policy_note)
+        _worker_setup(window, arms, panel_dir, policy_note, POLICY_VERSION["n"])
         for di, signal_date in enumerate(trade_dates, 1):
             _merge_day_result(_process_day(signal_date), trades, prov_rows, panel_days, triggered)
             if di % 10 == 0 or di == len(trade_dates):
@@ -660,6 +685,13 @@ def main() -> None:
         help="逐日并行进程数（交易日互相独立）。推荐 6：W1 串行约 3h，6 进程约 25-35min；"
              "1 = 串行（历史行为，结果与并行逐位一致）",
     )
+    ap.add_argument(
+        "--policy-version",
+        type=int,
+        default=None,
+        help="显式用某个 production_selection 版本跑（默认用当前 default）。用于在不改默认的前提下"
+             "验证候选 artifact（如 v7 = v6 + strong_climax_top_n=2）。",
+    )
     ap.add_argument("--policy-note", default=None)
     args = ap.parse_args()
     if args.policy_note is None:
@@ -673,6 +705,7 @@ def main() -> None:
     out_path = Path(args.out) if args.out else OUT / "ablate_fast.json"
     PANEL["dir"] = args.panel_dir
     UNIVERSE["mode"] = args.universe
+    POLICY_VERSION["n"] = args.policy_version
     WORKERS["n"] = max(1, int(args.workers))
     print(f"[workers] {WORKERS['n']}", flush=True)
     print(f"[universe] {UNIVERSE['mode']}", flush=True)

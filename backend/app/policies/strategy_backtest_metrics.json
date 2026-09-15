@@ -1,19 +1,19 @@
 {
  "schema_version": 1,
- "generated_at": "2026-09-15T15:07:46",
+ "generated_at": "2026-09-15T22:33:06",
  "caliber": {
   "name": "single_skill_portfolio",
   "label": "单策略组合回测（三窗）",
   "description": "只保留该技能有非否决策略信号的候选卡，再走真实 production_selection v4 选择（score_line=72 / Top10）与 execution_policy v4 因果出场（T+1 入场、止损/跟踪止盈、跳空成交约束）；逐笔等权，不含仓位与资金模型。",
   "combined_label": "全策略组合（10 技能全开，全管线重放）",
-  "selection_policy": "production_selection.v5",
+  "selection_policy": "production_selection.v7",
   "baseline_selection_policy": "production_selection.v4（Δ 与闸门判定相对该基线）",
   "execution_policy": "execution_policy.v4",
   "score_line": 72.0,
   "output_count": 10,
   "caveat": "候选池来自 10 技能全量重放的面板（按该技能信号筛卡），未做单技能独立 prefilter 重放；选择用当前生产选择策略（见 selection_policy），组合基线为 v4（基线_selection_policy）。两类指标都属 path A 诊断证据，不是 live_forward 发布证据。盈亏比在窗口内无亏损笔或样本<5 时置空（显示 —），不做伪精度展示。",
-  "source_artifact": "backend/output/research/entry_rule_panel_single_v5.json",
-  "reproduce": "cd backend && .venv/bin/python scripts/research_entry_rule_panel.py --rules '' --single-skill --baseline-version 4 --out output/research/entry_rule_panel_single_v5.json && .venv/bin/python scripts/export_strategy_backtest_metrics.py"
+  "source_artifact": "backend/output/research/entry_rule_panel_single_v7.json",
+  "reproduce": "cd backend && .venv/bin/python scripts/research_entry_rule_panel.py --rules '' --single-skill --baseline-version 4 --out output/research/entry_rule_panel_single_v7.json && .venv/bin/python scripts/export_strategy_backtest_metrics.py"
  },
  "windows": {
   "W1": {
@@ -34,307 +34,247 @@
  },
  "combined": {
   "W1": {
-   "n": 1085,
-   "win_rate_pct": 57.24,
-   "avg_net_pct": 0.3452,
-   "sum_net_pct": 374.53,
-   "profit_factor": 1.186,
-   "max_drawdown_pct": 41.39,
-   "trade_days": 156
+   "n": 805,
+   "win_rate_pct": 58.76,
+   "avg_net_pct": 0.566,
+   "sum_net_pct": 455.63,
+   "profit_factor": 1.317,
+   "max_drawdown_pct": 46.77,
+   "trade_days": 151
   },
   "W2": {
-   "n": 649,
-   "win_rate_pct": 56.24,
-   "avg_net_pct": 0.1714,
-   "sum_net_pct": 111.23,
-   "profit_factor": 1.077,
-   "max_drawdown_pct": 24.41,
-   "trade_days": 90
+   "n": 500,
+   "win_rate_pct": 54.2,
+   "avg_net_pct": 0.2644,
+   "sum_net_pct": 132.2,
+   "profit_factor": 1.115,
+   "max_drawdown_pct": 24.37,
+   "trade_days": 86
   },
   "W3": {
-   "n": 105,
-   "win_rate_pct": 46.67,
-   "avg_net_pct": -0.3611,
-   "sum_net_pct": -37.91,
-   "profit_factor": 0.857,
-   "max_drawdown_pct": 17.94,
-   "trade_days": 19
+   "n": 69,
+   "win_rate_pct": 55.07,
+   "avg_net_pct": 0.449,
+   "sum_net_pct": 30.98,
+   "profit_factor": 1.196,
+   "max_drawdown_pct": 16.48,
+   "trade_days": 17
   }
  },
  "skills": {
   "chao-gu-yang-jia-skill": {
    "windows": {
     "W1": {
-     "n": 937,
-     "win_rate_pct": 58.59,
-     "avg_net_pct": 0.4899,
-     "sum_net_pct": 459.07,
-     "profit_factor": 1.274,
+     "n": 772,
+     "win_rate_pct": 58.94,
+     "avg_net_pct": 0.5963,
+     "sum_net_pct": 460.38,
+     "profit_factor": 1.332,
      "profit_factor_note": null,
-     "max_drawdown_pct": 36.79,
-     "trade_days": 155,
-     "delta_cohort_vs_combined": 0.1099,
+     "max_drawdown_pct": 49.8,
+     "trade_days": 151,
+     "delta_cohort_vs_combined": 0.0005,
      "ci95": [
-      -0.0407,
-      0.265
+      -0.0617,
+      0.0533
      ],
      "month_same_sign_ratio": 0.69,
      "challenger": "PRODUCTION"
     },
     "W2": {
-     "n": 585,
-     "win_rate_pct": 54.53,
-     "avg_net_pct": 0.2575,
-     "sum_net_pct": 150.63,
-     "profit_factor": 1.114,
+     "n": 491,
+     "win_rate_pct": 53.36,
+     "avg_net_pct": 0.2377,
+     "sum_net_pct": 116.72,
+     "profit_factor": 1.101,
      "profit_factor_note": null,
-     "max_drawdown_pct": 25.98,
-     "trade_days": 90,
-     "delta_cohort_vs_combined": 0.0778,
+     "max_drawdown_pct": 30.07,
+     "trade_days": 86,
+     "delta_cohort_vs_combined": -0.0685,
      "ci95": [
-      -0.1687,
-      0.3136
+      -0.1841,
+      0.0365
      ],
-     "month_same_sign_ratio": 0.43,
+     "month_same_sign_ratio": 0.33,
      "challenger": "FALSIFIED"
     },
     "W3": {
-     "n": 94,
-     "win_rate_pct": 48.94,
-     "avg_net_pct": -0.1464,
-     "sum_net_pct": -13.77,
-     "profit_factor": 0.943,
+     "n": 69,
+     "win_rate_pct": 55.07,
+     "avg_net_pct": 0.4186,
+     "sum_net_pct": 28.89,
+     "profit_factor": 1.183,
      "profit_factor_note": null,
-     "max_drawdown_pct": 21.14,
-     "trade_days": 19,
-     "delta_cohort_vs_combined": 0.1198,
+     "max_drawdown_pct": 16.48,
+     "trade_days": 17,
+     "delta_cohort_vs_combined": 0.0733,
      "ci95": [
-      -0.1438,
-      0.4193
+      -0.1299,
+      0.3499
      ],
      "month_same_sign_ratio": 0.5,
-     "challenger": "PRODUCTION"
+     "challenger": "FALSIFIED"
     }
    },
    "windows_with_trades": 3,
-   "passes": 2,
-   "avg_net_pct_mean": 0.2003,
-   "all_windows_positive": false,
+   "passes": 1,
+   "avg_net_pct_mean": 0.4175,
+   "all_windows_positive": true,
    "any_window_positive": true
   },
   "chen-xiaoqun-skill": {
    "windows": {
     "W1": {
-     "n": 646,
-     "win_rate_pct": 58.51,
-     "avg_net_pct": 0.5386,
-     "sum_net_pct": 347.96,
-     "profit_factor": 1.315,
+     "n": 494,
+     "win_rate_pct": 57.89,
+     "avg_net_pct": 0.5361,
+     "sum_net_pct": 264.85,
+     "profit_factor": 1.306,
      "profit_factor_note": null,
-     "max_drawdown_pct": 35.16,
-     "trade_days": 147,
-     "delta_cohort_vs_combined": 0.2456,
+     "max_drawdown_pct": 39.28,
+     "trade_days": 143,
+     "delta_cohort_vs_combined": 0.1106,
      "ci95": [
-      -0.0879,
-      0.5944
+      -0.2437,
+      0.4799
      ],
      "month_same_sign_ratio": 0.46,
      "challenger": "FALSIFIED"
     },
     "W2": {
-     "n": 396,
-     "win_rate_pct": 55.56,
-     "avg_net_pct": 0.214,
-     "sum_net_pct": 84.75,
-     "profit_factor": 1.096,
+     "n": 301,
+     "win_rate_pct": 54.49,
+     "avg_net_pct": 0.2247,
+     "sum_net_pct": 67.63,
+     "profit_factor": 1.098,
      "profit_factor_note": null,
-     "max_drawdown_pct": 41.82,
-     "trade_days": 88,
-     "delta_cohort_vs_combined": -0.0818,
+     "max_drawdown_pct": 42.58,
+     "trade_days": 83,
+     "delta_cohort_vs_combined": -0.1442,
      "ci95": [
-      -0.5093,
-      0.3602
+      -0.5249,
+      0.2271
      ],
-     "month_same_sign_ratio": 0.29,
+     "month_same_sign_ratio": 0.14,
      "challenger": "FALSIFIED"
     },
     "W3": {
-     "n": 57,
-     "win_rate_pct": 47.37,
-     "avg_net_pct": -0.1915,
-     "sum_net_pct": -10.91,
-     "profit_factor": 0.93,
+     "n": 39,
+     "win_rate_pct": 48.72,
+     "avg_net_pct": 0.4882,
+     "sum_net_pct": 19.04,
+     "profit_factor": 1.186,
      "profit_factor_note": null,
-     "max_drawdown_pct": 26.65,
-     "trade_days": 16,
-     "delta_cohort_vs_combined": -0.0005,
+     "max_drawdown_pct": 21.8,
+     "trade_days": 14,
+     "delta_cohort_vs_combined": -0.2535,
      "ci95": [
-      -0.9556,
-      1.0151
+      -1.1436,
+      0.6844
      ],
-     "month_same_sign_ratio": 0.5,
-     "challenger": "PRODUCTION"
+     "month_same_sign_ratio": 0.0,
+     "challenger": "FALSIFIED"
     }
    },
    "windows_with_trades": 3,
-   "passes": 1,
-   "avg_net_pct_mean": 0.187,
-   "all_windows_positive": false,
+   "passes": 0,
+   "avg_net_pct_mean": 0.4163,
+   "all_windows_positive": true,
    "any_window_positive": true
   },
   "chip-single-peak-breakout": {
    "windows": {
     "W1": {
-     "n": 74,
-     "win_rate_pct": 60.81,
-     "avg_net_pct": -0.2338,
-     "sum_net_pct": -17.3,
-     "profit_factor": 0.85,
+     "n": 54,
+     "win_rate_pct": 66.67,
+     "avg_net_pct": 0.0928,
+     "sum_net_pct": 5.01,
+     "profit_factor": 1.074,
      "profit_factor_note": null,
-     "max_drawdown_pct": 16.65,
+     "max_drawdown_pct": 13.56,
      "trade_days": 27,
-     "delta_cohort_vs_combined": -0.1765,
+     "delta_cohort_vs_combined": -0.359,
      "ci95": [
-      -0.4649,
-      0.1111
+      -0.7502,
+      0.0046
      ],
      "month_same_sign_ratio": 0.38,
      "challenger": "FALSIFIED"
     },
     "W2": {
-     "n": 36,
-     "win_rate_pct": 58.33,
-     "avg_net_pct": 0.6051,
-     "sum_net_pct": 21.78,
-     "profit_factor": 1.329,
+     "n": 32,
+     "win_rate_pct": 59.38,
+     "avg_net_pct": 0.9198,
+     "sum_net_pct": 29.43,
+     "profit_factor": 1.537,
      "profit_factor_note": null,
-     "max_drawdown_pct": 18.57,
+     "max_drawdown_pct": 20.55,
      "trade_days": 19,
-     "delta_cohort_vs_combined": -0.3092,
+     "delta_cohort_vs_combined": -0.594,
      "ci95": [
-      -1.0695,
-      0.3433
+      -1.399,
+      0.1523
      ],
-     "month_same_sign_ratio": 0.43,
+     "month_same_sign_ratio": 0.29,
      "challenger": "FALSIFIED"
     },
     "W3": null
    },
    "windows_with_trades": 2,
    "passes": 0,
-   "avg_net_pct_mean": 0.1856,
+   "avg_net_pct_mean": 0.5063,
    "all_windows_positive": false,
    "any_window_positive": true
   },
   "daily-stock-analysis-skill": {
    "windows": {
     "W1": {
-     "n": 652,
-     "win_rate_pct": 57.36,
-     "avg_net_pct": 0.284,
-     "sum_net_pct": 185.18,
-     "profit_factor": 1.165,
+     "n": 522,
+     "win_rate_pct": 58.24,
+     "avg_net_pct": 0.3557,
+     "sum_net_pct": 185.69,
+     "profit_factor": 1.209,
      "profit_factor_note": null,
-     "max_drawdown_pct": 40.11,
-     "trade_days": 145,
-     "delta_cohort_vs_combined": -0.0146,
+     "max_drawdown_pct": 44.86,
+     "trade_days": 142,
+     "delta_cohort_vs_combined": -0.262,
      "ci95": [
-      -0.3825,
-      0.3773
+      -0.5953,
+      0.0701
      ],
-     "month_same_sign_ratio": 0.62,
+     "month_same_sign_ratio": 0.23,
      "challenger": "FALSIFIED"
     },
     "W2": {
-     "n": 353,
-     "win_rate_pct": 60.06,
-     "avg_net_pct": 0.5641,
-     "sum_net_pct": 199.11,
-     "profit_factor": 1.303,
+     "n": 293,
+     "win_rate_pct": 59.73,
+     "avg_net_pct": 0.5121,
+     "sum_net_pct": 150.04,
+     "profit_factor": 1.266,
      "profit_factor_note": null,
-     "max_drawdown_pct": 21.13,
-     "trade_days": 83,
-     "delta_cohort_vs_combined": 0.0288,
+     "max_drawdown_pct": 24.97,
+     "trade_days": 82,
+     "delta_cohort_vs_combined": -0.434,
      "ci95": [
-      -0.667,
-      0.6934
+      -1.1875,
+      0.2279
      ],
      "month_same_sign_ratio": 0.43,
      "challenger": "PRODUCTION"
     },
     "W3": {
-     "n": 51,
-     "win_rate_pct": 45.1,
-     "avg_net_pct": -1.6481,
-     "sum_net_pct": -84.05,
-     "profit_factor": 0.453,
+     "n": 44,
+     "win_rate_pct": 43.18,
+     "avg_net_pct": -1.7806,
+     "sum_net_pct": -78.35,
+     "profit_factor": 0.44,
      "profit_factor_note": null,
-     "max_drawdown_pct": 22.16,
+     "max_drawdown_pct": 28.21,
      "trade_days": 18,
-     "delta_cohort_vs_combined": -0.4118,
+     "delta_cohort_vs_combined": -0.6429,
      "ci95": [
-      -1.1414,
-      0.3318
-     ],
-     "month_same_sign_ratio": 0.5,
-     "challenger": "FALSIFIED"
-    }
-   },
-   "windows_with_trades": 3,
-   "passes": 1,
-   "avg_net_pct_mean": -0.2667,
-   "all_windows_positive": false,
-   "any_window_positive": true
-  },
-  "high-range-breakout-momentum": {
-   "windows": {
-    "W1": {
-     "n": 188,
-     "win_rate_pct": 46.28,
-     "avg_net_pct": -0.6513,
-     "sum_net_pct": -122.44,
-     "profit_factor": 0.684,
-     "profit_factor_note": null,
-     "max_drawdown_pct": 29.85,
-     "trade_days": 65,
-     "delta_cohort_vs_combined": -0.2485,
-     "ci95": [
-      -0.5929,
-      0.0844
-     ],
-     "month_same_sign_ratio": 0.38,
-     "challenger": "FALSIFIED"
-    },
-    "W2": {
-     "n": 85,
-     "win_rate_pct": 64.71,
-     "avg_net_pct": 1.9817,
-     "sum_net_pct": 168.44,
-     "profit_factor": 2.295,
-     "profit_factor_note": null,
-     "max_drawdown_pct": 17.02,
-     "trade_days": 35,
-     "delta_cohort_vs_combined": 0.3425,
-     "ci95": [
-      -0.5376,
-      1.2375
-     ],
-     "month_same_sign_ratio": 0.57,
-     "challenger": "PRODUCTION"
-    },
-    "W3": {
-     "n": 8,
-     "win_rate_pct": 25.0,
-     "avg_net_pct": -3.7924,
-     "sum_net_pct": -30.34,
-     "profit_factor": 0.108,
-     "profit_factor_note": null,
-     "max_drawdown_pct": 11.33,
-     "trade_days": 4,
-     "delta_cohort_vs_combined": -0.278,
-     "ci95": [
-      -1.206,
-      0.6127
+      -1.627,
+      0.364
      ],
      "month_same_sign_ratio": 0.0,
      "challenger": "FALSIFIED"
@@ -342,7 +282,67 @@
    },
    "windows_with_trades": 3,
    "passes": 1,
-   "avg_net_pct_mean": -0.8207,
+   "avg_net_pct_mean": -0.3043,
+   "all_windows_positive": false,
+   "any_window_positive": true
+  },
+  "high-range-breakout-momentum": {
+   "windows": {
+    "W1": {
+     "n": 125,
+     "win_rate_pct": 50.4,
+     "avg_net_pct": -0.4636,
+     "sum_net_pct": -57.95,
+     "profit_factor": 0.771,
+     "profit_factor_note": null,
+     "max_drawdown_pct": 31.37,
+     "trade_days": 64,
+     "delta_cohort_vs_combined": -0.4321,
+     "ci95": [
+      -0.8712,
+      -0.0094
+     ],
+     "month_same_sign_ratio": 0.46,
+     "challenger": "FALSIFIED"
+    },
+    "W2": {
+     "n": 60,
+     "win_rate_pct": 65.0,
+     "avg_net_pct": 2.6646,
+     "sum_net_pct": 159.87,
+     "profit_factor": 2.902,
+     "profit_factor_note": null,
+     "max_drawdown_pct": 17.02,
+     "trade_days": 34,
+     "delta_cohort_vs_combined": 0.3017,
+     "ci95": [
+      -0.6758,
+      1.2782
+     ],
+     "month_same_sign_ratio": 0.86,
+     "challenger": "PRODUCTION"
+    },
+    "W3": {
+     "n": 6,
+     "win_rate_pct": 33.33,
+     "avg_net_pct": -3.1684,
+     "sum_net_pct": -19.01,
+     "profit_factor": 0.161,
+     "profit_factor_note": null,
+     "max_drawdown_pct": 11.34,
+     "trade_days": 4,
+     "delta_cohort_vs_combined": -0.3077,
+     "ci95": [
+      -1.3902,
+      0.7332
+     ],
+     "month_same_sign_ratio": 0.5,
+     "challenger": "FALSIFIED"
+    }
+   },
+   "windows_with_trades": 3,
+   "passes": 1,
+   "avg_net_pct_mean": -0.3225,
    "all_windows_positive": false,
    "any_window_positive": true
   },
@@ -357,12 +357,12 @@
      "profit_factor_note": "样本不足 5 笔",
      "max_drawdown_pct": 6.61,
      "trade_days": 3,
-     "delta_cohort_vs_combined": -0.2033,
+     "delta_cohort_vs_combined": -0.401,
      "ci95": [
-      -0.5057,
-      0.0945
+      -0.801,
+      -0.0082
      ],
-     "month_same_sign_ratio": 0.38,
+     "month_same_sign_ratio": 0.31,
      "challenger": "FALSIFIED"
     },
     "W2": {
@@ -374,10 +374,10 @@
      "profit_factor_note": "样本不足 5 笔",
      "max_drawdown_pct": 2.98,
      "trade_days": 1,
-     "delta_cohort_vs_combined": -0.3424,
+     "delta_cohort_vs_combined": -0.6116,
      "ci95": [
-      -1.0368,
-      0.2575
+      -1.3731,
+      0.0417
      ],
      "month_same_sign_ratio": 0.29,
      "challenger": "FALSIFIED"
@@ -391,17 +391,17 @@
      "profit_factor_note": "样本不足 5 笔",
      "max_drawdown_pct": 0.0,
      "trade_days": 1,
-     "delta_cohort_vs_combined": 0.1894,
+     "delta_cohort_vs_combined": 0.16,
      "ci95": [
-      -0.8724,
-      1.2029
+      -0.8715,
+      1.2253
      ],
      "month_same_sign_ratio": 0.5,
-     "challenger": "PRODUCTION"
+     "challenger": "FALSIFIED"
     }
    },
    "windows_with_trades": 3,
-   "passes": 1,
+   "passes": 0,
    "avg_net_pct_mean": -0.6215,
    "all_windows_positive": false,
    "any_window_positive": true
@@ -409,140 +409,140 @@
   "overnight-holding-method": {
    "windows": {
     "W1": {
-     "n": 42,
-     "win_rate_pct": 61.9,
-     "avg_net_pct": 1.1114,
-     "sum_net_pct": 46.68,
-     "profit_factor": 1.85,
+     "n": 36,
+     "win_rate_pct": 63.89,
+     "avg_net_pct": 1.4148,
+     "sum_net_pct": 50.93,
+     "profit_factor": 2.114,
      "profit_factor_note": null,
      "max_drawdown_pct": 13.44,
-     "trade_days": 30,
-     "delta_cohort_vs_combined": -0.0364,
+     "trade_days": 29,
+     "delta_cohort_vs_combined": -0.2222,
      "ci95": [
-      -0.3671,
-      0.3035
+      -0.5937,
+      0.1299
      ],
-     "month_same_sign_ratio": 0.46,
+     "month_same_sign_ratio": 0.31,
      "challenger": "FALSIFIED"
     },
     "W2": {
-     "n": 34,
-     "win_rate_pct": 44.12,
-     "avg_net_pct": -1.8993,
-     "sum_net_pct": -64.58,
-     "profit_factor": 0.396,
+     "n": 26,
+     "win_rate_pct": 46.15,
+     "avg_net_pct": -2.0462,
+     "sum_net_pct": -53.2,
+     "profit_factor": 0.389,
      "profit_factor_note": null,
-     "max_drawdown_pct": 30.39,
-     "trade_days": 19,
-     "delta_cohort_vs_combined": -0.5355,
+     "max_drawdown_pct": 30.36,
+     "trade_days": 17,
+     "delta_cohort_vs_combined": -0.8046,
      "ci95": [
-      -1.2633,
-      0.1029
+      -1.6128,
+      -0.085
      ],
-     "month_same_sign_ratio": 0.14,
+     "month_same_sign_ratio": 0.29,
      "challenger": "FALSIFIED"
     },
     "W3": {
-     "n": 10,
-     "win_rate_pct": 70.0,
-     "avg_net_pct": 0.8002,
-     "sum_net_pct": 8.0,
-     "profit_factor": 1.459,
+     "n": 6,
+     "win_rate_pct": 83.33,
+     "avg_net_pct": 1.586,
+     "sum_net_pct": 9.52,
+     "profit_factor": 2.68,
      "profit_factor_note": null,
-     "max_drawdown_pct": 5.89,
-     "trade_days": 6,
-     "delta_cohort_vs_combined": 0.4049,
+     "max_drawdown_pct": 1.94,
+     "trade_days": 4,
+     "delta_cohort_vs_combined": 0.3845,
      "ci95": [
-      -0.6737,
-      1.4362
+      -0.6579,
+      1.4765
      ],
      "month_same_sign_ratio": 0.5,
-     "challenger": "PRODUCTION"
+     "challenger": "FALSIFIED"
     }
    },
    "windows_with_trades": 3,
-   "passes": 1,
-   "avg_net_pct_mean": 0.0041,
+   "passes": 0,
+   "avg_net_pct_mean": 0.3182,
    "all_windows_positive": false,
    "any_window_positive": true
   },
   "sector-relative-strength-leader": {
    "windows": {
     "W1": {
-     "n": 634,
-     "win_rate_pct": 57.26,
-     "avg_net_pct": 0.4048,
-     "sum_net_pct": 256.65,
-     "profit_factor": 1.213,
+     "n": 512,
+     "win_rate_pct": 59.57,
+     "avg_net_pct": 0.6027,
+     "sum_net_pct": 308.58,
+     "profit_factor": 1.325,
      "profit_factor_note": null,
-     "max_drawdown_pct": 56.29,
-     "trade_days": 144,
-     "delta_cohort_vs_combined": -0.0769,
+     "max_drawdown_pct": 65.83,
+     "trade_days": 139,
+     "delta_cohort_vs_combined": -0.2083,
      "ci95": [
-      -0.3447,
-      0.2008
+      -0.4972,
+      0.0815
      ],
-     "month_same_sign_ratio": 0.46,
+     "month_same_sign_ratio": 0.31,
      "challenger": "FALSIFIED"
     },
     "W2": {
-     "n": 418,
-     "win_rate_pct": 51.44,
-     "avg_net_pct": 0.1593,
-     "sum_net_pct": 66.58,
-     "profit_factor": 1.064,
+     "n": 326,
+     "win_rate_pct": 50.92,
+     "avg_net_pct": 0.1786,
+     "sum_net_pct": 58.22,
+     "profit_factor": 1.068,
      "profit_factor_note": null,
-     "max_drawdown_pct": 38.54,
-     "trade_days": 88,
-     "delta_cohort_vs_combined": -0.03,
+     "max_drawdown_pct": 36.26,
+     "trade_days": 82,
+     "delta_cohort_vs_combined": 0.0064,
      "ci95": [
-      -0.4033,
-      0.3462
+      -0.3512,
+      0.4143
      ],
      "month_same_sign_ratio": 0.43,
      "challenger": "FALSIFIED"
     },
     "W3": {
-     "n": 54,
-     "win_rate_pct": 57.41,
-     "avg_net_pct": 0.014,
-     "sum_net_pct": 0.76,
-     "profit_factor": 1.006,
+     "n": 39,
+     "win_rate_pct": 58.97,
+     "avg_net_pct": 0.3977,
+     "sum_net_pct": 15.51,
+     "profit_factor": 1.169,
      "profit_factor_note": null,
-     "max_drawdown_pct": 21.58,
-     "trade_days": 17,
-     "delta_cohort_vs_combined": 0.019,
+     "max_drawdown_pct": 20.14,
+     "trade_days": 15,
+     "delta_cohort_vs_combined": -0.1823,
      "ci95": [
-      -0.642,
-      0.7175
+      -0.7177,
+      0.3213
      ],
-     "month_same_sign_ratio": 0.5,
-     "challenger": "PRODUCTION"
+     "month_same_sign_ratio": 0.0,
+     "challenger": "FALSIFIED"
     }
    },
    "windows_with_trades": 3,
-   "passes": 1,
-   "avg_net_pct_mean": 0.1927,
+   "passes": 0,
+   "avg_net_pct_mean": 0.393,
    "all_windows_positive": true,
    "any_window_positive": true
   },
   "small-cap-thematic-momentum": {
    "windows": {
     "W1": {
-     "n": 69,
-     "win_rate_pct": 60.87,
-     "avg_net_pct": -0.203,
-     "sum_net_pct": -14.0,
-     "profit_factor": 0.884,
+     "n": 65,
+     "win_rate_pct": 61.54,
+     "avg_net_pct": 0.0111,
+     "sum_net_pct": 0.72,
+     "profit_factor": 1.007,
      "profit_factor_note": null,
-     "max_drawdown_pct": 37.41,
-     "trade_days": 52,
-     "delta_cohort_vs_combined": -0.2532,
+     "max_drawdown_pct": 37.08,
+     "trade_days": 51,
+     "delta_cohort_vs_combined": -0.4294,
      "ci95": [
-      -0.5735,
-      0.0671
+      -0.8434,
+      -0.037
      ],
-     "month_same_sign_ratio": 0.38,
+     "month_same_sign_ratio": 0.31,
      "challenger": "FALSIFIED"
     },
     "W2": {
@@ -554,10 +554,10 @@
      "profit_factor_note": null,
      "max_drawdown_pct": 20.41,
      "trade_days": 18,
-     "delta_cohort_vs_combined": -0.4176,
+     "delta_cohort_vs_combined": -0.6869,
      "ci95": [
-      -1.2101,
-      0.2914
+      -1.4845,
+      0.0523
      ],
      "month_same_sign_ratio": 0.43,
      "challenger": "FALSIFIED"
@@ -571,70 +571,70 @@
      "profit_factor_note": null,
      "max_drawdown_pct": 8.82,
      "trade_days": 6,
-     "delta_cohort_vs_combined": 0.0684,
+     "delta_cohort_vs_combined": 0.039,
      "ci95": [
-      -0.997,
-      1.1551
+      -1.0095,
+      1.1755
      ],
      "month_same_sign_ratio": 0.5,
-     "challenger": "PRODUCTION"
+     "challenger": "FALSIFIED"
     }
    },
    "windows_with_trades": 3,
-   "passes": 1,
-   "avg_net_pct_mean": -0.5154,
+   "passes": 0,
+   "avg_net_pct_mean": -0.4441,
    "all_windows_positive": false,
-   "any_window_positive": false
+   "any_window_positive": true
   },
   "trend-pullback-continuation": {
    "windows": {
     "W1": {
-     "n": 154,
-     "win_rate_pct": 62.34,
-     "avg_net_pct": 0.3959,
-     "sum_net_pct": 60.97,
-     "profit_factor": 1.242,
+     "n": 148,
+     "win_rate_pct": 61.49,
+     "avg_net_pct": 0.1819,
+     "sum_net_pct": 26.92,
+     "profit_factor": 1.109,
      "profit_factor_note": null,
      "max_drawdown_pct": 55.98,
      "trade_days": 76,
-     "delta_cohort_vs_combined": -0.2044,
+     "delta_cohort_vs_combined": -0.4479,
      "ci95": [
-      -0.5866,
-      0.1984
+      -0.895,
+      -0.0149
      ],
-     "month_same_sign_ratio": 0.38,
+     "month_same_sign_ratio": 0.31,
      "challenger": "FALSIFIED"
     },
     "W2": {
-     "n": 84,
-     "win_rate_pct": 64.29,
-     "avg_net_pct": 1.0218,
-     "sum_net_pct": 85.83,
-     "profit_factor": 1.592,
+     "n": 79,
+     "win_rate_pct": 64.56,
+     "avg_net_pct": 1.1489,
+     "sum_net_pct": 90.76,
+     "profit_factor": 1.651,
      "profit_factor_note": null,
-     "max_drawdown_pct": 24.59,
+     "max_drawdown_pct": 23.59,
      "trade_days": 48,
-     "delta_cohort_vs_combined": -0.0659,
+     "delta_cohort_vs_combined": -0.3142,
      "ci95": [
-      -0.8809,
-      0.7102
+      -1.1863,
+      0.4974
      ],
-     "month_same_sign_ratio": 0.57,
+     "month_same_sign_ratio": 0.43,
      "challenger": "FALSIFIED"
     },
     "W3": {
-     "n": 23,
-     "win_rate_pct": 43.48,
-     "avg_net_pct": -1.8211,
-     "sum_net_pct": -41.89,
-     "profit_factor": 0.282,
+     "n": 20,
+     "win_rate_pct": 35.0,
+     "avg_net_pct": -2.2155,
+     "sum_net_pct": -44.31,
+     "profit_factor": 0.241,
      "profit_factor_note": null,
-     "max_drawdown_pct": 25.12,
+     "max_drawdown_pct": 27.35,
      "trade_days": 13,
-     "delta_cohort_vs_combined": -0.8324,
+     "delta_cohort_vs_combined": -0.9396,
      "ci95": [
-      -2.0405,
-      0.3596
+      -2.0946,
+      0.263
      ],
      "month_same_sign_ratio": 0.0,
      "challenger": "FALSIFIED"
@@ -642,7 +642,7 @@
    },
    "windows_with_trades": 3,
    "passes": 0,
-   "avg_net_pct_mean": -0.1345,
+   "avg_net_pct_mean": -0.2949,
    "all_windows_positive": false,
    "any_window_positive": true
   }

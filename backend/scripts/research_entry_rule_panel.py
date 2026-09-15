@@ -58,6 +58,44 @@ def _non_veto_signals(card: dict) -> list[dict]:
             if isinstance(s, dict) and not s.get("hard_veto")]
 
 
+def _dominant(card: dict) -> str:
+    """卡片的"主导策略" = 非否决策略里分最高的那个（与落库 bucket=best_strategy_id 同义）。
+
+    注意：面板卡是 policy 的输入态，`bucket` 字段此时还没写（那是持久化阶段由
+    best_strategy_id 赋的），所以必须从 strategy_signals 现算，不能读 card["bucket"]。
+    """
+    sigs = _non_veto_signals(card)
+    if not sigs:
+        return ""
+    return str(max(sigs, key=lambda s: float(s.get("score") or 0)).get("strategy_id") or "")
+
+
+def _base_sentiment(snapshot: dict) -> tuple[str, str]:
+    """复用生产自身的 regime 判定（不另写一套，避免口径漂移）。"""
+    from app.engine.aggregator import _market_base, _market_sentiment
+
+    return str(_market_base(snapshot or {}) or ""), str(_market_sentiment(snapshot or {}) or "")
+
+
+def _climax_top_n(n: int, bases: tuple[str, ...] | None = None):
+    """高潮日只留分数最高的 n 张（可按市场基态限定）。
+
+    生产现有旋钮 climax_output_divisor 只按"情绪=高潮"生效；W3 的亏损集中在**强牛·高潮**，
+    而 W2 的高潮日多为偏多·高潮——所以把"减输出"限定到强牛基态是本轮的假设。
+    """
+
+    def rule(cards, day):
+        base, sent = _base_sentiment(day.get("market_snapshot") or {})
+        if sent != "高潮" or (bases is not None and base not in bases):
+            return cards
+        return sorted(
+            cards,
+            key=lambda c: -float(c.get("selection_score") or c.get("final_score") or 0.0),
+        )[:n]
+
+    return rule
+
+
 def r_identity(cards, day):
     return cards
 
@@ -101,14 +139,71 @@ def _card_filter(predicate):
     return rule
 
 
+def _apply_score_delta(card: dict, delta: float) -> dict:
+    """给卡片降/加分：**必须同时改 final_score / selection_score / portfolio_rank_score**。
+
+    坑：`apply_pool_rules` 读的是 `selection_score`（缺省才回落到 final_score），
+    只改 final_score 会让"降分"变体变成静默空操作（实测 Δ≡0 才发现）。
+    """
+    cc = dict(card)
+    for key in ("final_score", "selection_score", "portfolio_rank_score"):
+        if key in cc or key == "final_score":
+            cc[key] = float(cc.get(key) or cc.get("final_score") or 0.0) + delta
+    return cc
+
+
+# 聚合权重轴：`final_score = min(Σ w_i·raw_i · consensus_boost · 真实性折扣, quality_cap)`。
+# 上面这条恒等式已用面板逐卡复算验证（W3 1858/1858 一致，误差 <0.02），因此权重变体可以
+# **离线**评估，不必重放。默认权重取自生产卡片自身（aggregation_weights）。
+DEFAULT_W = {"skill_agent": 0.0, "strategy_rule": 0.55, "market": 0.20, "risk": 0.15, "evidence": 0.10}
+WEIGHT_VARIANTS: dict[str, dict] = {
+    "w_current": dict(DEFAULT_W),                                   # 保真度对照，必须 Δ≡0
+    "w_ev15_sr50": {**DEFAULT_W, "strategy_rule": 0.50, "evidence": 0.15},
+    "w_ev15_risk150": {**DEFAULT_W, "strategy_rule": 0.50, "evidence": 0.15, "market": 0.20},
+    "w_risk20_sr50": {**DEFAULT_W, "strategy_rule": 0.50, "risk": 0.20},
+    "w_mkt15_sr60": {**DEFAULT_W, "strategy_rule": 0.60, "market": 0.15},
+    "w_mkt25_sr50": {**DEFAULT_W, "strategy_rule": 0.50, "market": 0.25},
+    "w_sr65_mkt15_risk12_ev08": {"skill_agent": 0.0, "strategy_rule": 0.65, "market": 0.15,
+                                 "risk": 0.12, "evidence": 0.08},
+    "w_sr45_mkt25_risk15_ev15": {"skill_agent": 0.0, "strategy_rule": 0.45, "market": 0.25,
+                                 "risk": 0.15, "evidence": 0.15},
+}
+
+
+def _weight_rule(weights: dict):
+    """按给定权重复算 final_score/selection_score/portfolio_rank_score（缺字段的卡原样放行）。"""
+
+    def rule(cards, _day):
+        out = []
+        for c in cards:
+            raw = c.get("raw_component_scores")
+            if not isinstance(raw, dict):
+                out.append(c)
+                continue
+            base = sum(float(weights.get(k, 0.0)) * float(raw.get(k, 0.0) or 0.0) for k in weights)
+            score = base * float(c.get("consensus_boost") or 1.0)
+            auth = float(c.get("data_authenticity") or 1.0)
+            if auth < 0.7:
+                score *= 0.85
+            if auth < 0.5:
+                score *= 0.75
+            cap = (c.get("score_breakdown") or {}).get("quality_cap")
+            if cap is not None:
+                score = min(score, float(cap))
+            out.append({**c, "final_score": round(score, 2), "selection_score": round(score, 2),
+                        "portfolio_rank_score": round(score, 2)})
+        return out
+
+    return rule
+
+
+
+
 def _penalty(predicate, points):
     def rule(cards, day):
         out = []
         for c in cards:
-            cc = dict(c)
-            if predicate(cc, day):
-                cc["final_score"] = float(cc.get("final_score") or 0.0) - points
-            out.append(cc)
+            out.append(_apply_score_delta(c, -points) if predicate(c, day) else c)
         return out
     return rule
 
@@ -154,11 +249,11 @@ def _consensus_soft(points: float, regime_in: tuple[str, ...] | None = None):
     def rule(cards, _day):
         out = []
         for c in cards:
-            cc = dict(c)
-            regime = _regime_of(cc)
-            if (regime_in is None or any(r in regime for r in regime_in)) and _low_consensus(cc):
-                cc["final_score"] = float(cc.get("final_score") or 0.0) - points
-            out.append(cc)
+            regime = _regime_of(c)
+            if (regime_in is None or any(r in regime for r in regime_in)) and _low_consensus(c):
+                out.append(_apply_score_delta(c, -points))
+            else:
+                out.append(c)
         return out
 
     return rule
@@ -174,13 +269,13 @@ def _consensus_boost(
     def rule(cards, _day):
         out = []
         for c in cards:
-            cc = dict(c)
-            regime = _regime_of(cc)
+            regime = _regime_of(c)
             if (regime_in is None or any(r in regime for r in regime_in)) and not _low_consensus(
-                cc, min_signals=min_signals
+                c, min_signals=min_signals
             ):
-                cc["final_score"] = float(cc.get("final_score") or 0.0) + points
-            out.append(cc)
+                out.append(_apply_score_delta(c, points))
+            else:
+                out.append(c)
         return out
 
     return rule
@@ -220,6 +315,15 @@ RULES: dict[str, "callable"] = {
     "consensus2_soft6": _consensus_soft(6.0),
     "consensus2_soft6_weak": _consensus_soft(6.0, regime_in=("弱势", "震荡")),
     "consensus2_hi70": _card_filter(lambda c, _d: not _low_consensus(c, min_score=70.0)),
+    # 高潮日专用（W3 亏损集中在"强牛·高潮"）：高潮里要求至少 3 个策略背书。
+    "consensus3_climax": _card_filter(
+        lambda c, _d: not ("高潮" in _regime_of(c) and _low_consensus(c, min_signals=3))
+    ),
+    # 高潮减输出（regime 条件化）：W3 亏损集中在强牛·高潮；W1/W2 的高潮日更杂。
+    "climax_top3_strong": _climax_top_n(3, ("强牛",)),
+    "climax_top4_strong": _climax_top_n(4, ("强牛",)),
+    "climax_top3_all": _climax_top_n(3),
+    "climax_top4_all": _climax_top_n(4),
     # ⑤c 反向杠杆：不剔除低共识卡，而是给"多策略背书"加分（保留全部候选，
     # 只改排序/过线）。假设：背书数在弱势/震荡里是质量信号，在强趋势里失效。
     "consensus_boost6": _consensus_boost(6.0),
@@ -232,6 +336,65 @@ RULES: dict[str, "callable"] = {
     "non_main_p4": _penalty(_industry_not_in_main, 4.0),
     "non_main_p8": _penalty(_industry_not_in_main, 8.0),
     "non_main_drop": _card_filter(lambda c, d: not _industry_not_in_main(c, d)),
+}
+
+# 组合/口径变体：只改 policy 调用上下文（score_line / output_count），不改卡也不改政策字段。
+# 动机：生产盘前预设 `preset_formal_opening` 实际是 **Top6 + score_line 72**，而本筛查器的
+# canonical 口径是 Top10；"每天只留前 N 名"本身就是一个直接的胜率杠杆。
+CONTEXT_VARIANTS: dict[str, dict] = {
+    "oc8": {"output_count": 8},
+    "oc6": {"output_count": 6},
+    "oc4": {"output_count": 4},
+    "sl76": {"score_line": 76.0},
+    "sl80": {"score_line": 80.0},
+    "oc6_sl76": {"output_count": 6, "score_line": 76.0},
+    "oc6_sl80": {"output_count": 6, "score_line": 80.0},
+}
+
+
+for _wname, _wmap in WEIGHT_VARIANTS.items():
+    RULES.setdefault(_wname, _weight_rule(_wmap))
+
+# 政策级变体（不筛卡，只改 policy 字段）：W3 的亏损集中在"强牛·高潮"交易日，
+# 现有政策已有 climax_nonweak_extra（高潮抬线）与 climax_output_divisor（高潮减半输出），
+# 这里检验把它们推得更紧是否能在三窗同时改善；以及把共识阈值在弱势/震荡推到 3。
+POLICY_VARIANTS: dict[str, dict] = {
+    "climax_extra_12": {"climax_nonweak_extra": 12.0},
+    "climax_extra_16": {"climax_nonweak_extra": 16.0},
+    "climax_extra_24": {"climax_nonweak_extra": 24.0},
+    "climax_div_3": {"climax_output_divisor": 3},
+    "consensus3_weak": {"consensus_min_signals": 3, "consensus_regimes": ("弱势",)},
+    "consensus3_weak_osc": {"consensus_min_signals": 3, "consensus_regimes": ("弱势", "震荡")},
+    "consensus3_strong": {"consensus_min_signals": 3, "consensus_regimes": ("强牛",)},
+    "climax16_consensus3strong": {
+        "climax_nonweak_extra": 16.0,
+        "consensus_min_signals": 3,
+        "consensus_regimes": ("强牛",),
+    },
+    "climax16_consensus3_weakosc": {
+        "climax_nonweak_extra": 16.0,
+        "consensus_min_signals": 3,
+        "consensus_regimes": ("弱势", "震荡"),
+    },
+    # 组合：两个在单轴上各自 2/3 通过的改动叠在一起（climax 减输出 + 更严共识）
+    "climax_div_3_consensus3_weak": {
+        "climax_output_divisor": 3,
+        "consensus_min_signals": 3,
+        "consensus_regimes": ("弱势",),
+    },
+    "climax_div_3_consensus3_weak_osc": {
+        "climax_output_divisor": 3,
+        "consensus_min_signals": 3,
+        "consensus_regimes": ("弱势", "震荡"),
+    },
+    "climax_div_4": {"climax_output_divisor": 4},
+    # (卡片规则, policy 覆盖)：高潮减少输出 + 高潮要求 ≥3 背书，两条同轴的组合
+    "climax_div_3_consensus3climax": ("consensus3_climax", {"climax_output_divisor": 3}),
+    "consensus3_climax_only": ("consensus3_climax", {}),
+    # 近期窗口（W3）导向的加严变体：在 v6 的"强牛·高潮只留前 3"之上再收紧
+    "top2_strong": {"strong_climax_top_n": 2},
+    "top3_consensus3climax": ("consensus3_climax", {}),
+    "top2_consensus3climax": ("consensus3_climax", {"strong_climax_top_n": 2}),
 }
 
 
@@ -264,7 +427,10 @@ def _boot_ci(delta: np.ndarray, draws: int = 4000, seed: int = 7):
     return float(delta.mean()), float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))
 
 
-def run_rule(rule, panel: dict, pol) -> tuple[dict | None, list[dict]]:
+def run_rule(rule, panel: dict, pol, ctx_overrides: dict | None = None) -> tuple[dict | None, list[dict]]:
+    overrides = ctx_overrides or {}
+    score_line = float(overrides.get("score_line", SCORE_LINE))
+    output_count = int(overrides.get("output_count", OUTPUT_COUNT))
     rows: list[dict] = []
     all_days: list[str] = []
     for day in panel["days"]:
@@ -275,8 +441,8 @@ def run_rule(rule, panel: dict, pol) -> tuple[dict | None, list[dict]]:
         res = evaluate_selection_policy(
             cards,
             SelectionPolicyContext(
-                score_line=SCORE_LINE,
-                output_count=OUTPUT_COUNT,
+                score_line=score_line,
+                output_count=output_count,
                 market_snapshot=dict(day["market_snapshot"]),
                 risk_template="balanced",
                 same_day_industry_counts=day["same_day_industry_counts"],
@@ -306,13 +472,16 @@ def main() -> None:
         "--baseline-version",
         type=int,
         default=None,
-        help="对账/基线使用哪个 production_selection 版本（默认=当前 default）。"
-             "面板是在旧默认下导出的（selected 由当时默认 policy 产生），升级默认后"
-             "应显式传旧版本，规则本身仍用当前 default 评估（Δ 即相对旧生产默认的改善）。",
+        help="面板导出时的 production_selection 版本（默认=当前 default），只用于"
+             "「离线 identity 是否复现面板 selected」这一步对账。Δ 的基线始终用当前 default。",
     )
     ap.add_argument("--out", default=str(OUT))
     args = ap.parse_args()
     names = list(RULES) if args.rules == "all" else [r.strip() for r in args.rules.split(",") if r.strip()]
+    if args.rules == "policy":
+        names = list(POLICY_VARIANTS)
+    elif args.rules == "all":
+        names = list(RULES) + list(POLICY_VARIANTS)
     pol = load_production_selection_policy()
     base_pol = (
         load_production_selection_policy(version=args.baseline_version)
@@ -342,29 +511,33 @@ def main() -> None:
     base_metrics: dict[str, dict] = {}
     base_rows: dict[str, list[dict]] = {}
     for w in WINDOWS:
-        m, rows = run_rule(RULES["identity"], panels[w], base_pol)
+        # 1) 对账：面板的 selected 是在 panel_pol（升级前的默认）下产生的
+        m_recon, _ = run_rule(RULES["identity"], panels[w], base_pol)
+        # 2) Δ 基线：当前默认策略（升级后 = 新生产默认）
+        m, rows = run_rule(RULES["identity"], panels[w], pol)
         exp = baselines_expected[w]
-        assert m is not None, w
+        assert m is not None and m_recon is not None, w
         sel_panel = sum(len(d["selected"]) for d in panels[w]["days"])
-        # 离线基线 vs harness 基线对账：允许极小边界日噪声（面板 JSON 里记录 days），
+        # 离线对账基线 vs harness 基线：允许极小边界日噪声（面板 JSON 里记录 days），
         # 但量级必须一致——不一致就不能解释任何候选 Δ（L-112a）。
-        d_avg = m["avg"] - exp["avg"]
-        d_n = m["n"] - exp["n"]
+        d_avg = m_recon["avg"] - exp["avg"]
+        d_n = m_recon["n"] - exp["n"]
         mismatch_days = panels[w].get("fidelity_mismatch_days") or []
         # 容差按"边界日噪声"设定：实测 W2 有 3 天离线重跑与 harness 在第 10 张卡上互换
         # 1 张（n 相同、成分不同）→ Δavg 约 0.035pp。超过 0.10pp 说明不是边界噪声而是
         # 面板本身失真，必须停。
         ok = abs(d_avg) <= 0.10 and abs(d_n) <= 3
-        print(f"  {w}: 离线基线 n={m['n']} avg={m['avg']:+.4f} WR={m['wr']*100:.1f}% "
+        print(f"  {w}: 对账基线 n={m_recon['n']} avg={m_recon['avg']:+.4f} "
               f"| harness n={exp['n']} avg={exp['avg']:+.4f} WR={exp['wr']*100:.1f}% "
               f"| Δn={d_n:+d} Δavg={d_avg:+.4f} 边界日={len(mismatch_days)} "
-              f"→ {'OK' if ok else 'MISMATCH'}")
+              f"→ {'OK' if ok else 'MISMATCH'}｜Δ基线 v{pol.version}: n={m['n']} "
+              f"avg={m['avg']:+.4f} WR={m['wr']*100:.1f}%")
         if not ok:
-            raise RuntimeError(f"{w} 基线不一致：offline={m} vs harness={exp}")
+            raise RuntimeError(f"{w} 对账不一致：offline={m_recon} vs harness={exp}")
         base_metrics[w] = m
         base_rows[w] = rows
 
-    if args.single_skill:
+    def _register_per_skill_rules() -> list[str]:
         skills = sorted({
             str(s.get("strategy_id"))
             for w in WINDOWS for d in panels[w]["days"] for c in d["cards"]
@@ -380,19 +553,80 @@ def main() -> None:
                 ]
             )
             RULES[f"dominant:{sid}"] = (
-                lambda cards, _d, _sid=sid: [c for c in cards if str(c.get("bucket")) == _sid]
+                lambda cards, _d, _sid=sid: [c for c in cards if _dominant(c) == _sid]
             )
-        names = names + [n for n in RULES if n.startswith(("only:", "dominant:"))]
-        print(f"\n[per-skill] 已注册 {len(skills)} 个技能的单策略组合规则")
+            # 主导策略剔除（可限定 regime）：v5 之后 W3 的亏损几乎全部集中在
+            # DSA 主导的卡上（n=27 avg −1.59 sum −43.0），需要按"卡片主导策略"这条轴
+            # 而不是"是否出现该策略信号"来筛。
+            RULES[f"drop_dom:{sid}"] = (
+                lambda cards, _d, _sid=sid: [c for c in cards if _dominant(c) != _sid]
+            )
+            RULES[f"drop_dom_weakosc:{sid}"] = (
+                lambda cards, _d, _sid=sid: [
+                    c for c in cards
+                    if not (any(r in _regime_of(c) for r in ("弱势", "震荡")) and _dominant(c) == _sid)
+                ]
+            )
+            # 软降权版（L-089 偏好软权重而非硬剔除）：主导分过高、实际边缘不足的策略，
+            # 降分而不删卡，保留它作为背书策略的价值。
+            for _p in (6.0, 10.0):
+                RULES[f"penalize_dom_{int(_p)}:{sid}"] = (
+                    lambda cards, _d, _sid=sid, _pts=_p: [
+                        (_apply_score_delta(c, -_pts) if _dominant(c) == _sid else c)
+                        for c in cards
+                    ]
+                )
+        return skills
+
+    # 逐策略规则（only/dominant/drop_dom/penalize_dom）**无条件注册**：它们只依赖面板卡，
+    # 之前挂在 --single-skill 分支下，导致用 --rules 直接点名时报 KeyError 或被静默降级。
+    per_skill_names = [
+        n for n in _register_per_skill_rules()
+        for n in (f"only:{n}", f"dominant:{n}", f"drop_dom:{n}", f"drop_dom_weakosc:{n}",
+                  f"penalize_dom_6:{n}", f"penalize_dom_10:{n}")
+    ]
+    if args.single_skill:
+        names = names + [
+            n for n in RULES
+            if n.startswith(("only:", "dominant:", "drop_dom", "drop_dom_weakosc", "penalize_dom_"))
+        ]
+        print(f"\n[per-skill] 已注册 {len(per_skill_names) // 6} 个技能的单策略组合规则")
+
+    # 未知规则名必须显式报错：静默回落到 identity 会让"变体无效"伪装成"Δ≡0"，
+    # 本轮就这么被骗过一次（penalize_dom_* 当时未注册）。
+    unknown = [
+        n for n in names
+        if n not in RULES and n not in POLICY_VARIANTS and n not in CONTEXT_VARIANTS
+    ]
+    if unknown:
+        raise SystemExit(
+            f"未知规则名 {unknown[:5]}（共 {len(unknown)} 个）。可用：RULES 前缀 "
+            f"only:/dominant:/drop_dom:/drop_dom_weakosc:/penalize_dom_* 与 POLICY_VARIANTS "
+            f"{sorted(POLICY_VARIANTS)[:6]}…"
+        )
 
     print(f"\n=== 规则筛查（{len(names)} 个；PASS = 三窗全过 evaluate_challenger） ===")
     results: dict[str, dict] = {}
     for name in names:
-        rule = RULES[name]
+        spec = POLICY_VARIANTS.get(name)
+        card_rule_name = name
+        if isinstance(spec, tuple):
+            card_rule_name, variant = spec
+        else:
+            variant = spec or {}
+        rule = RULES.get(card_rule_name, RULES["identity"])
+        if variant:
+            policy_for_rule = pol
+            for key, value in variant.items():
+                policy_for_rule = policy_for_rule.with_rule_patch(key, value)
+        else:
+            policy_for_rule = pol
         per_window: dict[str, dict] = {}
         passes = 0
         for w in WINDOWS:
-            m, rows = run_rule(rule, panels[w], pol)
+            m, rows = run_rule(
+                rule, panels[w], policy_for_rule, ctx_overrides=CONTEXT_VARIANTS.get(name)
+            )
             if m is None:
                 per_window[w] = {"n": 0, "decision": "FALSIFIED(无成交)"}
                 continue

@@ -22,7 +22,7 @@ from pathlib import Path
 B = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(B))
 
-SRC = B / "output" / "research" / "entry_rule_panel_single_v5.json"
+SRC = B / "output" / "research" / "entry_rule_panel_single_v7.json"
 DST = B / "app" / "policies" / "strategy_backtest_metrics.json"
 WINDOW_LABELS = {
     "W1": ("2025-01-15", "2026-01-16", "W1 holdout 冻结窗"),
