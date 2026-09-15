@@ -58,6 +58,13 @@ def _snapshot() -> ScoredCandidateSnapshot:
                     "data_completeness_score": 100.0,
                     "data_authenticity": 1.0,
                     "data_quality": {"missing_fields": []},
+                    # v5 共识闸门（L-117）会在弱势/震荡剔掉单背书卡；本组用例锁定的是
+                    # policy experiment 的框架行为（快照/两臂/机会成本/持久化），
+                    # 给满 2 个背书以隔离共识闸门这条轴。
+                    "strategy_signals": [
+                        {"strategy_id": "chen-xiaoqun-skill", "score": 90.0, "hard_veto": False},
+                        {"strategy_id": "chao-gu-yang-jia-skill", "score": 85.0, "hard_veto": False},
+                    ],
                 },),
                 outcome_bars={code: (
                     BarInput(code, entry.isoformat(), 10.0, 10.6, 9.9, 10.5),

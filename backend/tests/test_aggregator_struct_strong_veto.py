@@ -32,6 +32,12 @@ def _card(code: str, final_score: float = 95.0) -> dict:
         "data_completeness_score": 100.0,
         "data_authenticity": 1.0,
         "data_quality": {"missing_fields": []},
+        # v5 共识闸门（L-117）在弱势/震荡会剔掉"只有 1 个策略背书"的卡；
+        # 本文件锁定的是结构性强势硬否决与 floor penalty 的优先级，给满 2 个背书隔离该轴。
+        "strategy_signals": [
+            {"strategy_id": "chen-xiaoqun-skill", "score": final_score, "hard_veto": False},
+            {"strategy_id": "chao-gu-yang-jia-skill", "score": final_score - 5.0, "hard_veto": False},
+        ],
     }
 
 

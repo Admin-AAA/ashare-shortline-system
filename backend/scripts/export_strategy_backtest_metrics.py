@@ -22,7 +22,7 @@ from pathlib import Path
 B = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(B))
 
-SRC = B / "output" / "research" / "entry_rule_panel_single.json"
+SRC = B / "output" / "research" / "entry_rule_panel_single_v5.json"
 DST = B / "app" / "policies" / "strategy_backtest_metrics.json"
 WINDOW_LABELS = {
     "W1": ("2025-01-15", "2026-01-16", "W1 holdout 冻结窗"),
@@ -67,6 +67,9 @@ def main() -> None:
     ap.add_argument("--src", default=str(SRC))
     ap.add_argument("--out", default=str(DST))
     args = ap.parse_args()
+    from app.engine.production_policy import load_production_selection_policy
+
+    current_policy = load_production_selection_policy()
     src = Path(args.src)
     data = json.loads(src.read_text())
 
@@ -116,19 +119,21 @@ def main() -> None:
                 "跳空成交约束）；逐笔等权，不含仓位与资金模型。"
             ),
             "combined_label": "全策略组合（10 技能全开，全管线重放）",
-            "selection_policy": "production_selection.v4",
+            "selection_policy": f"production_selection.v{current_policy.version}",
+            "baseline_selection_policy": "production_selection.v4（Δ 与闸门判定相对该基线）",
             "execution_policy": "execution_policy.v4",
             "score_line": 72.0,
             "output_count": 10,
             "caveat": (
                 "候选池来自 10 技能全量重放的面板（按该技能信号筛卡），未做单技能独立 prefilter 重放；"
-                "组合基线为同一面板的全量选择。两类指标都属 path A 诊断证据，不是 live_forward 发布证据。"
+                "选择用当前生产选择策略（见 selection_policy），组合基线为 v4（基线_selection_policy）。"
+                "两类指标都属 path A 诊断证据，不是 live_forward 发布证据。"
                 "盈亏比在窗口内无亏损笔或样本<5 时置空（显示 —），不做伪精度展示。"
             ),
-            "source_artifact": "backend/output/research/entry_rule_panel_single.json",
+            "source_artifact": f"backend/output/research/{src.name}",
             "reproduce": (
                 "cd backend && .venv/bin/python scripts/research_entry_rule_panel.py --rules '' "
-                "--single-skill --out output/research/entry_rule_panel_single.json && "
+                f"--single-skill --baseline-version 4 --out output/research/{src.name} && "
                 ".venv/bin/python scripts/export_strategy_backtest_metrics.py"
             ),
         },

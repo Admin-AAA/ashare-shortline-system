@@ -57,7 +57,35 @@ W2 +0.1714/56.2%/1.077/+111.2 · W3 −0.3611/46.7%/0.857/−37.9。
 
 ## 5. 三窗端到端验证（发布口径）
 
-<!-- VALIDATION_TABLE -->
+全管线重放（`scripts/research_strategy_ablation_fast.py --targets none --workers 6`，逐日 6 进程并行；
+串行/并行输出逐位一致，已用 W3 交叉验证），基线 = v4 默认 + 10 技能（dragon-tiger 退役后）：
+
+| 窗口 | 指标 | v4 基线 | **v5** | Δ |
+| --- | --- | --- | --- | --- |
+| W1 2025-01-15~2026-01-16 | n / WR / avg_net / sum_net / PF / MDD | 1085 / 57.2% / +0.3452 / +374.5 / 1.186 / −41.39 | **969 / 58.6% / +0.4556 / +441.4 / 1.257 / −35.61** | +0.1104 / +66.9 / +1.4pp / +0.071 / MDD 改善 5.78 |
+| W2 2026-01-17~2026-07-30 | 同上 | 649 / 56.5% / +0.2066 / +134.1 / 1.094 / −24.41 | **597 / 55.6% / +0.2794 / +166.8 / 1.127 / −24.07** | +0.0728 / +32.7 / −0.9pp / +0.033 / MDD 改善 0.34 |
+| W3 2026-08-01~2026-09-13 | 同上 | 105 / 46.7% / −0.3611 / −37.9 / 0.857 / −17.94 | **95 / 51.6% / −0.0537 / −5.10 / 0.978 / −19.25** | +0.3074 / +32.8 / +4.9pp / +0.122 / MDD 退化 1.31 |
+
+闸门判定（`evaluate_challenger`，MDD 传负值——见 L-116）：
+
+| 窗口 | 判定 | improvements | regressions |
+| --- | --- | --- | --- |
+| W1 | **PRODUCTION** | avg / sum / WR / PF / MDD（五项全改善） | — |
+| W2 | **PRODUCTION** | avg / sum / PF / MDD | WR −0.9pp（唯一辅助退化，L-010 允许至多一项） |
+| W3 | **PRODUCTION** | avg / sum / WR / PF | MDD −1.31（唯一辅助退化） |
+
+**三窗全过 → 按 L-010/L-009 可发布。** 复现命令：
+
+```bash
+cd backend
+NUMBA_CACHE_DIR=/tmp .venv/bin/python scripts/research_strategy_ablation_fast.py \
+  --windows W3 --targets none --workers 6 --out output/research/per_strategy/ablate_v5_W3.json
+# W1/W2 同（W1 6 进程 ≈65min；串行约 3h）
+```
+
+串行 champion 重放（L-016）：`scripts/si_sequential_champion_replay.py` 通过
+（`output/research/sequential_champion_replay_v5.json`，status=COMPLETED）——它重放的是已封存推荐链，
+对本规则（在候选卡阶段删卡、不引入新的样本依赖）不构成约束，等价的三窗全量重建重放已在上表给出。
 
 ## 6. 本轮同时证伪的方向（不重做）
 

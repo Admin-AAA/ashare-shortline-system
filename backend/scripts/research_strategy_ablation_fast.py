@@ -237,41 +237,6 @@ def _panel_pre_policy_cards(db, candidate_results, selected_skills, snapshot, pa
     return cards, same_day_industry, len(same_day_codes)
 
 
-def _install_pct_cache(db, trade_dates) -> None:
-    """把 ivol 分位 map 预加载一次并按日切片，避免每个臂每天都重查全市场。"""
-    from app.services import risk_features as rf
-
-    ivol_all = rf.load_ivol20_pct_map(db, trade_dates)
-    dn_all = rf.load_ivol_dn20_pct_map(db, trade_dates)
-    by_date_ivol: dict[str, dict] = defaultdict(dict)
-    by_date_dn: dict[str, dict] = defaultdict(dict)
-    for (d, _code), v in ivol_all.items():
-        by_date_ivol[d][(d, _code)] = v
-    for (d, _code), v in dn_all.items():
-        by_date_dn[d][(d, _code)] = v
-    _IVOL_BY_DATE.clear()
-    _IVOL_DN_BY_DATE.clear()
-    _IVOL_BY_DATE.update(by_date_ivol)
-    _IVOL_DN_BY_DATE.update(by_date_dn)
-    real_ivol, real_dn = rf.load_ivol20_pct_map, rf.load_ivol_dn20_pct_map
-
-    def cached_ivol(session, dates):  # noqa: ANN001
-        want = sorted({str(d) for d in dates})
-        if len(want) == 1 and want[0] in by_date_ivol:
-            return dict(by_date_ivol[want[0]])
-        return real_ivol(session, dates)
-
-    def cached_dn(session, dates):  # noqa: ANN001
-        want = sorted({str(d) for d in dates})
-        if len(want) == 1 and want[0] in by_date_dn:
-            return dict(by_date_dn[want[0]])
-        return real_dn(session, dates)
-
-    rf.load_ivol20_pct_map = cached_ivol
-    rf.load_ivol_dn20_pct_map = cached_dn
-    print(f"[cache] ivol 分位预加载 {len(ivol_all)} / {len(dn_all)} 条", flush=True)
-
-
 def _provenance(card: dict) -> dict:
     sigs = [s for s in (card.get("strategy_signals") or []) if isinstance(s, dict) and not s.get("hard_veto")]
     scores = [float(s.get("score", 0) or 0) for s in sigs]
@@ -294,6 +259,238 @@ def _filtered_entries(entries, skill_ids: set[str], snapshot: dict):
         )
     out.sort(key=lambda item: float(item.get("prelim_score") or 0), reverse=True)
     return out
+
+
+_WORKER: dict = {}
+_PCT_CACHE: dict[str, tuple[dict, dict]] = {}
+WORKERS: dict = {"n": 1}
+
+
+def _merge_day_result(
+    res: dict,
+    trades: dict[str, list],
+    prov_rows: list[dict],
+    panel_days: list[dict],
+    triggered: dict[str, set],
+) -> None:
+    """把单日结果并入窗口级累积（顺序保持为交易日升序）。"""
+    for arm, rows in (res.get("trades") or {}).items():
+        trades.setdefault(arm, []).extend(rows)
+    prov_rows.extend(res.get("prov") or [])
+    if res.get("panel_day") is not None:
+        panel_days.append(res["panel_day"])
+    for sid, codes in (res.get("triggered") or {}).items():
+        triggered.setdefault(sid, set()).update(codes)
+
+
+def _set_pct_maps(db, trade_date: str) -> None:
+    """按日惰性加载 ivol 分位（进程内缓存）并填充 `_panel_pre_policy_cards` 读的全局。
+
+    不整窗预加载：并行 worker 各自预加载 W1 的 115 万行要 ~100MB×N；按日查只多几百毫秒，
+    但让每个 worker 的内存占用保持恒定、可安全开多进程。
+    """
+    cached = _PCT_CACHE.get(trade_date)
+    if cached is None:
+        from app.services.risk_features import load_ivol20_pct_map, load_ivol_dn20_pct_map
+
+        cached = (
+            load_ivol20_pct_map(db, [trade_date]),
+            load_ivol_dn20_pct_map(db, [trade_date]),
+        )
+        _PCT_CACHE[trade_date] = cached
+    ivol_map, ivoldn_map = cached
+    global _IVOL_BY_DATE, _IVOL_DN_BY_DATE
+    _IVOL_BY_DATE = {trade_date: dict(ivol_map)}
+    _IVOL_DN_BY_DATE = {trade_date: dict(ivoldn_map)}
+
+
+def _worker_setup(window: str, arms: list[str], panel_dir: str | None, policy_note: str) -> None:
+    """每个进程（含主进程）各自准备 builder + session；worker 之间不共享任何对象。"""
+    from app.services.factors.registry import bootstrap_default_factor_registry
+
+    bootstrap_default_factor_registry()
+    db = SessionLocal()
+    event.listen(db.connection(), "before_cursor_execute", _reject_write_statement)
+    builder = ProductionRuleReplayCandidateBuilder(
+        db,
+        stock_metadata_provider=StockMetadataHistoryProvider(db),
+        historical_replay=(UNIVERSE["mode"] == "historical"),
+    )
+    selected_all = list(builder._selected_skills(None))  # noqa: SLF001
+    _WORKER.update(
+        db=db,
+        builder=builder,
+        selected_all=selected_all,
+        all_ids=sorted(str(s["skill_id"]) for s in selected_all),
+        arms=arms,
+        window=window,
+        panel_dir=panel_dir,
+        policy_note=policy_note,
+    )
+
+
+def _worker_init(window: str, arms: list[str], panel_dir: str | None, policy_note: str) -> None:
+    _worker_setup(window, arms, panel_dir, policy_note)
+
+
+def _process_day(signal_date: str) -> dict:
+    """处理一个交易日（交易日之间相互独立，故可多进程并行）。
+
+    返回 {trades, prov, panel_day, triggered}；所有 DB/对象都在本进程内，跨进程只传结果。
+    """
+    db = _WORKER["db"]
+    builder = _WORKER["builder"]
+    selected_all = _WORKER["selected_all"]
+    all_ids = _WORKER["all_ids"]
+    arms = _WORKER["arms"]
+    settings = get_settings()
+    ep = DEFAULT_EXECUTION_POLICY
+    from app.services.backtest.historical_universe import load_historical_universe
+
+    _set_pct_maps(db, signal_date)
+    result: dict = {
+        "signal_date": signal_date,
+        "trades": {a: [] for a in arms},
+        "prov": [],
+        "panel_day": None,
+        "triggered": {},
+    }
+    triggered: dict[str, set] = {}
+    stocks, snapshot = load_historical_universe(
+        db, signal_date, stock_metadata_provider=builder._stock_metadata_provider  # noqa: SLF001
+    )
+    stocks = [dict(s) for s in stocks]
+    snapshot = dict(snapshot)
+    snapshot["trade_date"] = str(snapshot.get("trade_date") or signal_date)
+    snapshot["strategy_versions"] = {
+        str(item["skill_id"]): str(item["version_id"]) for item in selected_all
+    }
+    prelim_entries: list = []
+    scoped = builder._scope.apply_scope(stocks, PARAMS)  # noqa: SLF001
+    prefiltered, audit = builder._scope.apply_prefilter(  # noqa: SLF001
+        scoped, selected_all, PARAMS, snapshot
+    )
+    if prefiltered:
+        _features, contexts = builder._features.build(prefiltered, snapshot)  # noqa: SLF001
+        prelim_entries, _cand, _g, _p = builder._strategy.evaluate(  # noqa: SLF001
+            research_contexts=contexts,
+            selected_skills=selected_all,
+            snapshot=snapshot,
+            params=PARAMS,
+            prefilter_audit=audit,
+        )
+        prelim_entries = list(prelim_entries)
+        for entry in prelim_entries:
+            for sid, sig in (entry.get("rule_signals") or {}).items():
+                if sig:
+                    triggered.setdefault(sid, set()).add(str(entry["stock"].get("code") or ""))
+
+    cards_by_arm: dict[str, list] = {}
+    codes_union: set[str] = set()
+    panel_pre_cards: list = []
+    panel_pending: dict | None = None
+    for arm in arms:
+        if arm == "__all__":
+            skill_ids = set(all_ids)
+        else:
+            skill_ids = set(all_ids) - {arm}
+        skills_arm = [s for s in selected_all if str(s["skill_id"]) in skill_ids]
+        entries_arm = _filtered_entries(prelim_entries, skill_ids, snapshot) if prelim_entries else []
+        gate = (
+            build_skill_rule_gate(entries_arm, skills_arm, settings)
+            if entries_arm
+            else {"skill_candidates": []}
+        )
+        candidate_results = tuple(
+            {
+                **dict(entry),
+                "review_skill_ids": [],
+                "agent_review_disabled": True,
+                "skill_reviews": [],
+            }
+            for entry in gate.get("skill_candidates") or []
+        )
+        assembly = ProductionRecommendationAssembly(db, f"backtest-rule-replay-{signal_date}")
+        formal_cards, scored_cards, _updates = assembly.aggregate(
+            candidate_results=candidate_results,
+            selected_skills=skills_arm,
+            snapshot=snapshot,
+            params=PARAMS,
+        )
+        full_by_code = {str(c.get("code")): c for c in scored_cards}
+        cards_by_arm[arm] = [full_by_code.get(str(c.get("code")), dict(c)) for c in formal_cards]
+        codes_union |= {str(c.get("code")) for c in cards_by_arm[arm]}
+
+        # 面板只在全臂导出，且导出的是 policy 的**输入态**（见 _panel_pre_policy_cards）。
+        if arm == "__all__" and PANEL.get("dir"):
+            import copy as _copy
+
+            _run_id = f"backtest-rule-replay-{signal_date}"
+            pre_cards, same_day_industry, same_day_count = _panel_pre_policy_cards(
+                db,
+                _copy.deepcopy(list(candidate_results)),
+                skills_arm,
+                snapshot,
+                PARAMS,
+                signal_date,
+                _run_id,
+            )
+            panel_pre_cards = pre_cards
+            panel_pending = {
+                "signal_date": signal_date,
+                "market_snapshot": dict(snapshot),
+                "same_day_industry_counts": same_day_industry,
+                "same_day_recommendation_count": same_day_count,
+                "cards": [_panel_card(dict(c)) for c in pre_cards],
+                "selected": [str(c.get("code")) for c in formal_cards],
+                # 每张候选卡的因果净收益：使离线规则筛查可以评估"换票"后的组合结果，
+                # 而不只是评估"同一批票"（这是面板能替代重放做入场侧筛查的前提）。
+                "net_by_code": {},
+                "exit_by_code": {},
+            }
+            # 候选卡全部需要 K 线：并入 codes_union（否则面板拿到的是空 bars）
+            codes_union |= {str(c.get("code")) for c in pre_cards}
+
+    bars = builder._outcome_bars(signal_date, sorted(codes_union), ep)  # noqa: SLF001
+
+    class _Day:
+        pass
+
+    day = _Day()
+    day.signal_date = signal_date
+    day.outcome_bars = bars
+    day.market_snapshot = snapshot
+    for arm, cards in cards_by_arm.items():
+        for card in cards:
+            tr = (_simulate_card(day, card, ep) or {}).get("trade")
+            if not (tr and tr.executed):
+                continue
+            result["trades"][arm].append(
+                {
+                    "dt": signal_date,
+                    "code": str(card.get("code")),
+                    "net": float(tr.net_return_pct),
+                    "exit": str(getattr(tr, "exit_reason", "")),
+                }
+            )
+            if arm == "__all__":
+                row = {"dt": signal_date, "code": str(card.get("code")),
+                       "net": float(tr.net_return_pct), "exit": str(getattr(tr, "exit_reason", ""))}
+                row.update(_provenance(card))
+                result["prov"].append(row)
+    if panel_pre_cards:
+        for card in panel_pre_cards:
+            code = str(card.get("code"))
+            tr = (_simulate_card(day, card, ep) or {}).get("trade")
+            if tr and tr.executed:
+                panel_pending["net_by_code"][code] = float(tr.net_return_pct)
+                panel_pending["exit_by_code"][code] = str(getattr(tr, "exit_reason", ""))
+            else:
+                panel_pending["net_by_code"][code] = None
+                panel_pending["exit_by_code"][code] = None
+        result["panel_day"] = panel_pending
+    result["triggered"] = {sid: sorted(codes) for sid, codes in triggered.items()}
+    return result
 
 
 def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
@@ -321,148 +518,40 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
     ]
     print(f"\n===== {window} {start}~{end} 交易日{len(trade_dates)} 启用skill{len(all_ids)} "
           f"臂{len(arms)} ({policy_note}) =====", flush=True)
-    _install_pct_cache(db, trade_dates)
     trades: dict[str, list] = {a: [] for a in arms}
     prov_rows: list[dict] = []
     panel_days: list[dict] = []
     triggered = defaultdict(set)
     t0 = time.time()
-    for di, signal_date in enumerate(trade_dates, 1):
-        from app.services.backtest.historical_universe import load_historical_universe
+    # 交易日之间相互独立 → 逐日并行（--workers N）。每个进程各自持有一份 builder/session，
+    # 跨进程只回传结果字典；worker 初始化失败会直接抛出，不做静默串行回退。
+    workers = max(1, int(WORKERS["n"]))
+    panel_dir = PANEL.get("dir")
+    if workers > 1:
+        from concurrent.futures import ProcessPoolExecutor
 
-        stocks, snapshot = load_historical_universe(
-            db, signal_date, stock_metadata_provider=builder._stock_metadata_provider  # noqa: SLF001
-        )
-        stocks = [dict(s) for s in stocks]
-        snapshot = dict(snapshot)
-        snapshot["trade_date"] = str(snapshot.get("trade_date") or signal_date)
-        snapshot["strategy_versions"] = {
-            str(item["skill_id"]): str(item["version_id"]) for item in selected_all
-        }
-        prelim_entries: list = []
-        scoped = builder._scope.apply_scope(stocks, PARAMS)  # noqa: SLF001
-        prefiltered, audit = builder._scope.apply_prefilter(  # noqa: SLF001
-            scoped, selected_all, PARAMS, snapshot
-        )
-        if prefiltered:
-            _features, contexts = builder._features.build(prefiltered, snapshot)  # noqa: SLF001
-            prelim_entries, _cand, _g, _p = builder._strategy.evaluate(  # noqa: SLF001
-                research_contexts=contexts,
-                selected_skills=selected_all,
-                snapshot=snapshot,
-                params=PARAMS,
-                prefilter_audit=audit,
-            )
-            prelim_entries = list(prelim_entries)
-            for entry in prelim_entries:
-                for sid, sig in (entry.get("rule_signals") or {}).items():
-                    if sig:
-                        triggered[sid].add(str(entry["stock"].get("code") or ""))
-
-        cards_by_arm: dict[str, list] = {}
-        codes_union: set[str] = set()
-        panel_pre_cards: list = []
-        panel_pending: dict | None = None
-        for arm in arms:
-            if arm == "__all__":
-                skill_ids = set(all_ids)
-            else:
-                skill_ids = set(all_ids) - {arm}
-            skills_arm = [s for s in selected_all if str(s["skill_id"]) in skill_ids]
-            entries_arm = _filtered_entries(prelim_entries, skill_ids, snapshot) if prelim_entries else []
-            gate = build_skill_rule_gate(entries_arm, skills_arm, settings) if entries_arm else {"skill_candidates": []}
-            candidate_results = tuple(
-                {
-                    **dict(entry),
-                    "review_skill_ids": [],
-                    "agent_review_disabled": True,
-                    "skill_reviews": [],
-                }
-                for entry in gate.get("skill_candidates") or []
-            )
-            assembly = ProductionRecommendationAssembly(db, f"backtest-rule-replay-{signal_date}")
-            formal_cards, scored_cards, _updates = assembly.aggregate(
-                candidate_results=candidate_results,
-                selected_skills=skills_arm,
-                snapshot=snapshot,
-                params=PARAMS,
-            )
-            full_by_code = {str(c.get("code")): c for c in scored_cards}
-            cards_by_arm[arm] = [full_by_code.get(str(c.get("code")), dict(c)) for c in formal_cards]
-            codes_union |= {str(c.get("code")) for c in cards_by_arm[arm]}
-
-            # 面板只在全臂导出，且导出的是 policy 的**输入态**（见 _panel_pre_policy_cards）。
-            if arm == "__all__" and PANEL.get("dir"):
-                import copy as _copy
-
-                _run_id = f"backtest-rule-replay-{signal_date}"
-                pre_cards, same_day_industry, same_day_count = _panel_pre_policy_cards(
-                    db,
-                    _copy.deepcopy(list(candidate_results)),
-                    skills_arm,
-                    snapshot,
-                    PARAMS,
-                    signal_date,
-                    _run_id,
-                )
-                panel_pre_cards = pre_cards
-                panel_pending = {
-                    "signal_date": signal_date,
-                    "market_snapshot": dict(snapshot),
-                    "same_day_industry_counts": same_day_industry,
-                    "same_day_recommendation_count": same_day_count,
-                    "cards": [_panel_card(dict(c)) for c in pre_cards],
-                    "selected": [str(c.get("code")) for c in formal_cards],
-                    # 每张候选卡的因果净收益：使离线规则筛查可以评估"换票"后的组合结果，
-                    # 而不只是评估"同一批票"（这是面板能替代重放做入场侧筛查的前提）。
-                    "net_by_code": {},
-                    "exit_by_code": {},
-                }
-                # 候选卡全部需要 K 线：并入 codes_union（否则面板拿到的是空 bars）
-                codes_union |= {str(c.get("code")) for c in pre_cards}
-
-        bars = builder._outcome_bars(signal_date, sorted(codes_union), ep)  # noqa: SLF001
-
-        class _Day:
-            pass
-
-        day = _Day()
-        day.signal_date = signal_date
-        day.outcome_bars = bars
-        day.market_snapshot = snapshot
-        for arm, cards in cards_by_arm.items():
-            for card in cards:
-                tr = (_simulate_card(day, card, ep) or {}).get("trade")
-                if not (tr and tr.executed):
-                    continue
-                trades[arm].append(
-                    {
-                        "dt": signal_date,
-                        "code": str(card.get("code")),
-                        "net": float(tr.net_return_pct),
-                        "exit": str(getattr(tr, "exit_reason", "")),
-                    }
-                )
-                if arm == "__all__":
-                    row = {"dt": signal_date, "code": str(card.get("code")),
-                           "net": float(tr.net_return_pct), "exit": str(getattr(tr, "exit_reason", ""))}
-                    row.update(_provenance(card))
-                    prov_rows.append(row)
-        if panel_pre_cards:
-            for card in panel_pre_cards:
-                code = str(card.get("code"))
-                tr = (_simulate_card(day, card, ep) or {}).get("trade")
-                if tr and tr.executed:
-                    panel_pending["net_by_code"][code] = float(tr.net_return_pct)
-                    panel_pending["exit_by_code"][code] = str(getattr(tr, "exit_reason", ""))
-                else:
-                    panel_pending["net_by_code"][code] = None
-                    panel_pending["exit_by_code"][code] = None
-            panel_days.append(panel_pending)
-        if di % 10 == 0 or di == len(trade_dates):
-            el = time.time() - t0
-            print(f"  [{window}] {di}/{len(trade_dates)} 天 {el/60:.1f}min "
-                  f"A={len(trades['__all__'])}笔", flush=True)
+        print(f"[parallel] {workers} 个进程逐日并行（交易日互相独立，结果按日回传）", flush=True)
+        done = 0
+        with ProcessPoolExecutor(
+            max_workers=workers,
+            initializer=_worker_init,
+            initargs=(window, arms, panel_dir, policy_note),
+        ) as pool:
+            for res in pool.map(_process_day, trade_dates, chunksize=1):
+                done += 1
+                _merge_day_result(res, trades, prov_rows, panel_days, triggered)
+                if done % 10 == 0 or done == len(trade_dates):
+                    el = time.time() - t0
+                    print(f"  [{window}] {done}/{len(trade_dates)} 天 {el/60:.1f}min "
+                          f"A={len(trades['__all__'])}笔", flush=True)
+    else:
+        _worker_setup(window, arms, panel_dir, policy_note)
+        for di, signal_date in enumerate(trade_dates, 1):
+            _merge_day_result(_process_day(signal_date), trades, prov_rows, panel_days, triggered)
+            if di % 10 == 0 or di == len(trade_dates):
+                el = time.time() - t0
+                print(f"  [{window}] {di}/{len(trade_dates)} 天 {el/60:.1f}min "
+                      f"A={len(trades['__all__'])}笔", flush=True)
 
     print(f"[{window}] 出票日/触发skill覆盖：", flush=True)
     for sid in all_ids:
@@ -564,6 +653,13 @@ def main() -> None:
         help="historical=从 daily_kbars 重建（L-110 默认，可覆盖全历史）；"
              "local_pool=与生产同源的实时报价池（stock_quotes，仅覆盖 2026-05-22 之后）",
     )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="逐日并行进程数（交易日互相独立）。推荐 6：W1 串行约 3h，6 进程约 25-35min；"
+             "1 = 串行（历史行为，结果与并行逐位一致）",
+    )
     ap.add_argument("--policy-note", default=None)
     args = ap.parse_args()
     if args.policy_note is None:
@@ -577,6 +673,8 @@ def main() -> None:
     out_path = Path(args.out) if args.out else OUT / "ablate_fast.json"
     PANEL["dir"] = args.panel_dir
     UNIVERSE["mode"] = args.universe
+    WORKERS["n"] = max(1, int(args.workers))
+    print(f"[workers] {WORKERS['n']}", flush=True)
     print(f"[universe] {UNIVERSE['mode']}", flush=True)
     if args.panel_dir:
         print(f"[panel] 导出目录 {args.panel_dir}（targets={args.targets}）", flush=True)

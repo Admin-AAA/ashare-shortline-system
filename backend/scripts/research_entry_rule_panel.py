@@ -302,10 +302,23 @@ def main() -> None:
         action="store_true",
         help="额外测每个技能的**单策略组合**（只保留该 skill 有非否决策略信号的卡，再走真实 policy）",
     )
+    ap.add_argument(
+        "--baseline-version",
+        type=int,
+        default=None,
+        help="对账/基线使用哪个 production_selection 版本（默认=当前 default）。"
+             "面板是在旧默认下导出的（selected 由当时默认 policy 产生），升级默认后"
+             "应显式传旧版本，规则本身仍用当前 default 评估（Δ 即相对旧生产默认的改善）。",
+    )
     ap.add_argument("--out", default=str(OUT))
     args = ap.parse_args()
     names = list(RULES) if args.rules == "all" else [r.strip() for r in args.rules.split(",") if r.strip()]
     pol = load_production_selection_policy()
+    base_pol = (
+        load_production_selection_policy(version=args.baseline_version)
+        if args.baseline_version is not None
+        else pol
+    )
     panels = {w: json.loads((PANEL_DIR / f"entry_panel_{w}.json").read_text()) for w in WINDOWS}
     def harness_baseline(w: str) -> dict:
         """harness A 臂基线：优先读 ablation JSON；缺失时用面板自带的 selected+net 复原
@@ -329,7 +342,7 @@ def main() -> None:
     base_metrics: dict[str, dict] = {}
     base_rows: dict[str, list[dict]] = {}
     for w in WINDOWS:
-        m, rows = run_rule(RULES["identity"], panels[w], pol)
+        m, rows = run_rule(RULES["identity"], panels[w], base_pol)
         exp = baselines_expected[w]
         assert m is not None, w
         sel_panel = sum(len(d["selected"]) for d in panels[w]["days"])

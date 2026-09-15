@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+from app.engine.production_policy import load_production_selection_policy
 from app.services.registry import backtest_metrics
 
 pytestmark = pytest.mark.integration
@@ -31,8 +32,10 @@ def test_artifact_loads_with_caliber_and_windows():
     assert payload["schema_version"] >= 1
     caliber = payload["caliber"]
     # 口径必须自证：选股/出场政策 + 复现命令 + 风险声明
-    assert caliber["selection_policy"] == "production_selection.v4"
+    expected = f"production_selection.v{load_production_selection_policy().version}"
+    assert caliber["selection_policy"] == expected
     assert caliber["execution_policy"] == "execution_policy.v4"
+    assert "baseline_selection_policy" in caliber
     assert "--single-skill" in caliber["reproduce"]
     assert caliber["caveat"]
     assert set(payload["windows"]) == {"W1", "W2", "W3"}
@@ -94,7 +97,7 @@ def test_api_strategies_exposes_backtest_returns():
     for item in with_returns:
         bt = item["backtest_returns"]
         assert set(bt["windows"]) == {"W1", "W2", "W3"}
-        assert bt["caliber"]["selection_policy"] == "production_selection.v4"
+        assert bt["caliber"]["selection_policy"].startswith("production_selection.v")
         assert bt["generated_at"]
     # 页面排序：有回测收益的（按三窗均值）应排在无收益的前面
     means = [
