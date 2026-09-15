@@ -112,6 +112,16 @@ class ProductionSelectionPolicy:
     no_support_high_ivol_veto_enabled: bool = False
     no_support_high_ivol_pct_threshold: float = 0.70
 
+    # v9（L-122）：配额槽 —— 给"指定技能当日分最高的那张卡"加分，把它抬进 top-N。
+    # 依据（用户 2026-09-16）：单策略口径下 trend-pullback W1 WR 61.5%(n148)/W2 65.0%(n80,PF1.73)、
+    # overnight W1 PF2.11/W3 PF2.68、sector-relative W1 WR 59.9%(n514)，但组合里每窗只被选中
+    # 19/19/3、0/0/0、8/8/1 笔——它们的卡几乎从不赢 top-N 排序。逐技能信号权重对**单信号卡**
+    # 完全无效（w 在 Σ(score·w)/Σw 里约掉，实测 sigw_tp15 与基线逐位相同），所以只有直接抬分
+    # 才能把它们的最高分卡拉进输出。面板三窗（配额 overnight +20）：W1 Δcohort +0.187
+    # CI[+0.028,+0.359]、W3 +0.251、W2 −0.090，三窗均过 evaluate_challenger。
+    # 形如 (("overnight-holding-method", 20.0),)；默认空 = 关闭。
+    slot_reserve: tuple[tuple[str, float], ...] = ()
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -158,6 +168,7 @@ class ProductionSelectionPolicy:
             "strong_climax_top_n": self.strong_climax_top_n,
             "no_support_high_ivol_veto_enabled": self.no_support_high_ivol_veto_enabled,
             "no_support_high_ivol_pct_threshold": self.no_support_high_ivol_pct_threshold,
+            "slot_reserve": [list(item) for item in self.slot_reserve],
         }
 
     @property
@@ -232,7 +243,7 @@ def load_production_selection_policy(
     W2 让价 WR −2.0pp、MDD −1.31 但 avg/sum/PF 均改善）。
     需要严格复现旧口径时显式传 version=1/2/3/4/5/6。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -270,6 +281,9 @@ def load_production_selection_policy(
     )
     payload["no_support_high_ivol_pct_threshold"] = float(
         payload.get("no_support_high_ivol_pct_threshold") or 0.70
+    )
+    payload["slot_reserve"] = tuple(
+        (str(sid), float(points)) for sid, points in payload.get("slot_reserve") or ()
     )
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:

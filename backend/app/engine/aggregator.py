@@ -926,6 +926,70 @@ def _is_20cm_board(code: str) -> bool:
     return str(code or "").startswith(("300", "301", "688", "689"))
 
 
+def _apply_slot_reserve(
+    cards: list[dict[str, Any]],
+    selection_policy: Any | None,
+) -> None:
+    """v9 配额槽（L-122）：给指定技能"当日分最高的一张卡"加分，把它抬进 top-N。
+
+    动机：单策略口径下若干技能胜率/盈亏比明显好于三大主力（trend-pullback W1 WR61.5%、
+    overnight W1 PF2.11、sector-relative W1 WR59.9%/n514），但组合里每窗只被选中个位数笔——
+    它们从不赢每日 top-N 排序。逐技能信号权重对**单信号卡**无效（权重在 Σ(score·w)/Σw 约掉），
+    因此唯一能改变它们出票量的机制是直接把当日最高分那张卡抬到线以上。
+
+    只改分数与证据，不删卡、不改其他卡；未点名的技能行为逐位不变（slot_reserve 为空时本函数
+    立即返回，保证 v1-v8 指纹语义不被隐式改变）。加分同时写 final_score / selection_score /
+    portfolio_rank_score 及 snapshot 双写位点（L-119：只改 final_score 会变静默空操作）。
+    """
+    if selection_policy is None:
+        return
+    reserve = tuple(getattr(selection_policy, "slot_reserve", ()) or ())
+    if not reserve:
+        return
+    for skill_id, points in reserve:
+        best: tuple[float, dict[str, Any]] | None = None
+        for card in cards:
+            sigs = [
+                s for s in (card.get("strategy_signals") or [])
+                if isinstance(s, dict) and not s.get("hard_veto")
+            ]
+            if not any(str(s.get("strategy_id")) == str(skill_id) for s in sigs):
+                continue
+            score = float(card.get("final_score") or 0)
+            if best is None or score > best[0]:
+                best = (score, card)
+        if best is None:
+            continue
+        card = best[1]
+        before = float(card.get("final_score") or 0)
+        after = round(before + float(points), 2)
+        card["final_score"] = after
+        card["slot_reserve_skill"] = str(skill_id)
+        card["slot_reserve_bonus"] = float(points)
+        for key in ("selection_score", "portfolio_rank_score"):
+            if card.get(key) is not None:
+                card[key] = round(float(card[key]) + float(points), 2)
+        snapshot = card.get("feature_snapshot")
+        if isinstance(snapshot, dict):
+            for key in ("final_score", "selection_score", "portfolio_rank_score"):
+                if snapshot.get(key) is not None:
+                    snapshot[key] = round(float(snapshot[key]) + float(points), 2)
+        score_meta = card.get("score_line_meta")
+        if isinstance(score_meta, dict):
+            for key in ("final_score", "selection_score", "portfolio_rank_score"):
+                if score_meta.get(key) is not None:
+                    score_meta[key] = round(float(score_meta[key]) + float(points), 2)
+        card.setdefault("policy_verdict_steps", []).append({
+            "rule_id": "slot_reserve",
+            "action": "boost",
+            "reason": (
+                f"配额槽：{skill_id} 当日最高分卡 {before:.2f} → {after:.2f}（+{float(points):.1f}）"
+            ),
+            "before_score_line": before,
+            "after_score_line": after,
+        })
+
+
 def apply_pool_rules(
     cards: list[dict[str, Any]],
     output_count: int | None = None,
@@ -964,6 +1028,7 @@ def apply_pool_rules(
     # _build_recommendation_card 中回退到 strategy.yaml 信号；继续让它们进入
     # 正式筛选，避免模型熔断/余额不足把整批推荐变成 0 条。
     formal_cards = list(cards)
+    _apply_slot_reserve(formal_cards, selection_policy)
     ordered = sorted(
         formal_cards,
         key=lambda card: (
