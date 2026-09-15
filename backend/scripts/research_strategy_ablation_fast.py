@@ -764,6 +764,13 @@ def main() -> None:
         help="覆盖出场策略：持有上限天数（默认 5）",
     )
     ap.add_argument(
+        "--entry-days",
+        type=int,
+        default=None,
+        help="覆盖入场策略：允许挂单成交的最大交易日数（默认 2）。1 = 只在信号次日成交，"
+             "用来检验「延迟一日的二次确认是否在筛选质量」。",
+    )
+    ap.add_argument(
         "--sl-pct",
         type=float,
         default=None,
@@ -785,7 +792,8 @@ def main() -> None:
     POLICY_VERSION["n"] = args.policy_version
     if (args.tp_pct is not None or args.sl_pct is not None
             or args.trail_act is not None or args.trail_lock is not None
-            or args.trail_callback is not None or args.horizon_days is not None):
+            or args.trail_callback is not None or args.horizon_days is not None
+            or args.entry_days is not None):
         import dataclasses as _dc
 
         ep = DEFAULT_EXECUTION_POLICY
@@ -803,6 +811,9 @@ def main() -> None:
                 ep.trailing, callback_pct=float(args.trail_callback)))
         if args.horizon_days is not None:
             ep = _dc.replace(ep, horizon_days=int(args.horizon_days))
+        if args.entry_days is not None:
+            ep = _dc.replace(ep, entry=_dc.replace(
+                ep.entry, max_entry_trade_days=int(args.entry_days)))
         if args.sl_pct is not None:
             ep = _dc.replace(ep, stop_loss=_dc.replace(
                 ep.stop_loss, default_loss_pct=float(args.sl_pct),
@@ -810,7 +821,8 @@ def main() -> None:
         EP_OVERRIDE["policy"] = ep
         print(f"[ep] 出场变体: tp={args.tp_pct} sl={args.sl_pct} "
               f"trail_act={args.trail_act} trail_lock={args.trail_lock} "
-              f"trail_cb={args.trail_callback} horizon={args.horizon_days}", flush=True)
+              f"trail_cb={args.trail_callback} horizon={args.horizon_days} "
+              f"entry_days={args.entry_days}", flush=True)
     _sw = str(args.skill_weights or "equal").strip()
     if _sw in ("equal", "preset"):
         SKILL_WEIGHTS["mode"] = _sw
