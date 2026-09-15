@@ -736,26 +736,26 @@ def main() -> None:
         "--tp-pct",
         type=float,
         default=None,
-        help="覆盖出场策略：打开止盈并设默认止盈百分比（如 4 = +4% 止盈）。"
+        help="覆盖出场策略：打开止盈并设默认止盈百分比（如 4 = +4%% 止盈）。"
              "WR 是目前唯一未达标的轴，止盈是最直接的胜率杠杆；默认 None = 用已发布 artifact。",
     )
     ap.add_argument(
         "--trail-act",
         type=float,
         default=None,
-        help="覆盖出场策略：trailing 激活阈值（%，越小越早锁利 → 胜率杠杆）",
+        help="覆盖出场策略：trailing 激活阈值（%%，越小越早锁利 → 胜率杠杆）",
     )
     ap.add_argument(
         "--trail-lock",
         type=float,
         default=None,
-        help="覆盖出场策略：trailing 最小锁利（%），把'曾浮盈'的单子变成小赢单",
+        help="覆盖出场策略：trailing 最小锁利（%%），把'曾浮盈'的单子变成小赢单",
     )
     ap.add_argument(
         "--trail-callback",
         type=float,
         default=None,
-        help="覆盖出场策略：trailing 回撤触发幅度（%，越大越晚离场 → 让单子跑到 horizon）",
+        help="覆盖出场策略：trailing 回撤触发幅度（%%，越大越晚离场 → 让单子跑到 horizon）",
     )
     ap.add_argument(
         "--horizon-days",
