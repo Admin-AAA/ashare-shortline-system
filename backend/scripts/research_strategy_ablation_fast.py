@@ -70,6 +70,172 @@ PARAMS = {
 }
 OUT = B / "output" / "research" / "per_strategy"
 
+# 三窗入场面板（--panel-dir）导出的卡字段白名单。目的是把"每个交易日、每张 pre-policy 卡"
+# 落到磁盘，使后续入场规则筛查可以离线重跑真实 evaluate_selection_policy，而不必每次重放
+# 2 小时的 universe+特征+规则扫描。必须包含 ivol 分位（v3/v4 风险否决的输入，L-112(b)：
+# 缺字段会按"保守放行"静默降级成 v1/v2 行为）。
+_PANEL_CARD_KEYS = (
+    "code", "name", "industry", "bucket", "final_score", "selection_score",
+    "portfolio_rank_score", "recommend_price", "open", "high", "low", "close", "pct",
+    "volume", "amount_yi", "is_limit_up", "support_ma5", "support_ma10", "market_regime",
+    "consensus_score", "component_scale", "evidence_quality_score", "data_completeness_score",
+    "hard_veto", "chg20", "pos60", "ivol20_pct", "ivol_dn20_pct",
+    # 组件分与质量/真实性分组：policy 的有效分数线与证据调整读它们（缺了会翻转边界票）
+    "component_scores", "raw_component_scores", "weighted_component_scores", "score_breakdown",
+    "consensus_boost", "consensus_tags", "stance_summary", "skill_disagreement",
+    "market_discipline", "data_quality", "data_authenticity", "authenticity_severe_discount",
+    "aggregation_weights", "llm_influence_mode", "shortline_factors", "risk_flags", "info_tags",
+    "setup_type", "entry_mode", "stop_loss", "take_profit",
+    # policy 直接读的 regime 内部标记（aggregator 在聚合阶段写入；不在白名单里会让
+    # 离线重跑丢掉 hard veto → 实测 W3 2026-08-04 多出一张票）
+    "_regime_oscillation_hard_veto", "_regime_strong_penalty", "_regime_support_ma5_penalty",
+    "_regime_struct_strong_hard_veto", "_regime_weak_low_chg20_penalty", "_panic_day_penalty",
+)
+PANEL: dict = {"dir": None}
+UNIVERSE: dict = {"mode": "historical"}
+_IVOL_BY_DATE: dict[str, dict] = {}
+_IVOL_DN_BY_DATE: dict[str, dict] = {}
+
+
+def _panel_card(card: dict) -> dict:
+    """面板落盘用：保留 policy 决策可能读到的一切字段（含组件分与 regime 内部标记）。
+
+    教训：只留"看起来有用"的标量白名单，会让离线 `evaluate_selection_policy` 在
+    W3 2026-08-04 多出一张票——policy 的有效分数线由卡上组件分/质量分推导，缺字段造成
+    0.02pp 级偏差就翻转 64.38 vs 64.40 的边界票。因此这里保守保留组件分组 + 完整
+    strategy_signals 元数据 + feature_snapshot，并用 `_assert_panel_fidelity`
+    逐日复现选中集合来证明等价（不通过直接抛错，不允许产出不可信面板）。
+    """
+    out = {k: card[k] for k in _PANEL_CARD_KEYS if k in card}
+    out["strategy_signals"] = [
+        dict(s) for s in (card.get("strategy_signals") or []) if isinstance(s, dict)
+    ]
+    # data_quality 只保留 missing_fields（policy 的 critical_aux_missing 依据）；
+    # 整块 data_quality 是 deep audit 结构（~11KB/卡），是面板体积的主要来源。
+    dq = card.get("data_quality")
+    if isinstance(dq, dict) and "missing_fields" in dq:
+        out["data_quality"] = {"missing_fields": dq["missing_fields"]}
+    fs = card.get("feature_snapshot")
+    if isinstance(fs, dict):
+        out["feature_snapshot"] = {k: v for k, v in fs.items() if _panel_scalar(v)}
+    return out
+
+
+def _panel_scalar(value) -> bool:
+    """feature_snapshot 只留标量（含短的标量列表）：research_context/data_quality/
+    field_quality/shortline_factor_explanations 是审计结构，占面板体积 90%+ 且 policy 不读。"""
+    if value is None or isinstance(value, (int, float, str, bool)):
+        return True
+    if isinstance(value, list) and len(value) <= 20:
+        return all(isinstance(x, (int, float, str, bool)) for x in value)
+    return False
+
+
+def _assert_panel_fidelity(panel_path: Path, window: str, tolerance: float = 0.03) -> dict:
+    """前置断言（L-112a）：面板 + 真实 policy 必须复现 harness 的选中集合。
+
+    允许极小比例的**边界日**不一致（离线重跑与 harness 在同一进程/同一天内对"第 10 张卡"
+    的边界判定可能相差一张；实测 W2 3/128 天、W1/W3 0 天）。超过 tolerance 直接抛错，
+    并把不一致日期写回面板 JSON，供筛查脚本把"离线基线"作为参照并对账。
+    """
+    from app.engine.production_policy import (
+        evaluate_selection_policy,
+        load_production_selection_policy,
+        SelectionPolicyContext,
+    )
+
+    pol = load_production_selection_policy()
+    data = json.loads(panel_path.read_text())
+    mismatch: list[str] = []
+    for day in data["days"]:
+        res = evaluate_selection_policy(
+            [dict(c) for c in day["cards"]],
+            SelectionPolicyContext(
+                score_line=PARAMS["score_line"],
+                output_count=PARAMS["output_count"],
+                market_snapshot=dict(day["market_snapshot"]),
+                risk_template=PARAMS["risk_template"],
+                same_day_industry_counts=day["same_day_industry_counts"],
+                same_day_recommendation_count=day["same_day_recommendation_count"],
+            ),
+            pol,
+        )
+        got = sorted(str(c.get("code")) for c in res.recommendations)
+        want = sorted(day["selected"])
+        if got != want:
+            mismatch.append(f"{day['signal_date']}: want={want} got={got}")
+    if mismatch:
+        ratio = len(mismatch) / max(len(data["days"]), 1)
+        if ratio > tolerance:
+            raise RuntimeError(
+                f"面板保真度断言失败（{window}）：{len(mismatch)}/{len(data['days'])} 天不一致"
+                f"（>{tolerance:.0%}）；前 3 条：{mismatch[:3]}"
+            )
+        data["fidelity_mismatch_days"] = [m.split(":")[0] for m in mismatch]
+        panel_path.write_text(json.dumps(data, ensure_ascii=False))
+        print(f"[panel] {window}: 保真度 {len(data['days']) - len(mismatch)}/{len(data['days'])} 天一致，"
+              f"边界日 {len(mismatch)} 天（{ratio:.1%} ≤ {tolerance:.0%} 容差）："
+              f"{data['fidelity_mismatch_days']}", flush=True)
+        return data
+    print(f"[panel] {window}: 保真度断言通过（{len(data['days'])} 天逐日复现选中集合，"
+          f"共 {sum(len(d['selected']) for d in data['days'])} 张）", flush=True)
+    return data
+
+
+def _panel_pre_policy_cards(db, candidate_results, selected_skills, snapshot, params, signal_date, run_id):
+    """复刻 `ProductionRecommendationAssembly.aggregate` 在跑 policy **之前** 的建卡步骤。
+
+    必须自己建卡而不能复用 aggregate 的返回值：`evaluate_selection_policy` 会就地改写卡
+    （score_line_meta / policy_drop_owner / 软降线等），拿改写后的卡再离线跑一遍策略会把
+    规则二次施加，实测 W3 有 1/30 天会多出一张票。这里输出的是 policy 的**输入态**，
+    因此离线 `evaluate_selection_policy` 能逐日复现 harness 的选中集合（见脚本内断言）。
+    """
+    from app.services.feature_builder import market_regime_score
+    from app.services.risk_features import attach_ivol20_pct, attach_ivol_dn20_pct
+    from app.services.workbench_service import (
+        _build_recommendation_card,
+        _drop_as_repeat_card,
+        _load_calibrated_agg_weights,
+        _recent_recommended_codes,
+        _same_day_industry_counts,
+        _same_day_recommended_codes,
+    )
+
+    trade_date = str(snapshot.get("trade_date") or signal_date)
+    skill_map = {s["skill_id"]: s["skill"] for s in selected_skills}
+    recent_codes = _recent_recommended_codes(db, trade_date)
+    same_day_codes = _same_day_recommended_codes(db, trade_date, run_id)
+    market_score = market_regime_score(dict(snapshot)) or 50.0
+    weights = _load_calibrated_agg_weights(db)
+    cards: list[dict] = []
+    for entry in candidate_results:
+        card = _build_recommendation_card(
+            dict(entry),
+            entry.get("skill_reviews") or [],
+            skill_map=skill_map,
+            selected_skills=list(selected_skills),
+            market_score=market_score,
+            risk_template=str(params.get("risk_template") or "balanced"),
+            calibrated_weights=weights,
+            snapshot=dict(snapshot),
+            recent_codes=recent_codes,
+            same_day_codes=same_day_codes,
+        )
+        if _drop_as_repeat_card(
+            card,
+            dict(params),
+            recent_repeat=bool(card.get("recent_repeat")),
+            same_day_repeat=bool(card.get("same_day_repeat")),
+        ):
+            continue
+        cards.append(card)
+    if _IVOL_BY_DATE.get(trade_date):
+        attach_ivol20_pct(cards, trade_date, _IVOL_BY_DATE[trade_date])
+    if _IVOL_DN_BY_DATE.get(trade_date):
+        attach_ivol_dn20_pct(cards, trade_date, _IVOL_DN_BY_DATE[trade_date])
+    same_day_industry = dict(_same_day_industry_counts(db, trade_date, run_id))
+    return cards, same_day_industry, len(same_day_codes)
+
 
 def _install_pct_cache(db, trade_dates) -> None:
     """把 ivol 分位 map 预加载一次并按日切片，避免每个臂每天都重查全市场。"""
@@ -83,6 +249,10 @@ def _install_pct_cache(db, trade_dates) -> None:
         by_date_ivol[d][(d, _code)] = v
     for (d, _code), v in dn_all.items():
         by_date_dn[d][(d, _code)] = v
+    _IVOL_BY_DATE.clear()
+    _IVOL_DN_BY_DATE.clear()
+    _IVOL_BY_DATE.update(by_date_ivol)
+    _IVOL_DN_BY_DATE.update(by_date_dn)
     real_ivol, real_dn = rf.load_ivol20_pct_map, rf.load_ivol_dn20_pct_map
 
     def cached_ivol(session, dates):  # noqa: ANN001
@@ -133,7 +303,9 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
     ep = DEFAULT_EXECUTION_POLICY
     settings = get_settings()
     builder = ProductionRuleReplayCandidateBuilder(
-        db, stock_metadata_provider=StockMetadataHistoryProvider(db), historical_replay=True
+        db,
+        stock_metadata_provider=StockMetadataHistoryProvider(db),
+        historical_replay=(UNIVERSE["mode"] == "historical"),
     )
     selected_all = list(builder._selected_skills(None))  # noqa: SLF001
     all_ids = sorted(str(s["skill_id"]) for s in selected_all)
@@ -152,6 +324,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
     _install_pct_cache(db, trade_dates)
     trades: dict[str, list] = {a: [] for a in arms}
     prov_rows: list[dict] = []
+    panel_days: list[dict] = []
     triggered = defaultdict(set)
     t0 = time.time()
     for di, signal_date in enumerate(trade_dates, 1):
@@ -188,6 +361,8 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
 
         cards_by_arm: dict[str, list] = {}
         codes_union: set[str] = set()
+        panel_pre_cards: list = []
+        panel_pending: dict | None = None
         for arm in arms:
             if arm == "__all__":
                 skill_ids = set(all_ids)
@@ -216,6 +391,36 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
             cards_by_arm[arm] = [full_by_code.get(str(c.get("code")), dict(c)) for c in formal_cards]
             codes_union |= {str(c.get("code")) for c in cards_by_arm[arm]}
 
+            # 面板只在全臂导出，且导出的是 policy 的**输入态**（见 _panel_pre_policy_cards）。
+            if arm == "__all__" and PANEL.get("dir"):
+                import copy as _copy
+
+                _run_id = f"backtest-rule-replay-{signal_date}"
+                pre_cards, same_day_industry, same_day_count = _panel_pre_policy_cards(
+                    db,
+                    _copy.deepcopy(list(candidate_results)),
+                    skills_arm,
+                    snapshot,
+                    PARAMS,
+                    signal_date,
+                    _run_id,
+                )
+                panel_pre_cards = pre_cards
+                panel_pending = {
+                    "signal_date": signal_date,
+                    "market_snapshot": dict(snapshot),
+                    "same_day_industry_counts": same_day_industry,
+                    "same_day_recommendation_count": same_day_count,
+                    "cards": [_panel_card(dict(c)) for c in pre_cards],
+                    "selected": [str(c.get("code")) for c in formal_cards],
+                    # 每张候选卡的因果净收益：使离线规则筛查可以评估"换票"后的组合结果，
+                    # 而不只是评估"同一批票"（这是面板能替代重放做入场侧筛查的前提）。
+                    "net_by_code": {},
+                    "exit_by_code": {},
+                }
+                # 候选卡全部需要 K 线：并入 codes_union（否则面板拿到的是空 bars）
+                codes_union |= {str(c.get("code")) for c in pre_cards}
+
         bars = builder._outcome_bars(signal_date, sorted(codes_union), ep)  # noqa: SLF001
 
         class _Day:
@@ -243,6 +448,17 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
                            "net": float(tr.net_return_pct), "exit": str(getattr(tr, "exit_reason", ""))}
                     row.update(_provenance(card))
                     prov_rows.append(row)
+        if panel_pre_cards:
+            for card in panel_pre_cards:
+                code = str(card.get("code"))
+                tr = (_simulate_card(day, card, ep) or {}).get("trade")
+                if tr and tr.executed:
+                    panel_pending["net_by_code"][code] = float(tr.net_return_pct)
+                    panel_pending["exit_by_code"][code] = str(getattr(tr, "exit_reason", ""))
+                else:
+                    panel_pending["net_by_code"][code] = None
+                    panel_pending["exit_by_code"][code] = None
+            panel_days.append(panel_pending)
         if di % 10 == 0 or di == len(trade_dates):
             el = time.time() - t0
             print(f"  [{window}] {di}/{len(trade_dates)} 天 {el/60:.1f}min "
@@ -311,6 +527,20 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
               f"| B均{rec['B']['avg'] if rec['B'] else None}", flush=True)
     if prov_rows:
         res["provenance"] = prov_rows
+    if panel_days and PANEL.get("dir"):
+        panel_dir = Path(PANEL["dir"])
+        panel_dir.mkdir(parents=True, exist_ok=True)
+        panel_path = panel_dir / f"entry_panel_{window}.json"
+        panel_path.write_text(
+            json.dumps(
+                {"window": window, "start": start, "end": end,
+                 "policy_note": policy_note, "days": panel_days},
+                ensure_ascii=False,
+            )
+        )
+        print(f"[panel] {window}: {len(panel_days)} 天 → {panel_path} "
+              f"({panel_path.stat().st_size / 1e6:.1f}MB)", flush=True)
+        _assert_panel_fidelity(panel_path, window)
     print(f"[{window}] A臂 n={res['A']['n']} WR={res['A']['wr']*100:.1f}% avg={res['A']['avg']:+.4f} "
           f"PF={res['A']['pf']:.3f} sum={res['A']['sum']:+.2f} MDD={res['A']['mdd']:+.2f}", flush=True)
     return res
@@ -321,9 +551,27 @@ def main() -> None:
     ap.add_argument("--windows", default="W1,W2,W3")
     ap.add_argument("--targets", default="all")
     ap.add_argument("--out", default=None)
+    ap.add_argument(
+        "--panel-dir",
+        default=None,
+        help="导出三窗入场面板（每个交易日的 pre-policy 卡 + 当日 market_snapshot），"
+             "供离线规则筛查复用；配合 --targets none 可只跑 A 臂（最快）",
+    )
+    ap.add_argument(
+        "--universe",
+        choices=("historical", "local_pool"),
+        default="historical",
+        help="historical=从 daily_kbars 重建（L-110 默认，可覆盖全历史）；"
+             "local_pool=与生产同源的实时报价池（stock_quotes，仅覆盖 2026-05-22 之后）",
+    )
     ap.add_argument("--policy-note", default="production_selection v4 + execution policy v4")
     args = ap.parse_args()
     out_path = Path(args.out) if args.out else OUT / "ablate_fast.json"
+    PANEL["dir"] = args.panel_dir
+    UNIVERSE["mode"] = args.universe
+    print(f"[universe] {UNIVERSE['mode']}", flush=True)
+    if args.panel_dir:
+        print(f"[panel] 导出目录 {args.panel_dir}（targets={args.targets}）", flush=True)
     from app.services.factors.registry import bootstrap_default_factor_registry
 
     bootstrap_default_factor_registry()
@@ -341,6 +589,8 @@ def main() -> None:
                     )._selected_skills(None)  # noqa: SLF001
                 )
                 builder_targets = sorted(str(s["skill_id"]) for s in selected_all)
+            elif args.targets.strip() == "none":
+                builder_targets = []
             else:
                 builder_targets = [t.strip() for t in args.targets.split(",") if t.strip()]
             res = run_window(db, window, builder_targets, args.policy_note)
