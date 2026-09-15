@@ -557,7 +557,11 @@ def _boot_ci(delta: np.ndarray, draws: int = 4000, seed: int = 7):
     return float(delta.mean()), float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))
 
 
-def run_rule(rule, panel: dict, pol, ctx_overrides: dict | None = None) -> tuple[dict | None, list[dict]]:
+GLOBAL_SIGNAL_WEIGHTS: dict | None = None   # 非 None 时，规则臂先用这套逐技能权重重算卡片分数
+
+
+def run_rule(rule, panel: dict, pol, ctx_overrides: dict | None = None,
+             apply_global_weights: bool = True) -> tuple[dict | None, list[dict]]:
     overrides = ctx_overrides or {}
     score_line = float(overrides.get("score_line", SCORE_LINE))
     output_count = int(overrides.get("output_count", OUTPUT_COUNT))
@@ -565,7 +569,10 @@ def run_rule(rule, panel: dict, pol, ctx_overrides: dict | None = None) -> tuple
     all_days: list[str] = []
     for day in panel["days"]:
         all_days.append(day["signal_date"])
-        cards = rule([dict(c) for c in day["cards"]], day)
+        base_cards = [dict(c) for c in day["cards"]]
+        if apply_global_weights and GLOBAL_SIGNAL_WEIGHTS:
+            base_cards = _signal_weight_rule(GLOBAL_SIGNAL_WEIGHTS)(base_cards, day)
+        cards = rule(base_cards, day)
         if not cards:
             continue
         res = evaluate_selection_policy(
@@ -605,6 +612,12 @@ def main() -> None:
         help="面板导出时的 production_selection 版本（默认=当前 default），只用于"
              "「离线 identity 是否复现面板 selected」这一步对账。Δ 的基线始终用当前 default。",
     )
+    ap.add_argument(
+        "--signal-weights",
+        default="equal",
+        help="equal（默认）| preset（读 preset_formal_opening 权重）| JSON 字符串；"
+             "非 equal 时所有规则臂先用该逐技能权重重算卡分数（用于让页面/项目口径与生产一致）",
+    )
     ap.add_argument("--out", default=str(OUT))
     args = ap.parse_args()
     names = list(RULES) if args.rules == "all" else [r.strip() for r in args.rules.split(",") if r.strip()]
@@ -618,6 +631,26 @@ def main() -> None:
         if args.baseline_version is not None
         else pol
     )
+    global GLOBAL_SIGNAL_WEIGHTS
+    _sw = str(args.signal_weights or "equal").strip()
+    if _sw == "equal":
+        GLOBAL_SIGNAL_WEIGHTS = None
+    elif _sw == "preset":
+        from sqlalchemy import create_engine, text as _text
+
+        from app.core.config import get_settings as _gs
+
+        url = _gs().database_url
+        eng = create_engine(url)
+        with eng.connect() as conn:
+            rows = conn.execute(_text(
+                "SELECT skill_id, weight FROM preset_skills WHERE preset_id='preset_formal_opening'"
+            )).all()
+        GLOBAL_SIGNAL_WEIGHTS = {str(r[0]): float(r[1]) for r in rows}
+    else:
+        GLOBAL_SIGNAL_WEIGHTS = json.loads(_sw)
+    if GLOBAL_SIGNAL_WEIGHTS:
+        print(f"[weights] 规则臂使用逐技能权重：{GLOBAL_SIGNAL_WEIGHTS}")
     panels = {w: json.loads((PANEL_DIR / f"entry_panel_{w}.json").read_text()) for w in WINDOWS}
     def harness_baseline(w: str) -> dict:
         """harness A 臂基线：优先读 ablation JSON；缺失时用面板自带的 selected+net 复原
@@ -642,9 +675,9 @@ def main() -> None:
     base_rows: dict[str, list[dict]] = {}
     for w in WINDOWS:
         # 1) 对账：面板的 selected 是在 panel_pol（升级前的默认）下产生的
-        m_recon, _ = run_rule(RULES["identity"], panels[w], base_pol)
+        m_recon, _ = run_rule(RULES["identity"], panels[w], base_pol, apply_global_weights=False)
         # 2) Δ 基线：当前默认策略（升级后 = 新生产默认）
-        m, rows = run_rule(RULES["identity"], panels[w], pol)
+        m, rows = run_rule(RULES["identity"], panels[w], pol, apply_global_weights=False)
         exp = baselines_expected[w]
         assert m is not None and m_recon is not None, w
         sel_panel = sum(len(d["selected"]) for d in panels[w]["days"])

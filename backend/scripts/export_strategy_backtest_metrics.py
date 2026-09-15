@@ -22,7 +22,7 @@ from pathlib import Path
 B = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(B))
 
-SRC = B / "output" / "research" / "entry_rule_panel_single_v7.json"
+SRC = B / "output" / "research" / "entry_rule_panel_single_prod.json"
 DST = B / "app" / "policies" / "strategy_backtest_metrics.json"
 WINDOW_LABELS = {
     "W1": ("2025-01-15", "2026-01-16", "W1 holdout 冻结窗"),
@@ -86,11 +86,16 @@ def main() -> None:
         for w, b in data["baseline"].items()
     }
 
+    live_skill_ids = {p.name for p in (B / "skills").iterdir() if p.is_dir()}
     skills: dict[str, dict] = {}
     for name, payload in data["rules"].items():
         if not name.startswith("only:"):
             continue
         sid = name.split(":", 1)[1]
+        # 已退役技能（面板里还留着历史卡）不再上页面
+        if sid not in live_skill_ids:
+            print(f"[skip] 已退役技能 {sid}")
+            continue
         windows = {w: _metrics_block(payload["windows"].get(w) or {}) for w in WINDOW_LABELS}
         present = [v for v in windows.values() if v]
         passes = int(payload.get("passes") or 0)
@@ -120,6 +125,7 @@ def main() -> None:
             ),
             "combined_label": "全策略组合（10 技能全开，全管线重放）",
             "selection_policy": f"production_selection.v{current_policy.version}",
+            "signal_weights": "preset_formal_opening（生产逐技能权重：DSA 0.5 / 陈小群 1.5 / 其余 1.0）",
             "baseline_selection_policy": "production_selection.v4（Δ 与闸门判定相对该基线）",
             "execution_policy": "execution_policy.v4",
             "score_line": 72.0,
