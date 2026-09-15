@@ -124,6 +124,68 @@ def _non_main_theme(_card=None, _day=None):
     raise NotImplementedError
 
 
+def _regime_of(card: dict) -> str:
+    return str(card.get("market_regime") or "")
+
+
+def _low_consensus(card: dict, min_signals: int = 2, min_score: float | None = None) -> bool:
+    sigs = _non_veto_signals(card)
+    if min_score is not None:
+        sigs = [s for s in sigs if float(s.get("score") or 0) >= min_score]
+    return len(sigs) < min_signals
+
+
+def _consensus_gate_in(regimes: tuple[str, ...]):
+    """只在指定 regime 卡上施加"至少 N 个策略背书"，其余 regime 原样（避免削掉强趋势窗）。"""
+
+    def rule(cards, _day):
+        out = []
+        for c in cards:
+            regime = _regime_of(c)
+            if any(r in regime for r in regimes) and _low_consensus(c):
+                continue
+            out.append(c)
+        return out
+
+    return rule
+
+
+def _consensus_soft(points: float, regime_in: tuple[str, ...] | None = None):
+    def rule(cards, _day):
+        out = []
+        for c in cards:
+            cc = dict(c)
+            regime = _regime_of(cc)
+            if (regime_in is None or any(r in regime for r in regime_in)) and _low_consensus(cc):
+                cc["final_score"] = float(cc.get("final_score") or 0.0) - points
+            out.append(cc)
+        return out
+
+    return rule
+
+
+def _consensus_boost(
+    points: float,
+    regime_in: tuple[str, ...] | None = None,
+    min_signals: int = 2,
+):
+    """给满足"至少 min_signals 个非否决策略背书"的卡加分（可限定 regime）。"""
+
+    def rule(cards, _day):
+        out = []
+        for c in cards:
+            cc = dict(c)
+            regime = _regime_of(cc)
+            if (regime_in is None or any(r in regime for r in regime_in)) and not _low_consensus(
+                cc, min_signals=min_signals
+            ):
+                cc["final_score"] = float(cc.get("final_score") or 0.0) + points
+            out.append(cc)
+        return out
+
+    return rule
+
+
 def _industry_not_in_main(card, day):
     ms = day["market_snapshot"] or {}
     main = ms.get("main_industries") or []
@@ -150,6 +212,21 @@ RULES: dict[str, "callable"] = {
     # ⑤ 共识闸门：只留至少 2 个非否决策略背书
     "consensus2": _card_filter(lambda c, _d: len(_non_veto_signals(c)) >= 2),
     "consensus3": _card_filter(lambda c, _d: len(_non_veto_signals(c)) >= 3),
+    # ⑤b 共识闸门的 regime 条件化与软化变体：consensus2 已在三窗把 avg/sum 全部抬高，
+    # 只因 W2 同时退化 WR 与 MDD 两项辅助被闸门否掉（L-010 允许至多一项辅助退化）。
+    # 这三个变体分别检验"只在弱/震荡施加""软降分而非剔除""只认高分背书"。
+    "consensus2_weak": _consensus_gate_in(("弱势",)),
+    "consensus2_weak_osc": _consensus_gate_in(("弱势", "震荡")),
+    "consensus2_soft6": _consensus_soft(6.0),
+    "consensus2_soft6_weak": _consensus_soft(6.0, regime_in=("弱势", "震荡")),
+    "consensus2_hi70": _card_filter(lambda c, _d: not _low_consensus(c, min_score=70.0)),
+    # ⑤c 反向杠杆：不剔除低共识卡，而是给"多策略背书"加分（保留全部候选，
+    # 只改排序/过线）。假设：背书数在弱势/震荡里是质量信号，在强趋势里失效。
+    "consensus_boost6": _consensus_boost(6.0),
+    "consensus_boost10": _consensus_boost(10.0),
+    "consensus_boost6_weak_osc": _consensus_boost(6.0, regime_in=("弱势", "震荡")),
+    "consensus_boost10_weak_osc": _consensus_boost(10.0, regime_in=("弱势", "震荡")),
+    "consensus3_boost10": _consensus_boost(10.0, min_signals=3),
     # ⑥ 主线闸门（LIVE 反事实强候选；本轮首次在三窗全区间可测，因为全管线重放的
     #    market_snapshot 带 main_industries，而面板口径的 W2/W3 快照没有）
     "non_main_p4": _penalty(_industry_not_in_main, 4.0),
@@ -312,8 +389,11 @@ def main() -> None:
             monthly = dlt.groupby(dlt.index.str[:7]).mean()
             pos, neg = int((monthly > 0).sum()), int((monthly < 0).sum())
             dec = evaluate_challenger(
-                PerformanceSnapshot(b["avg"], b["sum"], b["wr"] * 100, b["pf"], abs(b["mdd"])),
-                PerformanceSnapshot(m["avg"], m["sum"], m["wr"] * 100, m["pf"], abs(m["mdd"])),
+                # MDD 必须传**负值**（(cum-cummax()).min()）：evaluate_challenger 的约定是
+                # "less-negative max drawdown is an improvement"，即 delta = B-A > 0 才算改善。
+                # 曾误传 abs(mdd) 让极性反转，把"回撤变小"判成退化 —— 会误杀正确候选。
+                PerformanceSnapshot(b["avg"], b["sum"], b["wr"] * 100, b["pf"], b["mdd"]),
+                PerformanceSnapshot(m["avg"], m["sum"], m["wr"] * 100, m["pf"], m["mdd"]),
             )
             passes += int(dec.should_publish)
             per_window[w] = {

@@ -6,7 +6,7 @@
 
 | skill | 一句话依据 | 类型 |
 | --- | --- | --- |
-| `dragon-tiger-smart-money` | 三窗生产同构消融**全部通过** `evaluate_challenger` 闸门（剔除后三窗 avg/sum 同向改善） | 行为变更 |
+| `dragon-tiger-smart-money` | 三窗 avg/sum/PF 同向改善；闸门 **W1 PASS / W2 FALSIFIED / W3 PASS**（见 §2.1 更正） | 行为变更 |
 | `weak-market-strong-stock-reversal` | 三窗 Δcohort **恰好 0.0000**、0 张独持卡/背书卡：从未影响任何选中卡 | 零行为变更 |
 | `main-line-leader-resonance` | manifest 已 disabled、从未进任何 preset、三窗 0 张选中卡 | 零行为变更 |
 | `xiaoshi-quant-expert` | manifest 已 disabled、无 preset、research-only 映射，从未进入生产 | 零行为变更 |
@@ -48,9 +48,14 @@ B=剔除目标技能；同进程同源构建、按交易日对齐做配对 boots
 
 | 窗口 | n | WR | avg_net | sum_net | PF | MDD | 闸门 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| W1 | 1089 | 57.5% | +0.3568% | +388.52% | 1.193 | −40.45% | **PASS**（avg/sum/WR/PF 四项改善） |
-| W2 | 655 | 56.8% | +0.3521% | +230.66% | 1.163 | −24.01% | **PASS**（avg/sum/MDD 改善；WR −0.4pp 在容差内） |
-| W3 | 107 | 45.8% | −0.4082% | −43.67% | 0.839 | −19.60% | **PASS**（avg/sum/WR/PF 四项改善） |
+| W1 | 1089 | 57.5% | +0.3568% | +388.52% | 1.193 | −40.45% | **PASS**（五项指标全部改善） |
+| W2 | 655 | 56.8% | +0.3521% | +230.66% | 1.163 | −24.01% | **FALSIFIED**（WR −0.4pp 与 MDD −2.15pp 两项辅助退化 > L-010 允许的至多一项） |
+| W3 | 107 | 45.8% | −0.4082% | −43.67% | 0.839 | −19.60% | **PASS**（五项指标全部改善） |
+
+> **2026-09-15 更正（L-116）**：本表原先把三窗都写成 PASS，是把 `PerformanceSnapshot` 的
+> `max_drawdown_pct` 传成了 `abs(mdd)` 造成的极性反转（正确口径必须传负值：−21.86 → −24.01 是**变差**）。
+> 修正后 W2 为 FALSIFIED。退役决定**保留**（三窗 avg / sum / PF 全部同向改善，W1/W3 五项全改善），
+> 但它按用户验收规则属"2/3 窗通过 + W2 两项辅助退化"，不再作为"三窗全过"的 PASS 记录。
 
 配对日差与边际卡：
 

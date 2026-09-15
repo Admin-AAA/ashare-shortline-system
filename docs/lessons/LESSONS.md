@@ -1187,3 +1187,12 @@
 - 永久规则：**(a) 任何以"重建卡"为输入的选择类结论，必须先证明重建卡与生产卡字段等价（保留全部 policy 可读字段），并用逐日选中集合断言把关；字段白名单是最容易犯的静默失真。** **(b) 三窗指标必须同时写明"覆盖的完整日期区间"与"候选来源"（本次重放 / 库里已存历史 run）；覆盖不足的窗口判 NOT_EVALUABLE，不得用截断区间的正数当目标达成证据（承接 L-112(b)）。** **(c) 同一候选在两套口径下结论相反时，以"两套独立生产同源宇宙互相一致"的那一方为准，而不是以数字更好看的那一方为准。**
 - 复现：`backend/scripts/research_strategy_ablation_fast.py --windows W3 --targets none --universe local_pool`（与 `historical` 对照逐位相同）；`--panel-dir` 导出后脚本内 `_assert_panel_fidelity` 逐日断言；面板口径复现命令见 L-113/`research_verify_execution_policy_v3.py`。
 - 相关：L-112（静默失效/覆盖断言）、L-113（出场口径与三窗可测性）、L-110（生产同构）、L-114（本轮退役与裸 `ExecutionPolicy()` 陷阱）、L-071（研究必须与生产同构）。
+
+## L-116【判定口径硬规则】`evaluate_challenger` 的 MDD 必须传**负值**：传 `abs()` 会反转极性，既误杀正确候选、也误放行本该 FALSIFIED 的改动
+
+- 状态：active（判定口径硬规则；含一次自纠更正）。
+- 机制：`PerformanceSnapshot.max_drawdown_pct` 的语义是"回撤深度"，判定里算 `challenger − champion`，docstring 明写 **"A less-negative max drawdown is an improvement"** → 必须传 `(cum - cum.cummax()).min()` 的负值（如 −24.4 → −23.2 才算改善）。传 `abs()` 时 −24.4/−23.2 变成 24.4/23.2，delta = −1.2 → 被 `_regresses` 判成**退化**，极性正好反了。
+- 误杀例（本轮）：共识闸门候选族在 W2 只因 `max_drawdown_pct` 被列为退化而卡住；改成负值后 `consensus2` / `consensus2_weak` / `consensus2_weak_osc` / `consensus2_soft6_weak` 四个变体**三窗全过**（各自的 Δcohort 与 improvements/regressions 见 `output/research/entry_rule_panel_consensus.json`）。
+- 误放行例（本轮自纠）：`dragon-tiger-smart-money` 退役当时被报成"三窗全过"，是 `abs()` 造成的。按正确负值口径复算为 **W1 PRODUCTION / W2 FALSIFIED / W3 PRODUCTION**——W2 的 `win_rate_pct`（57.2%→56.8%）与 `max_drawdown_pct`（−21.86→−24.01）同时退化，两项辅助退化超过 L-010 允许的"至多一项"。已更正 `docs/strategy-retire-2026-09-15.md`；退役决定本身保留（三窗 avg/sum/PF 同向改善），但**不再宣称"三窗全过"**。
+- 永久规则：**(a) 任何调用 `evaluate_challenger` 的脚本/分析必须传负值 MDD（`(cum - cum.cummax()).min()`），禁止 `abs()`；`scripts/research_exit_sweep_three_window.py`、`research_exit_policy_canonical.py` 是正确范例。** **(b) 任何"某窗/三窗通过闸门"的声明必须附一条可复现命令，且该命令必须打印每窗的 `improvements` / `regressions` 列表——本轮正是靠这两个列表才看出极性错误，只看 PRODUCTION/FALSIFIED 标签看不出来。** **(c) 已发布的判定若事后发现口径错误，必须在 LESSONS 里显式写更正（本条即范例），不得静默覆盖历史结论。**
+- 相关：L-010（唯一闸门）、L-058（逐月同号）、L-114（退役落地）、L-115（口径一致性）、L-117（共识闸门 v5）。

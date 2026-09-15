@@ -1020,6 +1020,37 @@ def apply_pool_rules(
     # 通用横截面尾部否决（本轮新增，默认关闭）：与 L-093 强牛 ivol 否决同构，但因子/方向/阈值
     # 由 policy artifact 声明（extra_tail_veto_field/direction/pct_threshold）。卡片分位由选择
     # 咽喉预附到 extra_tail_veto_field；缺字段（数据不全）保守放行。
+    # v5 共识闸门（L-117）：弱势/震荡里只保留"至少 N 个非否决策略背书"的候选，强牛/偏多不动。
+    # 依据：三窗口全管线重放 Δcohort +0.105 / +0.070 / +0.159，三窗均过 evaluate_challenger；
+    # 机制：弱势/震荡里单策略信号多为噪声，多策略共振的票次日承接更好；强趋势里单策略动量有效，
+    # 施压会削掉 W1/W2 的动量收益（实测 consensus2 全 regime 版在 W2 退化 WR）。
+    # 缺 strategy_signals（理论不可能）时保守放行，保持 v1-v4 行为。
+    if (
+        selection_policy is not None
+        and int(getattr(selection_policy, "consensus_min_signals", 0) or 0) > 0
+        and (
+            not tuple(getattr(selection_policy, "consensus_regimes", ()) or ())
+            or _ctx_base in tuple(selection_policy.consensus_regimes)
+        )
+    ):
+        _min_signals = int(selection_policy.consensus_min_signals)
+        kept_after_consensus: list[dict[str, Any]] = []
+        for card in deduped:
+            signals = [
+                s for s in (card.get("strategy_signals") or [])
+                if isinstance(s, dict) and not s.get("hard_veto")
+            ]
+            if str(card.get("hard_veto")).lower() in ("true", "1") or len(signals) >= _min_signals:
+                kept_after_consensus.append(card)
+                continue
+            card["policy_drop_owner"] = "consensus_gate"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "consensus_gate",
+                "action": "drop",
+                "reason": f"{_ctx_base}仅有 {len(signals)} 个策略背书（<{_min_signals}）",
+                "eliminated": True,
+            })
+        deduped = kept_after_consensus
     if (
         selection_policy is not None
         and getattr(selection_policy, "extra_tail_veto_enabled", False)

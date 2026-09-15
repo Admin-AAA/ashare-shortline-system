@@ -564,8 +564,16 @@ def main() -> None:
         help="historical=从 daily_kbars 重建（L-110 默认，可覆盖全历史）；"
              "local_pool=与生产同源的实时报价池（stock_quotes，仅覆盖 2026-05-22 之后）",
     )
-    ap.add_argument("--policy-note", default="production_selection v4 + execution policy v4")
+    ap.add_argument("--policy-note", default=None)
     args = ap.parse_args()
+    if args.policy_note is None:
+        from app.engine.production_policy import DEFAULT_PRODUCTION_SELECTION_POLICY
+        from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
+
+        args.policy_note = (
+            f"production_selection v{DEFAULT_PRODUCTION_SELECTION_POLICY.version}"
+            f" + execution policy v{DEFAULT_EXECUTION_POLICY.version}"
+        )
     out_path = Path(args.out) if args.out else OUT / "ablate_fast.json"
     PANEL["dir"] = args.panel_dir
     UNIVERSE["mode"] = args.universe

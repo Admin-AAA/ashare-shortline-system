@@ -94,6 +94,11 @@ class ProductionSelectionPolicy:
     weak_low_ivoldn20_regimes: tuple[str, ...] = ("弱势",)
     weak_low_ivoldn20_pct_threshold: float = 0.25
 
+    # v5（L-117）：共识闸门 —— 只保留"至少 N 个非否决策略背书"的候选，且仅在指定市场基态生效。
+    # 默认 0 = 关闭，保证 v1-v4 行为与指纹语义不被隐式改变。
+    consensus_min_signals: int = 0
+    consensus_regimes: tuple[str, ...] = ()
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -135,6 +140,8 @@ class ProductionSelectionPolicy:
             "weak_low_ivoldn20_veto_enabled": self.weak_low_ivoldn20_veto_enabled,
             "weak_low_ivoldn20_regimes": list(self.weak_low_ivoldn20_regimes),
             "weak_low_ivoldn20_pct_threshold": self.weak_low_ivoldn20_pct_threshold,
+            "consensus_min_signals": self.consensus_min_signals,
+            "consensus_regimes": list(self.consensus_regimes),
         }
 
     @property
@@ -187,7 +194,7 @@ _POLICY_ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "policies"
 
 def load_production_selection_policy(
     policy_id: str = "production-selection",
-    version: int = 4,
+    version: int = 5,
 ) -> ProductionSelectionPolicy:
     """Load the repository-owned artifact used by production and backtests.
 
@@ -197,9 +204,12 @@ def load_production_selection_policy(
     v4 为当前默认 = v3 全部规则 + L-109 弱势×低特质下行半波动横截面风险否决（三窗口
     canonical Δcohort 全正 +0.056/+0.116/+0.077，合并月 block CI 下界 >0、逐月同号 18/21，
     被砍卡三窗均收益 -0.9~-1.4%，见 L-109）。
-    需要严格复现旧口径时显式传 version=1/2/3。
+    v5 为当前默认 = v4 全部规则 + 共识闸门（L-117：弱势/震荡 regime 下只保留至少 2 个非否决策略
+    背书的候选，三窗口全管线重放 Δcohort +0.105/+0.070/+0.159，三窗均过 evaluate_challenger；
+    强牛/偏多不动，避免削掉强趋势窗口的动量收益）。
+    需要严格复现旧口径时显式传 version=1/2/3/4。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -227,6 +237,10 @@ def load_production_selection_policy(
     payload["weak_low_ivoldn20_regimes"] = tuple(
         str(value) for value in payload.get("weak_low_ivoldn20_regimes") or ("弱势",)
     )
+    payload["consensus_regimes"] = tuple(
+        str(value) for value in payload.get("consensus_regimes") or ()
+    )
+    payload["consensus_min_signals"] = int(payload.get("consensus_min_signals") or 0)
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:
         raise ValueError("production selection policy artifact identity mismatch")

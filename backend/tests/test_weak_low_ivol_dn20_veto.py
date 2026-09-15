@@ -132,12 +132,11 @@ def test_default_dataclass_rule_disabled() -> None:
     assert p.weak_low_ivoldn20_pct_threshold == 0.25
 
 
-def test_default_policy_is_v4_and_v4_artifact_differs_from_v3_only_by_new_rule() -> None:
+def test_v4_artifact_differs_from_v3_only_by_new_rule() -> None:
     from app.engine.production_policy import DEFAULT_PRODUCTION_SELECTION_POLICY
 
-    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 4
     v3 = load_production_selection_policy(version=3)
-    v4 = DEFAULT_PRODUCTION_SELECTION_POLICY
+    v4 = load_production_selection_policy(version=4)
     assert v3.weak_low_ivoldn20_veto_enabled is False
     assert v4.weak_low_ivoldn20_veto_enabled is True
     # 除新规则三字段与 version 外，其余规则逐位一致（v4 = v3 + 本条）
@@ -147,6 +146,13 @@ def test_default_policy_is_v4_and_v4_artifact_differs_from_v3_only_by_new_rule()
     # （与 v4 取值相同），故 canonical_payload 只差 version 与 enabled 开关。
     diff = {k for k in set(p3) | set(p4) if p3.get(k) != p4.get(k)}
     assert diff == {"version", "weak_low_ivoldn20_veto_enabled"}, diff
+    # 默认策略已升到 v5（L-117 共识闸门），但 v1-v4 artifact 语义保持不变
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 5
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.consensus_min_signals == 2
+    v5 = DEFAULT_PRODUCTION_SELECTION_POLICY
+    d45 = {k for k in set(v4.canonical_payload()) | set(v5.canonical_payload())
+           if v4.canonical_payload().get(k) != v5.canonical_payload().get(k)}
+    assert d45 == {"version", "consensus_min_signals", "consensus_regimes"}, d45
 
 
 def test_attach_helper_sets_field_and_leaves_unknown_blank() -> None:

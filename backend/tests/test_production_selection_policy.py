@@ -156,7 +156,11 @@ def test_regime_hard_veto_is_persisted_as_policy_drop_owner() -> None:
     cards = [_card("300001", 99.0)]
     # 2026-08-02 用户决策：默认关闭震荡 hard_veto；归因代码仍须可用，
     # 用 with_rule_patch 开启后验证 drop_owner 归因链路。
-    policy = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(
+    # 基线固定 v4：DEFAULT 已是 v5（L-117 共识闸门），它也会在震荡剔掉单背书合成卡，
+    # 会污染本条"归因链路"断言；两条轴分别锁定。
+    from app.engine.production_policy import load_production_selection_policy
+
+    policy = load_production_selection_policy(version=4).with_rule_patch(
         "oscillation_hard_veto", True
     )
     result = evaluate_selection_policy(
@@ -308,8 +312,17 @@ def _oscillation_snapshot() -> dict:
 
 
 def _tail_policy(**overrides: object):
-    """在默认策略（v3）上只打开 extra_tail_veto，其余规则不动。"""
-    policy = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch("extra_tail_veto_enabled", True)
+    """在 v4 artifact 上只打开 extra_tail_veto，其余规则不动。
+
+    基线固定 v4 而非 DEFAULT：DEFAULT 已升到 v5（L-117 共识闸门会在弱势/震荡剔掉
+    "只有 1 个策略背书"的合成卡），而本组用例锁定的是 extra_tail_veto 的 regime 条件
+    与缺字段保守放行，两条轴不应互相污染。
+    """
+    from app.engine.production_policy import load_production_selection_policy
+
+    policy = load_production_selection_policy(version=4).with_rule_patch(
+        "extra_tail_veto_enabled", True
+    )
     for rule_id, value in overrides.items():
         policy = policy.with_rule_patch(rule_id, value)
     return policy
@@ -330,17 +343,19 @@ def _tail_cards() -> list[dict]:
 
 
 def test_extra_tail_veto_is_disabled_by_default_and_absent_from_frozen_artifacts() -> None:
-    """默认策略（v3）不得启用该规则；且 v1/v2/v3 artifact 不得含这些键（保持不可变）。"""
+    """默认策略不得启用 extra_tail_veto；且 v1-v4 artifact 不得含该键（保持不可变）。"""
     import json
     from pathlib import Path
 
     from app.engine.production_policy import load_production_selection_policy
 
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.extra_tail_veto_enabled is False
-    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 3
-    for version in (1, 2, 3):
+    # 当前默认 = v5（L-117 共识闸门）；v1-v4 是 frozen artifact，语义必须逐位不变
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 5
+    for version in (1, 2, 3, 4):
         policy = load_production_selection_policy(version=version)
         assert policy.extra_tail_veto_enabled is False
+        assert policy.consensus_min_signals == 0
         payload = json.loads(
             (
                 Path(__file__).resolve().parents[1]
@@ -350,6 +365,7 @@ def test_extra_tail_veto_is_disabled_by_default_and_absent_from_frozen_artifacts
             ).read_text(encoding="utf-8")
         )
         assert not any(key.startswith("extra_tail_veto") for key in payload)
+        assert not any(key.startswith("consensus_") for key in payload)
 
 
 def test_extra_tail_veto_high_tail_drops_card_and_backfills_next_ranked() -> None:

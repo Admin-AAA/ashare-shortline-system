@@ -69,7 +69,13 @@ def test_soft_floor_base_follows_weak_cap():
         "data_quality": {"missing_fields": []},
         "score_line_meta": {"effective_score_line": 60.0},
         "execution_viability": {"status": "ok"},
-        "strategy_signals": [{"strategy_id": "chip-single-peak-breakout", "score": 56.0, "hard_veto": False}],
+        # v5 共识闸门（L-117）：弱势/震荡下至少 2 个非否决策略背书才进候选；
+        # 本用例锁定的是"软降线 base_floor 跟随弱势封顶"，因此给满 2 个背书，
+        # 让它落在线行为这条轴而不是共识闸门这条轴。
+        "strategy_signals": [
+            {"strategy_id": "chip-single-peak-breakout", "score": 56.0, "hard_veto": False},
+            {"strategy_id": "trend-pullback-continuation", "score": 55.0, "hard_veto": False},
+        ],
     }
     market = _snapshot("弱势")
     # 无候选过线（top 56 < 60），软降线应把线放到 max(top-1, base_floor)=55 放行
