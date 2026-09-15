@@ -21,6 +21,10 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.services.backtest.strategy_profile import StrategyBacktestProfiles
 from app.services.outcome_service import exposure_sample_counts
+from app.services.registry.backtest_metrics import (
+    backtest_returns_for,
+    load_backtest_metrics,
+)
 from app.services.strategy_center_service import (
     StrategyVersionNotFoundError,
     get_strategy_center_detail,
@@ -191,6 +195,9 @@ def list_strategies(
     # 不跨版本混合——避免窗口每天漂移导致页面长期「尚未生成」。
     profiles_by_id = profiles.read_many_rolled(targets)
     exposure_30d = exposure_sample_counts(db, window_days=30)
+    # 三窗回测指标（path A 诊断口径）：来自 app/policies/strategy_backtest_metrics.json，
+    # 与 canonical_backtest 画像分开呈现，缺失时整块降级为 None。
+    backtest_metrics = load_backtest_metrics()
 
     # T4：低曝光策略门线明细**批量**查询（1 次索引扫描替代 N 次全扫）
     low_sids = [
@@ -237,6 +244,7 @@ def list_strategies(
                 target.strategy_version if target is not None else None
             ),
             "performance": perf,
+            "backtest_returns": backtest_returns_for(sid, backtest_metrics),
         }
         if gate is not None:
             item["last_exp_gate"] = gate
@@ -248,6 +256,7 @@ def list_strategies(
             x["performance"]["hit_rate"]
             if x["performance"] and x["performance"]["hit_rate"] is not None
             else -1,
+            (x.get("backtest_returns") or {}).get("avg_net_pct_mean") or -9e9,
         ),
         reverse=True,
     )

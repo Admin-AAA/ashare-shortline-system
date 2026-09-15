@@ -2121,6 +2121,62 @@ export type StrategyListItem = {
   performance_status: "ready" | "pending_backtest" | "unavailable";
   current_strategy_version: string | null;
   performance: StrategyPerformance | null;
+  /** 三窗回测收益（path A 诊断口径，单策略组合）：与 canonical 画像分开呈现 */
+  backtest_returns?: StrategyBacktestReturns | null;
+};
+
+/** 单个窗口的逐笔回测统计（口径见 StrategyBacktestReturns.caliber） */
+export type StrategyBacktestWindow = {
+  n: number;
+  win_rate_pct: number;
+  avg_net_pct: number;
+  sum_net_pct: number;
+  /** 窗口内无亏损笔或样本<5 时为 null（不做伪精度展示） */
+  profit_factor: number | null;
+  profit_factor_note?: string | null;
+  max_drawdown_pct: number;
+  trade_days: number;
+  delta_cohort_vs_combined: number | null;
+  ci95: [number, number] | null;
+  month_same_sign_ratio: number | null;
+  challenger: string | null;
+};
+
+/** 三窗回测收益聚合（后端 /api/strategies 的 backtest_returns 字段） */
+export type StrategyBacktestReturns = {
+  windows: Record<string, StrategyBacktestWindow | null>;
+  windows_with_trades: number;
+  passes: number;
+  avg_net_pct_mean: number | null;
+  all_windows_positive: boolean;
+  any_window_positive: boolean;
+  combined: Record<
+    string,
+    {
+      n: number;
+      win_rate_pct: number;
+      avg_net_pct: number;
+      sum_net_pct: number;
+      profit_factor: number;
+      max_drawdown_pct: number;
+      trade_days: number;
+    }
+  >;
+  caliber: {
+    label?: string;
+    description?: string;
+    combined_label?: string;
+    selection_policy?: string;
+    execution_policy?: string;
+    score_line?: number;
+    output_count?: number;
+    caveat?: string;
+    reproduce?: string;
+    source_artifact?: string;
+  };
+  windows_meta: Record<string, { from: string; to: string; label: string }>;
+  generated_at: string;
+  schema_version: number;
 };
 
 export type StrategyVersionUsage = {

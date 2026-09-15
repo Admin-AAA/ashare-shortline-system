@@ -1,7 +1,12 @@
 import { useState, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileText, History, Layers, Target } from "lucide-react";
 import { api } from "../api/client";
-import type { PresetStatsRow, StrategyListItem, StrategyPerformance } from "../types";
+import type {
+  PresetStatsRow,
+  StrategyBacktestReturns,
+  StrategyListItem,
+  StrategyPerformance,
+} from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { Panel } from "../components/Panel";
 import { useApi } from "../app/useApi";
@@ -93,7 +98,7 @@ function SkillsView({
     <>
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "var(--space-3)", padding: "var(--space-2) 0 var(--space-4)" }}>
         <div style={{ color: "var(--muted)", fontSize: 12 }}>
-          当前版本 canonical 回测 · 按信号日期筛选，收益按退出日聚合 · 不混入旧版本真实收益
+          三窗回测收益（单策略组合，见卡内口径）· 当前版本 canonical 画像另计 · 不混入旧版本真实收益
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexShrink: 0 }}>
           <span style={{ color: "var(--muted)", fontSize: 12 }}>窗口</span>
@@ -360,6 +365,8 @@ function CalledCard({ item, windowDays }: { item: StrategyListItem; windowDays: 
         <History size={14} /> 查看该策略推荐历史 →
       </button>
 
+      <BacktestReturnsBlock item={item} />
+
       <StrategyDetailLink item={item} />
 
       <CardFooter item={item} />
@@ -400,8 +407,111 @@ function DormantCard({ item }: { item: StrategyListItem }) {
         当前版本半年画像尚未生成；不会展示跨版本混合收益
       </div>
 
+      <BacktestReturnsBlock item={item} />
+
       <StrategyDetailLink item={item} />
       <CardFooter item={item} />
+    </div>
+  );
+}
+
+/**
+ * 三窗回测收益块：把本机跑出的单策略回测收益率直接展示在策略卡上。
+ *
+ * 口径（与 canonical_backtest 画像不同，必须显式标注，禁止混算）：
+ * 只保留该技能有非否决策略信号的候选卡 → 真实 selection v4（score_line 72 / Top10）
+ * → execution v4 因果出场；逐笔等权，不含仓位与资金模型。属 path A 诊断证据。
+ */
+function BacktestReturnsBlock({ item }: { item: StrategyListItem }) {
+  const bt = item.backtest_returns as StrategyBacktestReturns | null | undefined;
+  if (!bt) return null;
+  const windows = ["W1", "W2", "W3"];
+  const cellLabel: React.CSSProperties = {
+    fontSize: "var(--text-xs)",
+    color: "var(--muted)",
+    fontFamily: "var(--font-mono)",
+  };
+  return (
+    <div
+      style={{
+        marginTop: "var(--space-3)",
+        paddingTop: "var(--space-3)",
+        borderTop: "1px dashed var(--border)",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline" }}>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text)", fontWeight: 600 }}>
+          {bt.caliber?.label ?? "三窗回测收益"}（单策略组合）
+        </span>
+        <span
+          style={cellLabel}
+          title={bt.caliber?.caveat ?? ""}
+        >
+          {bt.windows_with_trades}/3 窗有样本
+        </span>
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: "var(--space-2)",
+          marginTop: "var(--space-2)",
+        }}
+      >
+        {windows.map((w) => {
+          const m = bt.windows?.[w];
+          const meta = bt.windows_meta?.[w];
+          if (!m) {
+            return (
+              <div key={w} style={{ background: "var(--surface)", borderRadius: 8, padding: "var(--space-2)" }}>
+                <div style={cellLabel} title={meta?.label}>
+                  {w}
+                </div>
+                <div style={{ fontSize: "var(--text-sm)", color: "var(--muted)" }}>无成交</div>
+              </div>
+            );
+          }
+          const color =
+            m.avg_net_pct >= 0 ? "var(--market-up)" : "var(--market-down)";
+          return (
+            <div
+              key={w}
+              style={{ background: "var(--surface)", borderRadius: 8, padding: "var(--space-2)" }}
+              title={`${meta?.label ?? w}（${meta?.from ?? ""} ~ ${meta?.to ?? ""}）\nn=${m.n} · 出票日 ${m.trade_days}\n胜率 ${m.win_rate_pct}% · 盈亏比 ${m.profit_factor}\n累计 ${m.sum_net_pct}% · 最大回撤 ${m.max_drawdown_pct}%\n闸门 ${m.challenger ?? "—"}`}
+            >
+              <div style={cellLabel}>{w}</div>
+              <div style={{ fontSize: "var(--text-lg)", fontWeight: 700, color }}>
+                {m.avg_net_pct >= 0 ? "+" : ""}
+                {m.avg_net_pct.toFixed(2)}%
+              </div>
+              <div style={cellLabel}>
+                WR {m.win_rate_pct.toFixed(1)}% · PF{" "}
+                {m.profit_factor == null ? "—" : m.profit_factor.toFixed(2)}
+              </div>
+              <div style={cellLabel}>
+                Σ {m.sum_net_pct >= 0 ? "+" : ""}
+                {m.sum_net_pct.toFixed(1)}% · n {m.n}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ ...cellLabel, marginTop: 4 }} title={bt.caliber?.description ?? ""}>
+        口径 {bt.caliber?.selection_policy} + {bt.caliber?.execution_policy} · 三窗平均单笔{" "}
+        {bt.avg_net_pct_mean == null
+          ? "—"
+          : `${bt.avg_net_pct_mean >= 0 ? "+" : ""}${bt.avg_net_pct_mean.toFixed(2)}%`}
+        {" · "}
+        组合基线{" "}
+        {["W1", "W2", "W3"]
+          .map((w) => {
+            const c = bt.combined?.[w];
+            return c ? `${w} ${c.avg_net_pct >= 0 ? "+" : ""}${c.avg_net_pct.toFixed(2)}%` : `${w} —`;
+          })
+          .join(" / ")}
+        {" · "}
+        {bt.generated_at?.slice(0, 10) ?? "—"}
+      </div>
     </div>
   );
 }
