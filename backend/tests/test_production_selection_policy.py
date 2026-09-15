@@ -350,14 +350,15 @@ def test_extra_tail_veto_is_disabled_by_default_and_absent_from_frozen_artifacts
     from app.engine.production_policy import load_production_selection_policy
 
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.extra_tail_veto_enabled is False
-    # 当前默认 = v7（L-119：强牛·高潮输出上限收到 2）；v1-v6 是 frozen artifact，语义必须逐位不变
+    # 当前默认 = v7；v8 是"已验证但不作为默认"的候选（L-121：W3 胜率下降）
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 7
     for version in (1, 2, 3, 4, 5, 6):
         policy = load_production_selection_policy(version=version)
         assert policy.extra_tail_veto_enabled is False
         # v5 引入共识闸门；v6 引入强牛·高潮输出上限 → 各版本只允许拥有自己那一代的新键
         assert policy.consensus_min_signals == (2 if version >= 5 else 0)
-        assert policy.strong_climax_top_n == (3 if version == 6 else 0)
+        assert policy.strong_climax_top_n == (3 if version == 6 else 2 if version == 7 else 0)
+        assert policy.no_support_high_ivol_veto_enabled is False
         payload = json.loads(
             (
                 Path(__file__).resolve().parents[1]
@@ -371,6 +372,7 @@ def test_extra_tail_veto_is_disabled_by_default_and_absent_from_frozen_artifacts
             assert not any(key.startswith("consensus_") for key in payload)
         if version < 6:
             assert not any(key.startswith("strong_climax") for key in payload)
+        assert not any(key.startswith("no_support_high_ivol") for key in payload)
 
 
 def test_extra_tail_veto_high_tail_drops_card_and_backfills_next_ranked() -> None:

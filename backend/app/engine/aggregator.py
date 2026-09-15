@@ -973,7 +973,6 @@ def apply_pool_rules(
     )
     if selection_policy is not None:
         board_universe = selection_policy.board_universe
-    # v6 强牛·高潮输出上限（L-118）：高潮日多个 −5.66% 跳空止损集中在强牛基态，
     # 把当日候选先按分数收到最高的 N 张（N=0 关闭）。放在 board/bucket 过滤之前，
     # 与离线筛查口径一致（先按分数取前 N，再走完整政策链）。
     _climax_top_n = int(getattr(selection_policy, "strong_climax_top_n", 0) or 0) if selection_policy is not None else 0
@@ -1070,6 +1069,38 @@ def apply_pool_rules(
                 "eliminated": True,
             })
         deduped = kept_after_consensus
+    # v8 无支撑高波动否决（L-121）：把 DSA 的"回撤特征"迁移成跨策略条件——高特质波动
+    # （ivol20_pct ≥ 阈值）且当日没有 MA5/MA10 支撑的卡直接剔除（缺 ivol 分位时保守放行）。
+    # 数据：W2 里 DSA 相关卡共同点是"有 MA 支撑"（sup5 0.37 vs 无 DSA 卡 0.16）；
+    # W3 里亏损卡集中高 ivol(0.80)+高位+无支撑，赢家是低位低波动+有支撑。
+    if (
+        selection_policy is not None
+        and bool(getattr(selection_policy, "no_support_high_ivol_veto_enabled", False))
+    ):
+        _ns_thr = float(getattr(selection_policy, "no_support_high_ivol_pct_threshold", 0.70))
+        kept_after_support: list[dict[str, Any]] = []
+        for card in deduped:
+            _ivol = card.get("ivol20_pct")
+            if _ivol is None:
+                kept_after_support.append(card)
+                continue
+            try:
+                _ivol = float(_ivol)
+            except (TypeError, ValueError):
+                kept_after_support.append(card)
+                continue
+            has_support = bool(card.get("support_ma5")) or bool(card.get("support_ma10"))
+            if _ivol >= _ns_thr and not has_support:
+                card["policy_drop_owner"] = "no_support_high_ivol_veto"
+                card.setdefault("policy_verdict_steps", []).append({
+                    "rule_id": "no_support_high_ivol_veto",
+                    "action": "drop",
+                    "reason": f"ivol20 分位 {_ivol:.2f}≥{_ns_thr:.2f} 且无 MA5/MA10 支撑",
+                    "eliminated": True,
+                })
+                continue
+            kept_after_support.append(card)
+        deduped = kept_after_support
     if (
         selection_policy is not None
         and getattr(selection_policy, "extra_tail_veto_enabled", False)

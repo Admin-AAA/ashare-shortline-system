@@ -105,6 +105,13 @@ class ProductionSelectionPolicy:
     # 且三窗均过 evaluate_challenger（W2 CI 下界 +0.064、逐月同号 0.86）。
     strong_climax_top_n: int = 0
 
+    # v8（L-121）：高特质波动 + 无均线支撑 → 剔除（把 DSA 的"回撤特征"迁移成跨策略条件）。
+    # 依据：W2 里 DSA 相关卡的共同点是"有 MA 支撑"（sup5 0.37 vs 无 DSA 0.16）；
+    # W3 里亏损卡集中在高 ivol(0.80) + 高位 + 无支撑，而赢家是低位低波动有支撑。
+    # 面板三端口径：W1 WR 60.0%/PF1.420、W3 WR 59.0%/PF1.446/Σ+53.9（W2 让价）。
+    no_support_high_ivol_veto_enabled: bool = False
+    no_support_high_ivol_pct_threshold: float = 0.70
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -149,6 +156,8 @@ class ProductionSelectionPolicy:
             "consensus_min_signals": self.consensus_min_signals,
             "consensus_regimes": list(self.consensus_regimes),
             "strong_climax_top_n": self.strong_climax_top_n,
+            "no_support_high_ivol_veto_enabled": self.no_support_high_ivol_veto_enabled,
+            "no_support_high_ivol_pct_threshold": self.no_support_high_ivol_pct_threshold,
         }
 
     @property
@@ -216,12 +225,14 @@ def load_production_selection_policy(
     强牛/偏多不动，避免削掉强趋势窗口的动量收益）。
     v6 为当前默认 = v5 全部规则 + 强牛·高潮日输出上限（strong_climax_top_n=3，L-118；
     三窗 Δcohort 全正、W2 配对 CI 下界 >0、逐月同号 0.86）。
-    v7 为当前默认 = v6 的同一旋钮收到 2 张（近期窗口优先：端到端 W3 五项全改善
+    v8 = v7 + "高 ivol 且无均线支撑"硬剔除（L-121）：端到端 W3 avg/PF/sum 改善但**胜率下降**
+    （51.0% vs v7 54.5%），而胜率是当前最紧的约束，因此 v8 保留为可显式加载的候选、**不作为默认**。
+    v7 = v6 的同一旋钮收到 2 张（近期窗口优先：端到端 W3 五项全改善
     avg +0.4237 / WR 54.5% / PF 1.186 / sum +28.0 / MDD −15.69，W1 亦改善至 +0.6079/PF 1.336，
     W2 让价 WR −2.0pp、MDD −1.31 但 avg/sum/PF 均改善）。
     需要严格复现旧口径时显式传 version=1/2/3/4/5/6。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -254,6 +265,12 @@ def load_production_selection_policy(
     )
     payload["consensus_min_signals"] = int(payload.get("consensus_min_signals") or 0)
     payload["strong_climax_top_n"] = int(payload.get("strong_climax_top_n") or 0)
+    payload["no_support_high_ivol_veto_enabled"] = bool(
+        payload.get("no_support_high_ivol_veto_enabled", False)
+    )
+    payload["no_support_high_ivol_pct_threshold"] = float(
+        payload.get("no_support_high_ivol_pct_threshold") or 0.70
+    )
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:
         raise ValueError("production selection policy artifact identity mismatch")

@@ -324,6 +324,36 @@ RULES: dict[str, "callable"] = {
     "climax_top4_strong": _climax_top_n(4, ("强牛",)),
     "climax_top3_all": _climax_top_n(3),
     "climax_top4_all": _climax_top_n(4),
+    # DSA 的"回撤特征"迁移（用户 2026-09-15 建议）：W2 里 DSA 相关卡的共同点是
+    # 小/中市值 + 有 MA 支撑（sup5 0.37 vs 无 DSA 0.16）；W3 里 DSA 主导卡的亏损卡
+    # 集中在高 ivol(0.80) + 高位(pos60 68/dist60 12)；W3 的赢家是低位(pos60 45/dist60 1.4)+低 ivol(0.65)。
+    # → 检验"高波动/高位的卡必须有均线支撑，否则不进"这一类跨策略条件。
+    "gate_support_hiivol": _card_filter(
+        lambda c, _d: not (
+            (float(c.get("ivol20_pct") or 0) >= 0.70)
+            and not (c.get("support_ma5") or c.get("support_ma10"))
+        )
+    ),
+    "gate_support_hidn": _card_filter(
+        lambda c, _d: not (
+            (float(c.get("ivol_dn20_pct") or 0) >= 0.50)
+            and not (c.get("support_ma5") or c.get("support_ma10"))
+        )
+    ),
+    "gate_support_extended": _card_filter(
+        lambda c, _d: not (
+            (_fs(c).get("pos60") is not None and float(_fs(c).get("pos60")) >= 70.0)
+            and not (c.get("support_ma5") or c.get("support_ma10"))
+        )
+    ),
+    "gate_support_hiivol_ext": _card_filter(
+        lambda c, _d: not (
+            (float(c.get("ivol20_pct") or 0) >= 0.70)
+            and (_fs(c).get("pos60") is not None and float(_fs(c).get("pos60")) >= 65.0)
+            and not (c.get("support_ma5") or c.get("support_ma10"))
+        )
+    ),
+    "penalize_no_support6": _penalty(lambda c, _d: not (c.get("support_ma5") or c.get("support_ma10")), 6.0),
     # ⑤c 反向杠杆：不剔除低共识卡，而是给"多策略背书"加分（保留全部候选，
     # 只改排序/过线）。假设：背书数在弱势/震荡里是质量信号，在强趋势里失效。
     "consensus_boost6": _consensus_boost(6.0),
@@ -337,6 +367,15 @@ RULES: dict[str, "callable"] = {
     "non_main_p8": _penalty(_industry_not_in_main, 8.0),
     "non_main_drop": _card_filter(lambda c, d: not _industry_not_in_main(c, d)),
 }
+
+# 阈值敏感性：只剔"最高 ivol 且无支撑"的更小一档（W3 WR 掉太多的备选）
+for _thr in (0.75, 0.80, 0.85, 0.90):
+    RULES[f"gate_support_hiivol_{int(_thr*100)}"] = _card_filter(
+        lambda c, _d, _t=_thr: not (
+            (float(c.get("ivol20_pct") or 0) >= _t)
+            and not (c.get("support_ma5") or c.get("support_ma10"))
+        )
+    )
 
 # 组合/口径变体：只改 policy 调用上下文（score_line / output_count），不改卡也不改政策字段。
 # 动机：生产盘前预设 `preset_formal_opening` 实际是 **Top6 + score_line 72**，而本筛查器的
@@ -354,6 +393,97 @@ CONTEXT_VARIANTS: dict[str, dict] = {
 
 for _wname, _wmap in WEIGHT_VARIANTS.items():
     RULES.setdefault(_wname, _weight_rule(_wmap))
+
+
+# 逐策略信号权重轴：`strategy_rule = Σ(w_s·score_s)/Σ(w_s)`（已用面板多信号卡 1211/1211 验证），
+# 再把 strategy_rule 代回 final_score 公式。单信号卡不受影响（权重在分子分母里约掉），
+# 因此这条轴只改变"多策略联合背书"卡的相对排序——正好用来压低"自己主导但胜率低"的技能。
+SIGNAL_WEIGHT_VARIANTS: dict[str, dict] = {
+    "sigw_identity": {},                                  # 保真度对照，必须 Δ≡0
+    "sigw_dsa05": {"daily-stock-analysis-skill": 0.5},
+    "sigw_dsa025": {"daily-stock-analysis-skill": 0.25},
+    "sigw_chaogu15": {"chao-gu-yang-jia-skill": 1.5},
+    "sigw_chen15": {"chen-xiaoqun-skill": 1.5},
+    "sigw_dsa05_chaogu15": {"daily-stock-analysis-skill": 0.5, "chao-gu-yang-jia-skill": 1.5},
+    "sigw_dsa05_chen15": {"daily-stock-analysis-skill": 0.5, "chen-xiaoqun-skill": 1.5},
+    "sigw_dsa05_chaogu15_chen15": {"daily-stock-analysis-skill": 0.5, "chao-gu-yang-jia-skill": 1.5,
+                                   "chen-xiaoqun-skill": 1.5},
+}
+
+
+def _signal_weight_rule(overrides: dict):
+    """按逐技能权重重算 strategy_rule → final_score（缺组件分的卡原样放行）。"""
+
+    def rule(cards, _day):
+        out = []
+        for c in cards:
+            raw = c.get("raw_component_scores")
+            sigs = [s for s in (c.get("strategy_signals") or [])
+                    if isinstance(s, dict) and not s.get("hard_veto")]
+            if not isinstance(raw, dict) or not sigs:
+                out.append(c)
+                continue
+            num = den = 0.0
+            for s in sigs:
+                w = float(overrides.get(str(s.get("strategy_id")), 1.0))
+                num += float(s.get("score") or 0.0) * w
+                den += w
+            if den <= 0:
+                out.append(c)
+                continue
+            new_raw = dict(raw)
+            new_raw["strategy_rule"] = num / den
+            weights = c.get("aggregation_weights") or {}
+            base = sum(float(weights.get(k, 0.0)) * float(new_raw.get(k, 0.0) or 0.0)
+                       for k in ("skill_agent", "strategy_rule", "market", "risk", "evidence"))
+            score = base * float(c.get("consensus_boost") or 1.0)
+            auth = float(c.get("data_authenticity") or 1.0)
+            if auth < 0.7:
+                score *= 0.85
+            if auth < 0.5:
+                score *= 0.75
+            cap = (c.get("score_breakdown") or {}).get("quality_cap")
+            if cap is not None:
+                score = min(score, float(cap))
+            out.append({**c, "final_score": round(score, 2), "selection_score": round(score, 2),
+                        "portfolio_rank_score": round(score, 2)})
+        return out
+
+    return rule
+
+
+# "YAML 声明权重真正生效"配置：把每个 skill 的 strategy.yaml `weight:` 当作信号权重
+# （现状是全部 1.0 —— 声明被静默忽略，见 L-120）。
+SIGNAL_WEIGHT_VARIANTS.update({
+    "sigw_yaml_declared": {
+        "chao-gu-yang-jia-skill": 1.1, "chen-xiaoqun-skill": 1.5, "chip-single-peak-breakout": 0.2,
+        "daily-stock-analysis-skill": 0.3, "high-range-breakout-momentum": 0.35,
+        "limit-up-reseal-relay": 0.6, "overnight-holding-method": 0.35,
+        "sector-relative-strength-leader": 1.5, "trend-pullback-continuation": 0.2,
+    },
+    "sigw_yaml_declared_chaogu1": {
+        "chao-gu-yang-jia-skill": 1.0, "chen-xiaoqun-skill": 1.5, "chip-single-peak-breakout": 0.2,
+        "daily-stock-analysis-skill": 0.3, "high-range-breakout-momentum": 0.35,
+        "limit-up-reseal-relay": 0.6, "overnight-holding-method": 0.35,
+        "sector-relative-strength-leader": 1.5, "trend-pullback-continuation": 0.2,
+    },
+    "sigw_declared_dsa05": {
+        "chao-gu-yang-jia-skill": 1.1, "chen-xiaoqun-skill": 1.5, "chip-single-peak-breakout": 0.2,
+        "daily-stock-analysis-skill": 0.5, "high-range-breakout-momentum": 0.35,
+        "limit-up-reseal-relay": 0.6, "overnight-holding-method": 0.35,
+        "sector-relative-strength-leader": 1.5, "trend-pullback-continuation": 0.2,
+    },
+})
+# 生产 preset_formal_opening 的逐技能权重（LIVE 走 signal.weight）以及其上的候选改动。
+_PRESET_W = {"chao-gu-yang-jia-skill": 1.1, "chen-xiaoqun-skill": 1.5, "chip-single-peak-breakout": 0.2, "daily-stock-analysis-skill": 0.3, "high-range-breakout-momentum": 0.95, "limit-up-reseal-relay": 0.9, "overnight-holding-method": 0.85, "sector-relative-strength-leader": 1.5, "trend-pullback-continuation": 0.2}
+SIGNAL_WEIGHT_VARIANTS.update({
+    "sigw_preset": dict(_PRESET_W),
+    "sigw_preset_dsa05": {**_PRESET_W, "daily-stock-analysis-skill": 0.5},
+    "sigw_preset_dsa05_others1": {"daily-stock-analysis-skill": 0.5, "chen-xiaoqun-skill": 1.5},
+    "sigw_preset_no_low": {k: (1.0 if v < 0.9 else v) for k, v in _PRESET_W.items()},
+})
+for _n, _m in SIGNAL_WEIGHT_VARIANTS.items():
+    RULES.setdefault(_n, _signal_weight_rule(_m))
 
 # 政策级变体（不筛卡，只改 policy 字段）：W3 的亏损集中在"强牛·高潮"交易日，
 # 现有政策已有 climax_nonweak_extra（高潮抬线）与 climax_output_divisor（高潮减半输出），

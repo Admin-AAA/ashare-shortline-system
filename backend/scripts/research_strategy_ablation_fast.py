@@ -94,6 +94,7 @@ _PANEL_CARD_KEYS = (
 PANEL: dict = {"dir": None}
 UNIVERSE: dict = {"mode": "historical"}
 POLICY_VERSION: dict = {"n": None}   # None = 用 default；否则显式加载该版本 artifact
+SKILL_WEIGHTS: dict = {"mode": "equal", "map": None}  # equal | preset | json
 _IVOL_BY_DATE: dict[str, dict] = {}
 _IVOL_DN_BY_DATE: dict[str, dict] = {}
 
@@ -315,6 +316,8 @@ def _worker_setup(
     panel_dir: str | None,
     policy_note: str,
     policy_version: int | None = None,
+    skill_weight_mode: str | None = None,
+    skill_weight_map: dict | None = None,
 ) -> None:
     """每个进程（含主进程）各自准备 builder + session；worker 之间不共享任何对象。"""
     from app.services.factors.registry import bootstrap_default_factor_registry
@@ -336,6 +339,26 @@ def _worker_setup(
         historical_replay=(UNIVERSE["mode"] == "historical"),
     )
     selected_all = list(builder._selected_skills(None))  # noqa: SLF001
+    # 逐技能信号权重：生产 LIVE 走 `_build_recommendation_card` 的
+    # `signal["weight"] = selected["weight"]`（即 preset_skills 权重），而本重放器
+    # `_selected_skills` 默认给 1.0（等权）——两者差异会改变 strategy_rule 与最终排序。
+    # 默认保持等权（历史可比），需要生产口径时传 --skill-weights preset。
+    mode = skill_weight_mode or SKILL_WEIGHTS.get("mode") or "equal"
+    weight_map: dict[str, float] | None = None
+    if mode == "preset":
+        from sqlalchemy import text as _text
+
+        rows = db.execute(
+            _text("SELECT skill_id, weight FROM preset_skills WHERE preset_id = 'preset_formal_opening'")
+        ).all()
+        weight_map = {str(r[0]): float(r[1]) for r in rows}
+    elif mode == "json":
+        weight_map = {str(k): float(v) for k, v in (skill_weight_map or SKILL_WEIGHTS.get("map") or {}).items()}
+    if weight_map:
+        selected_all = [
+            {**s, "weight": float(weight_map.get(str(s["skill_id"]), s.get("weight", 1.0)))}
+            for s in selected_all
+        ]
     _WORKER.update(
         db=db,
         builder=builder,
@@ -354,8 +377,11 @@ def _worker_init(
     panel_dir: str | None,
     policy_note: str,
     policy_version: int | None = None,
+    skill_weight_mode: str | None = None,
+    skill_weight_map: dict | None = None,
 ) -> None:
-    _worker_setup(window, arms, panel_dir, policy_note, policy_version)
+    _worker_setup(window, arms, panel_dir, policy_note, policy_version,
+                  skill_weight_mode, skill_weight_map)
 
 
 def _process_day(signal_date: str) -> dict:
@@ -560,7 +586,8 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
         with ProcessPoolExecutor(
             max_workers=workers,
             initializer=_worker_init,
-            initargs=(window, arms, panel_dir, policy_note, POLICY_VERSION["n"]),
+            initargs=(window, arms, panel_dir, policy_note, POLICY_VERSION["n"],
+                      SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map")),
         ) as pool:
             for res in pool.map(_process_day, trade_dates, chunksize=1):
                 done += 1
@@ -570,7 +597,8 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
                     print(f"  [{window}] {done}/{len(trade_dates)} 天 {el/60:.1f}min "
                           f"A={len(trades['__all__'])}笔", flush=True)
     else:
-        _worker_setup(window, arms, panel_dir, policy_note, POLICY_VERSION["n"])
+        _worker_setup(window, arms, panel_dir, policy_note, POLICY_VERSION["n"],
+                      SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"))
         for di, signal_date in enumerate(trade_dates, 1):
             _merge_day_result(_process_day(signal_date), trades, prov_rows, panel_days, triggered)
             if di % 10 == 0 or di == len(trade_dates):
@@ -692,6 +720,12 @@ def main() -> None:
         help="显式用某个 production_selection 版本跑（默认用当前 default）。用于在不改默认的前提下"
              "验证候选 artifact（如 v7 = v6 + strong_climax_top_n=2）。",
     )
+    ap.add_argument(
+        "--skill-weights",
+        default="equal",
+        help="equal（默认，全部 1.0）| preset（读 preset_formal_opening 的 preset_skills 权重，"
+             "与生产 LIVE 的 signal.weight 口径一致）| JSON 字符串（如 '{\"daily-stock-analysis-skill\":0.5}'）",
+    )
     ap.add_argument("--policy-note", default=None)
     args = ap.parse_args()
     if args.policy_note is None:
@@ -706,6 +740,15 @@ def main() -> None:
     PANEL["dir"] = args.panel_dir
     UNIVERSE["mode"] = args.universe
     POLICY_VERSION["n"] = args.policy_version
+    _sw = str(args.skill_weights or "equal").strip()
+    if _sw in ("equal", "preset"):
+        SKILL_WEIGHTS["mode"] = _sw
+        SKILL_WEIGHTS["map"] = None
+    else:
+        import json as _json
+
+        SKILL_WEIGHTS["mode"] = "json"
+        SKILL_WEIGHTS["map"] = _json.loads(_sw)
     WORKERS["n"] = max(1, int(args.workers))
     print(f"[workers] {WORKERS['n']}", flush=True)
     print(f"[universe] {UNIVERSE['mode']}", flush=True)
