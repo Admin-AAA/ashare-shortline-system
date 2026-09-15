@@ -1134,6 +1134,29 @@ def apply_pool_rules(
                 "eliminated": True,
             })
         deduped = kept_after_consensus
+    # v11 高换手闸门（L-124）：turnover_rate ≥ 阈值的卡直接剔除，由其后按 final_score 排序的
+    # 下一名自然递补。依据：已选样本按换手分层时 [8,12) 在三个窗口都是低质量区（三窗符号一致），
+    # 是本轮唯一三窗同号的横截面特征。默认 None = 关闭，保证 v1-v10 逐位不变。
+    if (
+        selection_policy is not None
+        and getattr(selection_policy, "high_turnover_veto_pct", None) is not None
+    ):
+        _turn_thr = float(selection_policy.high_turnover_veto_pct)
+        kept_after_turnover: list[dict[str, Any]] = []
+        for card in deduped:
+            _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
+            _turn = card.get("turnover_rate", _snap.get("turnover_rate"))
+            if _turn is None or float(_turn) < _turn_thr:
+                kept_after_turnover.append(card)
+                continue
+            card["policy_drop_owner"] = "high_turnover_veto"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "high_turnover_veto",
+                "action": "drop",
+                "reason": f"换手率 {float(_turn):.2f}% ≥ {_turn_thr:.2f}%（L-124 高换手闸门）",
+                "eliminated": True,
+            })
+        deduped = kept_after_turnover
     # v8 无支撑高波动否决（L-121）：把 DSA 的"回撤特征"迁移成跨策略条件——高特质波动
     # （ivol20_pct ≥ 阈值）且当日没有 MA5/MA10 支撑的卡直接剔除（缺 ivol 分位时保守放行）。
     # 数据：W2 里 DSA 相关卡共同点是"有 MA 支撑"（sup5 0.37 vs 无 DSA 卡 0.16）；

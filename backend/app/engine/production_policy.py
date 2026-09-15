@@ -122,6 +122,14 @@ class ProductionSelectionPolicy:
     # 形如 (("overnight-holding-method", 20.0),)；默认空 = 关闭。
     slot_reserve: tuple[tuple[str, float], ...] = ()
 
+    # v11（L-124）：高换手闸门 —— turnover_rate ≥ 阈值的候选卡直接剔除（None = 关闭）。
+    # 依据（2026-09-16 第 23 轮）：在**已选中**样本上按换手分层，[8,12) 这一档在三个窗口
+    # 都是低质量区（W1 53% vs 60%、W2 47% vs 54-59%、W3 50% vs 61-65%）——是本轮唯一
+    # 三窗符号一致的横截面特征。面板口径 turnover<8：W2 WR 54.2→55.9%、PF 1.115→1.186、
+    # Σ +132→+201；W3 五项全改善（WR 55.1→55.9%、avg +0.449→+0.652、PF 1.196→1.294）。
+    # 缺 turnover_rate 的卡片保守放行（与 v8/L-121 同一纪律）。
+    high_turnover_veto_pct: float | None = None
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -169,6 +177,7 @@ class ProductionSelectionPolicy:
             "no_support_high_ivol_veto_enabled": self.no_support_high_ivol_veto_enabled,
             "no_support_high_ivol_pct_threshold": self.no_support_high_ivol_pct_threshold,
             "slot_reserve": [list(item) for item in self.slot_reserve],
+            "high_turnover_veto_pct": self.high_turnover_veto_pct,
         }
 
     @property
@@ -243,7 +252,7 @@ def load_production_selection_policy(
     W2 让价 WR −2.0pp、MDD −1.31 但 avg/sum/PF 均改善）。
     需要严格复现旧口径时显式传 version=1/2/3/4/5/6。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -285,6 +294,8 @@ def load_production_selection_policy(
     payload["slot_reserve"] = tuple(
         (str(sid), float(points)) for sid, points in payload.get("slot_reserve") or ()
     )
+    _htv = payload.get("high_turnover_veto_pct", None)
+    payload["high_turnover_veto_pct"] = None if _htv is None else float(_htv)
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:
         raise ValueError("production selection policy artifact identity mismatch")
