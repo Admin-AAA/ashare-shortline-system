@@ -1173,3 +1173,17 @@
 - 永久规则：**(a) 退役/降权任何策略必须跑生产同构 A/B 且必须逐窗跑 `evaluate_challenger`；Δ≡0 的技能（0 张边际卡）按"零贡献"退役，不适用"必须改善"闸门。** **(b) 研究脚本禁止裸构造 `ExecutionPolicy()`；必须引用 `DEFAULT_EXECUTION_POLICY`（已发布 artifact），否则测的是历史 v1 出场。** **(c) 报告"三窗指标"必须写明口径（面板 / 全管线重放）与真实区间；面板口径的 W2/W3 不是 canonical 区间，禁止当作目标达成证据。** **(d) 删除技能必须同步清理 `skill_registry`、`preset_skills` 与只含该技能的空壳 preset，否则 formal run 会被 `preset_references_unknown_strategy` / `empty_executable_preset` fail-closed 拦住（本轮删除 3 行 preset_skills + 1 个空壳 preset + 4 行 skill_registry，`build_registry_diagnostics(...).ok` 保持 True）。** **(e) 历史语义相关引用（如 `entry_policy._LEGACY_NEXT_OPEN_STRATEGY_IDS`、龙虎榜因子与标记注入）在技能退役后必须保留，删除会改变历史重放语义。**
 - 复现：`backend/scripts/research_strategy_ablation_fast.py`（多臂复用消融）、`backend/scripts/research_strategy_retire_decision.py`（三层证据决策表）、`backend/scripts/research_verify_execution_policy_v3.py`（面板口径复现）。落地文档 `docs/strategy-retire-2026-09-15.md`。
 - 相关：L-110（生产同构消融、solo 不可砍策略）、L-111（记录可复现、删前查既有 FALSIFIED）、L-010（唯一闸门）、L-058（逐月同号 0.8）、L-112（静默失效）、L-113（出场侧三窗可测性）、L-071（研究口径必须与生产同构）。
+
+## L-115【测量口径硬规则】"面板口径"与"全管线重放口径"在第 3 窗结论相反；根因不是区间/宇宙/ivol，而是重建卡只剩 4 个字段 → 大部分 v4 卡级规则静默失效
+
+- 状态：active（测量口径硬规则 + 一次选项排除实验）。
+- 现象：同一句"三窗 sum_net>0"在两套口径下第 3 窗符号相反。面板口径（`research_verify_execution_policy_v3.py`，本轮逐位复现）：W1 n=981/57.6%/+0.6448/1.374/+632.6、W2 n=693/57.4%/+0.0468/1.023/+32.4、**W3 n=94/55.3%/+0.2737/1.161/+25.7**；全管线重放口径（本仓 `--targets none` 三窗面板，含 dragon-tiger 退役后基线）：W1 n=1085/57.2%/+0.3452/1.186/+374.5、W2 n=649/56.2%/+0.1714/1.077/+111.2、**W3 n=105/46.7%/−0.3611/0.857/−37.9**。
+- 三个候选解释逐一排除（都可复现）：
+  1. **不是窗口区间**：面板口径 W3 实际只覆盖 **19 天**（2026-08-07~09-02：历史 backtest run 的 `D0/D1` 与 `build_market_snapshots` 可覆盖日取交集），而用户口径 W3 是 30 天（2026-08-01~09-13）。但把全管线重放**限定到同 19 天**仍是 n=73/WR43.8%/**avg −0.4978**/sum −36.3 → 符号不变，区间不是根因。
+  2. **不是候选宇宙**：把全管线从 `historical_replay=True`（daily_kbars 重建）换成与生产同源的实时报价池（`--universe local_pool`，`stock_quotes` 覆盖 2026-05-22 起），W3 指标**逐位相同**（n=105 / avg −0.3611 / PF 0.857 / MDD −19.84）→ 宇宙不是根因。
+  3. **不是 ivol 分位缺失**：面板口径在 `_selected()` 里已 `attach_ivol20_pct` / `attach_ivol_dn20_pct`，v3/v4 尾部否决真实生效 → 已排除。
+  4. 剩下的是**卡片字段完整性**：`research_riskveto_canonical.canon_groups` 把候选重建成 `{code, final_score, industry, signal_price}` 四个字段。v4 policy 的卡级规则（组件分/证据分与有效分数线、`_regime_*` regime 标记、执行可行性、support_ma5 等）在缺字段时按设计**保守放行**，于是同区间选出更多票（面板 94 vs 全管线 73）且更乐观。本轮同一机理在自建面板上先复现了一次：只保留白名单标量时离线 policy 在 W3 2026-08-04 多出一张票（64.38 vs 64.40 的边界票）——补回组件分/质量分/`_regime_oscillation_hard_veto` 后逐日复现选中集合。
+- 处置：**目标口径统一采用"全管线重放"**（两种生产同源宇宙一致、且方向与 LIVE 实盘 n=368/avg −1.104%/PF0.64 一致）；面板口径只保留其原本用途——**出场参数 A/B**（同面板配对，选择集固定，配对差仍有效，故 v3/v4 出场改动的判定不因此作废）。
+- 永久规则：**(a) 任何以"重建卡"为输入的选择类结论，必须先证明重建卡与生产卡字段等价（保留全部 policy 可读字段），并用逐日选中集合断言把关；字段白名单是最容易犯的静默失真。** **(b) 三窗指标必须同时写明"覆盖的完整日期区间"与"候选来源"（本次重放 / 库里已存历史 run）；覆盖不足的窗口判 NOT_EVALUABLE，不得用截断区间的正数当目标达成证据（承接 L-112(b)）。** **(c) 同一候选在两套口径下结论相反时，以"两套独立生产同源宇宙互相一致"的那一方为准，而不是以数字更好看的那一方为准。**
+- 复现：`backend/scripts/research_strategy_ablation_fast.py --windows W3 --targets none --universe local_pool`（与 `historical` 对照逐位相同）；`--panel-dir` 导出后脚本内 `_assert_panel_fidelity` 逐日断言；面板口径复现命令见 L-113/`research_verify_execution_policy_v3.py`。
+- 相关：L-112（静默失效/覆盖断言）、L-113（出场口径与三窗可测性）、L-110（生产同构）、L-114（本轮退役与裸 `ExecutionPolicy()` 陷阱）、L-071（研究必须与生产同构）。
