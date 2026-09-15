@@ -149,13 +149,6 @@ class QualityGateResult:
 # The third is intentionally kept shadow-only because the observed sample is
 # too small to satisfy the release gates.
 QUALITY_CONFIGS: Mapping[str, StrategyQualityConfig] = {
-    "small-cap-thematic-momentum": StrategyQualityConfig(
-        strategy_id="small-cap-thematic-momentum",
-        min_score=85.0,
-        allowed_regimes=("强势", "结构性强势"),
-        require_main_theme=True,
-        required_setup_keywords=("小盘主线共振", "小盘题材动量启动"),
-    ),
     "trend-pullback-continuation": StrategyQualityConfig(
         strategy_id="trend-pullback-continuation",
         min_score=85.0,
