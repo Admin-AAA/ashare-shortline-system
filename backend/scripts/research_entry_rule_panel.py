@@ -208,9 +208,57 @@ def _penalty(predicate, points):
     return rule
 
 
+def _boost_best_of_day_rule(sids, points: float):
+    """"配额槽"变体：把指定技能当日分最高的那张卡抬进 top-N（其余卡不动）。
+
+    动机（用户 2026-09-16）：单策略口径下 trend-pullback W1 WR 61.5%(n148)/W2 65.0%(n80,PF1.73)、
+    sector-relative W1 WR 59.9%(n514)，但组合里每窗只选中 19/19/3 与 8/8/1 笔——逐技能权重
+    对**单信号卡**完全无效（w 在 Σ(score·w)/Σw 里约掉），所以只有"直接抬分"才能把它们的
+    最高分卡拉进输出。这是 portfolio-construction 级别检验，不是入场规则。
+    """
+    _sids = {str(x) for x in sids}
+
+    def rule(cards, _day):
+        best = None
+        for c in cards:
+            sigs = [s for s in (c.get("strategy_signals") or [])
+                    if isinstance(s, dict) and not s.get("hard_veto")]
+            if not any(str(s.get("strategy_id")) in _sids for s in sigs):
+                continue
+            fs = float(c.get("final_score") or 0)
+            if best is None or fs > best[0]:
+                best = (fs, c)
+        if best is None:
+            return cards
+        return [_apply_score_delta(c, points) if c is best[1] else c for c in cards]
+
+    return rule
+
+
 def _vol5_20_ge(thr):
     def pred(card, _day):
         v = _fs(card).get("vol5_20")
+        return v is not None and float(v) >= thr
+    return pred
+
+
+def _dn_pct_ge(thr):
+    def pred(card, _day):
+        v = card.get("ivol_dn20_pct")
+        return v is not None and float(v) >= thr
+    return pred
+
+
+def _ivol_pct_ge(thr):
+    def pred(card, _day):
+        v = card.get("ivol20_pct")
+        return v is not None and float(v) >= thr
+    return pred
+
+
+def _fs_ge(field, thr):
+    def pred(card, _day):
+        v = _fs(card).get(field)
         return v is not None and float(v) >= thr
     return pred
 
@@ -366,6 +414,58 @@ RULES: dict[str, "callable"] = {
     "non_main_p4": _penalty(_industry_not_in_main, 4.0),
     "non_main_p8": _penalty(_industry_not_in_main, 8.0),
     "non_main_drop": _card_filter(lambda c, d: not _industry_not_in_main(c, d)),
+    # ⑦ 尾部风险族：用户 2026-09-16 建议把"DSA 的回撤特征"迁移到其他策略。
+    # 直接口径：把"净收益 <= -5%（跳空/止损大亏）"当目标变量，在 W1/W2/W3 的**已选中**样本上
+    # 做分位筛查（n=1357，命中率 29.6%）。三窗（高组 − 低组）尾部率差：
+    #   ivol20_pct      +15.3 | +6.2 | +21.1 pp  ← 与 v3 强牛高 ivol 否决同源，但生产只在强牛生效
+    #   ivol_dn20_pct   +15.7 | +9.8 |  +6.3 pp  ← 新轴：下行半波动高分位
+    #                                            （生产现用其**低**分位否决 L-109，方向相反）
+    #   chg20            +6.9 | +3.3 | +25.5 pp
+    #   limit_up_days20  +5.7 | +4.3 | +26.7 pp
+    # 三窗全同号且高组均值同时更低的只有 ivol20 / ivol_dn20 / chg20 三个。
+    # 注意：面板是 v4 导出态，v7 的强牛高 ivol 否决（≥0.80）已含在 Δ 基线里。
+    "tailrisk_dnvol_ge60": _card_filter(_dn_pct_ge(0.60)),
+    "tailrisk_dnvol_ge70": _card_filter(_dn_pct_ge(0.70)),
+    "tailrisk_dnvol_ge80": _card_filter(_dn_pct_ge(0.80)),
+    "tailrisk_dnvol_pen8": _penalty(_dn_pct_ge(0.70), 8.0),
+    "tailrisk_ivolall_ge80": _card_filter(_ivol_pct_ge(0.80)),
+    "tailrisk_ivolall_ge86": _card_filter(_ivol_pct_ge(0.86)),
+    "tailrisk_chg20_ge25": _card_filter(_fs_ge("chg20", 25.0)),
+    "tailrisk_chg20_ge35": _card_filter(_fs_ge("chg20", 35.0)),
+    # 组合：两条尾部轴并联（任一命中即剔），检验边际叠加还是互相重复。
+    "tailrisk_dn70_or_chg20_25": _card_filter(
+        lambda c, _d: not (_dn_pct_ge(0.70)(c, _d) or _fs_ge("chg20", 25.0)(c, _d))
+    ),
+    "tailrisk_dn70_or_ivol80": _card_filter(
+        lambda c, _d: not (_dn_pct_ge(0.70)(c, _d) or _ivol_pct_ge(0.80)(c, _d))
+    ),
+    # ⑧ 配额槽族（用户 2026-09-16 的"其他策略推不出票"问题）：把被排序挤掉的高胜率技能
+    # 当日最高分卡直接抬进 top-N。单策略口径（生产权重、v4 policy）参考值：
+    #   trend-pullback  W1 61.5%(n148) W2 65.0%(n80,PF1.73) W3 42.1%(n19)
+    #   sector-relative W1 59.9%(n514) W2 50.3%(n330) W3 52.5%(n40)
+    #   overnight       W1 63.9%(n36)  W2 46.2%(n26)  W3 83.3%(n6)
+    # 抬分幅度 15 分是"跨过 score_line(72) 之上、但不至于把 top-N 全占满"的量级。
+    "quota_tp12": _boost_best_of_day_rule(("trend-pullback-continuation",), 12.0),
+    "quota_tp20": _boost_best_of_day_rule(("trend-pullback-continuation",), 20.0),
+    "quota_sr20": _boost_best_of_day_rule(("sector-relative-strength-leader",), 20.0),
+    "quota_on20": _boost_best_of_day_rule(("overnight-holding-method",), 20.0),
+    "quota_tp20_sr20": _boost_best_of_day_rule(
+        ("trend-pullback-continuation", "sector-relative-strength-leader"), 20.0
+    ),
+    "quota_chip20": _boost_best_of_day_rule(("chip-single-peak-breakout",), 20.0),
+    # 中性版：不点名任何单一技能，而是给"非三大主力（chao/chen/DSA）"的最高分卡一个槽。
+    # 动机：overnight 有 2026-07-21 因 LIVE 低胜率被暂停、08-06 才恢复的记录，
+    # 单靠它背书配额机制不够稳；这里检验"配额本身是否有效"（换 sleeve 而非换机制）。
+    "quota_tier2_20": _boost_best_of_day_rule(
+        ("trend-pullback-continuation", "sector-relative-strength-leader",
+         "chip-single-peak-breakout", "high-range-breakout-momentum",
+         "limit-up-reseal-relay", "overnight-holding-method"), 20.0
+    ),
+    "quota_tier2_12": _boost_best_of_day_rule(
+        ("trend-pullback-continuation", "sector-relative-strength-leader",
+         "chip-single-peak-breakout", "high-range-breakout-momentum",
+         "limit-up-reseal-relay", "overnight-holding-method"), 12.0
+    ),
 }
 
 # 阈值敏感性：只剔"最高 ivol 且无支撑"的更小一档（W3 WR 掉太多的备选）
@@ -408,6 +508,17 @@ SIGNAL_WEIGHT_VARIANTS: dict[str, dict] = {
     "sigw_dsa05_chen15": {"daily-stock-analysis-skill": 0.5, "chen-xiaoqun-skill": 1.5},
     "sigw_dsa05_chaogu15_chen15": {"daily-stock-analysis-skill": 0.5, "chao-gu-yang-jia-skill": 1.5,
                                    "chen-xiaoqun-skill": 1.5},
+    # 被低估的高胜率技能加权（2026-09-16）：单策略 standalone 口径下
+    # trend-pullback-continuation W1 WR61.5%(n148)/W2 65.0%(n80)/PF1.73，但生产组合里
+    # 每窗只选中 19/19/3 笔——它的卡几乎从没赢过 top-N 排序。同理 sector-relative W1
+    # WR59.9%(n514)。这条轴检验"给高胜率但排序吃亏的技能加权，能否把它们的卡拉进组合"。
+    "sigw_tp15": {"trend-pullback-continuation": 1.5},
+    "sigw_tp20": {"trend-pullback-continuation": 2.0},
+    "sigw_sr15": {"sector-relative-strength-leader": 1.5},
+    "sigw_tp15_sr15": {"trend-pullback-continuation": 1.5,
+                       "sector-relative-strength-leader": 1.5},
+    "sigw_tp20_sr20": {"trend-pullback-continuation": 2.0,
+                       "sector-relative-strength-leader": 2.0},
 }
 
 
@@ -425,7 +536,10 @@ def _signal_weight_rule(overrides: dict):
                 continue
             num = den = 0.0
             for s in sigs:
-                w = float(overrides.get(str(s.get("strategy_id")), 1.0))
+                # 未点名的技能回落到 --signal-weights 的取值，否则"预设权重 + 单技能加权"
+                # 这类组合变体会把预设权重静默抹回 1.0。
+                _sid = str(s.get("strategy_id"))
+                w = float(overrides.get(_sid, (GLOBAL_SIGNAL_WEIGHTS or {}).get(_sid, 1.0)))
                 num += float(s.get("score") or 0.0) * w
                 den += w
             if den <= 0:

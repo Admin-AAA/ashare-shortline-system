@@ -95,6 +95,7 @@ PANEL: dict = {"dir": None}
 UNIVERSE: dict = {"mode": "historical"}
 POLICY_VERSION: dict = {"n": None}   # None = 用 default；否则显式加载该版本 artifact
 SKILL_WEIGHTS: dict = {"mode": "equal", "map": None}  # equal | preset | json
+EP_OVERRIDE: dict = {"policy": None}                  # dataclasses.replace 出来的出场策略变体
 _IVOL_BY_DATE: dict[str, dict] = {}
 _IVOL_DN_BY_DATE: dict[str, dict] = {}
 
@@ -318,6 +319,7 @@ def _worker_setup(
     policy_version: int | None = None,
     skill_weight_mode: str | None = None,
     skill_weight_map: dict | None = None,
+    ep=None,
 ) -> None:
     """每个进程（含主进程）各自准备 builder + session；worker 之间不共享任何对象。"""
     from app.services.factors.registry import bootstrap_default_factor_registry
@@ -368,6 +370,7 @@ def _worker_setup(
         window=window,
         panel_dir=panel_dir,
         policy_note=policy_note,
+        ep=ep if ep is not None else EP_OVERRIDE.get("policy"),
     )
 
 
@@ -379,9 +382,10 @@ def _worker_init(
     policy_version: int | None = None,
     skill_weight_mode: str | None = None,
     skill_weight_map: dict | None = None,
+    ep=None,
 ) -> None:
     _worker_setup(window, arms, panel_dir, policy_note, policy_version,
-                  skill_weight_mode, skill_weight_map)
+                  skill_weight_mode, skill_weight_map, ep)
 
 
 def _process_day(signal_date: str) -> dict:
@@ -395,7 +399,7 @@ def _process_day(signal_date: str) -> dict:
     all_ids = _WORKER["all_ids"]
     arms = _WORKER["arms"]
     settings = get_settings()
-    ep = DEFAULT_EXECUTION_POLICY
+    ep = _WORKER.get("ep") or DEFAULT_EXECUTION_POLICY
     from app.services.backtest.historical_universe import load_historical_universe
 
     _set_pct_maps(db, signal_date)
@@ -587,7 +591,8 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
             max_workers=workers,
             initializer=_worker_init,
             initargs=(window, arms, panel_dir, policy_note, POLICY_VERSION["n"],
-                      SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map")),
+                      SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"),
+                      EP_OVERRIDE.get("policy")),
         ) as pool:
             for res in pool.map(_process_day, trade_dates, chunksize=1):
                 done += 1
@@ -598,7 +603,8 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
                           f"A={len(trades['__all__'])}笔", flush=True)
     else:
         _worker_setup(window, arms, panel_dir, policy_note, POLICY_VERSION["n"],
-                      SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"))
+                      SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"),
+                      EP_OVERRIDE.get("policy"))
         for di, signal_date in enumerate(trade_dates, 1):
             _merge_day_result(_process_day(signal_date), trades, prov_rows, panel_days, triggered)
             if di % 10 == 0 or di == len(trade_dates):
@@ -726,6 +732,43 @@ def main() -> None:
         help="equal（默认，全部 1.0）| preset（读 preset_formal_opening 的 preset_skills 权重，"
              "与生产 LIVE 的 signal.weight 口径一致）| JSON 字符串（如 '{\"daily-stock-analysis-skill\":0.5}'）",
     )
+    ap.add_argument(
+        "--tp-pct",
+        type=float,
+        default=None,
+        help="覆盖出场策略：打开止盈并设默认止盈百分比（如 4 = +4% 止盈）。"
+             "WR 是目前唯一未达标的轴，止盈是最直接的胜率杠杆；默认 None = 用已发布 artifact。",
+    )
+    ap.add_argument(
+        "--trail-act",
+        type=float,
+        default=None,
+        help="覆盖出场策略：trailing 激活阈值（%，越小越早锁利 → 胜率杠杆）",
+    )
+    ap.add_argument(
+        "--trail-lock",
+        type=float,
+        default=None,
+        help="覆盖出场策略：trailing 最小锁利（%），把'曾浮盈'的单子变成小赢单",
+    )
+    ap.add_argument(
+        "--trail-callback",
+        type=float,
+        default=None,
+        help="覆盖出场策略：trailing 回撤触发幅度（%，越大越晚离场 → 让单子跑到 horizon）",
+    )
+    ap.add_argument(
+        "--horizon-days",
+        type=int,
+        default=None,
+        help="覆盖出场策略：持有上限天数（默认 5）",
+    )
+    ap.add_argument(
+        "--sl-pct",
+        type=float,
+        default=None,
+        help="覆盖出场策略：止损宽度（同时抬 maximum_loss_pct），默认 None = 用已发布 artifact。",
+    )
     ap.add_argument("--policy-note", default=None)
     args = ap.parse_args()
     if args.policy_note is None:
@@ -740,6 +783,34 @@ def main() -> None:
     PANEL["dir"] = args.panel_dir
     UNIVERSE["mode"] = args.universe
     POLICY_VERSION["n"] = args.policy_version
+    if (args.tp_pct is not None or args.sl_pct is not None
+            or args.trail_act is not None or args.trail_lock is not None
+            or args.trail_callback is not None or args.horizon_days is not None):
+        import dataclasses as _dc
+
+        ep = DEFAULT_EXECUTION_POLICY
+        if args.tp_pct is not None:
+            ep = _dc.replace(ep, take_profit=_dc.replace(
+                ep.take_profit, enabled=True, default_gain_pct=float(args.tp_pct)))
+        if args.trail_act is not None:
+            ep = _dc.replace(ep, trailing=_dc.replace(
+                ep.trailing, activation_gain_pct=float(args.trail_act)))
+        if args.trail_lock is not None:
+            ep = _dc.replace(ep, trailing=_dc.replace(
+                ep.trailing, minimum_lock_gain_pct=float(args.trail_lock)))
+        if args.trail_callback is not None:
+            ep = _dc.replace(ep, trailing=_dc.replace(
+                ep.trailing, callback_pct=float(args.trail_callback)))
+        if args.horizon_days is not None:
+            ep = _dc.replace(ep, horizon_days=int(args.horizon_days))
+        if args.sl_pct is not None:
+            ep = _dc.replace(ep, stop_loss=_dc.replace(
+                ep.stop_loss, default_loss_pct=float(args.sl_pct),
+                maximum_loss_pct=max(float(args.sl_pct) + 0.2, ep.stop_loss.maximum_loss_pct)))
+        EP_OVERRIDE["policy"] = ep
+        print(f"[ep] 出场变体: tp={args.tp_pct} sl={args.sl_pct} "
+              f"trail_act={args.trail_act} trail_lock={args.trail_lock} "
+              f"trail_cb={args.trail_callback} horizon={args.horizon_days}", flush=True)
     _sw = str(args.skill_weights or "equal").strip()
     if _sw in ("equal", "preset"):
         SKILL_WEIGHTS["mode"] = _sw
