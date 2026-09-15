@@ -99,6 +99,12 @@ class ProductionSelectionPolicy:
     consensus_min_signals: int = 0
     consensus_regimes: tuple[str, ...] = ()
 
+    # v6（L-118）：强牛·高潮日只保留分数最高的 N 张（0 = 关闭）。
+    # 依据：W3 的亏损集中在强牛·高潮日（多个 −5.66% 跳空止损）；把高潮日的输出从
+    # 现有 divisor 机制（10→5）进一步收到 3 张，三窗 Δcohort +0.015/+0.419/−0.119 全为正
+    # 且三窗均过 evaluate_challenger（W2 CI 下界 +0.064、逐月同号 0.86）。
+    strong_climax_top_n: int = 0
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -142,6 +148,7 @@ class ProductionSelectionPolicy:
             "weak_low_ivoldn20_pct_threshold": self.weak_low_ivoldn20_pct_threshold,
             "consensus_min_signals": self.consensus_min_signals,
             "consensus_regimes": list(self.consensus_regimes),
+            "strong_climax_top_n": self.strong_climax_top_n,
         }
 
     @property
@@ -194,7 +201,7 @@ _POLICY_ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "policies"
 
 def load_production_selection_policy(
     policy_id: str = "production-selection",
-    version: int = 5,
+    version: int = 7,
 ) -> ProductionSelectionPolicy:
     """Load the repository-owned artifact used by production and backtests.
 
@@ -207,9 +214,14 @@ def load_production_selection_policy(
     v5 为当前默认 = v4 全部规则 + 共识闸门（L-117：弱势/震荡 regime 下只保留至少 2 个非否决策略
     背书的候选，三窗口全管线重放 Δcohort +0.105/+0.070/+0.159，三窗均过 evaluate_challenger；
     强牛/偏多不动，避免削掉强趋势窗口的动量收益）。
-    需要严格复现旧口径时显式传 version=1/2/3/4。
+    v6 为当前默认 = v5 全部规则 + 强牛·高潮日输出上限（strong_climax_top_n=3，L-118；
+    三窗 Δcohort 全正、W2 配对 CI 下界 >0、逐月同号 0.86）。
+    v7 为当前默认 = v6 的同一旋钮收到 2 张（近期窗口优先：端到端 W3 五项全改善
+    avg +0.4237 / WR 54.5% / PF 1.186 / sum +28.0 / MDD −15.69，W1 亦改善至 +0.6079/PF 1.336，
+    W2 让价 WR −2.0pp、MDD −1.31 但 avg/sum/PF 均改善）。
+    需要严格复现旧口径时显式传 version=1/2/3/4/5/6。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -241,6 +253,7 @@ def load_production_selection_policy(
         str(value) for value in payload.get("consensus_regimes") or ()
     )
     payload["consensus_min_signals"] = int(payload.get("consensus_min_signals") or 0)
+    payload["strong_climax_top_n"] = int(payload.get("strong_climax_top_n") or 0)
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:
         raise ValueError("production selection policy artifact identity mismatch")

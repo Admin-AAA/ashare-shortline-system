@@ -146,13 +146,22 @@ def test_v4_artifact_differs_from_v3_only_by_new_rule() -> None:
     # （与 v4 取值相同），故 canonical_payload 只差 version 与 enabled 开关。
     diff = {k for k in set(p3) | set(p4) if p3.get(k) != p4.get(k)}
     assert diff == {"version", "weak_low_ivoldn20_veto_enabled"}, diff
-    # 默认策略已升到 v5（L-117 共识闸门），但 v1-v4 artifact 语义保持不变
-    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 5
+    # 默认策略已升到 v7（L-119：强牛·高潮只留前 2），v1-v6 artifact 语义保持不变
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 7
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.consensus_min_signals == 2
-    v5 = DEFAULT_PRODUCTION_SELECTION_POLICY
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.strong_climax_top_n == 2
+    v5 = load_production_selection_policy(version=5)
     d45 = {k for k in set(v4.canonical_payload()) | set(v5.canonical_payload())
            if v4.canonical_payload().get(k) != v5.canonical_payload().get(k)}
     assert d45 == {"version", "consensus_min_signals", "consensus_regimes"}, d45
+    v6 = load_production_selection_policy(version=6)
+    d56 = {k for k in set(v5.canonical_payload()) | set(v6.canonical_payload())
+           if v5.canonical_payload().get(k) != v6.canonical_payload().get(k)}
+    assert d56 == {"version", "strong_climax_top_n"}, d56
+    v7 = DEFAULT_PRODUCTION_SELECTION_POLICY
+    d67 = {k for k in set(v6.canonical_payload()) | set(v7.canonical_payload())
+           if v6.canonical_payload().get(k) != v7.canonical_payload().get(k)}
+    assert d67 == {"version", "strong_climax_top_n"}, d67
 
 
 def test_attach_helper_sets_field_and_leaves_unknown_blank() -> None:

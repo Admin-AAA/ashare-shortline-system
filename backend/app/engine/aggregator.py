@@ -973,6 +973,25 @@ def apply_pool_rules(
     )
     if selection_policy is not None:
         board_universe = selection_policy.board_universe
+    # v6 强牛·高潮输出上限（L-118）：高潮日多个 −5.66% 跳空止损集中在强牛基态，
+    # 把当日候选先按分数收到最高的 N 张（N=0 关闭）。放在 board/bucket 过滤之前，
+    # 与离线筛查口径一致（先按分数取前 N，再走完整政策链）。
+    _climax_top_n = int(getattr(selection_policy, "strong_climax_top_n", 0) or 0) if selection_policy is not None else 0
+    if _climax_top_n > 0 and _ctx_base == "强牛" and _market_sentiment(dict(market_snapshot or {})) == "高潮":
+        _ranked = sorted(
+            ordered,
+            key=lambda c: -float(c.get("portfolio_rank_score") or c.get("selection_score") or c.get("final_score") or 0.0),
+        )
+        _kept = _ranked[:_climax_top_n]
+        for card in _ranked[_climax_top_n:]:
+            card["policy_drop_owner"] = "strong_climax_top_n"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "strong_climax_top_n",
+                "action": "drop",
+                "reason": f"强牛·高潮日只留分数最高 {_climax_top_n} 张（L-118）",
+                "eliminated": True,
+            })
+        ordered = _kept
     if board_universe == "20cm":
         kept_by_board: list[dict[str, Any]] = []
         for card in ordered:
