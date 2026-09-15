@@ -771,6 +771,13 @@ def main() -> None:
              "用来检验「延迟一日的二次确认是否在筛选质量」。",
     )
     ap.add_argument(
+        "--max-entry-gap",
+        type=float,
+        default=None,
+        help="覆盖入场策略：成交价高于推荐价超过该百分比时放弃入场（默认 6.0）。"
+             "这是纯入场侧、决策时可知的闸门：越小越不追高（0 = 只在推荐价及以下成交）。",
+    )
+    ap.add_argument(
         "--sl-pct",
         type=float,
         default=None,
@@ -793,7 +800,7 @@ def main() -> None:
     if (args.tp_pct is not None or args.sl_pct is not None
             or args.trail_act is not None or args.trail_lock is not None
             or args.trail_callback is not None or args.horizon_days is not None
-            or args.entry_days is not None):
+            or args.entry_days is not None or args.max_entry_gap is not None):
         import dataclasses as _dc
 
         ep = DEFAULT_EXECUTION_POLICY
@@ -814,6 +821,9 @@ def main() -> None:
         if args.entry_days is not None:
             ep = _dc.replace(ep, entry=_dc.replace(
                 ep.entry, max_entry_trade_days=int(args.entry_days)))
+        if args.max_entry_gap is not None:
+            ep = _dc.replace(ep, gap_risk=_dc.replace(
+                ep.gap_risk, max_entry_gap_up_pct=float(args.max_entry_gap)))
         if args.sl_pct is not None:
             ep = _dc.replace(ep, stop_loss=_dc.replace(
                 ep.stop_loss, default_loss_pct=float(args.sl_pct),
@@ -822,7 +832,7 @@ def main() -> None:
         print(f"[ep] 出场变体: tp={args.tp_pct} sl={args.sl_pct} "
               f"trail_act={args.trail_act} trail_lock={args.trail_lock} "
               f"trail_cb={args.trail_callback} horizon={args.horizon_days} "
-              f"entry_days={args.entry_days}", flush=True)
+              f"entry_days={args.entry_days} max_entry_gap={args.max_entry_gap}", flush=True)
     _sw = str(args.skill_weights or "equal").strip()
     if _sw in ("equal", "preset"):
         SKILL_WEIGHTS["mode"] = _sw

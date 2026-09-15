@@ -208,6 +208,15 @@ def _penalty(predicate, points):
     return rule
 
 
+def _boost(predicate, points):
+    """与 _penalty 对称的显式加分版（避免用 _penalty(pred, -x) 造成符号歧义）。"""
+
+    def rule(cards, day):
+        return [_apply_score_delta(c, points) if predicate(c, day) else c for c in cards]
+
+    return rule
+
+
 def _boost_best_of_day_rule(sids, points: float):
     """"配额槽"变体：把指定技能当日分最高的那张卡抬进 top-N（其余卡不动）。
 
@@ -231,6 +240,51 @@ def _boost_best_of_day_rule(sids, points: float):
         if best is None:
             return cards
         return [_apply_score_delta(c, points) if c is best[1] else c for c in cards]
+
+    return rule
+
+
+def _dom_daily_cap_rule(caps: dict[str, int], default_cap: int | None = None):
+    """"逐技能每日限流"：每个交易日、每个主导策略只保留分数最高的 N 张卡。
+
+    与配额槽（slot_reserve）对称：配额是"保底一条腿"，限流是"防止单腿占满输出"。
+    动机（2026-09-16 第 23 轮）：W2 里 炒股养家 主导 208 笔（41.9%）WR 仅 48.6%、
+    陈小群 144 笔、DSA 115 笔——输出高度集中于单腿，而边际卡质量更低。
+    """
+    _caps = {str(k): int(v) for k, v in (caps or {}).items()}
+    _default = None if default_cap is None else int(default_cap)
+
+    def rule(cards, _day):
+        keep_pos: dict[str, int] = {}
+        kept: list[dict] = []
+        for c in sorted(
+            cards,
+            key=lambda x: -float(x.get("portfolio_rank_score") or x.get("selection_score")
+                                 or x.get("final_score") or 0.0),
+        ):
+            sid = _dominant(c)
+            cap = _caps.get(sid, _default)
+            if cap is None:
+                kept.append(c)
+                continue
+            used = keep_pos.get(sid, 0)
+            if used >= cap:
+                continue
+            keep_pos[sid] = used + 1
+            kept.append(c)
+        return kept
+
+    return rule
+
+
+def _compose(*rules):
+    """把多个卡片规则按顺序串联（前一个的输出是后一个的输入）。"""
+
+    def rule(cards, day):
+        out = cards
+        for r in rules:
+            out = r(out, day)
+        return out
 
     return rule
 
@@ -278,14 +332,14 @@ def _low_consensus(card: dict, min_signals: int = 2, min_score: float | None = N
     return len(sigs) < min_signals
 
 
-def _consensus_gate_in(regimes: tuple[str, ...]):
+def _consensus_gate_in(regimes: tuple[str, ...], min_signals: int = 2):
     """只在指定 regime 卡上施加"至少 N 个策略背书"，其余 regime 原样（避免削掉强趋势窗）。"""
 
     def rule(cards, _day):
         out = []
         for c in cards:
             regime = _regime_of(c)
-            if any(r in regime for r in regimes) and _low_consensus(c):
+            if any(r in regime for r in regimes) and _low_consensus(c, min_signals=min_signals):
                 continue
             out.append(c)
         return out
@@ -466,6 +520,55 @@ RULES: dict[str, "callable"] = {
          "chip-single-peak-breakout", "high-range-breakout-momentum",
          "limit-up-reseal-relay", "overnight-holding-method"), 12.0
     ),
+    # ⑨ 背书数轴（2026-09-16 第 23 轮）：已选样本里 chao 主导单 W2 输家的背书数中位数 2、
+    # 赢家 3；v5 共识闸门（≥2）只在弱势/震荡生效。这里检验"把 ≥N 背书推广到全部 regime"
+    # 以及"用背书数直接加减分"（后者不改候选集合、只改排序，避免 L-121 的剔卡耦合）。
+    "nsig_pen6_le2": _penalty(lambda c, _d: len(_non_veto_signals(c)) <= 2, 6.0),
+    "nsig_pen10_le3": _penalty(lambda c, _d: len(_non_veto_signals(c)) <= 3, 10.0),
+    "nsig_boost6_ge3": _boost(lambda c, _d: len(_non_veto_signals(c)) >= 3, 6.0),
+    # ⑩ 共识闸门的 regime 分层（第 23 轮）：池级数据显示"≥3 背书"在 W1/W2 中性偏正
+    # （trend-pullback 的 ≥3 卡 W1 n38 WR 78.9% avg+3.87），但在 W3 对**每一个技能**都是负的
+    # （chao 43.0% vs 52.5%、DSA 40.3% vs 44.5%、overnight 38.5% vs 56.0%）。
+    # 这里检验把 ≥3 约束限制在不同 regime/情绪子集时能否三窗同时成立。
+    "consensus3_active": _consensus_gate_in(("活跃",), min_signals=3),
+    "consensus3_weak_osc": _consensus_gate_in(("弱势", "震荡"), min_signals=3),
+    "consensus3_weak": _consensus_gate_in(("弱势",), min_signals=3),
+    "consensus3_climax": _consensus_gate_in(("高潮",), min_signals=3),
+    "consensus3_active_weak_osc": _consensus_gate_in(("弱势·活跃", "震荡·活跃"), min_signals=3),
+    # ⑪ 逐技能每日限流（2026-09-16 第 23 轮）：W2 输出高度集中（炒股养家 41.9%、陈小群 29.0%、
+    # DSA 23.1%），而边际卡质量更低。检验"每个主导策略每天最多 N 张"能否在不削强趋势的前提下抬 WR。
+    "cap_dom_chao2": _dom_daily_cap_rule({"chao-gu-yang-jia-skill": 2}),
+    "cap_dom_chao3": _dom_daily_cap_rule({"chao-gu-yang-jia-skill": 3}),
+    "cap_dom_dsa2": _dom_daily_cap_rule({"daily-stock-analysis-skill": 2}),
+    "cap_dom_chen2": _dom_daily_cap_rule({"chen-xiaoqun-skill": 2}),
+    "cap_dom_all3": _dom_daily_cap_rule({}, default_cap=3),
+    "cap_dom_all2": _dom_daily_cap_rule({}, default_cap=2),
+    "cap_dom_all4": _dom_daily_cap_rule({}, default_cap=4),
+    # ⑫ 组合：≥3 背书（W1/W2 上的最强 WR 杠杆）叠加 W3 最强单轴（DSA ≤2/日），
+    # 检验两者是否互补——W3 下 consensus3 选中的多背书卡里有相当比例是 DSA 主导。
+    "c3_capdsa2": _compose(_consensus_gate_in(("活跃", "高潮", "弱势", "偏多", "震荡"), min_signals=3),
+                           _dom_daily_cap_rule({"daily-stock-analysis-skill": 2})),
+    "c3_capall3": _compose(_consensus_gate_in(("活跃", "高潮", "弱势", "偏多", "震荡"), min_signals=3),
+                           _dom_daily_cap_rule({}, default_cap=3)),
+    "c3weakosc_capdsa2": _compose(_consensus_gate_in(("弱势", "震荡"), min_signals=3),
+                                  _dom_daily_cap_rule({"daily-stock-analysis-skill": 2})),
+    # ⑬ 换手/市值闸门（第 23 轮）：在**已选中**样本上分层，turnover_rate∈[8,12) 在三个窗口
+    # 都是低质量区（W1 53% vs 60%、W2 47% vs 54-59%、W3 50% vs 61-65%）；free_mv≥400 亿
+    # 在 W2/W3 同样偏差（W2 48%、W3 47%）。这是唯一在三个窗口**符号一致**的横截面特征。
+    "turn_lt8": _card_filter(lambda c, _d: not (_fs(c).get("turnover_rate") is not None
+                                               and float(_fs(c).get("turnover_rate")) >= 8.0)),
+    "turn_lt6": _card_filter(lambda c, _d: not (_fs(c).get("turnover_rate") is not None
+                                               and float(_fs(c).get("turnover_rate")) >= 6.0)),
+    "turn_lt10": _card_filter(lambda c, _d: not (_fs(c).get("turnover_rate") is not None
+                                                and float(_fs(c).get("turnover_rate")) >= 10.0)),
+    "fmv_lt400": _card_filter(lambda c, _d: not (_fs(c).get("free_mv_yi") is not None
+                                                and float(_fs(c).get("free_mv_yi")) >= 400.0)),
+    "turn8_fmv400": _card_filter(lambda c, _d: not (
+        (_fs(c).get("turnover_rate") is not None and float(_fs(c).get("turnover_rate")) >= 8.0)
+        or (_fs(c).get("free_mv_yi") is not None and float(_fs(c).get("free_mv_yi")) >= 400.0)
+    )),
+    "turn8_pen6": _penalty(lambda c, _d: (_fs(c).get("turnover_rate") is not None
+                                          and float(_fs(c).get("turnover_rate")) >= 8.0), 6.0),
 }
 
 # 阈值敏感性：只剔"最高 ivol 且无支撑"的更小一档（W3 WR 掉太多的备选）
@@ -488,6 +591,11 @@ CONTEXT_VARIANTS: dict[str, dict] = {
     "sl80": {"score_line": 80.0},
     "oc6_sl76": {"output_count": 6, "score_line": 76.0},
     "oc6_sl80": {"output_count": 6, "score_line": 80.0},
+    # 与 POLICY_VARIANTS 里同名条目配对使用（规则 + 上下文组合）
+    "c3_oc6": {"output_count": 6},
+    "c3_oc4": {"output_count": 4},
+    "c3_sl80": {"score_line": 80.0},
+    "c3weakosc_oc6": {"output_count": 6},
 }
 
 
@@ -639,6 +747,12 @@ POLICY_VARIANTS: dict[str, dict] = {
     "top2_strong": {"strong_climax_top_n": 2},
     "top3_consensus3climax": ("consensus3_climax", {}),
     "top2_consensus3climax": ("consensus3_climax", {"strong_climax_top_n": 2}),
+    # ≥3 背书在 W1/W2 大幅抬 WR/PF，但 W3 的 ≥3 卡在每个 regime 都比 <3 差（池级），
+    # 因此检验"≥3 背书 + 更少输出/更高线"能否抵消 W3 的伤害（W3 一贯偏好更少更严）。
+    "c3_oc6": ("consensus3", {}),
+    "c3_oc4": ("consensus3", {}),
+    "c3_sl80": ("consensus3", {}),
+    "c3weakosc_oc6": ("consensus3_weak_osc", {}),
 }
 
 
