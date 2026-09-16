@@ -62,7 +62,9 @@ _EXPECTED_V3_FINGERPRINT = "86553a1fcd4a92d97b0395cd71caae1a11b6090360686b9ee750
 # v4（2026-09-15 第二次发布）：在 v3 基础上收紧两个**真规则**旋钮——
 # 入场跳空上限 10% → 6%（跳空太大就不追）、trailing 最小锁利 0.3% → 2.5%。
 # 稳健性：相对 v3 的逐月同号 0.82（21 个月）达 L-058 的 0.80 门槛，三窗全改善。
-_EXPECTED_V4_FINGERPRINT = "d0b4fc18c1cc8c683176f4b6db34935a336d2fab06e6c8f61bbcc32664b28470"
+# v5（2026-09-17 发布）：v4 + trailing 激活阈值 1.5% → 0.8%（L-123）。三窗端到端全部提升 WR 与 MDD，
+# 并在"自适应共识闸门 + 换手/大成交额闸门"组合下三窗口同时满足 WR≥60% / PF≥1.2 / Σ>0（L-126/L-127）。
+_EXPECTED_V5_FINGERPRINT = "eeefd0c2c550ee341b9713c640a66b205bbd69b761d97a22d36b8649dd3e2a91"
 _POLICY_DIR = Path(__file__).resolve().parents[1] / "app" / "policies"
 
 _CAP_FIELD_NAMES = (
@@ -106,7 +108,7 @@ def test_default_policy_is_complete_immutable_and_canonically_fingerprinted() ->
 
     assert DEFAULT_EXECUTION_POLICY_REGISTRY.current is policy
     assert policy.policy_id == "a-share-shortline"
-    assert policy.version == "4.0.0"
+    assert policy.version == "5.0.0"
     assert policy.schema_version == 1
     assert policy.entry.max_entry_trade_days == 2
     assert policy.t_plus_one is True
@@ -126,12 +128,12 @@ def test_default_policy_is_complete_immutable_and_canonically_fingerprinted() ->
     assert policy.stop_loss == StopLossPolicy(enabled=True, default_loss_pct=5.5, maximum_loss_pct=5.7)
     assert policy.take_profit.enabled is False
     assert policy.take_profit.default_gain_pct == 6.0  # 数值保留但不再生效
-    assert policy.trailing.activation_gain_pct == 1.5
+    assert policy.trailing.activation_gain_pct == 0.8
     assert policy.trailing.minimum_lock_gain_pct == 2.5
     assert policy.gap_risk.max_entry_gap_up_pct == 6.0
     assert policy.trailing.profit_lock_ratio == 0.5
     assert policy.gap_risk.stop_gap_loss_cap_pct == 15.0
-    assert policy.fingerprint() == _EXPECTED_V4_FINGERPRINT
+    assert policy.fingerprint() == _EXPECTED_V5_FINGERPRINT
     assert " " not in policy.to_canonical_json()
     assert "\n" not in policy.to_canonical_json()
 
@@ -148,8 +150,8 @@ def test_default_request_resolves_exact_registry_current_v3() -> None:
     resolved = request.to_domain()
 
     assert resolved is DEFAULT_EXECUTION_POLICY
-    assert resolved.version == "4.0.0"
-    assert resolved.fingerprint() == _EXPECTED_V4_FINGERPRINT
+    assert resolved.version == "5.0.0"
+    assert resolved.fingerprint() == _EXPECTED_V5_FINGERPRINT
     assert resolved.position.cap_composition is PositionCapComposition.MIN_ALL_APPLICABLE
     assert tuple(getattr(resolved.position, name) for name in _CAP_FIELD_NAMES) == pytest.approx(
         (0.35, 0.60, 0.80, 0.80, 0.40, 0.40)
@@ -168,7 +170,7 @@ def test_flat_override_gets_deterministic_derived_identity_and_retains_v3_caps()
 
     assert first == second
     assert first.policy_id == "a-share-shortline-derived"
-    assert first.version.startswith("4.0.0-cfg-")
+    assert first.version.startswith("5.0.0-cfg-")
     assert first.version != DEFAULT_EXECUTION_POLICY.version
     assert first.version != another.version
     assert first.fingerprint() != DEFAULT_EXECUTION_POLICY.fingerprint()
@@ -197,7 +199,7 @@ def test_canonical_fingerprint_is_invariant_to_every_mapping_order() -> None:
 
     assert loaded == policy
     assert loaded.to_canonical_json() == policy.to_canonical_json()
-    assert loaded.fingerprint() == _EXPECTED_V4_FINGERPRINT
+    assert loaded.fingerprint() == _EXPECTED_V5_FINGERPRINT
 
 
 def test_outcome_settlement_honours_disabled_exit_switches(monkeypatch) -> None:
@@ -396,7 +398,7 @@ def test_runtime_config_and_documentation_projections_match_policy_snapshot() ->
         "STOP_LOSS_GAP_CAP_PCT": -15.0,
         "MAX_ENTRY_GAP_PCT": 6.0,
         "TRAILING_ENABLED": True,
-        "TRAILING_STOP_ACTIVATE_PCT": 1.5,
+        "TRAILING_STOP_ACTIVATE_PCT": 0.8,
         "TRAILING_STOP_CALLBACK_PCT": 0.8,
         "TRAILING_STOP_MIN_LOCK_PCT": 2.5,
         "TRAILING_STOP_PROFIT_LOCK_RATIO": 0.5,
@@ -444,15 +446,15 @@ def test_runtime_config_and_documentation_projections_match_policy_snapshot() ->
     }) == 0.2
 
     assert render_execution_policy_markdown(policy) == (
-        "# Execution Policy `a-share-shortline@4.0.0`\n"
+        "# Execution Policy `a-share-shortline@5.0.0`\n"
         "\n"
-        "- Schema: `1`; fingerprint: `d0b4fc18c1cc8c683176f4b6db34935a336d2fab06e6c8f61bbcc32664b28470`\n"
+        "- Schema: `1`; fingerprint: `eeefd0c2c550ee341b9713c640a66b205bbd69b761d97a22d36b8649dd3e2a91`\n"
         "- Entry: `causal_strategy_entry_v1`, window 2 trading days, source `intraday_snapshot_or_postclose_target`.\n"
         "- Settlement/horizon: T+1 `true`, 5 holding bars.\n"
         "- Costs: commission 0.0001 per side, exit stamp tax 0.0005; slippage 10/10 bps.\n"
         "- Board/liquidity: 10/20/30% limits; one-word limit-up blocks entry and one-word limit-down defers exit.\n"
         "- Position: default 1, high-score cap 0.5 from score 85, composition `min_all_applicable`.\n"
         "- Stops: loss 5.5% (maximum 5.7%), profit disabled.\n"
-        "- Trailing: `profit_floor`, activation 1.5%, callback 0.8%, minimum lock 2.5%, ratio 0.5.\n"
+        "- Trailing: `profit_floor`, activation 0.8%, callback 0.8%, minimum lock 2.5%, ratio 0.5.\n"
         "- Gap risk: max entry gap 6%, stop gap cap 15%, same-bar priority `stop_loss`.\n"
     )

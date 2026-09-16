@@ -144,6 +144,11 @@ class ProductionSelectionPolicy:
     # 只是推广到全部技能。缺 amount_yi 的卡片保守放行。
     high_amount_veto_yi: float | None = None
 
+    # v19（L-126）：启用"自适应共识闸门"——由 `app/services/consensus_edge.py` 按
+    # **已结算的近 K 日多背书边际**逐日选择政策版本（v19 自身 = 中性分支）。
+    # 未启用（False）时，`resolve_adaptive_selection_policy` 原样返回传入政策，逐位不变。
+    adaptive_consensus_enabled: bool = False
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -194,6 +199,7 @@ class ProductionSelectionPolicy:
             "high_turnover_veto_pct": self.high_turnover_veto_pct,
             "consensus_max_signals": self.consensus_max_signals,
             "high_amount_veto_yi": self.high_amount_veto_yi,
+            "adaptive_consensus_enabled": self.adaptive_consensus_enabled,
         }
 
     @property
@@ -246,7 +252,7 @@ _POLICY_ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "policies"
 
 def load_production_selection_policy(
     policy_id: str = "production-selection",
-    version: int = 7,
+    version: int = 19,
 ) -> ProductionSelectionPolicy:
     """Load the repository-owned artifact used by production and backtests.
 
@@ -268,7 +274,7 @@ def load_production_selection_policy(
     W2 让价 WR −2.0pp、MDD −1.31 但 avg/sum/PF 均改善）。
     需要严格复现旧口径时显式传 version=1/2/3/4/5/6。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -316,6 +322,7 @@ def load_production_selection_policy(
     payload["consensus_max_signals"] = None if _cms in (None, 0, "") else int(_cms)
     _hav = payload.get("high_amount_veto_yi", None)
     payload["high_amount_veto_yi"] = None if _hav in (None, 0, "") else float(_hav)
+    payload["adaptive_consensus_enabled"] = bool(payload.get("adaptive_consensus_enabled", False))
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:
         raise ValueError("production selection policy artifact identity mismatch")

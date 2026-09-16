@@ -557,6 +557,14 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
                 attach_ivol_dn20_pct(scored_cards, _sel_date, _ivoldn_map)
             except Exception as _ivol_exc:  # noqa: BLE001
                 logger.warning("风险特征分位附加失败，本轮保守不做风险否决: %s", _ivol_exc)
+        # L-126 自适应共识闸门：按"已结算的近 K 日多背书边际"选当日政策版本
+        # （edge>0 → 正向分支；edge<−1.5 → 反向分支；其余/样本不足 → 默认中性分支）。
+        # 未启用该机制（`adaptive_consensus_enabled=False`）时原样返回默认政策，逐位不变。
+        from app.services.consensus_edge import resolve_adaptive_selection_policy
+
+        _selection_policy = resolve_adaptive_selection_policy(
+            self._db, str(snapshot.get("trade_date") or ""), DEFAULT_PRODUCTION_SELECTION_POLICY
+        )
         policy_result = evaluate_selection_policy(
             scored_cards,
             SelectionPolicyContext(
@@ -567,7 +575,7 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
                 same_day_industry_counts=same_day_industry_counts,
                 same_day_recommendation_count=len(same_day_codes),
             ),
-            DEFAULT_PRODUCTION_SELECTION_POLICY,
+            _selection_policy,
         )
         formal_cards = list(policy_result.recommendations)
         pipeline_updates: dict[str, Any] = {

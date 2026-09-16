@@ -162,7 +162,9 @@ def test_real_declarative_strategy_gateway_vertical_slice_is_research_only(gatew
     assert detail.status_code == candidates.status_code == trades.status_code == attributions.status_code == 200
     assert candidates.json()["items"]
     assert trades.json()["items"]
-    assert {item["reason_code"] for item in attributions.json()["items"]} == {"stop_loss"}
+        # v5（act 0.8%）后部分亏损单的出场原因从 stop_loss_hit 变为 trailing_stop_gap，
+    # 而归因映射对"reason 含 gap"的亏损单一律标 chase_high（app/engine/simulation.py::attribute_failure）。
+    assert {item["reason_code"] for item in attributions.json()["items"]} == {"stop_loss", "chase_high"}
 
     replay = client.post(f"/api/backtests/{backtest_id}/replay", json={})
     assert replay.status_code == 200, replay.text

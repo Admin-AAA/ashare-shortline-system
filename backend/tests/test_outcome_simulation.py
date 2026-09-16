@@ -390,16 +390,16 @@ def test_resolve_exit_same_bar_high_surge_then_stop_loss_uses_stop_loss():
 
 
 def test_resolve_exit_trailing_not_activated_below_threshold():
-    """high 未达激活阈值（+2%）时 trailing 不激活，走 horizon_close。"""
-    # bar1（入场日，不触发）；bar2 high=10.1（+1%，未达 2% 激活阈值）, bar3 回落 → horizon_close
+    """v5（act 0.8%）语义：+1% 已超过激活阈值 → trailing 生效（原 v4 的 2% 阈值下不激活）。"""
+    # bar1（入场日，不触发）；bar2 close=10.05（+0.5%）、bar3 回落 → trailing_stop_gap
     bars = [
         _bar_trailing(trade_date="2026-07-01", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0),
         _bar_trailing(trade_date="2026-07-02", open=10.0, high=10.1, low=10.0, close=10.05, pct_chg=1.0),
         _bar_trailing(trade_date="2026-07-03", open=10.0, high=10.1, low=9.9, close=9.95, pct_chg=0.0),
     ]
     result = _resolve_exit(bars, stop_loss_price=9.0, take_profit_price=12.0, code="000001", entry_price=10.0)
-    assert result[2] == "horizon_close"
-    assert result[0] == 9.95  # 最后一根 bar 的 close
+    assert result[2] == "trailing_stop_gap"
+    assert result[0] == 10.0  # trailing 触发价（peak 未过 10.1，回落即出）
 
 
 def test_simulate_outcome_feature_snapshot_preparse_consistency():
@@ -704,7 +704,8 @@ def test_simulate_outcome_min_return_truncated_to_exit_not_horizon():
     sim = _simulate_outcome(
         rec, bars, dates, horizon_days=5, entry_policy=CAUSAL_STRATEGY_ENTRY,
     )
-    assert sim["exit_reason"] == "stop_loss_hit"
+    # v5（act 0.8%）：入场日 close 已越激活阈值 → 07-13 由 trailing 触发（原为 stop_loss_hit）
+    assert sim["exit_reason"] == "trailing_stop_gap"
     assert str(sim["exit_date"]) == "2026-07-13"
     # 旧 bug：min_return 算到 07-17 low=27.04 → (27.04-40)/40=-32%；修复后只算到 07-13 low=37.0
     assert sim["min_return"] > -10.0, f"止损后窗口未截断，min_return 虚构回撤 got {sim['min_return']}"
@@ -914,8 +915,8 @@ def test_causal_entry_day_high_over_2pct_but_close_below_2pct_no_activation():
     price, date, reason = _resolve_exit_causal(
         bars, stop_loss_price=9.5, take_profit_price=11.0, code="000001", entry_price=10.0,
     )
-    assert reason == "horizon_close"
-    assert not reason.startswith("trailing")
+    # v5（act 0.8%）：入场日 close=10.1（+1%）已越激活阈值 → 次日回落触发 trailing
+    assert reason == "trailing_stop_hit"
 
 
 def test_causal_entry_day_close_over_2pct_activates_next_day_protection():

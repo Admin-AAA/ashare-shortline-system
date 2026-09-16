@@ -147,7 +147,7 @@ def test_v4_artifact_differs_from_v3_only_by_new_rule() -> None:
     diff = {k for k in set(p3) | set(p4) if p3.get(k) != p4.get(k)}
     assert diff == {"version", "weak_low_ivoldn20_veto_enabled"}, diff
     # 默认策略保持 v7（v8 为已验证但未启用的候选），v1-v6 artifact 语义保持不变
-    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 7
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 19  # L-126/L-127 发布
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.consensus_min_signals == 2
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.strong_climax_top_n == 2
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.no_support_high_ivol_veto_enabled is False
