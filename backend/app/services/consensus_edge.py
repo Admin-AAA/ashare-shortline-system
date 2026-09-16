@@ -22,10 +22,11 @@ from typing import Any, Iterable, Mapping
 
 from sqlalchemy import text
 
-# 逐日政策版本的默认映射（与 production_selection.v15/v17/v18 一致）
-NEUTRAL_VERSION = 15
-POSITIVE_VERSION = 17
-NEGATIVE_VERSION = 18
+# 逐日政策版本的默认映射（与生产的 v19/v20/v21 一一对应：
+# v19 = v15 + adaptive 标记（中性分支）、v20 = v17 + 标记（正向分支）、v21 = v18 + 标记（反向分支））
+NEUTRAL_VERSION = 19
+POSITIVE_VERSION = 20
+NEGATIVE_VERSION = 21
 DEFAULT_LOOKBACK_DAYS = 15
 DEFAULT_NEGATIVE_THRESHOLD = -1.5
 DEFAULT_MIN_SIDE = 5
