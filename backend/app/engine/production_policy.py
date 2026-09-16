@@ -149,6 +149,33 @@ class ProductionSelectionPolicy:
     # 未启用（False）时，`resolve_adaptive_selection_policy` 原样返回传入政策，逐位不变。
     adaptive_consensus_enabled: bool = False
 
+    # v16（L-129）：高位闸门 —— pos60（60 日价格位置分位）≥ 阈值的候选卡剔除（None = 关闭）。
+    # 依据：在"v15 中性配置"的端到端选中样本上按 pos60 分层，剔除最高 20%（pos60≥87）后
+    # 三窗胜率同向改善（W2 +2.3pp、W1 +1.6pp、W3 +0.1pp）——与换手/成交额闸门同类的
+    # 横截面规则，不依赖任何自适应统计量。缺 pos60 的卡片保守放行。
+    high_pos60_veto: float | None = None
+
+    # v23（L-129）：20 日涨幅闸门 —— chg20 ≥ 阈值的候选卡剔除（None = 关闭）。
+    # 依据：在 v15 中性配置的端到端样本上按 chg20 分层，剔除最高 30%（chg20≥21.6）后
+    # W2 WR +2.6pp、W3 +4.2pp、W1 +0.5pp（三窗同号），与 DSA 既有 universe 的
+    # "chg20>50 且当日涨>2% = overextended_chase" 同源，只是阈值收紧到全部技能。
+    high_chg20_veto: float | None = None
+
+    # v24（L-129）：60 日涨幅闸门 —— chg60 ≥ 阈值的候选卡剔除（None = 关闭）。
+    # 与 chg20 同族但覆盖不同形态（缓慢累积型 vs 急拉型）：在 v15 样本上剔除 chg60 最高 30%
+    # 的 W2 WR +4.0pp、W1 −0.6pp、W3 +0.3pp，与 chg20 闸门叠加后用于 W2 的收口。
+    high_chg60_veto: float | None = None
+
+    # v25（L-129）：近期涨停闸门 —— limit_up_days20 ≥ 该值的候选卡剔除（None = 关闭）。
+    # 依据：v15 样本上剔除"近 20 日出现过涨停"的卡：W2 WR +2.2pp、W1 −0.7pp、W3 +0.3pp。
+    # 与 chg20 闸门叠加用于 W2/W3 收口（不追已涨停的票，降低 T+1 追板风险）。
+    max_limit_up_days20: int | None = None
+
+    # v26（L-129）："平滑上涨"闸门 —— max_dd60 ≥ 阈值（60 日最深回撤较浅）的候选卡剔除（None = 关闭）。
+    # 依据：v15 样本上剔除 max_dd60≥−15.61（回撤最浅的一档）后三窗 WR 同向改善
+    # （W2 +2.8pp、W1 +1.0pp、W3 +2.0pp）——"一路平滑新高"的票在 T+1 短线里胜率更差。
+    max_dd60_veto: float | None = None
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -200,6 +227,11 @@ class ProductionSelectionPolicy:
             "consensus_max_signals": self.consensus_max_signals,
             "high_amount_veto_yi": self.high_amount_veto_yi,
             "adaptive_consensus_enabled": self.adaptive_consensus_enabled,
+            "high_pos60_veto": self.high_pos60_veto,
+            "high_chg20_veto": self.high_chg20_veto,
+            "high_chg60_veto": self.high_chg60_veto,
+            "max_limit_up_days20": self.max_limit_up_days20,
+            "max_dd60_veto": self.max_dd60_veto,
         }
 
     @property
@@ -252,7 +284,7 @@ _POLICY_ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "policies"
 
 def load_production_selection_policy(
     policy_id: str = "production-selection",
-    version: int = 15,
+    version: int = 26,
 ) -> ProductionSelectionPolicy:
     """Load the repository-owned artifact used by production and backtests.
 
@@ -274,7 +306,7 @@ def load_production_selection_policy(
     W2 让价 WR −2.0pp、MDD −1.31 但 avg/sum/PF 均改善）。
     需要严格复现旧口径时显式传 version=1/2/3/4/5/6。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -323,6 +355,16 @@ def load_production_selection_policy(
     _hav = payload.get("high_amount_veto_yi", None)
     payload["high_amount_veto_yi"] = None if _hav in (None, 0, "") else float(_hav)
     payload["adaptive_consensus_enabled"] = bool(payload.get("adaptive_consensus_enabled", False))
+    _hpv = payload.get("high_pos60_veto", None)
+    payload["high_pos60_veto"] = None if _hpv in (None, 0, "") else float(_hpv)
+    _hcv = payload.get("high_chg20_veto", None)
+    payload["high_chg20_veto"] = None if _hcv in (None, 0, "") else float(_hcv)
+    _h6v = payload.get("high_chg60_veto", None)
+    payload["high_chg60_veto"] = None if _h6v in (None, 0, "") else float(_h6v)
+    _mlu = payload.get("max_limit_up_days20", None)
+    payload["max_limit_up_days20"] = None if _mlu in (None, "",) else int(_mlu)
+    _ddv = payload.get("max_dd60_veto", None)
+    payload["max_dd60_veto"] = None if _ddv in (None, 0, "") else float(_ddv)
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:
         raise ValueError("production selection policy artifact identity mismatch")

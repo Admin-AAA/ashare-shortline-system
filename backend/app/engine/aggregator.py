@@ -1200,6 +1200,102 @@ def apply_pool_rules(
                 "eliminated": True,
             })
         deduped = kept_after_amount
+    # v16 高位闸门（L-129）：pos60 ≥ 阈值直接剔除（60 日价格位置最高的一档=阶段高位追高区）。
+    _hpv = getattr(selection_policy, "high_pos60_veto", None) if selection_policy is not None else None
+    if _hpv is not None and float(_hpv) > 0:
+        _pos_thr = float(_hpv)
+        kept_after_pos: list[dict[str, Any]] = []
+        for card in deduped:
+            _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
+            _pos = card.get("pos60", _snap.get("pos60"))
+            if _pos is None or float(_pos) < _pos_thr:
+                kept_after_pos.append(card)
+                continue
+            card["policy_drop_owner"] = "high_pos60_veto"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "high_pos60_veto",
+                "action": "drop",
+                "reason": f"60 日位置 {float(_pos):.1f} ≥ {_pos_thr:.1f}（L-129 高位闸门）",
+                "eliminated": True,
+            })
+        deduped = kept_after_pos
+    # v23 涨幅闸门（L-129）：chg20（20 日涨幅）≥ 阈值直接剔除——"20 日已经涨太多的票不追"，
+    # 与 DSA 自身 universe 的 overextended_chase 同源，阈值收紧后推广到全部技能。
+    _hcv = getattr(selection_policy, "high_chg20_veto", None) if selection_policy is not None else None
+    if _hcv is not None and float(_hcv) > 0:
+        _chg_thr = float(_hcv)
+        kept_after_chg: list[dict[str, Any]] = []
+        for card in deduped:
+            _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
+            _chg = card.get("chg20", _snap.get("chg20"))
+            if _chg is None or float(_chg) < _chg_thr:
+                kept_after_chg.append(card)
+                continue
+            card["policy_drop_owner"] = "high_chg20_veto"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "high_chg20_veto",
+                "action": "drop",
+                "reason": f"20 日涨幅 {float(_chg):.2f}% ≥ {_chg_thr:.1f}%（L-129 涨幅闸门）",
+                "eliminated": True,
+            })
+        deduped = kept_after_chg
+    # v24 60 日涨幅闸门（L-129）：与 chg20 同族，覆盖"缓慢累积型"高位股。
+    _h6v = getattr(selection_policy, "high_chg60_veto", None) if selection_policy is not None else None
+    if _h6v is not None and float(_h6v) > 0:
+        _chg6_thr = float(_h6v)
+        kept_after_chg60: list[dict[str, Any]] = []
+        for card in deduped:
+            _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
+            _chg6 = card.get("chg60", _snap.get("chg60"))
+            if _chg6 is None or float(_chg6) < _chg6_thr:
+                kept_after_chg60.append(card)
+                continue
+            card["policy_drop_owner"] = "high_chg60_veto"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "high_chg60_veto",
+                "action": "drop",
+                "reason": f"60 日涨幅 {float(_chg6):.2f}% ≥ {_chg6_thr:.1f}%（L-129 涨幅闸门）",
+                "eliminated": True,
+            })
+        deduped = kept_after_chg60
+    # v25 近期涨停闸门（L-129）：limit_up_days20 ≥ 阈值 → 剔除（不追近 20 日已涨停的票）。
+    _mlu = getattr(selection_policy, "max_limit_up_days20", None) if selection_policy is not None else None
+    if _mlu is not None and int(_mlu) > 0:
+        _lu_thr = int(_mlu)
+        kept_after_lu: list[dict[str, Any]] = []
+        for card in deduped:
+            _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
+            _lu = card.get("limit_up_days20", _snap.get("limit_up_days20"))
+            if _lu is None or float(_lu) < _lu_thr:
+                kept_after_lu.append(card)
+                continue
+            card["policy_drop_owner"] = "limit_up_days20_veto"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "limit_up_days20_veto",
+                "action": "drop",
+                "reason": f"近 20 日涨停 {int(float(_lu))} 次 ≥ {_lu_thr}（L-129 近期涨停闸门）",
+                "eliminated": True,
+            })
+        deduped = kept_after_lu
+    # v26 "平滑上涨"闸门（L-129）：max_dd60 ≥ 阈值（回撤过浅）→ 剔除。
+    _ddv = getattr(selection_policy, "max_dd60_veto", None) if selection_policy is not None else None
+    if _ddv is not None:
+        _dd_thr = float(_ddv)
+        kept_after_dd: list[dict[str, Any]] = []
+        for card in deduped:
+            _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
+            _dd = card.get("max_dd60", _snap.get("max_dd60"))
+            if _dd is None or float(_dd) < _dd_thr:
+                kept_after_dd.append(card)
+                continue
+            card["policy_drop_owner"] = "max_dd60_veto"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "max_dd60_veto",
+                "action": "drop",
+                "reason": f"60 日最深回撤 {float(_dd):.2f}% ≥ {_dd_thr:.2f}%（L-129 平滑上涨闸门）",
+                "eliminated": True,
+            })
+        deduped = kept_after_dd
     # v8 无支撑高波动否决（L-121）：把 DSA 的"回撤特征"迁移成跨策略条件——高特质波动
     # （ivol20_pct ≥ 阈值）且当日没有 MA5/MA10 支撑的卡直接剔除（缺 ivol 分位时保守放行）。
     # 数据：W2 里 DSA 相关卡共同点是"有 MA 支撑"（sup5 0.37 vs 无 DSA 卡 0.16）；
