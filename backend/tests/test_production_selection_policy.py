@@ -350,10 +350,10 @@ def test_extra_tail_veto_is_disabled_by_default_and_absent_from_frozen_artifacts
     from app.engine.production_policy import load_production_selection_policy
 
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.extra_tail_veto_enabled is False
-    # 当前默认 = v19（L-126/L-127：自适应共识闸门 + 换手/大成交额闸门，三窗口同时达标）。
-    # v8（无支撑高波动否决）仍是"已验证但不作为默认"的候选（L-121：W3 胜率下降）。
-    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 19
-    assert DEFAULT_PRODUCTION_SELECTION_POLICY.adaptive_consensus_enabled is True
+    # 当前默认 = v15（换手<8% + 成交额<20 亿；L-127）。自适应共识切换的 v19/v20/v21 因
+    # "统计量自参照"（L-128）暂不作为默认，待参考样本修复后再启用。
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 15
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.adaptive_consensus_enabled is False
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.high_turnover_veto_pct == 8.0
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.high_amount_veto_yi == 20.0
     for version in (1, 2, 3, 4, 5, 6):

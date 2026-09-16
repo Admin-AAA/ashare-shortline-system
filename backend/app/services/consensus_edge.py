@@ -57,6 +57,11 @@ def compute_consensus_edge(
     min_side: int = DEFAULT_MIN_SIDE,
 ) -> float | None:
     """返回 `edge(t)`；样本任一侧不足 `min_side` 时返回 None（调用方回落到中性分支）。"""
+    # ⚠️ 已知口径缺陷（2026-09-17 审计发现）：本函数从 `recommendations`（即"本策略自己的选股"）
+    # 统计 edge，而 v20/v21 分支本身按背书数筛卡 → 两个分支各自只贡献一侧样本，
+    # 统计量自参照（self-censoring）。研究侧的 edge 用的是**固定参考书**（冠军 v7 的选择），
+    # 因此产线必须改为在参考样本（例如 v7 shadow 选股 / 盘前候选池）上计算后才可重新启用
+    # `adaptive_consensus_enabled`。当前默认政策保持中性分支（v15/v19，不切换），见 L-128。
     rows = db.execute(
         text(
             """

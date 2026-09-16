@@ -252,7 +252,7 @@ _POLICY_ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "policies"
 
 def load_production_selection_policy(
     policy_id: str = "production-selection",
-    version: int = 19,
+    version: int = 15,
 ) -> ProductionSelectionPolicy:
     """Load the repository-owned artifact used by production and backtests.
 
