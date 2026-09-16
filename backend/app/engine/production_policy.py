@@ -130,6 +130,13 @@ class ProductionSelectionPolicy:
     # 缺 turnover_rate 的卡片保守放行（与 v8/L-121 同一纪律）。
     high_turnover_veto_pct: float | None = None
 
+    # v13（L-126）：反向共识闸门 —— 只保留"背书数 ≤ N"的候选（None = 关闭）。
+    # 依据（2026-09-16 第 23 轮）：`≥3 背书` 是 W1/W2 的强正信号、W3 的强负信号
+    # （已选样本 W3：<3 背书 WR 62% avg +1.57 vs ≥3 背书 WR 45% avg −1.31）。
+    # 因果门控（regime/情绪/涨停家数/ivol/分数差）全部无效 → 只能用"已结算的近 K 日
+    # 表现"决定当前该用哪一侧；v10 是正向侧、本字段是反向侧，二者由逐日政策切换驱动。
+    consensus_max_signals: int | None = None
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -178,6 +185,7 @@ class ProductionSelectionPolicy:
             "no_support_high_ivol_pct_threshold": self.no_support_high_ivol_pct_threshold,
             "slot_reserve": [list(item) for item in self.slot_reserve],
             "high_turnover_veto_pct": self.high_turnover_veto_pct,
+            "consensus_max_signals": self.consensus_max_signals,
         }
 
     @property
@@ -252,7 +260,7 @@ def load_production_selection_policy(
     W2 让价 WR −2.0pp、MDD −1.31 但 avg/sum/PF 均改善）。
     需要严格复现旧口径时显式传 version=1/2/3/4/5/6。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -296,6 +304,8 @@ def load_production_selection_policy(
     )
     _htv = payload.get("high_turnover_veto_pct", None)
     payload["high_turnover_veto_pct"] = None if _htv is None else float(_htv)
+    _cms = payload.get("consensus_max_signals", None)
+    payload["consensus_max_signals"] = None if _cms in (None, 0, "") else int(_cms)
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:
         raise ValueError("production selection policy artifact identity mismatch")

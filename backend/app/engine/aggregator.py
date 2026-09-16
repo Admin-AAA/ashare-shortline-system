@@ -1157,6 +1157,29 @@ def apply_pool_rules(
                 "eliminated": True,
             })
         deduped = kept_after_turnover
+    # v13 反向共识闸门（L-126）：只保留背书数 ≤ N 的候选。与 v5 的共识闸门方向相反，
+    # 用于"多策略共振反而是负信号"的行情段（W3 已选样本：<3 背书 WR 62% vs ≥3 背书 45%）。
+    # 默认 None = 关闭；硬否决卡不受影响。
+    _cms = getattr(selection_policy, "consensus_max_signals", None) if selection_policy is not None else None
+    if _cms is not None and int(_cms) > 0:
+        _max_signals = int(_cms)
+        kept_after_max: list[dict[str, Any]] = []
+        for card in deduped:
+            signals = [
+                s for s in (card.get("strategy_signals") or [])
+                if isinstance(s, dict) and not s.get("hard_veto")
+            ]
+            if str(card.get("hard_veto")).lower() in ("true", "1") or len(signals) <= _max_signals:
+                kept_after_max.append(card)
+                continue
+            card["policy_drop_owner"] = "anti_consensus_gate"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "anti_consensus_gate",
+                "action": "drop",
+                "reason": f"{_ctx_base}有 {len(signals)} 个策略背书（>{_max_signals}，反向共识闸门）",
+                "eliminated": True,
+            })
+        deduped = kept_after_max
     # v8 无支撑高波动否决（L-121）：把 DSA 的"回撤特征"迁移成跨策略条件——高特质波动
     # （ivol20_pct ≥ 阈值）且当日没有 MA5/MA10 支撑的卡直接剔除（缺 ivol 分位时保守放行）。
     # 数据：W2 里 DSA 相关卡共同点是"有 MA 支撑"（sup5 0.37 vs 无 DSA 卡 0.16）；
