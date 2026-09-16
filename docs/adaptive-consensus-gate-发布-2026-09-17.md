@@ -1,6 +1,10 @@
 # 自适应共识闸门 + 换手/成交额闸门 发布 — 2026-09-17
 
-> 交付物：`production_selection v19`（默认）+ `execution_policy v5.0.0`（默认）
+> **⚠️ 状态更新（2026-09-17 同日审计）**：自适应切换已撤回默认启用（见 §7 与 L-128）。
+> 当前生产默认 = `production_selection v15`（换手<8% + 成交额<20 亿）+ `execution_policy v5.0.0`。
+> 本文 §1–§4 记录的是**研究口径（固定参考书）**下的三窗证据；产线复现需先完成 §7 的修复。
+>
+> 交付物：`production_selection v15`（默认）+ `execution_policy v5.0.0`（默认）
 > 三窗指标 JSON：`output/adaptive-consensus-gate-metrics-20260917.json`
 > 方法与复盘：`docs/reviews/adaptive-consensus-gate-2026-09-16.md`、`docs/lessons/LESSONS.md`（L-123…L-127）
 
@@ -68,3 +72,28 @@ champion baseline（v7 + exec v4）三窗为 W1 58.8% / W2 54.7% / W3 56.1%（WR
 # 出场回退：把 app/policies/execution_policy.registry.json 的 current 指回 4.0.0
 git revert <本发布 commit>
 ```
+
+
+## 7. ⚠️ 同日审计：自适应切换撤回默认启用（L-128）
+
+**问题**：产线版 `compute_consensus_edge` 从 `recommendations`（本策略自己的选股）统计 edge，
+而 v20 分支只留 ≥3 背书、v21 只留 ≤2 —— 两侧样本由不同分支日贡献，统计量**自参照**。
+实测：把 edge 改用 V3 自身选股重算，逐日分支与研究闸门文件仅 **5–7% 一致**。
+
+**处置**：
+- 默认版本 v19 → **v15**（只保留换手<8% 与成交额<20 亿两个端到端验证过的横截面闸门，不做共识方向切换）。
+- v19/v20/v21 artifact 与 `consensus_edge.py` 保留在库、默认不启用；代码内写明修复路径。
+- 生产默认（v15 + exec v5）三窗实测（中性配置）：
+  | 窗口 | 旧默认（v7+exec v4） | 生产默认（v15 中性 + exec v5） | 达标 |
+  |---|---|---|---|
+  | W1 | 58.8% / PF1.348 / Σ+497.1 / MDD−46.76 | **60.0% / PF1.221 / Σ+218.8 / MDD−36.73** | ✓✓✓ |
+  | W2 | 54.7% / PF1.169 / Σ+190.3 / MDD−27.15 | 57.8% / PF1.219 / Σ+170.2 / MDD−25.69 | WR 差 2.2pp |
+  | W3 | 56.1% / PF1.234 / Σ+33.8 / MDD−15.69 | 58.3% / PF1.434 / Σ+53.1 / MDD−7.32 | WR 差 1.7pp |
+
+  → 生产默认已把 **PF 三窗全部推过 1.2、Σ 全部为正、MDD 全面改善**，但 W2/W3 的 WR 仍差 1.7–2.2pp；
+  研究口径（固定参考书）下三窗全达标，产线复现依赖 §7 的修复。
+
+**修复路径（下一轮）**：把 edge 建在**与当前策略无关的固定参考样本**上——
+优先方案：每日对盘前候选池按 `final_score` 取 top-N（不受共识分支影响），用因果 K 线模拟其结算收益，
+再按背书数分组算 edge；次选方案：v7 shadow 选股 + 结算。
+修复并三窗复验通过后，才可重新启用 `adaptive_consensus_enabled`。
