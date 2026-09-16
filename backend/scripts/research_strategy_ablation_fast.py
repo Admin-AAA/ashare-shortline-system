@@ -94,6 +94,11 @@ _PANEL_CARD_KEYS = (
 PANEL: dict = {"dir": None}
 UNIVERSE: dict = {"mode": "historical"}
 POLICY_VERSION: dict = {"n": None}   # None = 用 default；否则显式加载该版本 artifact
+# 逐日政策切换（自适应闸门实验用）：GATE["dates"] 里的交易日改用 GATE["version"] 的政策，
+# 其余交易日照常用默认/`--policy-version`。动机：某些规则在 A 段行情有效、在 B 段行情有害
+# （例如"≥3 背书"闸门：W1/W2 端到端大改善、W3 端到端 WR −17pp），而现有可用特征无法因果门控，
+# 只能用"已结算的近 N 日表现"决定开关。见 L-126。
+GATE: dict = {"map": {}, "version": None}   # map: {signal_date: policy_version}（逐日三态切换）
 SKILL_WEIGHTS: dict = {"mode": "equal", "map": None}  # equal | preset | json
 EP_OVERRIDE: dict = {"policy": None}                  # dataclasses.replace 出来的出场策略变体
 _IVOL_BY_DATE: dict[str, dict] = {}
@@ -320,8 +325,16 @@ def _worker_setup(
     skill_weight_mode: str | None = None,
     skill_weight_map: dict | None = None,
     ep=None,
+    gate_dates=None,
+    gate_version: int | None = None,
 ) -> None:
     """每个进程（含主进程）各自准备 builder + session；worker 之间不共享任何对象。"""
+    # spawn 模式子进程会重新 import 模块，模块级 GATE 不会自动带过去，必须显式传参。
+    if isinstance(gate_dates, dict):
+        GATE["map"] = {str(k): int(v) for k, v in gate_dates.items()}
+    else:
+        GATE["map"] = {str(x): int(gate_version) for x in (gate_dates or ())} if gate_version is not None else {}
+    GATE["version"] = gate_version
     from app.services.factors.registry import bootstrap_default_factor_registry
 
     # 显式版本：把模块级默认换成该 artifact（aggregate 内部读的就是这个常量）。
@@ -383,9 +396,11 @@ def _worker_init(
     skill_weight_mode: str | None = None,
     skill_weight_map: dict | None = None,
     ep=None,
+    gate_dates=None,
+    gate_version: int | None = None,
 ) -> None:
     _worker_setup(window, arms, panel_dir, policy_note, policy_version,
-                  skill_weight_mode, skill_weight_map, ep)
+                  skill_weight_mode, skill_weight_map, ep, gate_dates, gate_version)
 
 
 def _process_day(signal_date: str) -> dict:
@@ -393,6 +408,23 @@ def _process_day(signal_date: str) -> dict:
 
     返回 {trades, prov, panel_day, triggered}；所有 DB/对象都在本进程内，跨进程只传结果。
     """
+    # 逐日政策切换（自适应闸门）：命中 GATE 日期的交易日改用另一版政策 artifact。
+    # 每个 worker 顺序处理若干天、单线程，因此直接换模块级默认政策是安全的。
+    if GATE["map"]:
+        import app.engine.production_policy as _pp
+
+        _want = GATE["map"].get(str(signal_date), GATE.get("version"))
+        _cur = _pp.DEFAULT_PRODUCTION_SELECTION_POLICY.version
+        _target = None
+        if _want is None:
+            # 未命中日期回落到默认（表外=默认）；默认由 --policy-version 或 v7 决定
+            _fallback = int(POLICY_VERSION["n"]) if POLICY_VERSION.get("n") is not None else 7
+            if _cur != _fallback:
+                _target = _pp.load_production_selection_policy(version=_fallback)
+        elif _cur != int(_want):
+            _target = _pp.load_production_selection_policy(version=int(_want))
+        if _target is not None:
+            _pp.DEFAULT_PRODUCTION_SELECTION_POLICY = _target
     db = _WORKER["db"]
     builder = _WORKER["builder"]
     selected_all = _WORKER["selected_all"]
@@ -592,7 +624,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
             initializer=_worker_init,
             initargs=(window, arms, panel_dir, policy_note, POLICY_VERSION["n"],
                       SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"),
-                      EP_OVERRIDE.get("policy")),
+                      EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"]),
         ) as pool:
             for res in pool.map(_process_day, trade_dates, chunksize=1):
                 done += 1
@@ -604,7 +636,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
     else:
         _worker_setup(window, arms, panel_dir, policy_note, POLICY_VERSION["n"],
                       SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"),
-                      EP_OVERRIDE.get("policy"))
+                      EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"])
         for di, signal_date in enumerate(trade_dates, 1):
             _merge_day_result(_process_day(signal_date), trades, prov_rows, panel_days, triggered)
             if di % 10 == 0 or di == len(trade_dates):
@@ -771,6 +803,19 @@ def main() -> None:
              "用来检验「延迟一日的二次确认是否在筛选质量」。",
     )
     ap.add_argument(
+        "--gate-file",
+        default=None,
+        help="逐日政策切换：JSON 文件，内容为日期列表（YYYY-MM-DD），这些交易日改用 "
+             "--gate-policy-version 指定的政策，其余交易日沿用默认/--policy-version。"
+             "用于验证「用已结算的近 N 日表现自适应开关某条规则」。",
+    )
+    ap.add_argument(
+        "--gate-policy-version",
+        type=int,
+        default=None,
+        help="与 --gate-file 配套：命中日期使用的 production_selection 版本号。",
+    )
+    ap.add_argument(
         "--max-entry-gap",
         type=float,
         default=None,
@@ -797,6 +842,19 @@ def main() -> None:
     PANEL["dir"] = args.panel_dir
     UNIVERSE["mode"] = args.universe
     POLICY_VERSION["n"] = args.policy_version
+    if args.gate_file:
+        _gd = json.loads(Path(args.gate_file).read_text())
+        _dates = _gd.get("dates") if isinstance(_gd, dict) else _gd
+        if isinstance(_dates, dict):
+            GATE["map"] = {str(k): int(v) for k, v in _dates.items()}
+        else:
+            GATE["map"] = (
+                {str(x): int(args.gate_policy_version) for x in (_dates or [])}
+                if args.gate_policy_version is not None else {}
+            )
+        GATE["version"] = args.gate_policy_version
+        from collections import Counter as _C
+        print(f"[gate] 逐日切换 {len(GATE['map'])} 天 → {dict(_C(GATE['map'].values()))}", flush=True)
     if (args.tp_pct is not None or args.sl_pct is not None
             or args.trail_act is not None or args.trail_lock is not None
             or args.trail_callback is not None or args.horizon_days is not None
