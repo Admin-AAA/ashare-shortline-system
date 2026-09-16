@@ -816,6 +816,19 @@ def main() -> None:
         help="与 --gate-file 配套：命中日期使用的 production_selection 版本号。",
     )
     ap.add_argument(
+        "--output-count",
+        type=int,
+        default=None,
+        help="覆盖选择上下文：当日正式推荐上限（研究默认 10；生产 preset_formal_opening = 6）。"
+             "口径不一致会让研究结论与 LIVE 脱节（L-127）。",
+    )
+    ap.add_argument(
+        "--score-line",
+        type=float,
+        default=None,
+        help="覆盖选择上下文：分数线（研究默认 72.0，与生产 preset 一致）。",
+    )
+    ap.add_argument(
         "--max-entry-gap",
         type=float,
         default=None,
@@ -842,6 +855,11 @@ def main() -> None:
     PANEL["dir"] = args.panel_dir
     UNIVERSE["mode"] = args.universe
     POLICY_VERSION["n"] = args.policy_version
+    if args.output_count is not None:
+        PARAMS["output_count"] = int(args.output_count)
+    if args.score_line is not None:
+        PARAMS["score_line"] = float(args.score_line)
+    print(f"[ctx] score_line={PARAMS['score_line']} output_count={PARAMS['output_count']}", flush=True)
     if args.gate_file:
         _gd = json.loads(Path(args.gate_file).read_text())
         _dates = _gd.get("dates") if isinstance(_gd, dict) else _gd

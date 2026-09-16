@@ -137,6 +137,13 @@ class ProductionSelectionPolicy:
     # 表现"决定当前该用哪一侧；v10 是正向侧、本字段是反向侧，二者由逐日政策切换驱动。
     consensus_max_signals: int | None = None
 
+    # v15（L-127）：大成交额闸门 —— amount_yi ≥ 阈值的候选卡直接剔除（None = 关闭）。
+    # 依据（2026-09-16 第 24 轮末尾/V2 口径端到端分层）：剔除 V2 选中样本里 amount_yi 最高 20% 的单子，
+    # 三窗胜率同向改善（W2 59.6→61.9%、W1 +1.0pp、W3 +2.2pp）——是本轮唯一在**端到端样本**上
+    # 三窗同号的特征。与既有 DSA 自身 universe（`amount_yi < 15`，理由"大成交额是机构博弈盘"）同源，
+    # 只是推广到全部技能。缺 amount_yi 的卡片保守放行。
+    high_amount_veto_yi: float | None = None
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -186,6 +193,7 @@ class ProductionSelectionPolicy:
             "slot_reserve": [list(item) for item in self.slot_reserve],
             "high_turnover_veto_pct": self.high_turnover_veto_pct,
             "consensus_max_signals": self.consensus_max_signals,
+            "high_amount_veto_yi": self.high_amount_veto_yi,
         }
 
     @property
@@ -260,7 +268,7 @@ def load_production_selection_policy(
     W2 让价 WR −2.0pp、MDD −1.31 但 avg/sum/PF 均改善）。
     需要严格复现旧口径时显式传 version=1/2/3/4/5/6。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -306,6 +314,8 @@ def load_production_selection_policy(
     payload["high_turnover_veto_pct"] = None if _htv is None else float(_htv)
     _cms = payload.get("consensus_max_signals", None)
     payload["consensus_max_signals"] = None if _cms in (None, 0, "") else int(_cms)
+    _hav = payload.get("high_amount_veto_yi", None)
+    payload["high_amount_veto_yi"] = None if _hav in (None, 0, "") else float(_hav)
     policy = ProductionSelectionPolicy(**payload)
     if policy.policy_id != policy_id or policy.version != version:
         raise ValueError("production selection policy artifact identity mismatch")

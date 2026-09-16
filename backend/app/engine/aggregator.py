@@ -1180,6 +1180,26 @@ def apply_pool_rules(
                 "eliminated": True,
             })
         deduped = kept_after_max
+    # v15 大成交额闸门（L-127）：amount_yi ≥ 阈值直接剔除。与 DSA 自身 universe 的
+    # `amount_yi < 15`（"大成交额=机构博弈盘，短线不适用"）同源，推广到全部技能。
+    _hav = getattr(selection_policy, "high_amount_veto_yi", None) if selection_policy is not None else None
+    if _hav is not None and float(_hav) > 0:
+        _amt_thr = float(_hav)
+        kept_after_amount: list[dict[str, Any]] = []
+        for card in deduped:
+            _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
+            _amt = card.get("amount_yi", _snap.get("amount_yi"))
+            if _amt is None or float(_amt) < _amt_thr:
+                kept_after_amount.append(card)
+                continue
+            card["policy_drop_owner"] = "high_amount_veto"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "high_amount_veto",
+                "action": "drop",
+                "reason": f"成交额 {float(_amt):.2f} 亿 ≥ {_amt_thr:.1f} 亿（L-127 大成交额闸门）",
+                "eliminated": True,
+            })
+        deduped = kept_after_amount
     # v8 无支撑高波动否决（L-121）：把 DSA 的"回撤特征"迁移成跨策略条件——高特质波动
     # （ivol20_pct ≥ 阈值）且当日没有 MA5/MA10 支撑的卡直接剔除（缺 ivol 分位时保守放行）。
     # 数据：W2 里 DSA 相关卡共同点是"有 MA 支撑"（sup5 0.37 vs 无 DSA 卡 0.16）；
