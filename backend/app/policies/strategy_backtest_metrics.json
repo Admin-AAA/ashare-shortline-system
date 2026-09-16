@@ -1,12 +1,12 @@
 {
  "schema_version": 1,
- "generated_at": "2026-09-17T06:00:53",
+ "generated_at": "2026-09-17T07:46:10",
  "caliber": {
   "name": "single_skill_portfolio",
   "label": "单策略组合回测（三窗）",
   "description": "只保留该技能有非否决策略信号的候选卡，再走真实 production_selection v4 选择（score_line=72 / Top10）与 execution_policy v4 因果出场（T+1 入场、止损/跟踪止盈、跳空成交约束）；逐笔等权，不含仓位与资金模型。",
   "combined_label": "全策略组合（10 技能全开，全管线重放）",
-  "selection_policy": "production_selection.v26",
+  "selection_policy": "production_selection.v27",
   "signal_weights": "preset_formal_opening（生产逐技能权重：DSA 0.5 / 陈小群 1.5 / 其余 1.0）",
   "baseline_selection_policy": "production_selection.v4（Δ 与闸门判定相对该基线）",
   "execution_policy": "execution_policy.v4",

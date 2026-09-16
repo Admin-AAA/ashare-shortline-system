@@ -80,16 +80,14 @@ def test_daily_top10_policy_counts_recommendations_from_earlier_same_day_runs() 
         ),
     )
 
+    # 默认政策 v27 的每日输出上限 = 6（与生产 preset 的 6 张/日对齐），
+    # 同日已有 3 张 → 本运行只剩 3 个名额。
     assert [card["code"] for card in result.recommendations] == [
         "300001",
         "300002",
         "300003",
-        "300004",
-        "300005",
-        "300006",
-        "300007",
     ]
-    assert sum(item.drop_owner == "daily_top_n" for item in result.verdicts) == 5
+    assert sum(item.drop_owner == "daily_top_n" for item in result.verdicts) == 9
 
 
 def test_one_rule_patch_changes_only_structural_veto_and_keeps_same_input_cards() -> None:
@@ -350,9 +348,10 @@ def test_extra_tail_veto_is_disabled_by_default_and_absent_from_frozen_artifacts
     from app.engine.production_policy import load_production_selection_policy
 
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.extra_tail_veto_enabled is False
-    # 当前默认 = v26（换手<8% + 成交额<20 亿 + chg20<22 + max_dd60<−15.61；L-129 三窗达标）。
+    # 当前默认 = v27（v26 的全部横截面闸门 + daily_output_limit=6，与生产 preset 的 6 张/日对齐；L-129 三窗达标）。
     # 自适应共识切换的 v19/v20/v21 因"统计量自参照"（L-128）暂不作为默认。
-    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 26
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.version == 27
+    assert DEFAULT_PRODUCTION_SELECTION_POLICY.daily_output_limit == 6
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.adaptive_consensus_enabled is False
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.high_turnover_veto_pct == 8.0
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.high_amount_veto_yi == 20.0

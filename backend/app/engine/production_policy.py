@@ -284,7 +284,7 @@ _POLICY_ARTIFACT_DIR = Path(__file__).resolve().parents[1] / "policies"
 
 def load_production_selection_policy(
     policy_id: str = "production-selection",
-    version: int = 26,
+    version: int = 27,
 ) -> ProductionSelectionPolicy:
     """Load the repository-owned artifact used by production and backtests.
 
@@ -306,7 +306,7 @@ def load_production_selection_policy(
     W2 让价 WR −2.0pp、MDD −1.31 但 avg/sum/PF 均改善）。
     需要严格复现旧口径时显式传 version=1/2/3/4/5/6。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
