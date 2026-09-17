@@ -188,6 +188,7 @@ class RegistryDiagnosticsReport:
                 "active_strategy_unknown_declared_group",
                 "inactive_strategy_unknown_declared_group",
                 "empty_executable_group",
+                "imperative_strategy_declares_preset_group",
             }:
                 if target_groups and issue.group not in target_groups:
                     continue
@@ -387,6 +388,31 @@ def build_registry_diagnostics(
                 available_values=declared_groups,
             )
         )
+
+    # 命令式技能（无 strategy.yaml 契约，``skill.executable`` 仍为真）不得声明进入
+    # 选股预设组：研究/重放口径要求 ``skill.contract`` 才能同构复现候选与打分
+    # （``ProductionRuleReplayCandidateBuilder._selected_skills`` 直接跳过无契约技能），
+    # 因此 imperative 技能一旦进入选股预设，"研究三窗通过、生产重建亏损"会静默并存。
+    # 证据：2026-09-18 高位放量滞涨预警技能混入 preset_formal_opening，生产重建三窗
+    # Σ−66.36 而同一政策/权重/窗口的研究 A 臂 Σ+116.26（见 L-132）。
+    for skill in skill_rows:
+        skill_id = str(skill.skill_id)
+        groups = declarations.get(skill_id, ())
+        if not groups or not _is_active(skill) or str(skill.mode).lower() != "imperative":
+            continue
+        for group in groups:
+            errors.append(
+                RegistryDiagnostic(
+                    code="imperative_strategy_declares_preset_group",
+                    strategy_id=skill_id,
+                    group=group,
+                    message=(
+                        f"命令式策略 '{skill_id}' 声明进入选股预设组 '{group}'，但它没有 "
+                        f"strategy.yaml 契约，研究/重放口径无法同构复现（L-132）。"
+                    ),
+                    available_values=declared_groups,
+                )
+            )
 
     # Explicit DB references must point to a loaded strategy identity.  The
     # registry is observed exactly as-is; no missing row is synthesized.

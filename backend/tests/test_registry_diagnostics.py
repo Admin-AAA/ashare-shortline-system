@@ -19,6 +19,7 @@ def _skill(
     groups: tuple[str, ...] = ("formal_opening",),
     status: str = "active",
     executable: bool = True,
+    mode: str = "declarative",
 ) -> StrategySkill:
     return StrategySkill(
         skill_id=skill_id,
@@ -29,7 +30,7 @@ def _skill(
             "id": skill_id,
             "name": skill_id,
             "version": "1.0.0",
-            "mode": "declarative",
+            "mode": mode,
             "status": status,
             "requirements": [],
             "capabilities": [],
@@ -66,6 +67,53 @@ def test_repository_active_strategy_groups_match_canonical_presets():
         issue.code == "active_strategy_unknown_declared_group"
         for issue in report.errors
     )
+
+
+def test_repository_imperative_strategy_never_declares_selection_preset_group():
+    """命令式（无 strategy.yaml 契约）技能不得声明进入选股预设组（L-132）。
+
+    研究/重放口径只认 ``skill.contract``，imperative 技能进选股预设会让
+    "研究三窗通过、生产重建亏损"静默并存：2026-09-18 高位放量滞涨预警技能混入
+    preset_formal_opening，同期生产重建 Σ−66.36 / 研究 A 臂 Σ+116.26。
+    """
+    skills_dir = Path(__file__).resolve().parents[1] / "skills"
+    skills = load_skills(skills_dir)
+    report = build_registry_diagnostics(skills, [], canonical_presets=DEFAULT_PRESETS)
+
+    assert not any(
+        issue.code == "imperative_strategy_declares_preset_group"
+        for issue in report.errors
+    )
+    imperative_skills = [skill for skill in skills if skill.mode == "imperative"]
+    assert imperative_skills, "仓库内应至少有一个命令式技能用于覆盖该守卫"
+
+
+def test_imperative_strategy_declaring_preset_group_is_blocking():
+    skills = [
+        _skill("warning-only", mode="imperative"),
+        _skill("opening-a"),
+    ]
+    presets = [
+        {
+            "preset_id": "preset_formal_opening",
+            "status": "active",
+            "skills": [{"strategy_id": "warning-only"}, {"strategy_id": "opening-a"}],
+        }
+    ]
+    report = build_registry_diagnostics(skills, presets, canonical_presets=_CANONICAL)
+    issues = [
+        issue
+        for issue in report.errors
+        if issue.code == "imperative_strategy_declares_preset_group"
+    ]
+
+    assert [issue.strategy_id for issue in issues] == ["warning-only"]
+    assert [issue.group for issue in issues] == ["formal_opening"]
+    with pytest.raises(RegistryDiagnosticsError) as caught:
+        report.require_executable("preset_formal_opening")
+    assert "imperative_strategy_declares_preset_group" in {
+        item.code for item in caught.value.report.errors
+    }
 
 
 def test_runtime_preflight_preserves_duplicate_skill_ids_before_map_projection(monkeypatch):

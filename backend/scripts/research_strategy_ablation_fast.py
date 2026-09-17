@@ -751,6 +751,12 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--windows", default="W1,W2,W3")
+    ap.add_argument(
+        "--window-range",
+        default=None,
+        help="自定义窗口 START:END（YYYY-MM-DD），注册为 WX 并覆盖 --windows；"
+             "用于复现 DB 历史重建实际窗口（如 2026-06-17:2026-09-18）。",
+    )
     ap.add_argument("--targets", default="all")
     ap.add_argument("--out", default=None)
     ap.add_argument(
@@ -942,6 +948,11 @@ def main() -> None:
               f"trail_cb={args.trail_callback} horizon={args.horizon_days} "
               f"entry_days={args.entry_days} max_entry_gap={args.max_entry_gap}", flush=True)
     _sw = str(args.skill_weights or "equal").strip()
+    if args.window_range:
+        _range_start, _range_end = [p.strip() for p in str(args.window_range).split(":", 1)]
+        WINDOWS["WX"] = (_range_start, _range_end)
+        args.windows = "WX"
+        print(f"[window] WX = {_range_start} ~ {_range_end}", flush=True)
     if _sw in ("equal", "preset"):
         SKILL_WEIGHTS["mode"] = _sw
         SKILL_WEIGHTS["map"] = None
