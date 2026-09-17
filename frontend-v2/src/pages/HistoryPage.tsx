@@ -473,6 +473,31 @@ export function HistoryPage() {
             <span className="return-badge__value">{cancelSummary.avoided_loss_rate_5d.toFixed(1)}%</span>
           </div>
         )}
+
+        {/* 未触发买点的旁路参考：这些票没有真实成交，不进胜率/净收益口径，
+            但"没买到是躲过亏损还是错过盈利"必须能看到。 */}
+        {summary?.missed_observation?.average_reference_return != null && (
+          <div
+            className={`return-badge return-badge--${summary.missed_observation.average_reference_return >= 0 ? "up" : "down"}`}
+            title={`未触发买点、未建仓的 ${summary.missed_observation.observed_count} 笔推荐（另有 ${summary.missed_observation.pending_count} 笔观察窗口未满未计入），假设按推荐价买入并持有到观察期末收盘的平均静态参考收益（已扣 ${summary.additional_cost_pct.toFixed(2)}% 成本）。非实际盈亏。`}
+          >
+            <span className="return-badge__label">未触发·参考收益</span>
+            <span className="return-badge__value">
+              {summary.missed_observation.average_reference_return >= 0 ? "+" : ""}
+              {summary.missed_observation.average_reference_return.toFixed(2)}%
+            </span>
+          </div>
+        )}
+
+        {summary?.missed_observation?.avoided_loss_rate != null && (
+          <div
+            className="return-badge"
+            title={`未触发推荐里"如果买了会亏"的比例（${summary.missed_observation.avoided_loss_count}/${summary.missed_observation.observed_count} 笔）；越低说明未触发越可能是在错过盈利。`}
+          >
+            <span className="return-badge__label">未触发避免亏损率</span>
+            <span className="return-badge__value">{summary.missed_observation.avoided_loss_rate.toFixed(1)}%</span>
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -744,7 +769,34 @@ export function HistoryPage() {
                               )}
                             </>
                           ) : o?.outcome_label === "missed" ? (
-                            <span>未成交</span>
+                            // 未触发买点：没有真实成交，展示旁路参考（按推荐价持有到观察期末
+                            // 收盘的静态收益，已扣附加成本），让复盘能区分"躲过亏损"与"错过盈利"。
+                            // 观察窗口未满的样本不给数值，避免拿截断窗口冒充"持有到期"。
+                            <div style={{ ...stackStyle, alignItems: "flex-end" }}>
+                              <span>未成交</span>
+                              {(() => {
+                                const missed = it.missed_observation;
+                                if (!missed) return null;
+                                if (missed.net_return_pct == null) {
+                                  return (
+                                    <span
+                                      style={{ fontSize: "var(--text-xs)", color: "var(--muted)" }}
+                                      title={`观察窗口未满（已观察 ${missed.observed_days}/${missed.horizon_days} 个交易日），参考收益待后续交易日`}
+                                    >
+                                      参考 观察中 {missed.observed_days}/{missed.horizon_days}日
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <span
+                                    style={{ fontSize: "var(--text-xs)", color: "var(--muted)" }}
+                                    title={`未触发买点、未建仓：假设按推荐价买入并持有到观察期末（${missed.horizon_days} 个交易日）收盘的静态参考收益（已扣 ${missed.cost_pct.toFixed(2)}% 成本）。不代表实际盈亏，只用于判断“没买到”是躲过亏损还是错过盈利。`}
+                                  >
+                                    参考 {missed.net_return_pct >= 0 ? "+" : ""}{missed.net_return_pct.toFixed(2)}%
+                                  </span>
+                                );
+                              })()}
+                            </div>
                           ) : (
                             // 未结算：回落到实时浮盈，标注「未结算」与「收益」区分
                             renderRealtimePnl(pnlMap[it.recommendation_id])

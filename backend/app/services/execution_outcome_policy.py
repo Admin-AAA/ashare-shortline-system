@@ -144,6 +144,104 @@ def build_cancel_observations(
     return {"items": items, "summary": _summarize_cancel_observations(items)}
 
 
+def build_missed_observations(
+    db: Session,
+    recommendations: list[Any],
+    outcomes: dict[str, Any],
+) -> dict[str, Any]:
+    """未触发买点（missed）的旁路参考观察。
+
+    未触发买点的推荐没有真实成交，永远不进胜率/净收益口径；但"没买到到底是躲过亏损还是
+    错过盈利"是复盘必需的信息。口径与「取消后观察」（``build_cancel_observations``）同构：
+    以推荐价（``recommend_price``，信号日参考价，也是 outcome 静态指标的基准）为成本，
+    持有到观察期末（第 ``horizon_days`` 个交易日）收盘，扣掉统一附加成本。
+
+    完整性：只有行情已覆盖满 ``horizon_days`` 个交易日的样本才给数值，未满的返回
+    ``pending`` 与已观察天数——绝不用被截断的窗口冒充"持有到期"。
+    """
+    items: dict[str, dict[str, Any]] = {}
+    candidates: list[dict[str, Any]] = []
+    for rec in recommendations:
+        recommendation_id = str(_value(rec, "recommendation_id") or "")
+        outcome = outcomes.get(recommendation_id)
+        if outcome is None:
+            continue
+        if str(_value(outcome, "outcome_label") or "").lower() != "missed":
+            continue
+        if bool(_value(outcome, "entry_triggered")):
+            continue
+        horizon_days = int(_value(outcome, "horizon_days") or 5)
+        items[recommendation_id] = {
+            "status": "pending",
+            "observed_days": 0,
+            "horizon_days": horizon_days,
+            "cost_pct": ADDITIONAL_COST_PCT,
+            "net_return_pct": None,
+        }
+        code = str(_value(rec, "code") or "")
+        trade_date = str(_value(rec, "trade_date") or "")
+        if code and trade_date:
+            candidates.append({
+                "recommendation_id": recommendation_id,
+                "code": code,
+                "trade_date": trade_date,
+                "horizon_days": horizon_days,
+                "static_close_return": _optional_float(_value(outcome, "close_return")),
+            })
+
+    if candidates:
+        codes = sorted({candidate["code"] for candidate in candidates})
+        min_trade_date = min(candidate["trade_date"] for candidate in candidates)
+        bars = db.scalars(
+            select(DailyKbar)
+            .where(DailyKbar.code.in_(codes), DailyKbar.trade_date > min_trade_date)
+            .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
+        ).all()
+        dates_by_code: dict[str, list[str]] = {}
+        for bar in bars:
+            if float(bar.close or 0) > 0:
+                dates_by_code.setdefault(str(bar.code), []).append(str(bar.trade_date))
+        for candidate in candidates:
+            observed_days = min(
+                candidate["horizon_days"],
+                sum(
+                    1
+                    for trade_date in dates_by_code.get(candidate["code"], [])
+                    if trade_date > candidate["trade_date"]
+                ),
+            )
+            item = items[candidate["recommendation_id"]]
+            item["observed_days"] = observed_days
+            if observed_days < candidate["horizon_days"]:
+                continue
+            static_close_return = candidate["static_close_return"]
+            if static_close_return is None:
+                continue
+            item["status"] = "complete"
+            item["net_return_pct"] = round(static_close_return - ADDITIONAL_COST_PCT, 2)
+
+    return {"items": items, "summary": _summarize_missed_observations(items)}
+
+
+def _summarize_missed_observations(items: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    returns = [
+        float(item["net_return_pct"])
+        for item in items.values()
+        if item.get("net_return_pct") is not None
+    ]
+    avoided = sum(value <= 0 for value in returns)
+    return {
+        "missed_count": len(items),
+        "observed_count": len(returns),
+        "pending_count": len(items) - len(returns),
+        "average_reference_return": round(sum(returns) / len(returns), 2) if returns else None,
+        "avoided_loss_count": avoided,
+        "avoided_loss_rate": round(avoided * 100.0 / len(returns), 1) if returns else None,
+        "missed_gain_count": len(returns) - avoided,
+        "return_basis": "static_close_return_at_recommend_price_minus_additional_cost",
+    }
+
+
 def _summarize_cancel_observations(items: dict[str, dict[str, Any]]) -> dict[str, Any]:
     summary: dict[str, Any] = {"cancelled_count": len(items)}
     for horizon in _CANCEL_HORIZONS:
@@ -174,6 +272,15 @@ def _parse_cancel_datetime(value: Any) -> datetime | None:
     return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
 
 
+def _optional_float(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def _positive_float(value: Any) -> float | None:
     try:
         number = float(value)
@@ -186,4 +293,8 @@ def _value(item: Any, name: str) -> Any:
     return item.get(name) if isinstance(item, dict) else getattr(item, name, None)
 
 
-__all__ = ["apply_execution_outcome_policy", "build_cancel_observations"]
+__all__ = [
+    "apply_execution_outcome_policy",
+    "build_cancel_observations",
+    "build_missed_observations",
+]

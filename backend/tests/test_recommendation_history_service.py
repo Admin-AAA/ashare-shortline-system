@@ -13,6 +13,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import text
 
 from app.db.session import SessionLocal
 from app.models.tables import RecommendationRun
@@ -20,6 +21,7 @@ from app.services.workbench_service import (
     _build_recommendation_history_summary,
     list_recommendation_history,
 )
+from app.services.execution_outcome_policy import build_missed_observations
 
 pytestmark = pytest.mark.integration
 
@@ -186,8 +188,82 @@ def test_history_items_have_outcome_field():
             if item["outcome"] is not None:
                 assert "missed_observation" not in item["outcome"]
         assert "cancel_observation" in result["summary"]
+        # 未触发买点的旁路参考汇总（不改真实成交口径）必须随 summary 一起返回
+        assert "missed_observation" in result["summary"]
+        assert "average_reference_return" in result["summary"]["missed_observation"]
     finally:
         db.close()
+
+
+def test_missed_observation_is_bypass_only_and_needs_a_complete_window():
+    """未触发买点的旁路参考：只统计 missed、扣附加成本，且窗口未满不给数值。
+
+    用真实行情库构造：一笔用真实历史日期（窗口已满），一笔用未来日期（窗口必未满）。
+    """
+    db = _db()
+    try:
+        real_date = db.execute(
+            text("SELECT MAX(trade_date) FROM daily_kbars")
+        ).scalar()
+        recommendations = [
+            {"recommendation_id": "m_complete", "code": "600000", "trade_date": "2026-06-17"},
+            {"recommendation_id": "m_pending", "code": "600000", "trade_date": str(real_date)},
+        ]
+        outcomes = {
+            "m_complete": SimpleNamespace(
+                recommendation_id="m_complete",
+                outcome_label="missed",
+                entry_triggered=False,
+                horizon_days=5,
+                close_return=-8.64,
+            ),
+            "m_pending": SimpleNamespace(
+                recommendation_id="m_pending",
+                outcome_label="missed",
+                entry_triggered=False,
+                horizon_days=5,
+                close_return=3.0,
+            ),
+            "s1": SimpleNamespace(
+                recommendation_id="s1",
+                outcome_label="success",
+                entry_triggered=True,
+                horizon_days=5,
+                close_return=9.0,
+            ),
+        }
+
+        report = build_missed_observations(db, recommendations, outcomes)
+
+        assert set(report["items"]) == {"m_complete", "m_pending"}
+        # 真实成交样本不得进入旁路口径
+        assert "s1" not in report["items"]
+        assert report["items"]["m_complete"]["status"] == "complete"
+        assert report["items"]["m_complete"]["observed_days"] == 5
+        assert report["items"]["m_complete"]["net_return_pct"] == -8.71
+        assert report["items"]["m_pending"]["status"] == "pending"
+        assert report["items"]["m_pending"]["net_return_pct"] is None
+        summary = report["summary"]
+        assert summary["missed_count"] == 2
+        assert summary["observed_count"] == 1
+        assert summary["pending_count"] == 1
+        assert summary["average_reference_return"] == -8.71
+        assert summary["avoided_loss_rate"] == 100.0
+    finally:
+        db.close()
+
+
+def test_missed_observation_without_samples_is_explicit():
+    db = _db()
+    try:
+        summary = build_missed_observations(db, [], {})["summary"]
+    finally:
+        db.close()
+
+    assert summary["missed_count"] == 0
+    assert summary["observed_count"] == 0
+    assert summary["average_reference_return"] is None
+    assert summary["avoided_loss_rate"] is None
 
 
 def test_recompute_stale_outcomes_idempotent():

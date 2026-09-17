@@ -60,7 +60,7 @@ from app.services.auxiliary.application import (
 from app.services.market_source.local_pool_adapter import load_legacy_market_universe
 from app.services.failure_attribution import classify_false_positive
 from app.services.execution_confirmation_state import load_execution_state_map
-from app.services.execution_outcome_policy import build_cancel_observations
+from app.services.execution_outcome_policy import build_cancel_observations, build_missed_observations
 from app.services.market_data import MarketDataError, get_market_universe
 from app.services.market_pool import (
     get_market_snapshot_from_pool,
@@ -968,6 +968,7 @@ def list_recommendation_history(
         {
             "recommendation_id": str(row.recommendation_id),
             "code": str(row.code),
+            "trade_date": str(row.trade_date),
         }
         for row in id_rows
     ]
@@ -988,6 +989,12 @@ def list_recommendation_history(
     )
     cancel_report = build_cancel_observations(db, deduped_refs, all_execution_states)
     summary["cancel_observation"] = cancel_report["summary"]
+    missed_report = build_missed_observations(
+        db,
+        deduped_refs,
+        {str(outcome.recommendation_id): outcome for outcome in all_outcomes},
+    )
+    summary["missed_observation"] = missed_report["summary"]
     page_ids = deduped_ids[offset : offset + limit]
     if not page_ids:
         return {
@@ -1019,6 +1026,9 @@ def list_recommendation_history(
         item["outcome"] = serialized_outcome
         item["execution_state"] = all_execution_states.get(str(rec_id)) if rec_id else None
         item["cancel_observation"] = cancel_report["items"].get(str(rec_id)) if rec_id else None
+        item["missed_observation"] = (
+            missed_report["items"].get(str(rec_id)) if rec_id else None
+        )
 
     result = {
         "items": items,

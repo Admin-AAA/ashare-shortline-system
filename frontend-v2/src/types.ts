@@ -1606,6 +1606,13 @@ export type RecommendationHistoryResponse = {
     outcome: RecommendationOutcome | null;
     execution_state: RecommendationExecutionState | null;
     cancel_observation: CancelObservation | null;
+    missed_observation: {
+      status: "pending" | "complete" | string;
+      observed_days: number;
+      horizon_days: number;
+      cost_pct: number;
+      net_return_pct: number | null;
+    } | null;
   })[];
   total: number;
   offset: number;
@@ -1631,6 +1638,16 @@ export type RecommendationHistoryResponse = {
       avoided_loss_count_5d: number;
       avoided_loss_rate_5d: number | null;
       missed_gain_count_5d: number;
+    };
+    missed_observation: {
+      missed_count: number;
+      observed_count: number;
+      pending_count: number;
+      average_reference_return: number | null;
+      avoided_loss_count: number;
+      avoided_loss_rate: number | null;
+      missed_gain_count: number;
+      return_basis: string;
     };
   };
 };
