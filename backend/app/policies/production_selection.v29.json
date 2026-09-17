@@ -1,0 +1,134 @@
+{
+  "policy_id": "production-selection",
+  "version": 29,
+  "board_universe": null,
+  "excluded_20cm_buckets": [
+    "daily-stock-analysis-skill",
+    "chao-gu-yang-jia-skill"
+  ],
+  "structural_strong_hard_veto": false,
+  "oscillation_hard_veto": false,
+  "strong_score_penalty": 8.0,
+  "strong_support_ma5_penalty": 6.0,
+  "weak_low_chg20_threshold": 15.0,
+  "weak_low_chg20_penalty": 12.0,
+  "panic_limit_down_threshold": 100,
+  "panic_score_penalty": 12.0,
+  "market_base_score_adjustments": [
+    [
+      "强牛",
+      6.0
+    ],
+    [
+      "偏多",
+      0.0
+    ],
+    [
+      "震荡",
+      0.0
+    ],
+    [
+      "弱势",
+      2.0
+    ]
+  ],
+  "sentiment_score_adjustments": [
+    [
+      "高潮",
+      5.0
+    ],
+    [
+      "活跃",
+      3.0
+    ],
+    [
+      "平淡",
+      0.0
+    ],
+    [
+      "冰点",
+      -3.0
+    ]
+  ],
+  "climax_nonweak_extra": 8.0,
+  "score_line_minimum": 35.0,
+  "score_line_maximum": 120.0,
+  "weak_regime_score_cap": 60.0,
+  "dynamic_soft_floor_enabled": true,
+  "dynamic_soft_floor_offset": 1.0,
+  "dynamic_soft_floor_base_discount": 8.0,
+  "dynamic_soft_floor_max_gap": 20.0,
+  "dynamic_soft_floor_disabled_regimes": [
+    "震荡"
+  ],
+  "output_limit_enabled": true,
+  "daily_output_limit": 6,
+  "climax_output_divisor": 2,
+  "weak_ice_output_limit": 2,
+  "regime_sentiment_line_overrides": [
+    [
+      "强牛·高潮",
+      64.0
+    ],
+    [
+      "强牛·活跃",
+      64.0
+    ],
+    [
+      "偏多·活跃",
+      71.4
+    ],
+    [
+      "震荡·活跃",
+      72.0
+    ],
+    [
+      "偏多·高潮",
+      120.0
+    ],
+    [
+      "震荡·高潮",
+      120.0
+    ],
+    [
+      "弱势·高潮",
+      120.0
+    ]
+  ],
+  "strong_high_ivol_veto_enabled": true,
+  "strong_high_ivol_regimes": [
+    "强牛"
+  ],
+  "strong_high_ivol_pct_threshold": 0.8,
+  "extra_tail_veto_enabled": false,
+  "extra_tail_veto_field": "extra_tail_veto_pct",
+  "extra_tail_veto_regimes": [
+    "强牛"
+  ],
+  "extra_tail_veto_direction": "high",
+  "extra_tail_veto_pct_threshold": 0.8,
+  "weak_low_ivoldn20_veto_enabled": true,
+  "weak_low_ivoldn20_regimes": [
+    "弱势"
+  ],
+  "weak_low_ivoldn20_pct_threshold": 0.25,
+  "consensus_min_signals": 2,
+  "consensus_regimes": [
+    "弱势",
+    "震荡"
+  ],
+  "strong_climax_top_n": 2,
+  "no_support_high_ivol_veto_enabled": false,
+  "no_support_high_ivol_pct_threshold": 0.7,
+  "slot_reserve": [],
+  "high_turnover_veto_pct": 8.0,
+  "consensus_max_signals": null,
+  "high_amount_veto_yi": 20.0,
+  "adaptive_consensus_enabled": false,
+  "high_pos60_veto": 80.0,
+  "high_chg20_veto": 22.0,
+  "high_chg60_veto": 33.0,
+  "max_limit_up_days20": null,
+  "max_dd60_veto": -15.61,
+  "require_ma_support": true
+}

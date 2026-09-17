@@ -129,5 +129,6 @@
   "high_chg20_veto": 22.0,
   "high_chg60_veto": null,
   "max_limit_up_days20": null,
-  "max_dd60_veto": -15.61
+  "max_dd60_veto": -15.61,
+  "require_ma_support": false
 }
