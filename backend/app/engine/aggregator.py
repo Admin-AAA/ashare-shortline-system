@@ -1296,6 +1296,25 @@ def apply_pool_rules(
                 "eliminated": True,
             })
         deduped = kept_after_dd
+    # v28 均线支撑闸门（L-131）：要求当日站上 MA5 或 MA10。
+    if selection_policy is not None and bool(getattr(selection_policy, "require_ma_support", False)):
+        kept_after_support: list[dict[str, Any]] = []
+        for card in deduped:
+            _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
+            ok = bool(card.get("support_ma5", _snap.get("support_ma5"))) or bool(
+                card.get("support_ma10", _snap.get("support_ma10"))
+            )
+            if ok:
+                kept_after_support.append(card)
+                continue
+            card["policy_drop_owner"] = "require_ma_support"
+            card.setdefault("policy_verdict_steps", []).append({
+                "rule_id": "require_ma_support",
+                "action": "drop",
+                "reason": "当日既未站上 MA5 也未站上 MA10（L-131 均线支撑闸门）",
+                "eliminated": True,
+            })
+        deduped = kept_after_support
     # v8 无支撑高波动否决（L-121）：把 DSA 的"回撤特征"迁移成跨策略条件——高特质波动
     # （ivol20_pct ≥ 阈值）且当日没有 MA5/MA10 支撑的卡直接剔除（缺 ivol 分位时保守放行）。
     # 数据：W2 里 DSA 相关卡共同点是"有 MA 支撑"（sup5 0.37 vs 无 DSA 卡 0.16）；

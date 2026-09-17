@@ -487,6 +487,7 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
         selected_skills: Sequence[StageMapping],
         snapshot: StageMapping,
         params: StageMapping,
+        card_filter: "callable | None" = None,
     ) -> tuple[tuple[StageMapping, ...], tuple[StageMapping, ...], StageMapping]:
         from app.services.workbench_service import (
             _build_recommendation_card,
@@ -562,6 +563,10 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
         # 未启用该机制（`adaptive_consensus_enabled=False`）时原样返回默认政策，逐位不变。
         from app.services.consensus_edge import resolve_adaptive_selection_policy
 
+        # 单策略端到端研究（`--only-skill-cards`）：在**policy 之前**按"该技能是否发出非否决信号"过滤候选卡，
+        # 其它技能的信号仍留在卡上（共识闸门/多策略背书不受影响）——这与面板口径 `only:<sid>` 完全一致。
+        if card_filter is not None:
+            scored_cards = [c for c in scored_cards if card_filter(c)]
         _selection_policy = resolve_adaptive_selection_policy(
             self._db, str(snapshot.get("trade_date") or ""), DEFAULT_PRODUCTION_SELECTION_POLICY
         )

@@ -99,7 +99,8 @@ POLICY_VERSION: dict = {"n": None}   # None = 用 default；否则显式加载�
 # （例如"≥3 背书"闸门：W1/W2 端到端大改善、W3 端到端 WR −17pp），而现有可用特征无法因果门控，
 # 只能用"已结算的近 N 日表现"决定开关。见 L-126。
 GATE: dict = {"map": {}, "version": None}
-CTX_OVERRIDE: dict = {"params": None}   # 选择上下文覆盖（score_line/output_count），spawn 需显式传参   # map: {signal_date: policy_version}（逐日三态切换）
+CTX_OVERRIDE: dict = {"params": None}
+ONLY_SKILL: dict = {"sid": None}   # 单策略端到端：只选该技能的卡（其它技能背书保留）
 SKILL_WEIGHTS: dict = {"mode": "equal", "map": None}  # equal | preset | json
 EP_OVERRIDE: dict = {"policy": None}                  # dataclasses.replace 出来的出场策略变体
 _IVOL_BY_DATE: dict[str, dict] = {}
@@ -329,6 +330,7 @@ def _worker_setup(
     gate_dates=None,
     gate_version: int | None = None,
     ctx_params: dict | None = None,
+    only_skill: str | None = None,
 ) -> None:
     """每个进程（含主进程）各自准备 builder + session；worker 之间不共享任何对象。"""
     # spawn 模式子进程重新 import 模块 → PARAMS 的 CLI 覆盖必须显式传参（同 GATE 的坑）。
@@ -337,6 +339,7 @@ def _worker_setup(
     # 同理：面板导出目录必须显式落到 worker 的模块级 PANEL，否则并行导出会静默产出 0 天
     # （2026-09-17 实测：--panel-dir + --workers 5 写出空目录，A 臂指标正常但面板缺失）。
     PANEL["dir"] = panel_dir
+    ONLY_SKILL["sid"] = only_skill
     # spawn 模式子进程会重新 import 模块，模块级 GATE 不会自动带过去，必须显式传参。
     if isinstance(gate_dates, dict):
         GATE["map"] = {str(k): int(v) for k, v in gate_dates.items()}
@@ -407,9 +410,11 @@ def _worker_init(
     gate_dates=None,
     gate_version: int | None = None,
     ctx_params: dict | None = None,
+    only_skill: str | None = None,
 ) -> None:
     _worker_setup(window, arms, panel_dir, policy_note, policy_version,
-                  skill_weight_mode, skill_weight_map, ep, gate_dates, gate_version, ctx_params)
+                  skill_weight_mode, skill_weight_map, ep, gate_dates, gate_version, ctx_params,
+                  only_skill)
 
 
 def _process_day(signal_date: str) -> dict:
@@ -507,11 +512,19 @@ def _process_day(signal_date: str) -> dict:
             for entry in gate.get("skill_candidates") or []
         )
         assembly = ProductionRecommendationAssembly(db, f"backtest-rule-replay-{signal_date}")
+        _only = ONLY_SKILL.get("sid")
         formal_cards, scored_cards, _updates = assembly.aggregate(
             candidate_results=candidate_results,
             selected_skills=skills_arm,
             snapshot=snapshot,
             params=PARAMS,
+            card_filter=(
+                (lambda c, _sid=_only: any(
+                    isinstance(s, dict) and str(s.get("strategy_id")) == _sid and not s.get("hard_veto")
+                    for s in (c.get("strategy_signals") or [])
+                ))
+                if _only else None
+            ),
         )
         full_by_code = {str(c.get("code")): c for c in scored_cards}
         cards_by_arm[arm] = [full_by_code.get(str(c.get("code")), dict(c)) for c in formal_cards]
@@ -633,7 +646,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
             initializer=_worker_init,
             initargs=(window, arms, panel_dir, policy_note, POLICY_VERSION["n"],
                       SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"),
-                      EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"], CTX_OVERRIDE.get("params")),
+                      EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"], CTX_OVERRIDE.get("params"), ONLY_SKILL.get("sid")),
         ) as pool:
             for res in pool.map(_process_day, trade_dates, chunksize=1):
                 done += 1
@@ -645,7 +658,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
     else:
         _worker_setup(window, arms, panel_dir, policy_note, POLICY_VERSION["n"],
                       SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"),
-                      EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"], CTX_OVERRIDE.get("params"))
+                      EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"], CTX_OVERRIDE.get("params"), ONLY_SKILL.get("sid"))
         for di, signal_date in enumerate(trade_dates, 1):
             _merge_day_result(_process_day(signal_date), trades, prov_rows, panel_days, triggered)
             if di % 10 == 0 or di == len(trade_dates):
@@ -850,6 +863,12 @@ def main() -> None:
         default=None,
         help="覆盖出场策略：止损宽度（同时抬 maximum_loss_pct），默认 None = 用已发布 artifact。",
     )
+    ap.add_argument(
+        "--only-skill",
+        default=None,
+        help="单策略端到端：只选该技能发出非否决信号的候选卡（其它技能信号保留，共识闸门不受影响），"
+             "与面板口径 only:<sid> 一致。",
+    )
     ap.add_argument("--policy-note", default=None)
     args = ap.parse_args()
     if args.policy_note is None:
@@ -869,6 +888,9 @@ def main() -> None:
     if args.score_line is not None:
         PARAMS["score_line"] = float(args.score_line)
     CTX_OVERRIDE["params"] = {"output_count": PARAMS["output_count"], "score_line": PARAMS["score_line"]}
+    ONLY_SKILL["sid"] = args.only_skill
+    if args.only_skill:
+        print(f"[only-skill] 单策略端到端：{args.only_skill}", flush=True)
     print(f"[ctx] score_line={PARAMS['score_line']} output_count={PARAMS['output_count']}", flush=True)
     if args.gate_file:
         _gd = json.loads(Path(args.gate_file).read_text())

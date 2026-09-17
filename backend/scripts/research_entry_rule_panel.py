@@ -552,6 +552,10 @@ RULES: dict[str, "callable"] = {
                            _dom_daily_cap_rule({}, default_cap=3)),
     "c3weakosc_capdsa2": _compose(_consensus_gate_in(("弱势", "震荡"), min_signals=3),
                                   _dom_daily_cap_rule({"daily-stock-analysis-skill": 2})),
+    # ⑭ 单策略精修（第 25 轮，用户要求走单策略路线）：`only:<sid>` 与候选规则的复合。
+    # 面板已升级到 v27 口径（换手<8/成交额<20/chg20<22/max_dd60<-15.61/每日 6 张），
+    # 这里检验"在冠军闸门之上再给某个技能单独加一条"能否把该技能单独推过验收线。
+    # （在 main() 里按 RULES 动态注册，见 `_register_single_skill_composites`）
     # ⑬ 换手/市值闸门（第 23 轮）：在**已选中**样本上分层，turnover_rate∈[8,12) 在三个窗口
     # 都是低质量区（W1 53% vs 60%、W2 47% vs 54-59%、W3 50% vs 61-65%）；free_mv≥400 亿
     # 在 W2/W3 同样偏差（W2 48%、W3 47%）。这是唯一在三个窗口**符号一致**的横截面特征。
@@ -990,8 +994,93 @@ def main() -> None:
         for n in (f"only:{n}", f"dominant:{n}", f"drop_dom:{n}", f"drop_dom_weakosc:{n}",
                   f"penalize_dom_6:{n}", f"penalize_dom_10:{n}")
     ]
+    def _register_single_skill_composites() -> list[str]:
+        """为 4 个候选单策略 × 若干"冠军之上的候选规则"注册复合臂。"""
+        candidates = {
+            "chen-xiaoqun-skill": [
+                ("pos60lt87", _card_filter(lambda c, _d: (_fs(c).get("pos60") is None
+                                                         or float(_fs(c).get("pos60")) < 87.0))),
+                ("upratio025", _make_day_gate(_up_ratio_lt(0.25))),
+                ("chg60lt33", _card_filter(lambda c, _d: (_fs(c).get("chg60") is None
+                                                         or float(_fs(c).get("chg60")) < 33.0))),
+                ("nolimitup20", _card_filter(lambda c, _d: (_fs(c).get("limit_up_days20") is None
+                                                           or float(_fs(c).get("limit_up_days20")) < 1))),
+                ("nosupport", _card_filter(lambda c, _d: bool(c.get("support_ma5") or c.get("support_ma10")))),
+                ("nsig3", _consensus_gate_in(("活跃", "高潮", "弱势", "偏多", "震荡"), min_signals=3)),
+                ("amtlt12", _card_filter(lambda c, _d: (_fs(c).get("amount_yi") is None
+                                                       or float(_fs(c).get("amount_yi")) < 12.0))),
+            ],
+            "daily-stock-analysis-skill": [
+                ("chg60lt33", _card_filter(lambda c, _d: (_fs(c).get("chg60") is None
+                                                         or float(_fs(c).get("chg60")) < 33.0))),
+                ("pos60lt80", _card_filter(lambda c, _d: (_fs(c).get("pos60") is None
+                                                         or float(_fs(c).get("pos60")) < 80.0))),
+                ("dist60lt12", _card_filter(lambda c, _d: (_fs(c).get("dist60") is None
+                                                          or float(_fs(c).get("dist60")) < 12.0))),
+                ("nsig3", _consensus_gate_in(("活跃", "高潮", "弱势", "偏多", "震荡"), min_signals=3)),
+                ("amtlt12", _card_filter(lambda c, _d: (_fs(c).get("amount_yi") is None
+                                                       or float(_fs(c).get("amount_yi")) < 12.0))),
+            ],
+            "sector-relative-strength-leader": [
+                ("chg60lt33", _card_filter(lambda c, _d: (_fs(c).get("chg60") is None
+                                                         or float(_fs(c).get("chg60")) < 33.0))),
+                ("nsig3", _consensus_gate_in(("活跃", "高潮", "弱势", "偏多", "震荡"), min_signals=3)),
+                ("pos60lt87", _card_filter(lambda c, _d: (_fs(c).get("pos60") is None
+                                                         or float(_fs(c).get("pos60")) < 87.0))),
+            ],
+            "trend-pullback-continuation": [
+                ("sl_dn20", _card_filter(lambda c, _d: (_fs(c).get("dist20") is None
+                                                       or float(_fs(c).get("dist20")) >= 0))),
+                ("pos60lt87", _card_filter(lambda c, _d: (_fs(c).get("pos60") is None
+                                                         or float(_fs(c).get("pos60")) < 87.0))),
+                # 日级闸门：普跌日（涨家占比过低）不进场。W3 的唯一亏损日簇 2026-08-13 涨家占比 20.6%。
+                ("upratio025", _make_day_gate(_up_ratio_lt(0.25))),
+                ("upratio030", _make_day_gate(_up_ratio_lt(0.30))),
+                ("ld5", _make_day_gate(lambda ms: float(ms.get("limit_down_count") or 0) >= 5)),
+            ],
+        }
+        added: list[str] = []
+        for sid, combos in candidates.items():
+            base = RULES.get(f"only:{sid}")
+            if base is None:
+                continue
+            for tag, rule in combos:
+                name = f"only:{sid}+{tag}"
+                RULES[name] = _compose(base, rule)
+                added.append(name)
+        # 第二轮：在"陈小群+均线支撑"这个已 2/3 达标的臂上继续叠规则，目标是补上 W2（PF 1.08）
+        _chen_ns = RULES.get("only:chen-xiaoqun-skill+nosupport")
+        if _chen_ns is not None:
+            for tag, rule in (
+                ("chg60lt33", _card_filter(lambda c, _d: (_fs(c).get("chg60") is None
+                                                         or float(_fs(c).get("chg60")) < 33.0))),
+                ("pos60lt87", _card_filter(lambda c, _d: (_fs(c).get("pos60") is None
+                                                         or float(_fs(c).get("pos60")) < 87.0))),
+                ("nsig3", _consensus_gate_in(("活跃", "高潮", "弱势", "偏多", "震荡"), min_signals=3)),
+                ("amtlt12", _card_filter(lambda c, _d: (_fs(c).get("amount_yi") is None
+                                                       or float(_fs(c).get("amount_yi")) < 12.0))),
+                ("upratio025", _make_day_gate(_up_ratio_lt(0.25))),
+            ):
+                name = f"only:chen-xiaoqun-skill+nosupport+{tag}"
+                RULES[name] = _compose(_chen_ns, rule)
+                added.append(name)
+        # 相对强度 + nsig3 已有两窗接近，再叠一条
+        _sr = RULES.get("only:sector-relative-strength-leader+nsig3")
+        if _sr is not None:
+            for tag, rule in (
+                ("pos60lt87", _card_filter(lambda c, _d: (_fs(c).get("pos60") is None
+                                                         or float(_fs(c).get("pos60")) < 87.0))),
+                ("chg60lt33", _card_filter(lambda c, _d: (_fs(c).get("chg60") is None
+                                                         or float(_fs(c).get("chg60")) < 33.0))),
+            ):
+                name = f"only:sector-relative-strength-leader+nsig3+{tag}"
+                RULES[name] = _compose(_sr, rule)
+                added.append(name)
+        return added
+
+    composite_names = _register_single_skill_composites()
     if args.single_skill:
-        names = names + [
+        names = names + composite_names + [
             n for n in RULES
             if n.startswith(("only:", "dominant:", "drop_dom", "drop_dom_weakosc", "penalize_dom_"))
         ]

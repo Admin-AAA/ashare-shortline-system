@@ -176,6 +176,12 @@ class ProductionSelectionPolicy:
     # （W2 +2.8pp、W1 +1.0pp、W3 +2.0pp）——"一路平滑新高"的票在 T+1 短线里胜率更差。
     max_dd60_veto: float | None = None
 
+    # v28（L-131）：均线支撑闸门 —— 要求候选卡当日站上 MA5 或 MA10（None/False = 关闭）。
+    # 依据：单策略精修（2026-09-17，面板 v27 口径）——陈小群臂叠加"必须有 MA 支撑"后
+    # W1 WR 57→62%、W3 57→71%，PF 1.30→1.61 / 1.43→2.59；是三窗同时达标的必要一条。
+    # 与 v8 的"高 ivol 且无支撑 → 剔除"同源（L-121），此处把"要有支撑"作为正向必要条件。
+    require_ma_support: bool = False
+
     def canonical_payload(self) -> dict[str, Any]:
         return {
             "policy_id": self.policy_id,
@@ -306,7 +312,7 @@ def load_production_selection_policy(
     W2 让价 WR −2.0pp、MDD −1.31 但 avg/sum/PF 均改善）。
     需要严格复现旧口径时显式传 version=1/2/3/4/5/6。
     """
-    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27):
+    if policy_id != "production-selection" or version not in (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28):
         raise ValueError(f"unknown production selection policy: {policy_id}@{version}")
     path = _POLICY_ARTIFACT_DIR / f"production_selection.v{version}.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
