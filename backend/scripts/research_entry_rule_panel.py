@@ -1064,6 +1064,53 @@ def main() -> None:
                 name = f"only:chen-xiaoqun-skill+nosupport+{tag}"
                 RULES[name] = _compose(_chen_ns, rule)
                 added.append(name)
+        # 第三轮（第 25 轮 B）：陈小群 W2 的病是隔夜跳空止损（7 笔 avg −8.19），
+        # 沿"跳空风险"维度继续叠闸门——低 ivol / 位置 / 涨幅 / 波动 / 量能。
+        if _chen_ns is not None:
+            _chen_v28 = RULES.get("only:chen-xiaoqun-skill+nosupport+chg60lt33")
+            if _chen_v28 is not None:
+                for tag, rule in (
+                    ("ivol_lt60", _card_filter(lambda c, _d: (c.get("ivol20_pct") is None
+                                                             or float(c.get("ivol20_pct")) < 0.60))),
+                    ("ivol_lt45", _card_filter(lambda c, _d: (c.get("ivol20_pct") is None
+                                                             or float(c.get("ivol20_pct")) < 0.45))),
+                    ("pos60lt80", _card_filter(lambda c, _d: (_fs(c).get("pos60") is None
+                                                             or float(_fs(c).get("pos60")) < 80.0))),
+                    ("chg20lt15", _card_filter(lambda c, _d: (_fs(c).get("chg20") is None
+                                                             or float(_fs(c).get("chg20")) < 15.0))),
+                    ("dd20lt8", _card_filter(lambda c, _d: (_fs(c).get("max_dd20") is None
+                                                           or float(_fs(c).get("max_dd20")) < -8.0))),
+                    ("amplt_lt12", _card_filter(lambda c, _d: (_fs(c).get("amplitude20") is None
+                                                              or float(_fs(c).get("amplitude20")) < 12.0))),
+                    ("turn_lt6", _card_filter(lambda c, _d: (_fs(c).get("turnover_rate") is None
+                                                            or float(_fs(c).get("turnover_rate")) < 6.0))),
+                    ("turn_lt5", _card_filter(lambda c, _d: (_fs(c).get("turnover_rate") is None
+                                                            or float(_fs(c).get("turnover_rate")) < 5.0))),
+                    ("dist20lt6", _card_filter(lambda c, _d: (_fs(c).get("dist20") is None
+                                                             or float(_fs(c).get("dist20")) < 6.0))),
+                    ("top_ma_both", _card_filter(lambda c, _d: bool(c.get("support_ma5")) and bool(c.get("support_ma10")))),
+                ):
+                    name = f"only:chen-xiaoqun-skill+nosupport+chg60lt33+{tag}"
+                    RULES[name] = _compose(_chen_v28, rule)
+                    added.append(name)
+        # 强趋势缩量回踩：W1/W2 已极强（77%/PF 2.1–3.4），只修 W3（13 笔里 3 笔止损）
+        _tp = RULES.get("only:trend-pullback-continuation")
+        if _tp is not None:
+            for tag, rule in (
+                ("ivol_lt60", _card_filter(lambda c, _d: (c.get("ivol20_pct") is None
+                                                         or float(c.get("ivol20_pct")) < 0.60))),
+                ("chg20lt15", _card_filter(lambda c, _d: (_fs(c).get("chg20") is None
+                                                         or float(_fs(c).get("chg20")) < 15.0))),
+                ("not_strong_climax", _card_filter(lambda c, _d: "强牛·高潮" not in _regime_of(c))),
+                ("pos60lt80", _card_filter(lambda c, _d: (_fs(c).get("pos60") is None
+                                                         or float(_fs(c).get("pos60")) < 80.0))),
+                ("amplt_lt12", _card_filter(lambda c, _d: (_fs(c).get("amplitude20") is None
+                                                          or float(_fs(c).get("amplitude20")) < 12.0))),
+                ("upratio040", _make_day_gate(_up_ratio_lt(0.40))),
+            ):
+                name = f"only:trend-pullback-continuation+{tag}"
+                RULES[name] = _compose(_tp, rule)
+                added.append(name)
         # 相对强度 + nsig3 已有两窗接近，再叠一条
         _sr = RULES.get("only:sector-relative-strength-leader+nsig3")
         if _sr is not None:
