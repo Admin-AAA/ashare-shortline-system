@@ -1,11 +1,11 @@
 {
  "schema_version": 1,
- "generated_at": "2026-09-17T07:46:10",
+ "generated_at": "2026-09-17T09:26:27",
  "caliber": {
   "name": "single_skill_portfolio",
   "label": "单策略组合回测（三窗）",
   "description": "只保留该技能有非否决策略信号的候选卡，再走真实 production_selection v4 选择（score_line=72 / Top10）与 execution_policy v4 因果出场（T+1 入场、止损/跟踪止盈、跳空成交约束）；逐笔等权，不含仓位与资金模型。",
-  "combined_label": "全策略组合（10 技能全开，全管线重放）",
+  "combined_label": "全策略组合（冠军：当前生产默认选择 + 出场策略，全管线端到端）",
   "selection_policy": "production_selection.v27",
   "signal_weights": "preset_formal_opening（生产逐技能权重：DSA 0.5 / 陈小群 1.5 / 其余 1.0）",
   "baseline_selection_policy": "production_selection.v4（Δ 与闸门判定相对该基线）",
@@ -14,7 +14,9 @@
   "output_count": 10,
   "caveat": "候选池来自 10 技能全量重放的面板（按该技能信号筛卡），未做单技能独立 prefilter 重放；选择用当前生产选择策略（见 selection_policy），组合基线为 v4（基线_selection_policy）。两类指标都属 path A 诊断证据，不是 live_forward 发布证据。盈亏比在窗口内无亏损笔或样本<5 时置空（显示 —），不做伪精度展示。",
   "source_artifact": "backend/output/research/entry_rule_panel_single_prod.json",
-  "reproduce": "cd backend && .venv/bin/python scripts/research_entry_rule_panel.py --rules '' --single-skill --baseline-version 4 --out output/research/entry_rule_panel_single_prod.json && .venv/bin/python scripts/export_strategy_backtest_metrics.py"
+  "reproduce": "cd backend && .venv/bin/python scripts/research_entry_rule_panel.py --rules '' --single-skill --baseline-version 4 --out output/research/entry_rule_panel_single_prod.json && .venv/bin/python scripts/export_strategy_backtest_metrics.py",
+  "combined_note": "该行来自 `research_strategy_ablation_fast.py --policy-version <当前默认> --trail-act <当前出场>` 的全管线重放（含全部横截面闸门与每日输出上限），是唯一与 LIVE 同口径的组合行；skills 各行仍是单技能面板口径（selection v4 / Top10 / 出场 v4）。",
+  "baseline_for_combined": "production_selection.v7 + execution_policy.v4（发布前冠军）"
  },
  "windows": {
   "W1": {
@@ -35,31 +37,166 @@
  },
  "combined": {
   "W1": {
-   "n": 805,
-   "win_rate_pct": 58.76,
-   "avg_net_pct": 0.566,
-   "sum_net_pct": 455.63,
-   "profit_factor": 1.317,
-   "max_drawdown_pct": 46.77,
-   "trade_days": 151
+   "n": 366,
+   "win_rate_pct": 63.11,
+   "avg_net_pct": 0.795,
+   "sum_net_pct": 290.95,
+   "profit_factor": 1.574,
+   "max_drawdown_pct": 15.16,
+   "trade_days": 112
   },
   "W2": {
-   "n": 500,
-   "win_rate_pct": 54.2,
-   "avg_net_pct": 0.2644,
-   "sum_net_pct": 132.2,
-   "profit_factor": 1.115,
-   "max_drawdown_pct": 24.37,
-   "trade_days": 86
+   "n": 209,
+   "win_rate_pct": 62.2,
+   "avg_net_pct": 0.9424,
+   "sum_net_pct": 196.96,
+   "profit_factor": 1.601,
+   "max_drawdown_pct": 23.8,
+   "trade_days": 66
   },
   "W3": {
-   "n": 69,
-   "win_rate_pct": 55.07,
-   "avg_net_pct": 0.449,
-   "sum_net_pct": 30.98,
-   "profit_factor": 1.196,
-   "max_drawdown_pct": 16.48,
-   "trade_days": 17
+   "n": 45,
+   "win_rate_pct": 64.44,
+   "avg_net_pct": 1.8802,
+   "sum_net_pct": 84.61,
+   "profit_factor": 2.158,
+   "max_drawdown_pct": 7.16,
+   "trade_days": 14
+  }
+ },
+ "champion": {
+  "W1": {
+   "n": 366,
+   "win_rate_pct": 63.11,
+   "avg_net_pct": 0.795,
+   "sum_net_pct": 290.95,
+   "profit_factor": 1.574,
+   "max_drawdown_pct": 15.16,
+   "trade_days": 112
+  },
+  "W2": {
+   "n": 209,
+   "win_rate_pct": 62.2,
+   "avg_net_pct": 0.9424,
+   "sum_net_pct": 196.96,
+   "profit_factor": 1.601,
+   "max_drawdown_pct": 23.8,
+   "trade_days": 66
+  },
+  "W3": {
+   "n": 45,
+   "win_rate_pct": 64.44,
+   "avg_net_pct": 1.8802,
+   "sum_net_pct": 84.61,
+   "profit_factor": 2.158,
+   "max_drawdown_pct": 7.16,
+   "trade_days": 14
+  }
+ },
+ "champion_contributions": {
+  "chao-gu-yang-jia-skill": {
+   "W1": {
+    "n": 210,
+    "sum_net_pct": 177.26,
+    "win_rate_pct": 60.95
+   },
+   "W2": {
+    "n": 95,
+    "sum_net_pct": 76.05,
+    "win_rate_pct": 61.05
+   },
+   "W3": {
+    "n": 19,
+    "sum_net_pct": 44.69,
+    "win_rate_pct": 78.95
+   }
+  },
+  "trend-pullback-continuation": {
+   "W1": {
+    "n": 23,
+    "sum_net_pct": -4.12,
+    "win_rate_pct": 65.22
+   },
+   "W2": {
+    "n": 6,
+    "sum_net_pct": 7.38,
+    "win_rate_pct": 83.33
+   },
+   "W3": {
+    "n": 2,
+    "sum_net_pct": -11.33,
+    "win_rate_pct": 0.0
+   }
+  },
+  "chen-xiaoqun-skill": {
+   "W1": {
+    "n": 83,
+    "sum_net_pct": 76.49,
+    "win_rate_pct": 66.27
+   },
+   "W2": {
+    "n": 60,
+    "sum_net_pct": 92.4,
+    "win_rate_pct": 63.33
+   },
+   "W3": {
+    "n": 15,
+    "sum_net_pct": 54.0,
+    "win_rate_pct": 66.67
+   }
+  },
+  "daily-stock-analysis-skill": {
+   "W1": {
+    "n": 45,
+    "sum_net_pct": 45.74,
+    "win_rate_pct": 66.67
+   },
+   "W2": {
+    "n": 37,
+    "sum_net_pct": 14.49,
+    "win_rate_pct": 62.16
+   },
+   "W3": {
+    "n": 7,
+    "sum_net_pct": 8.58,
+    "win_rate_pct": 57.14
+   }
+  },
+  "sector-relative-strength-leader": {
+   "W1": {
+    "n": 2,
+    "sum_net_pct": -3.34,
+    "win_rate_pct": 50.0
+   },
+   "W2": {
+    "n": 5,
+    "sum_net_pct": -3.06,
+    "win_rate_pct": 20.0
+   },
+   "W3": {
+    "n": 1,
+    "sum_net_pct": -5.66,
+    "win_rate_pct": 0.0
+   }
+  },
+  "chip-single-peak-breakout": {
+   "W1": {
+    "n": 3,
+    "sum_net_pct": -1.07,
+    "win_rate_pct": 66.67
+   },
+   "W2": {
+    "n": 6,
+    "sum_net_pct": 9.71,
+    "win_rate_pct": 83.33
+   }
+  },
+  "high-range-breakout-momentum": {
+   "W3": {
+    "n": 1,
+    "sum_net_pct": -5.66,
+    "win_rate_pct": 0.0
+   }
   }
  },
  "skills": {

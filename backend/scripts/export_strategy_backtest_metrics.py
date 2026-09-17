@@ -66,6 +66,13 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--src", default=str(SRC))
     ap.add_argument("--out", default=str(DST))
+    ap.add_argument(
+        "--champion-runs",
+        default=None,
+        help="冠军（当前生产默认 + 出场策略）的三窗端到端重放产物，逗号分隔 W1=<json>,W2=<json>,W3=<json>。"
+             "给定后用它覆盖页面的『全策略组合』行（否则该行是 v4 面板基线，与当前生产不符），"
+             "并额外导出逐技能贡献（按 dominant 归因）。",
+    )
     args = ap.parse_args()
     from app.engine.production_policy import load_production_selection_policy
 
@@ -85,6 +92,38 @@ def main() -> None:
         }
         for w, b in data["baseline"].items()
     }
+    champion_runs: dict[str, dict] = {}
+    champion_contrib: dict[str, dict] = {}
+    if args.champion_runs:
+        for item in str(args.champion_runs).split(","):
+            if not item.strip():
+                continue
+            win, _, path = item.partition("=")
+            payload = json.loads(Path(path.strip()).read_text())
+            block = payload.get(win) or next(iter(payload.values()))
+            a = block["A"]
+            champion_runs[win] = {
+                "n": int(a["n"]),
+                "win_rate_pct": _round(float(a["wr"]) * 100, 2),
+                "avg_net_pct": _round(a["avg"], 4),
+                "sum_net_pct": _round(a["sum"], 2),
+                "profit_factor": _round(a["pf"], 3),
+                "max_drawdown_pct": _round(abs(float(a["mdd"])), 2),
+                "trade_days": int(a.get("days") or 0),
+            }
+            for t in block.get("provenance") or []:
+                sid = str(t.get("dominant") or "unknown")
+                bucket = champion_contrib.setdefault(sid, {}).setdefault(
+                    win, {"n": 0, "wins": 0, "sum_net_pct": 0.0}
+                )
+                bucket["n"] += 1
+                bucket["wins"] += 1 if float(t.get("net") or 0) > 0 else 0
+                bucket["sum_net_pct"] += float(t.get("net") or 0)
+        for sid, per_win in champion_contrib.items():
+            for win, agg in per_win.items():
+                agg["win_rate_pct"] = _round(agg["wins"] / agg["n"] * 100, 2) if agg["n"] else None
+                agg["sum_net_pct"] = _round(agg["sum_net_pct"], 2)
+                del agg["wins"]
 
     live_skill_ids = {p.name for p in (B / "skills").iterdir() if p.is_dir()}
     skills: dict[str, dict] = {}
@@ -148,8 +187,20 @@ def main() -> None:
             for w, (d0, d1, label) in WINDOW_LABELS.items()
         },
         "combined": combined,
+        "champion": champion_runs or None,
+        "champion_contributions": champion_contrib or None,
         "skills": skills,
     }
+    if champion_runs:
+        # 页面『全策略组合』行改用冠军（当前生产默认 + 出场策略）的三窗端到端结果
+        out["combined"] = champion_runs
+        out["caliber"]["combined_label"] = "全策略组合（冠军：当前生产默认选择 + 出场策略，全管线端到端）"
+        out["caliber"]["combined_note"] = (
+            "该行来自 `research_strategy_ablation_fast.py --policy-version <当前默认> --trail-act <当前出场>` "
+            "的全管线重放（含全部横截面闸门与每日输出上限），是唯一与 LIVE 同口径的组合行；"
+            "skills 各行仍是单技能面板口径（selection v4 / Top10 / 出场 v4）。"
+        )
+        out["caliber"]["baseline_for_combined"] = "production_selection.v7 + execution_policy.v4（发布前冠军）"
     dst = Path(args.out)
     dst.write_text(json.dumps(out, ensure_ascii=False, indent=1) + "\n")
     print(f"[saved] {dst}（{len(skills)} 个技能）")

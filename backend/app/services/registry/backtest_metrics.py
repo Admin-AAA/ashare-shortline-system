@@ -63,6 +63,10 @@ def backtest_returns_for(
         "all_windows_positive": bool(skill.get("all_windows_positive")),
         "any_window_positive": bool(skill.get("any_window_positive")),
         "combined": data.get("combined") or {},
+        # 冠军（当前生产默认 + 出场策略）的全管线三窗结果与逐技能贡献（L-129 发布口径）。
+        # 仅透传数据，不参与任何判定；前端未消费时无副作用。
+        "champion": data.get("champion") or {},
+        "champion_contributions": (data.get("champion_contributions") or {}).get(str(skill_id)) or {},
         "caliber": data.get("caliber") or {},
         "windows_meta": data.get("windows") or {},
         "generated_at": data.get("generated_at"),
