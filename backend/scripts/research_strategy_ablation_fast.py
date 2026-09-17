@@ -98,7 +98,8 @@ POLICY_VERSION: dict = {"n": None}   # None = 用 default；否则显式加载�
 # 其余交易日照常用默认/`--policy-version`。动机：某些规则在 A 段行情有效、在 B 段行情有害
 # （例如"≥3 背书"闸门：W1/W2 端到端大改善、W3 端到端 WR −17pp），而现有可用特征无法因果门控，
 # 只能用"已结算的近 N 日表现"决定开关。见 L-126。
-GATE: dict = {"map": {}, "version": None}   # map: {signal_date: policy_version}（逐日三态切换）
+GATE: dict = {"map": {}, "version": None}
+CTX_OVERRIDE: dict = {"params": None}   # 选择上下文覆盖（score_line/output_count），spawn 需显式传参   # map: {signal_date: policy_version}（逐日三态切换）
 SKILL_WEIGHTS: dict = {"mode": "equal", "map": None}  # equal | preset | json
 EP_OVERRIDE: dict = {"policy": None}                  # dataclasses.replace 出来的出场策略变体
 _IVOL_BY_DATE: dict[str, dict] = {}
@@ -327,8 +328,15 @@ def _worker_setup(
     ep=None,
     gate_dates=None,
     gate_version: int | None = None,
+    ctx_params: dict | None = None,
 ) -> None:
     """每个进程（含主进程）各自准备 builder + session；worker 之间不共享任何对象。"""
+    # spawn 模式子进程重新 import 模块 → PARAMS 的 CLI 覆盖必须显式传参（同 GATE 的坑）。
+    if ctx_params:
+        PARAMS.update({k: v for k, v in ctx_params.items() if v is not None})
+    # 同理：面板导出目录必须显式落到 worker 的模块级 PANEL，否则并行导出会静默产出 0 天
+    # （2026-09-17 实测：--panel-dir + --workers 5 写出空目录，A 臂指标正常但面板缺失）。
+    PANEL["dir"] = panel_dir
     # spawn 模式子进程会重新 import 模块，模块级 GATE 不会自动带过去，必须显式传参。
     if isinstance(gate_dates, dict):
         GATE["map"] = {str(k): int(v) for k, v in gate_dates.items()}
@@ -398,9 +406,10 @@ def _worker_init(
     ep=None,
     gate_dates=None,
     gate_version: int | None = None,
+    ctx_params: dict | None = None,
 ) -> None:
     _worker_setup(window, arms, panel_dir, policy_note, policy_version,
-                  skill_weight_mode, skill_weight_map, ep, gate_dates, gate_version)
+                  skill_weight_mode, skill_weight_map, ep, gate_dates, gate_version, ctx_params)
 
 
 def _process_day(signal_date: str) -> dict:
@@ -624,7 +633,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
             initializer=_worker_init,
             initargs=(window, arms, panel_dir, policy_note, POLICY_VERSION["n"],
                       SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"),
-                      EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"]),
+                      EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"], CTX_OVERRIDE.get("params")),
         ) as pool:
             for res in pool.map(_process_day, trade_dates, chunksize=1):
                 done += 1
@@ -636,7 +645,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
     else:
         _worker_setup(window, arms, panel_dir, policy_note, POLICY_VERSION["n"],
                       SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"),
-                      EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"])
+                      EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"], CTX_OVERRIDE.get("params"))
         for di, signal_date in enumerate(trade_dates, 1):
             _merge_day_result(_process_day(signal_date), trades, prov_rows, panel_days, triggered)
             if di % 10 == 0 or di == len(trade_dates):
@@ -859,6 +868,7 @@ def main() -> None:
         PARAMS["output_count"] = int(args.output_count)
     if args.score_line is not None:
         PARAMS["score_line"] = float(args.score_line)
+    CTX_OVERRIDE["params"] = {"output_count": PARAMS["output_count"], "score_line": PARAMS["score_line"]}
     print(f"[ctx] score_line={PARAMS['score_line']} output_count={PARAMS['output_count']}", flush=True)
     if args.gate_file:
         _gd = json.loads(Path(args.gate_file).read_text())

@@ -847,6 +847,11 @@ def main() -> None:
              "非 equal 时所有规则臂先用该逐技能权重重算卡分数（用于让页面/项目口径与生产一致）",
     )
     ap.add_argument("--out", default=str(OUT))
+    ap.add_argument(
+        "--panel-dir",
+        default=None,
+        help="覆盖面板目录（默认 output/research/entry_panel）。用于在不同消费政策口径下重导出的面板上做筛查。",
+    )
     args = ap.parse_args()
     names = list(RULES) if args.rules == "all" else [r.strip() for r in args.rules.split(",") if r.strip()]
     if args.rules == "policy":
@@ -879,11 +884,20 @@ def main() -> None:
         GLOBAL_SIGNAL_WEIGHTS = json.loads(_sw)
     if GLOBAL_SIGNAL_WEIGHTS:
         print(f"[weights] 规则臂使用逐技能权重：{GLOBAL_SIGNAL_WEIGHTS}")
+    global PANEL_DIR
+    if args.panel_dir:
+        PANEL_DIR = Path(args.panel_dir)
     panels = {w: json.loads((PANEL_DIR / f"entry_panel_{w}.json").read_text()) for w in WINDOWS}
     def harness_baseline(w: str) -> dict:
         """harness A 臂基线：优先读 ablation JSON；缺失时用面板自带的 selected+net 复原
         （两者同源：selected 来自 harness 的 formal_cards，net 来自同一次因果出场模拟）。"""
         path = BASE_DIR / f"ablate_fast_baseline_{w}.json"
+        # 版本化基线优先：换了消费政策口径重导出面板时，用 ablate_fast_baseline_v<ver>_W*.json 对账，
+        # 避免与 v4 时代的历史基线文件互相污染（L-129 口径纪律）。
+        if args.baseline_version is not None:
+            _cand = BASE_DIR / f"ablate_fast_baseline_v{int(args.baseline_version)}_{w}.json"
+            if _cand.exists():
+                path = _cand
         if path.exists():
             return json.loads(path.read_text())[w]["A"]
         rows = []

@@ -34,7 +34,10 @@ def test_artifact_loads_with_caliber_and_windows():
     # 口径必须自证：选股/出场政策 + 复现命令 + 风险声明
     expected = f"production_selection.v{load_production_selection_policy().version}"
     assert caliber["selection_policy"] == expected
-    assert caliber["execution_policy"] == "execution_policy.v4"
+    # 出场口径随发布演进：只要求自证为 execution_policy.vX，且与当前默认一致
+    from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY as _ep
+
+    assert f"execution_policy.v{_ep.version.split('.')[0]}" in caliber["execution_policy"]
     assert "baseline_selection_policy" in caliber
     assert "--single-skill" in caliber["reproduce"]
     assert caliber["caveat"]

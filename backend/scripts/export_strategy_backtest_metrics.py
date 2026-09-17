@@ -67,6 +67,11 @@ def main() -> None:
     ap.add_argument("--src", default=str(SRC))
     ap.add_argument("--out", default=str(DST))
     ap.add_argument(
+        "--panel-note",
+        default=None,
+        help="单技能行的口径说明（默认按当前默认选择策略 + 出场策略 + TopN 自动生成）。",
+    )
+    ap.add_argument(
         "--champion-runs",
         default=None,
         help="冠军（当前生产默认 + 出场策略）的三窗端到端重放产物，逗号分隔 W1=<json>,W2=<json>,W3=<json>。"
@@ -157,18 +162,19 @@ def main() -> None:
         "caliber": {
             "name": "single_skill_portfolio",
             "label": "单策略组合回测（三窗）",
-            "description": (
-                "只保留该技能有非否决策略信号的候选卡，再走真实 production_selection v4 选择"
-                "（score_line=72 / Top10）与 execution_policy v4 因果出场（T+1 入场、止损/跟踪止盈、"
-                "跳空成交约束）；逐笔等权，不含仓位与资金模型。"
+            "description": args.panel_note or (
+                f"只保留该技能有非否决策略信号的候选卡，再走真实 production_selection "
+                f"v{current_policy.version} 选择（score_line=72 / Top{current_policy.daily_output_limit}）"
+                "与 execution_policy v5 因果出场（T+1 入场、止损/跟踪止盈、跳空成交约束）；"
+                "逐笔等权，不含仓位与资金模型。"
             ),
-            "combined_label": "全策略组合（10 技能全开，全管线重放）",
+            "combined_label": "全策略组合（全技能开，全管线重放）",
             "selection_policy": f"production_selection.v{current_policy.version}",
             "signal_weights": "preset_formal_opening（生产逐技能权重：DSA 0.5 / 陈小群 1.5 / 其余 1.0）",
             "baseline_selection_policy": "production_selection.v4（Δ 与闸门判定相对该基线）",
-            "execution_policy": "execution_policy.v4",
+            "execution_policy": "execution_policy.v5（trailing 激活 0.8%）",
             "score_line": 72.0,
-            "output_count": 10,
+            "output_count": int(current_policy.daily_output_limit),
             "caveat": (
                 "候选池来自 10 技能全量重放的面板（按该技能信号筛卡），未做单技能独立 prefilter 重放；"
                 "选择用当前生产选择策略（见 selection_policy），组合基线为 v4（基线_selection_policy）。"
