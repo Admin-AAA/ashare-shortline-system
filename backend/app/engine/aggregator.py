@@ -1301,9 +1301,10 @@ def apply_pool_rules(
         kept_after_support: list[dict[str, Any]] = []
         for card in deduped:
             _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
-            ok = bool(card.get("support_ma5", _snap.get("support_ma5"))) or bool(
-                card.get("support_ma10", _snap.get("support_ma10"))
-            )
+            _ma5 = bool(card.get("support_ma5", _snap.get("support_ma5")))
+            _ma10 = bool(card.get("support_ma10", _snap.get("support_ma10")))
+            _mode = str(getattr(selection_policy, "require_ma_support_mode", "any") or "any").lower()
+            ok = (_ma5 and _ma10) if _mode == "both" else (_ma5 or _ma10)
             if ok:
                 kept_after_support.append(card)
                 continue
