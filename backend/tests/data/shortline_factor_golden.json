@@ -21,7 +21,7 @@
         "shortline_leader_score": 100.0,
         "is_shortline_leader_candidate": true,
         "dragon_tiger_buy_dispersion": "集中",
-        "dragon_tiger_inst_buy_ratio": 1.0,
+        "dragon_tiger_inst_buy_ratio": 0.0,
         "shortline_factor_explanations": {
           "limit_up_overheat": {
             "fields": [
@@ -107,7 +107,7 @@
         "shortline_leader_score": 100.0,
         "is_shortline_leader_candidate": true,
         "dragon_tiger_buy_dispersion": "一般",
-        "dragon_tiger_inst_buy_ratio": 0.5,
+        "dragon_tiger_inst_buy_ratio": 0.0,
         "shortline_factor_explanations": {
           "limit_up_overheat": {
             "fields": [
@@ -537,7 +537,7 @@
         "shortline_leader_score": 25.36,
         "is_shortline_leader_candidate": false,
         "dragon_tiger_buy_dispersion": "一般",
-        "dragon_tiger_inst_buy_ratio": 0.5,
+        "dragon_tiger_inst_buy_ratio": 0.0,
         "shortline_factor_explanations": {
           "limit_up_overheat": {
             "fields": [
@@ -628,7 +628,7 @@
         "shortline_leader_score": 14.69,
         "is_shortline_leader_candidate": false,
         "dragon_tiger_buy_dispersion": "一般",
-        "dragon_tiger_inst_buy_ratio": 0.5,
+        "dragon_tiger_inst_buy_ratio": 0.0,
         "shortline_factor_explanations": {
           "limit_up_overheat": {
             "fields": [
