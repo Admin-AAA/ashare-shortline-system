@@ -150,8 +150,16 @@ def validate_skill(skill: StrategySkill) -> list[str]:
             errors.append("strategy.yaml missing name")
         if not isinstance(skill.contract.get("scoring", {}).get("rules", []), list):
             errors.append("scoring.rules must be a list")
+        default_entry_mode = str(
+            skill.contract.get("default_entry_mode") or ENTRY_MODE_TARGET_TOUCH
+        )
+        if default_entry_mode not in VALID_ENTRY_MODES:
+            errors.append(
+                "default_entry_mode must be one of "
+                f"{sorted(VALID_ENTRY_MODES)}"
+            )
         for setup in skill.contract.get("setups", []) or []:
-            entry_mode = str(setup.get("entry_mode") or ENTRY_MODE_TARGET_TOUCH)
+            entry_mode = str(setup.get("entry_mode") or default_entry_mode)
             if entry_mode not in VALID_ENTRY_MODES:
                 errors.append(
                     f"setup '{setup.get('name', '')}' entry_mode must be one of "

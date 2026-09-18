@@ -505,6 +505,44 @@ def resolve_causal_entry(
     )
     entry_window = bars[:lookahead]
     blocked_reasons: list[str] = []
+    has_targets = bool(config.target_prices)
+    if (
+        config.allow_target_touch
+        and has_targets
+        and config.fallback_to_open_when_targets_miss
+    ):
+        target_bar = entry_window[0]
+        for target in config.target_prices:
+            if target_bar.low <= target:
+                if target_bar.block_reason:
+                    blocked_reasons.append(target_bar.block_reason)
+                    continue
+                raw_price = min(target_bar.open, target) if target_bar.open > 0 else target
+                return decision(0, target_bar.trade_date, raw_price, "buy_target_touched")
+
+        for index, bar in enumerate(entry_window[1:], start=1):
+            if bar.block_reason:
+                blocked_reasons.append(bar.block_reason)
+                continue
+            raw_price = bar.open or bar.close
+            if raw_price <= 0:
+                blocked_reasons.append("入场日价格无效，无法真实成交")
+                continue
+            return decision(
+                index,
+                bar.trade_date,
+                raw_price,
+                "next_open_after_target_miss_entry（前一交易日买点未命中，次日开盘入场）",
+            )
+        return EntryDecision(
+            False,
+            None,
+            None,
+            None,
+            None,
+            _entry_not_triggered_reason(blocked_reasons, has_targets=True),
+        )
+
     if config.allow_target_touch:
         for index, bar in enumerate(entry_window):
             for target in config.target_prices:
@@ -515,7 +553,6 @@ def resolve_causal_entry(
                     raw_price = min(bar.open, target) if bar.open > 0 else target
                     return decision(index, bar.trade_date, raw_price, "buy_target_touched")
 
-    has_targets = bool(config.target_prices)
     if has_targets and not config.fallback_to_open_when_targets_miss:
         return EntryDecision(
             False,

@@ -174,6 +174,47 @@ def test_declarative_setup_rejects_unknown_entry_mode():
     assert any("entry_mode must be one of" in error for error in errors)
 
 
+def test_declarative_default_entry_mode_applies_with_and_without_setup():
+    setup = dict(_CONTRACT["setups"][0])
+    setup.pop("entry_mode")
+    contract = {
+        **_CONTRACT,
+        "default_entry_mode": "next_open",
+        "setups": [setup],
+    }
+    skill = _make_skill(contract=contract)
+    base_stock = _full_quality(
+        amount_yi=5,
+        is_st=False,
+        avg_cost=50,
+        pct=2,
+        vol5_20=1.5,
+        bias_ma20=5,
+    )
+
+    without_setup = run_strategy(
+        skill,
+        {**base_stock, "breakout20": False},
+        main_industries=[],
+    )
+    with_setup = run_strategy(
+        skill,
+        {**base_stock, "breakout20": True},
+        main_industries=[],
+    )
+
+    assert without_setup["entry_mode"] == "next_open"
+    assert with_setup["entry_mode"] == "next_open"
+
+
+def test_declarative_default_entry_mode_rejects_unknown_value():
+    contract = {**_CONTRACT, "default_entry_mode": "guess_open"}
+
+    errors = validate_skill(_make_skill(contract=contract))
+
+    assert any("default_entry_mode must be one of" in error for error in errors)
+
+
 def test_build_registry_from_skills_binds_every_signal_to_descriptor_version():
     skills = [_make_skill(skill_id="skill-1"), _make_skill(skill_id="skill-2")]
     registry = build_registry_from_skills(skills)

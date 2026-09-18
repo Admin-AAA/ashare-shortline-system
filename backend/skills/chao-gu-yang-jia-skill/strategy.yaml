@@ -2,11 +2,12 @@ id: chao-gu-yang-jia-skill
 name: 炒股养家大局观
 enabled: true
 weight: 1.1
+default_entry_mode: next_open
 
 meta:
   author: system
   style: shortline
-  version: 0.1.0
+  version: 0.2.0
   holding_days: [1, 3, 5]
   strategy_independence: 0.75
   default_preset_groups:
