@@ -1,10 +1,10 @@
 {
  "schema_version": 1,
- "generated_at": "2026-09-17T11:19:40",
+ "generated_at": "2026-09-18T23:00:26",
  "caliber": {
   "name": "single_skill_portfolio",
   "label": "单策略组合回测（三窗）",
-  "description": "只保留该技能有非否决策略信号的候选卡，再走真实 production_selection v27 选择（score_line=72 / Top6）与 execution_policy v5 因果出场（T+1 入场、止损/跟踪止盈、跳空成交约束）；逐笔等权，不含仓位与资金模型。",
+  "description": "只保留该技能有非否决策略信号的候选卡，再走真实 production_selection v27 选择（score_line=72 / Top6）与 execution_policy v5 因果出场（按策略声明的 entry_mode 入场、T+1 卖出、止损/跟踪止盈、跳空成交约束）；逐笔等权，不含仓位与资金模型。",
   "combined_label": "全策略组合（冠军：当前生产默认选择 + 出场策略，全管线端到端）",
   "selection_policy": "production_selection.v27",
   "signal_weights": "preset_formal_opening（生产逐技能权重：DSA 0.5 / 陈小群 1.5 / 其余 1.0）",
@@ -12,9 +12,9 @@
   "execution_policy": "execution_policy.v5（trailing 激活 0.8%）",
   "score_line": 72.0,
   "output_count": 6,
-  "caveat": "候选池来自 10 技能全量重放的面板（按该技能信号筛卡），未做单技能独立 prefilter 重放；选择用当前生产选择策略（见 selection_policy），组合基线为 v4（基线_selection_policy）。两类指标都属 path A 诊断证据，不是 live_forward 发布证据。盈亏比在窗口内无亏损笔或样本<5 时置空（显示 —），不做伪精度展示。",
-  "source_artifact": "backend/output/research/entry_rule_panel_single_v27.json",
-  "reproduce": "cd backend && .venv/bin/python scripts/research_entry_rule_panel.py --rules '' --single-skill --baseline-version 4 --out output/research/entry_rule_panel_single_v27.json && .venv/bin/python scripts/export_strategy_backtest_metrics.py",
+  "caveat": "候选池来自启用中技能的全量重放面板（按该技能信号筛卡），未做单技能独立 prefilter 重放；选择用当前生产选择策略（见 selection_policy），组合基线为 v4（基线_selection_policy）。两类指标都属 path A 诊断证据，不是 live_forward 发布证据。盈亏比在窗口内无亏损笔或样本<5 时置空（显示 —），不做伪精度展示。",
+  "source_artifact": "backend/output/research/entry_rule_panel_single_entrymode.json",
+  "reproduce": "cd backend && .venv/bin/python scripts/research_strategy_ablation_fast.py --windows W1,W2,W3 --targets none --universe local_pool --workers 6 --skill-weights preset --output-count 6 --panel-dir output/research/entry_panel_next_open --out output/research/per_strategy/ablate_next_open.json && .venv/bin/python scripts/research_entry_rule_panel.py --rules '' --single-skill --panel-dir output/research/entry_panel_next_open --signal-weights preset --out output/research/entry_rule_panel_single_entrymode.json && .venv/bin/python scripts/export_strategy_backtest_metrics.py --src output/research/entry_rule_panel_single_entrymode.json --champion-runs W1=output/research/per_strategy/ablate_next_open.json,W2=output/research/per_strategy/ablate_next_open.json,W3=output/research/per_strategy/ablate_next_open.json",
   "combined_note": "该行来自 `research_strategy_ablation_fast.py --policy-version <当前默认> --trail-act <当前出场>` 的全管线重放（含全部横截面闸门与每日输出上限），是唯一与 LIVE 同口径的组合行；skills 各行仍是单技能面板口径（selection v4 / Top10 / 出场 v4）。",
   "baseline_for_combined": "production_selection.v7 + execution_policy.v4（发布前冠军）"
  },
@@ -37,12 +37,12 @@
  },
  "combined": {
   "W1": {
-   "n": 366,
-   "win_rate_pct": 63.11,
-   "avg_net_pct": 0.795,
-   "sum_net_pct": 290.95,
-   "profit_factor": 1.574,
-   "max_drawdown_pct": 15.16,
+   "n": 365,
+   "win_rate_pct": 63.29,
+   "avg_net_pct": 0.8048,
+   "sum_net_pct": 293.74,
+   "profit_factor": 1.582,
+   "max_drawdown_pct": 14.87,
    "trade_days": 112
   },
   "W2": {
@@ -55,23 +55,23 @@
    "trade_days": 66
   },
   "W3": {
-   "n": 45,
-   "win_rate_pct": 64.44,
-   "avg_net_pct": 1.8802,
-   "sum_net_pct": 84.61,
-   "profit_factor": 2.158,
-   "max_drawdown_pct": 7.16,
-   "trade_days": 14
+   "n": 56,
+   "win_rate_pct": 57.14,
+   "avg_net_pct": 0.8412,
+   "sum_net_pct": 47.11,
+   "profit_factor": 1.408,
+   "max_drawdown_pct": 10.27,
+   "trade_days": 17
   }
  },
  "champion": {
   "W1": {
-   "n": 366,
-   "win_rate_pct": 63.11,
-   "avg_net_pct": 0.795,
-   "sum_net_pct": 290.95,
-   "profit_factor": 1.574,
-   "max_drawdown_pct": 15.16,
+   "n": 365,
+   "win_rate_pct": 63.29,
+   "avg_net_pct": 0.8048,
+   "sum_net_pct": 293.74,
+   "profit_factor": 1.582,
+   "max_drawdown_pct": 14.87,
    "trade_days": 112
   },
   "W2": {
@@ -84,13 +84,13 @@
    "trade_days": 66
   },
   "W3": {
-   "n": 45,
-   "win_rate_pct": 64.44,
-   "avg_net_pct": 1.8802,
-   "sum_net_pct": 84.61,
-   "profit_factor": 2.158,
-   "max_drawdown_pct": 7.16,
-   "trade_days": 14
+   "n": 56,
+   "win_rate_pct": 57.14,
+   "avg_net_pct": 0.8412,
+   "sum_net_pct": 47.11,
+   "profit_factor": 1.408,
+   "max_drawdown_pct": 10.27,
+   "trade_days": 17
   }
  },
  "champion_contributions": {
@@ -106,9 +106,9 @@
     "win_rate_pct": 61.05
    },
    "W3": {
-    "n": 19,
-    "sum_net_pct": 44.69,
-    "win_rate_pct": 78.95
+    "n": 21,
+    "sum_net_pct": 33.77,
+    "win_rate_pct": 71.43
    }
   },
   "trend-pullback-continuation": {
@@ -123,9 +123,9 @@
     "win_rate_pct": 83.33
    },
    "W3": {
-    "n": 2,
-    "sum_net_pct": -11.33,
-    "win_rate_pct": 0.0
+    "n": 7,
+    "sum_net_pct": -28.64,
+    "win_rate_pct": 14.29
    }
   },
   "chen-xiaoqun-skill": {
@@ -140,16 +140,16 @@
     "win_rate_pct": 63.33
    },
    "W3": {
-    "n": 15,
-    "sum_net_pct": 54.0,
-    "win_rate_pct": 66.67
+    "n": 16,
+    "sum_net_pct": 46.51,
+    "win_rate_pct": 62.5
    }
   },
   "daily-stock-analysis-skill": {
    "W1": {
-    "n": 45,
-    "sum_net_pct": 45.74,
-    "win_rate_pct": 66.67
+    "n": 44,
+    "sum_net_pct": 48.52,
+    "win_rate_pct": 68.18
    },
    "W2": {
     "n": 37,
@@ -157,9 +157,9 @@
     "win_rate_pct": 62.16
    },
    "W3": {
-    "n": 7,
-    "sum_net_pct": 8.58,
-    "win_rate_pct": 57.14
+    "n": 10,
+    "sum_net_pct": 6.79,
+    "win_rate_pct": 60.0
    }
   },
   "sector-relative-strength-leader": {
@@ -203,11 +203,11 @@
   "chao-gu-yang-jia-skill": {
    "windows": {
     "W1": {
-     "n": 346,
-     "win_rate_pct": 63.01,
-     "avg_net_pct": 0.9048,
-     "sum_net_pct": 313.06,
-     "profit_factor": 1.657,
+     "n": 345,
+     "win_rate_pct": 63.19,
+     "avg_net_pct": 0.9155,
+     "sum_net_pct": 315.84,
+     "profit_factor": 1.667,
      "profit_factor_note": null,
      "max_drawdown_pct": 11.8,
      "trade_days": 112,
@@ -237,26 +237,26 @@
      "challenger": "FALSIFIED"
     },
     "W3": {
-     "n": 44,
-     "win_rate_pct": 65.91,
-     "avg_net_pct": 1.8683,
-     "sum_net_pct": 82.2,
-     "profit_factor": 2.157,
+     "n": 54,
+     "win_rate_pct": 62.96,
+     "avg_net_pct": 1.6411,
+     "sum_net_pct": 88.62,
+     "profit_factor": 1.873,
      "profit_factor_note": null,
-     "max_drawdown_pct": 8.51,
-     "trade_days": 14,
-     "delta_cohort_vs_combined": -0.0448,
+     "max_drawdown_pct": 7.8,
+     "trade_days": 17,
+     "delta_cohort_vs_combined": 0.2315,
      "ci95": [
       -0.1345,
-      0.0
+      0.829
      ],
-     "month_same_sign_ratio": 0.0,
-     "challenger": "FALSIFIED"
+     "month_same_sign_ratio": 0.5,
+     "challenger": "PRODUCTION"
     }
    },
    "windows_with_trades": 3,
-   "passes": 1,
-   "avg_net_pct_mean": 1.2333,
+   "passes": 2,
+   "avg_net_pct_mean": 1.1611,
    "all_windows_positive": true,
    "any_window_positive": true
   },
@@ -271,12 +271,12 @@
      "profit_factor_note": null,
      "max_drawdown_pct": 14.07,
      "trade_days": 94,
-     "delta_cohort_vs_combined": -0.0957,
+     "delta_cohort_vs_combined": -0.1045,
      "ci95": [
-      -0.3611,
-      0.1803
+      -0.3712,
+      0.1666
      ],
-     "month_same_sign_ratio": 0.54,
+     "month_same_sign_ratio": 0.46,
      "challenger": "FALSIFIED"
     },
     "W2": {
@@ -297,18 +297,18 @@
      "challenger": "FALSIFIED"
     },
     "W3": {
-     "n": 28,
-     "win_rate_pct": 57.14,
-     "avg_net_pct": 0.9681,
-     "sum_net_pct": 27.11,
-     "profit_factor": 1.427,
+     "n": 30,
+     "win_rate_pct": 53.33,
+     "avg_net_pct": 0.4789,
+     "sum_net_pct": 14.37,
+     "profit_factor": 1.187,
      "profit_factor_note": null,
-     "max_drawdown_pct": 10.49,
+     "max_drawdown_pct": 9.06,
      "trade_days": 12,
-     "delta_cohort_vs_combined": -0.1213,
+     "delta_cohort_vs_combined": 0.2211,
      "ci95": [
-      -1.2135,
-      0.9313
+      -0.9487,
+      1.3433
      ],
      "month_same_sign_ratio": 0.5,
      "challenger": "FALSIFIED"
@@ -316,7 +316,7 @@
    },
    "windows_with_trades": 3,
    "passes": 0,
-   "avg_net_pct_mean": 0.8673,
+   "avg_net_pct_mean": 0.7043,
    "all_windows_positive": true,
    "any_window_positive": true
   },
@@ -331,10 +331,10 @@
      "profit_factor_note": null,
      "max_drawdown_pct": 6.88,
      "trade_days": 17,
-     "delta_cohort_vs_combined": -0.3677,
+     "delta_cohort_vs_combined": -0.3765,
      "ci95": [
-      -0.6917,
-      -0.0615
+      -0.7001,
+      -0.0748
      ],
      "month_same_sign_ratio": 0.31,
      "challenger": "FALSIFIED"
@@ -367,18 +367,18 @@
   "daily-stock-analysis-skill": {
    "windows": {
     "W1": {
-     "n": 228,
-     "win_rate_pct": 60.53,
-     "avg_net_pct": 0.1362,
-     "sum_net_pct": 31.05,
-     "profit_factor": 1.088,
+     "n": 227,
+     "win_rate_pct": 60.79,
+     "avg_net_pct": 0.149,
+     "sum_net_pct": 33.83,
+     "profit_factor": 1.097,
      "profit_factor_note": null,
      "max_drawdown_pct": 23.69,
-     "trade_days": 92,
-     "delta_cohort_vs_combined": -0.2165,
+     "trade_days": 91,
+     "delta_cohort_vs_combined": -0.2139,
      "ci95": [
-      -0.5015,
-      0.065
+      -0.4991,
+      0.0662
      ],
      "month_same_sign_ratio": 0.46,
      "challenger": "FALSIFIED"
@@ -401,18 +401,18 @@
      "challenger": "FALSIFIED"
     },
     "W3": {
-     "n": 33,
-     "win_rate_pct": 60.61,
-     "avg_net_pct": 0.1717,
-     "sum_net_pct": 5.67,
-     "profit_factor": 1.08,
+     "n": 37,
+     "win_rate_pct": 59.46,
+     "avg_net_pct": -0.0483,
+     "sum_net_pct": -1.79,
+     "profit_factor": 0.978,
      "profit_factor_note": null,
-     "max_drawdown_pct": 12.76,
-     "trade_days": 15,
-     "delta_cohort_vs_combined": -0.8587,
+     "max_drawdown_pct": 14.56,
+     "trade_days": 18,
+     "delta_cohort_vs_combined": -0.7413,
      "ci95": [
-      -2.0939,
-      0.3673
+      -1.979,
+      0.5086
      ],
      "month_same_sign_ratio": 0.0,
      "challenger": "FALSIFIED"
@@ -420,8 +420,8 @@
    },
    "windows_with_trades": 3,
    "passes": 0,
-   "avg_net_pct_mean": 0.1917,
-   "all_windows_positive": true,
+   "avg_net_pct_mean": 0.1226,
+   "all_windows_positive": false,
    "any_window_positive": true
   },
   "high-range-breakout-momentum": {
@@ -435,10 +435,10 @@
      "profit_factor_note": null,
      "max_drawdown_pct": 36.61,
      "trade_days": 14,
-     "delta_cohort_vs_combined": -0.5289,
+     "delta_cohort_vs_combined": -0.5377,
      "ci95": [
-      -0.8586,
-      -0.2301
+      -0.8662,
+      -0.2397
      ],
      "month_same_sign_ratio": 0.15,
      "challenger": "FALSIFIED"
@@ -469,12 +469,12 @@
      "profit_factor_note": "样本不足 5 笔",
      "max_drawdown_pct": 1.3,
      "trade_days": 2,
-     "delta_cohort_vs_combined": -0.8291,
+     "delta_cohort_vs_combined": -0.5346,
      "ci95": [
-      -1.8908,
-      0.2124
+      -1.6686,
+      0.5482
      ],
-     "month_same_sign_ratio": 0.0,
+     "month_same_sign_ratio": 0.5,
      "challenger": "FALSIFIED"
     }
    },
@@ -495,10 +495,10 @@
      "profit_factor_note": "样本不足 5 笔",
      "max_drawdown_pct": 0.94,
      "trade_days": 1,
-     "delta_cohort_vs_combined": -0.3827,
+     "delta_cohort_vs_combined": -0.3915,
      "ci95": [
-      -0.7184,
-      -0.0699
+      -0.7301,
+      -0.0795
      ],
      "month_same_sign_ratio": 0.38,
      "challenger": "FALSIFIED"
@@ -529,12 +529,12 @@
      "profit_factor_note": "样本不足 5 笔",
      "max_drawdown_pct": 0.0,
      "trade_days": 1,
-     "delta_cohort_vs_combined": -0.5017,
+     "delta_cohort_vs_combined": -0.2072,
      "ci95": [
-      -1.6292,
-      0.5619
+      -1.3801,
+      0.9321
      ],
-     "month_same_sign_ratio": 0.0,
+     "month_same_sign_ratio": 0.5,
      "challenger": "FALSIFIED"
     }
    },
@@ -555,10 +555,10 @@
      "profit_factor_note": null,
      "max_drawdown_pct": 6.03,
      "trade_days": 10,
-     "delta_cohort_vs_combined": -0.3163,
+     "delta_cohort_vs_combined": -0.3251,
      "ci95": [
-      -0.6029,
-      -0.0381
+      -0.6114,
+      -0.0468
      ],
      "month_same_sign_ratio": 0.38,
      "challenger": "FALSIFIED"
@@ -589,12 +589,12 @@
      "profit_factor_note": null,
      "max_drawdown_pct": 1.94,
      "trade_days": 3,
-     "delta_cohort_vs_combined": -0.5215,
+     "delta_cohort_vs_combined": -0.227,
      "ci95": [
-      -1.6623,
-      0.5763
+      -1.4276,
+      0.9385
      ],
-     "month_same_sign_ratio": 0.0,
+     "month_same_sign_ratio": 0.5,
      "challenger": "FALSIFIED"
     }
    },
@@ -607,18 +607,18 @@
   "sector-relative-strength-leader": {
    "windows": {
     "W1": {
-     "n": 210,
-     "win_rate_pct": 63.33,
-     "avg_net_pct": 0.5559,
-     "sum_net_pct": 116.75,
-     "profit_factor": 1.335,
+     "n": 208,
+     "win_rate_pct": 63.46,
+     "avg_net_pct": 0.556,
+     "sum_net_pct": 115.64,
+     "profit_factor": 1.337,
      "profit_factor_note": null,
      "max_drawdown_pct": 22.31,
      "trade_days": 76,
-     "delta_cohort_vs_combined": -0.1235,
+     "delta_cohort_vs_combined": -0.1358,
      "ci95": [
-      -0.3788,
-      0.1086
+      -0.3889,
+      0.0893
      ],
      "month_same_sign_ratio": 0.38,
      "challenger": "FALSIFIED"
@@ -649,10 +649,10 @@
      "profit_factor_note": null,
      "max_drawdown_pct": 17.55,
      "trade_days": 14,
-     "delta_cohort_vs_combined": -0.3122,
+     "delta_cohort_vs_combined": -0.0177,
      "ci95": [
-      -1.2429,
-      0.4981
+      -1.0569,
+      0.925
      ],
      "month_same_sign_ratio": 0.5,
      "challenger": "FALSIFIED"
@@ -675,10 +675,10 @@
      "profit_factor_note": null,
      "max_drawdown_pct": 5.66,
      "trade_days": 24,
-     "delta_cohort_vs_combined": -0.3179,
+     "delta_cohort_vs_combined": -0.3267,
      "ci95": [
-      -0.6575,
-      -0.0107
+      -0.6662,
+      -0.0183
      ],
      "month_same_sign_ratio": 0.54,
      "challenger": "FALSIFIED"
@@ -701,18 +701,18 @@
      "challenger": "FALSIFIED"
     },
     "W3": {
-     "n": 13,
-     "win_rate_pct": 61.54,
-     "avg_net_pct": -0.4567,
-     "sum_net_pct": -5.94,
-     "profit_factor": 0.701,
+     "n": 19,
+     "win_rate_pct": 47.37,
+     "avg_net_pct": -1.6586,
+     "sum_net_pct": -31.51,
+     "profit_factor": 0.315,
      "profit_factor_note": null,
-     "max_drawdown_pct": 1.03,
-     "trade_days": 7,
-     "delta_cohort_vs_combined": -0.5998,
+     "max_drawdown_pct": 4.26,
+     "trade_days": 8,
+     "delta_cohort_vs_combined": -0.4474,
      "ci95": [
-      -1.6487,
-      0.4495
+      -1.548,
+      0.5842
      ],
      "month_same_sign_ratio": 0.0,
      "challenger": "FALSIFIED"
@@ -720,7 +720,7 @@
    },
    "windows_with_trades": 3,
    "passes": 0,
-   "avg_net_pct_mean": 0.8274,
+   "avg_net_pct_mean": 0.4268,
    "all_windows_positive": false,
    "any_window_positive": true
   }

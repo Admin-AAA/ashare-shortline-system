@@ -252,11 +252,17 @@ def list_strategies(
 
     result.sort(
         key=lambda x: (
+            # 页面按三窗回测均值排序：有回测收益的技能排在没有收益的技能之前，
+            # 同一批内部仍按生产画像（ready + hit_rate）细分。
+            bool(
+                (x.get("backtest_returns") or {}).get("avg_net_pct_mean")
+                is not None
+            ),
+            (x.get("backtest_returns") or {}).get("avg_net_pct_mean") or -9e9,
             x["performance_status"] == "ready",
             x["performance"]["hit_rate"]
             if x["performance"] and x["performance"]["hit_rate"] is not None
             else -1,
-            (x.get("backtest_returns") or {}).get("avg_net_pct_mean") or -9e9,
         ),
         reverse=True,
     )

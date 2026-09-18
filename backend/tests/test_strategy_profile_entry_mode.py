@@ -6,10 +6,13 @@ from pathlib import Path
 import app.services.backtest.strategy_profile as strategy_profile_module
 from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY, EntryPriceSource
 from app.engine.skill_loader import load_skill
+from app.engine.backtest import BarInput
 from app.services.backtest.strategy_profile import StrategyBacktestProfiles
+from app.services.backtest.policy_experiment import ScoredCandidateDay, _simulate_card
 from app.services.entry_policy import (
     execution_policy_for_entry_mode,
     execution_policy_for_next_open_entry,
+    execution_policy_with_entry_mode,
     execution_policy_fingerprint_for_entry_policy,
 )
 
@@ -64,3 +67,39 @@ def test_current_targets_use_declared_entry_mode(monkeypatch) -> None:
         targets[TARGET_TOUCH_SKILL].execution_policy.fingerprint()
         == DEFAULT_EXECUTION_POLICY.fingerprint()
     )
+
+
+def test_simulate_card_uses_declared_entry_mode() -> None:
+    bars = (
+        BarInput("000001", "2026-06-02", 12.0, 12.4, 11.8, 12.2),
+        BarInput("000001", "2026-06-03", 10.5, 10.8, 10.3, 10.6),
+        BarInput("000001", "2026-06-04", 10.6, 10.9, 10.4, 10.8),
+    )
+    day = ScoredCandidateDay(
+        signal_date="2026-06-01",
+        market_snapshot={},
+        cards=(),
+        outcome_bars={"000001": bars},
+    )
+    base_card = {"code": "000001", "recommend_price": 10.0, "stop_loss": 9.0}
+
+    touch_trade = _simulate_card(
+        day, {**base_card, "entry_mode": "target_touch"}, DEFAULT_EXECUTION_POLICY
+    )["trade"]
+    next_open_trade = _simulate_card(
+        day, {**base_card, "entry_mode": "next_open"}, DEFAULT_EXECUTION_POLICY
+    )["trade"]
+
+    # 首日跳空超过 6% 上限：次日开盘入场（等待窗口 1 天）直接放弃，
+    # 买点触碰方式（等待窗口 2 天）继续看下一根。
+    assert touch_trade.entry_date == "2026-06-03"
+    assert next_open_trade.entry_date is None
+
+
+def test_execution_policy_with_entry_mode_keeps_exit_and_cost() -> None:
+    policy = execution_policy_with_entry_mode(DEFAULT_EXECUTION_POLICY, "next_open")
+
+    assert policy.entry.price_source is EntryPriceSource.NEXT_TRADING_DAY_OPEN
+    assert policy.take_profit == DEFAULT_EXECUTION_POLICY.take_profit
+    assert policy.gap_risk == DEFAULT_EXECUTION_POLICY.gap_risk
+    assert policy.slippage == DEFAULT_EXECUTION_POLICY.slippage

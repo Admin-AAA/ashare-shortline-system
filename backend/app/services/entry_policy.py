@@ -85,9 +85,24 @@ def execution_policy_fingerprint_for_entry_policy(entry_policy_id: object) -> st
 def execution_policy_for_next_open_entry() -> ExecutionPolicy:
     """出场、费用、仓位沿用当前版本，只把 entry 换成次日开盘。"""
 
-    return replace(
-        DEFAULT_EXECUTION_POLICY,
-        entry=EntryWindowPolicy(
+    return execution_policy_with_entry_mode(DEFAULT_EXECUTION_POLICY, ENTRY_MODE_NEXT_OPEN)
+
+
+def entry_window_policy_for_mode(
+    entry_mode: object,
+    *,
+    template: EntryWindowPolicy | None = None,
+    legacy_strategy_id: object = None,
+) -> EntryWindowPolicy:
+    """按策略声明的入场方式给出 entry 段；其余 entry 旋钮沿用 template。"""
+
+    base = template or DEFAULT_EXECUTION_POLICY.entry
+    entry = entry_policy_for_mode(
+        entry_mode,
+        legacy_strategy_id=legacy_strategy_id,
+    )
+    if entry.policy_id == NEXT_TRADING_DAY_OPEN.policy_id:
+        return EntryWindowPolicy(
             policy_id=NEXT_TRADING_DAY_OPEN.policy_id,
             price_source=EntryPriceSource.NEXT_TRADING_DAY_OPEN,
             max_entry_trade_days=NEXT_TRADING_DAY_OPEN.max_entry_trade_days,
@@ -95,18 +110,33 @@ def execution_policy_for_next_open_entry() -> ExecutionPolicy:
             fallback_to_open_when_targets_miss=(
                 NEXT_TRADING_DAY_OPEN.fallback_to_open_when_targets_miss
             ),
-            skip_untradable_bars=DEFAULT_EXECUTION_POLICY.entry.skip_untradable_bars,
+            skip_untradable_bars=base.skip_untradable_bars,
+        )
+    return base
+
+
+def execution_policy_with_entry_mode(
+    policy: ExecutionPolicy,
+    entry_mode: object,
+    *,
+    legacy_strategy_id: object = None,
+) -> ExecutionPolicy:
+    """把策略声明的入场方式套到给定执行合约上，出场、费用、仓位保持不变。"""
+
+    return replace(
+        policy,
+        entry=entry_window_policy_for_mode(
+            entry_mode,
+            template=policy.entry,
+            legacy_strategy_id=legacy_strategy_id,
         ),
     )
 
 
 def execution_policy_for_entry_mode(entry_mode: object) -> ExecutionPolicy:
-    """按策略声明的入场方式返回完整执行合约。"""
+    """按策略声明的入场方式返回当前版本的完整执行合约。"""
 
-    entry = entry_policy_for_mode(entry_mode)
-    if entry.policy_id == NEXT_TRADING_DAY_OPEN.policy_id:
-        return execution_policy_for_next_open_entry()
-    return DEFAULT_EXECUTION_POLICY
+    return execution_policy_with_entry_mode(DEFAULT_EXECUTION_POLICY, entry_mode)
 
 
 __all__ = [
@@ -114,7 +144,9 @@ __all__ = [
     "EntryPolicy",
     "NEXT_TRADING_DAY_OPEN",
     "entry_policy_for_mode",
+    "entry_window_policy_for_mode",
     "execution_policy_for_entry_mode",
     "execution_policy_for_next_open_entry",
+    "execution_policy_with_entry_mode",
     "execution_policy_fingerprint_for_entry_policy",
 ]

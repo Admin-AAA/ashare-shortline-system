@@ -20,6 +20,7 @@ from app.engine.production_policy import (
     evaluate_selection_policy,
 )
 from app.engine.simulation import compute_metrics, simulate
+from app.services.entry_policy import execution_policy_with_entry_mode
 from app.services.backtest.release_policy import DEFAULT_RELEASE_POLICY
 from app.services.backtest.vectorbt_validation import cross_validate_trades
 
@@ -718,6 +719,11 @@ def _simulate_card(
     bars = tuple(day.outcome_bars.get(code, ()))
     if not bars:
         return {"status": "missing_outcome_bars", "trade": None}
+    card_policy = execution_policy_with_entry_mode(
+        execution_policy,
+        card.get("entry_mode"),
+        legacy_strategy_id=card.get("bucket"),
+    )
     result = simulate(
         RecommendationInput(
             code=code,
@@ -725,7 +731,7 @@ def _simulate_card(
             signal_price=price,
         ),
         bars,
-        execution_policy,
+        card_policy,
     )
     return {"status": "simulated", "trade": result.trade}
 

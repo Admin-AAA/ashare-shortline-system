@@ -78,6 +78,11 @@ def main() -> None:
              "给定后用它覆盖页面的『全策略组合』行（否则该行是 v4 面板基线，与当前生产不符），"
              "并额外导出逐技能贡献（按 dominant 归因）。",
     )
+    ap.add_argument(
+        "--reproduce",
+        default=None,
+        help="写入 caliber.reproduce 的完整复现命令；默认按单技能面板口径生成。",
+    )
     args = ap.parse_args()
     from app.engine.production_policy import load_production_selection_policy
 
@@ -165,7 +170,8 @@ def main() -> None:
             "description": args.panel_note or (
                 f"只保留该技能有非否决策略信号的候选卡，再走真实 production_selection "
                 f"v{current_policy.version} 选择（score_line=72 / Top{current_policy.daily_output_limit}）"
-                "与 execution_policy v5 因果出场（T+1 入场、止损/跟踪止盈、跳空成交约束）；"
+                "与 execution_policy v5 因果出场（按策略声明的 entry_mode 入场、T+1 卖出、"
+                "止损/跟踪止盈、跳空成交约束）；"
                 "逐笔等权，不含仓位与资金模型。"
             ),
             "combined_label": "全策略组合（全技能开，全管线重放）",
@@ -176,13 +182,13 @@ def main() -> None:
             "score_line": 72.0,
             "output_count": int(current_policy.daily_output_limit),
             "caveat": (
-                "候选池来自 10 技能全量重放的面板（按该技能信号筛卡），未做单技能独立 prefilter 重放；"
+                "候选池来自启用中技能的全量重放面板（按该技能信号筛卡），未做单技能独立 prefilter 重放；"
                 "选择用当前生产选择策略（见 selection_policy），组合基线为 v4（基线_selection_policy）。"
                 "两类指标都属 path A 诊断证据，不是 live_forward 发布证据。"
                 "盈亏比在窗口内无亏损笔或样本<5 时置空（显示 —），不做伪精度展示。"
             ),
             "source_artifact": f"backend/output/research/{src.name}",
-            "reproduce": (
+            "reproduce": args.reproduce or (
                 "cd backend && .venv/bin/python scripts/research_entry_rule_panel.py --rules '' "
                 f"--single-skill --baseline-version 4 --out output/research/{src.name} && "
                 ".venv/bin/python scripts/export_strategy_backtest_metrics.py"
