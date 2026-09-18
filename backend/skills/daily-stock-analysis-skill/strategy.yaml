@@ -2,11 +2,12 @@ id: daily-stock-analysis-skill
 name: 基础短线策略
 enabled: true
 weight: 0.3
+default_entry_mode: next_open
 
 meta:
   author: system
   style: technical-score
-  version: 0.1.0
+  version: 0.2.0
   holding_days: [1, 3, 5]
   default_preset_groups:
     formal_opening:

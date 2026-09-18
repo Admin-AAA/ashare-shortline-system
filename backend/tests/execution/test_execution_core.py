@@ -123,6 +123,38 @@ def test_canonical_entry_core_rejects_unreached_target_without_fallback():
     assert "未触发目标买点" in decision.reason
 
 
+def test_canonical_entry_core_uses_second_open_after_first_day_target_miss():
+    decision = resolve_causal_entry(
+        (
+            CausalEntryBar("000001", "2026-06-02", 10.2, 10.1, 10.15),
+            CausalEntryBar("000001", "2026-06-03", 10.3, 10.0, 10.2),
+        ),
+        _entry_config(
+            fallback_to_open_when_targets_miss=True,
+            max_entry_gap_pct=6.0,
+        ),
+    )
+
+    assert decision.triggered is True
+    assert decision.trade_date == "2026-06-03"
+    assert decision.raw_price == pytest.approx(10.3)
+    assert decision.executed_price == pytest.approx(10.3103)
+    assert decision.reason == "next_open_after_target_miss_entry（前一交易日买点未命中，次日开盘入场）"
+
+
+def test_canonical_entry_core_does_not_backdate_fallback_with_one_bar():
+    decision = resolve_causal_entry(
+        (CausalEntryBar("000001", "2026-06-02", 10.2, 10.1, 10.15),),
+        _entry_config(
+            fallback_to_open_when_targets_miss=True,
+            max_entry_gap_pct=6.0,
+        ),
+    )
+
+    assert decision.triggered is False
+    assert "未触发目标买点" in decision.reason
+
+
 def test_canonical_entry_core_owns_max_entry_gap_rejection():
     decision = resolve_causal_entry(
         (CausalEntryBar("000001", "2026-06-02", 11.2, 11.1, 11.15),),

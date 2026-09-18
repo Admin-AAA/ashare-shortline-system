@@ -16,6 +16,14 @@ def run_strategy(
     # 实证权重：把 strategy.yaml 顶层 weight 注入 signal，让 aggregator 按历史胜率加权。
     # 此前该字段从未注入 → aggregator 永远用 weight=1.0（等权），净负策略与赢家同权污染 final_score。
     skill_weight = float(contract.get("weight", 1.0))
+    default_entry_mode = str(
+        contract.get("default_entry_mode") or ENTRY_MODE_TARGET_TOUCH
+    )
+    if default_entry_mode not in VALID_ENTRY_MODES:
+        raise ValueError(
+            f"策略 '{skill.skill_id}' default_entry_mode "
+            f"必须是 {sorted(VALID_ENTRY_MODES)}，实际为 {default_entry_mode!r}"
+        )
     context = dict(stock)
     industry = stock.get("industry")
     context["is_main_theme"] = bool(
@@ -101,7 +109,7 @@ def run_strategy(
     setup_name = ""
     entry_rule = ""
     invalid_rule = ""
-    entry_mode = ENTRY_MODE_TARGET_TOUCH
+    entry_mode = default_entry_mode
     setup_quality = 50.0
     for setup in contract.get("setups", []) or []:
         if evaluate(str(setup.get("when", "")), context):
@@ -110,7 +118,7 @@ def run_strategy(
             setup_quality = min(100.0, 60.0 + float(setup.get("score_delta", 0)))
             entry_rule = str(setup.get("entry_rule", ""))
             invalid_rule = str(setup.get("invalid_rule", ""))
-            entry_mode = str(setup.get("entry_mode") or ENTRY_MODE_TARGET_TOUCH)
+            entry_mode = str(setup.get("entry_mode") or default_entry_mode)
             if entry_mode not in VALID_ENTRY_MODES:
                 raise ValueError(
                     f"策略 '{skill.skill_id}' setup '{setup_name}' 的 entry_mode "
