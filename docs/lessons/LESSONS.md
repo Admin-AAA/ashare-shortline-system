@@ -1472,9 +1472,10 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 
 ## L-133【入场规则】补充成交必须由信号日策略决定，目标价未命中不能用于选择更早的开盘价
 
-- 状态：active（已加入策略配置、因果成交保护和三窗口研究工具）。
+- 状态：active（已加入策略配置、策略页回测口径与三窗口研究工具）。
 - 证据：最近 60 天 14 条未触发推荐中，7 条完成五个交易日观察，6 条上涨，平均参考收益 +7.90%。把全部 `target_touch` 改成下一交易日开盘，W3 的 WR、PF 与 MDD 同时变差；按卡片最高分策略选择入场时点后，`chao-gu-yang-jia-skill` 与 `daily-stock-analysis-skill` 的联合候选每窗信号数为 255/132/26。
 - 三窗口：W1 354 笔、WR 63.3%、PF 1.548、Σ+271.63%、MDD -15.03%；W2 201 笔、WR 61.2%、PF 1.602、Σ+192.65%、MDD -25.43%；W3 44 笔、WR 70.5%、PF 2.959、Σ+105.08%、MDD -6.30%。三个窗口的 `evaluate_challenger()` 均返回 `PRODUCTION`。
-- 永久规则：**(a) 入场方式属于策略信号，使用 `default_entry_mode` 或 setup 的 `entry_mode` 表达；(b) 研究补充入场必须经过生产 `_simulate_outcome`；(c) 如果某日目标价未命中，只能在后续交易日使用开盘价，禁止用后来行情决定此前成交；(d) 全局改入场方式前必须保留策略分组，每窗候选信号数至少 20。**
-- 吸收位置：`app/engine/strategy_runner.py`、`app/engine/skill_loader.py`、`app/engine/execution_core.py`、`scripts/research_entry_mode_three_window.py`、`docs/炒股养家与基础短线-开盘入场-2026-09-18.md`。
+- 生产实测（合并后重跑 67 个交易日，cohort `237e3bc0289e`）：近 60 天成交 67 → 81 笔、Σ+55.77% → +84.63%、未触发 14 → 1 笔；全窗口 129 笔、WR 62.0%、Σ+121.61。
+- 永久规则：**(a) 入场方式属于策略信号，使用 `default_entry_mode` 或 setup 的 `entry_mode` 表达；(b) 研究补充入场必须经过生产 `_simulate_outcome`；(c) 全局改入场方式前必须保留策略分组，每窗候选信号数至少 20；(d) 任何回测引擎都必须读取策略声明的入场方式，否则页面收益与生产成交不一致。**
+- 吸收位置：`app/engine/strategy_runner.py`、`app/engine/skill_loader.py`、`app/services/entry_policy.py`、`app/services/backtest/strategy_profile.py`、`scripts/research_entry_mode_three_window.py`、`docs/炒股养家与基础短线-开盘入场-2026-09-18.md`。
 - 相关：L-009（统计门槛）、L-010（发布判定）、L-018（参数研究）、L-023（`final_score`）、L-025（仓位计算）、L-129（Top6 口径）。

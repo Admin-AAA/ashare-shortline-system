@@ -34,6 +34,7 @@ from app.services.backtest.research_runner import (
     ResearchBacktestRunner,
 )
 from app.services.registry.skills import sync_skills
+from app.services.entry_policy import execution_policy_for_entry_mode
 from app.services.backtest.strategy_quality import StrategyTradeEvidence
 
 
@@ -95,6 +96,9 @@ class StrategyBacktestProfiles:
         targets = []
         for skill in sorted(skills, key=lambda item: item.skill_id):
             descriptor = registry.get_descriptor(skill.skill_id)
+            strategy_policy = execution_policy_for_entry_mode(
+                (skill.contract or {}).get("default_entry_mode")
+            )
             targets.append(
                 StrategyBacktestProfileTarget(
                     strategy_id=descriptor.strategy_id,
@@ -104,7 +108,7 @@ class StrategyBacktestProfiles:
                     parameter_set=dict(
                         validate_backtest_parameter_set(descriptor, None)
                     ),
-                    execution_policy=policy,
+                    execution_policy=strategy_policy,
                     data_requirement_fingerprint=canonical_fingerprint(
                         descriptor.data_requirement.canonical_payload()
                     ),

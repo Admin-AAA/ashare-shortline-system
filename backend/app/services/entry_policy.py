@@ -8,6 +8,7 @@ from app.engine.execution_policy import (
     DEFAULT_EXECUTION_POLICY,
     EntryPriceSource,
     EntryWindowPolicy,
+    ExecutionPolicy,
 )
 
 
@@ -77,7 +78,16 @@ def execution_policy_fingerprint_for_entry_policy(entry_policy_id: object) -> st
     if normalized == CAUSAL_STRATEGY_ENTRY.policy_id:
         return DEFAULT_EXECUTION_POLICY.fingerprint()
     if normalized == NEXT_TRADING_DAY_OPEN.policy_id:
-        next_open_entry = EntryWindowPolicy(
+        return execution_policy_for_next_open_entry().fingerprint()
+    raise ValueError(f"unknown entry_policy_id: {normalized}")
+
+
+def execution_policy_for_next_open_entry() -> ExecutionPolicy:
+    """出场、费用、仓位沿用当前版本，只把 entry 换成次日开盘。"""
+
+    return replace(
+        DEFAULT_EXECUTION_POLICY,
+        entry=EntryWindowPolicy(
             policy_id=NEXT_TRADING_DAY_OPEN.policy_id,
             price_source=EntryPriceSource.NEXT_TRADING_DAY_OPEN,
             max_entry_trade_days=NEXT_TRADING_DAY_OPEN.max_entry_trade_days,
@@ -86,14 +96,25 @@ def execution_policy_fingerprint_for_entry_policy(entry_policy_id: object) -> st
                 NEXT_TRADING_DAY_OPEN.fallback_to_open_when_targets_miss
             ),
             skip_untradable_bars=DEFAULT_EXECUTION_POLICY.entry.skip_untradable_bars,
-        )
-        return replace(DEFAULT_EXECUTION_POLICY, entry=next_open_entry).fingerprint()
-    raise ValueError(f"unknown entry_policy_id: {normalized}")
+        ),
+    )
+
+
+def execution_policy_for_entry_mode(entry_mode: object) -> ExecutionPolicy:
+    """按策略声明的入场方式返回完整执行合约。"""
+
+    entry = entry_policy_for_mode(entry_mode)
+    if entry.policy_id == NEXT_TRADING_DAY_OPEN.policy_id:
+        return execution_policy_for_next_open_entry()
+    return DEFAULT_EXECUTION_POLICY
+
 
 __all__ = [
     "CAUSAL_STRATEGY_ENTRY",
     "EntryPolicy",
     "NEXT_TRADING_DAY_OPEN",
     "entry_policy_for_mode",
+    "execution_policy_for_entry_mode",
+    "execution_policy_for_next_open_entry",
     "execution_policy_fingerprint_for_entry_policy",
 ]
