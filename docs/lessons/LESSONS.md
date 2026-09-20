@@ -1479,3 +1479,13 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 永久规则：**(a) 入场方式属于策略信号，使用 `default_entry_mode` 或 setup 的 `entry_mode` 表达；(b) 研究补充入场必须经过生产 `_simulate_outcome`；(c) 全局改入场方式前必须保留策略分组，每窗候选信号数至少 20；(d) 任何回测引擎都必须读取策略声明的入场方式，否则页面收益与生产成交不一致。**
 - 吸收位置：`app/engine/strategy_runner.py`、`app/engine/skill_loader.py`、`app/services/entry_policy.py`、`app/services/backtest/strategy_profile.py`、`scripts/research_entry_mode_three_window.py`、`docs/炒股养家与基础短线-开盘入场-2026-09-18.md`。
 - 相关：L-009（统计门槛）、L-010（发布判定）、L-018（参数研究）、L-023（`final_score`）、L-025（仓位计算）、L-129（Top6 口径）。
+
+## L-134【口径与目标冲突】WR 70% 需要同时处理入场质量和盈利保留，单轴改动会在 W1/W2 与 W3 之间发生冲突
+
+- 状态：active（连续五轮 FALSIFIED；生产策略未改变）。
+- 证据：当前生产成交口径为 W1 354/WR63.28%/PF1.548/Σ+271.63、W2 201/61.19%/1.602/+192.65、W3 60/66.67%/1.913/+84.90。单字段保护、双字段保护、市场日级保护、最高分策略成交方式和出场盈利保护均未让三个窗口同时达到 WR70%。
+- 最接近的选择候选是全卡 `final_score >= 70`：W1 66.05%、W2 61.64%、W3 69.77%，三个窗口均获 `evaluate_challenger()` 的 `PRODUCTION`，仍未满足绝对 WR70%。最接近的出场候选是 `take_profit=1%`：W1 74.25%、W2 72.73%、W3 68.75%，W3 PF 1.187，同时三个窗口均为 `FALSIFIED`。
+- 口径冲突：同一批 366/209/66 张卡和同一批日线，`outcome_simulation` 与 canonical pure execution 的已结算笔数为 354/201/60 对 365/209/62；逐笔差异为 76/47/18。主要差异包含目标价未触发在 pure execution 中成交，以及止损、trailing、到期退出收益不一致。
+- 永久规则：**(a) WR70 优化前必须消除两条成交模拟的逐笔差异；同一选中集合的 n、入场状态和净收益未逐笔相同时，出场参数结果不得用于发布。 (b) `evaluate_challenger()` 通过不能代替绝对验收指标。 (c) 低止盈能提高 W1/W2 胜率，同时会压低 W3 PF；后续候选必须同时包含信号日质量和盈利保留机制。 (d) W3 未完成持有期的记录保持 provisional，不计入胜负。**
+- 证据：`backend/output/wr70/baseline_engine_compare.json`、`backend/output/wr70/round5_exit_screen_current_w3.json`、`output/strategies-wr70-bottleneck-metrics-2026-09-20.json`。
+- 相关：L-010（唯一发布判定）、L-021（累计收益与回撤）、L-113（出场轴冲突）、L-127（Top6）、L-133（策略声明入场方式）。
