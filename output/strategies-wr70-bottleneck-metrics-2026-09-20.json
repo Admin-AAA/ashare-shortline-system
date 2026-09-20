@@ -7,9 +7,9 @@
     "W3": ["2026-08-01", "2026-09-18"]
   },
   "production_outcome_baseline": {
-    "W1": {"n": 354, "wr_pct": 63.2768, "avg_net_pct": 0.7673, "sum_net_pct": 271.63, "pf": 1.5476, "mdd_pct": -15.0333, "avg_win_pct": 3.4271, "avg_loss_pct": -3.8157, "coverage_pct": 96.7213, "capital_utilization_pct": 21.5847},
-    "W2": {"n": 201, "wr_pct": 61.1940, "avg_net_pct": 0.9585, "sum_net_pct": 192.65, "pf": 1.6016, "mdd_pct": -25.4307, "avg_win_pct": 4.1698, "avg_loss_pct": -4.1055, "coverage_pct": 96.1722, "capital_utilization_pct": 22.4163},
-    "W3": {"n": 60, "wr_pct": 66.6667, "avg_net_pct": 1.4150, "sum_net_pct": 84.90, "pf": 1.9134, "mdd_pct": -10.9675, "avg_win_pct": 4.4463, "avg_loss_pct": -4.6475, "coverage_pct": 90.9091, "capital_utilization_pct": 19.6970, "pending_count": 4}
+    "W1": {"n": 354, "wr_pct": 63.2768, "avg_net_pct": 0.7673, "sum_net_pct": 271.63, "pf": 1.5476, "mdd_pct": -15.0333, "avg_win_pct": 3.4271, "avg_loss_pct": -3.8157, "coverage_pct": 96.7213, "capital_utilization_pct": 21.5847, "bootstrap_ci95_pct": [0.0, 0.0]},
+    "W2": {"n": 201, "wr_pct": 61.1940, "avg_net_pct": 0.9585, "sum_net_pct": 192.65, "pf": 1.6016, "mdd_pct": -25.4307, "avg_win_pct": 4.1698, "avg_loss_pct": -4.1055, "coverage_pct": 96.1722, "capital_utilization_pct": 22.4163, "bootstrap_ci95_pct": [0.0, 0.0]},
+    "W3": {"n": 60, "wr_pct": 66.6667, "avg_net_pct": 1.4150, "sum_net_pct": 84.90, "pf": 1.9134, "mdd_pct": -10.9675, "avg_win_pct": 4.4463, "avg_loss_pct": -4.6475, "coverage_pct": 90.9091, "capital_utilization_pct": 19.6970, "pending_count": 4, "bootstrap_ci95_pct": [0.0, 0.0]}
   },
   "rounds": [
     {
