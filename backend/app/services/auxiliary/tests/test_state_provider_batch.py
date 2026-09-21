@@ -17,6 +17,7 @@ import pandas as pd
 
 from app.services.auxiliary.contracts import AuxiliaryDatasetRequest, AuxiliaryInstrument
 from app.services.auxiliary.state_adapters import TushareStateProvider
+from app.services.tushare_transport import TushareProviderError
 
 
 class _RecordingClient:
@@ -120,7 +121,7 @@ def test_auction_unavailable_returns_empty_without_per_stock_loop():
         def __getattr__(self, name):
             def _call(**kwargs):
                 self.calls += 1
-                raise RuntimeError("no permission")
+                raise TushareProviderError("stk_auction", [])
             return _call
     client = _FailingClient()
     provider = TushareStateProvider(client, session=None)

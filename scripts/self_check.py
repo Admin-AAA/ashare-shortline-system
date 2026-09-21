@@ -375,12 +375,6 @@ def strategy_inactive_from_recent_zero_days(classifications: list[str]) -> bool:
     return len(classifications) >= 5 and classifications[-5:] == ["policy_blocked"] * 5
 
 
-def _zero_rec_day_is_protective(stage_summaries_list: list[list[dict]]) -> bool:
-    """Backward-compatible helper: only plain threshold abstention is protective."""
-    audits = [{"stage_summary": stages} for stages in stage_summaries_list]
-    return classify_zero_output_health(audits) == "reasonable_abstain"
-
-
 def check_a_item(db) -> None:
     """A 项：最近 7 天 formal 推荐产出（按交易日聚合，标出断档日）。
 

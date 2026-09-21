@@ -22,6 +22,10 @@
 
 本次研究没有完成全技能推荐流程、历史公告风险过滤和组合资金占用重放，不具备发布依据。后续需要新的席位级证据检验资金行为假设，禁止继续扫描本次整理阈值。
 
+## Agent 输出约束
+
+Agent 审查必须遵循 `SkillReviewOutput` schema，并输出 `stance` 与 `action` 字段。`stance` 只允许使用 `strong_support`、`support`、`neutral_support`、`neutral`、`oppose`、`veto`；`action` 只允许使用“观察”、“轻仓试错”、“确认后加仓”、“不做”。策略保持停用时，Agent 不得将研究信号解释为正式推荐依据。
+
 ## 官方字段说明
 
 - [龙虎榜每日明细](https://tushare.pro/document/2?doc_id=106)

@@ -29,10 +29,13 @@ def _fake_df() -> pd.DataFrame:
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache():
+def _reset_cache(monkeypatch):
+    monkeypatch.setenv("ASHARE_TUSHARE_FASTAPIC_TOKEN", "test-token")
+    rq.get_settings.cache_clear()
     rq._cache["fetched_at"] = 0.0
     rq._cache["rows"] = {}
     yield
+    rq.get_settings.cache_clear()
     rq._cache["fetched_at"] = 0.0
     rq._cache["rows"] = {}
 

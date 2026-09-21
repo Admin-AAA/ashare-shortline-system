@@ -10,6 +10,7 @@ from app.models.tables import DailyKbar, DragonTiger, StockMetadataHistory
 from scripts.research_dragon_tiger_reaccumulation import load_evaluator, metadata_on
 
 
+@pytest.mark.integration
 @pytest.mark.parametrize("code,signal_date", [
     ("000737", "2025-02-05"),
     ("603333", "2026-01-19"),

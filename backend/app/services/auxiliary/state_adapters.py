@@ -48,6 +48,7 @@ from app.services.auxiliary.production import (
     AuxiliaryInventoryError,
     StandardAuxiliaryDatasetAdapters,
 )
+from app.services.tushare_transport import TushareProviderError
 
 
 class TushareStateClientPort(Protocol):
@@ -593,7 +594,10 @@ class TushareStateProvider:
     def auction(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         # 集合竞价按 trade_date 批量获取全市场，再以本地股票表过滤债券等同代码证券。
         target = _compact_day(request.trade_date)
-        frame = self._client.stk_auction(trade_date=target)
+        try:
+            frame = self._client.stk_auction(trade_date=target)
+        except TushareProviderError:
+            return ()
         if frame is None or frame.empty:
             return ()
         wanted = set(request.requested_codes) or {

@@ -1,14 +1,3 @@
-"""Regression guard: self_check A 项 0 推荐日分类（保护性 vs 故障性，第183轮 T12 误报修复）。
-
-背景: A 项原先把所有"系统跑了但 0 推荐"的交易日都当 T12 断档告警，但强势 regime
-(score_line penalty +4/+8) / 恐慌日 (ld>100 panic veto +12) / 结构性强势 regime 会把
-有效线拉到 95-103，候选最高分 82<95 不过线 → 0 推荐是"准确 > 可见"的设计意图，
-非 pipeline 故障。误报会让 self-improve 浪费 D 攻击档期去查 T12。
-
-_zero_rec_day_is_protective 用纯函数判断：至少一个 completed run 的 score_line 阶段
-input>0 且 pass=0（候选进了分数线但分不够）= 保护性；否则（prefilter/skill_gate 卡住
-或无 completed run）= 故障性。
-"""
 import pathlib
 import sys
 
@@ -24,27 +13,46 @@ def _stage(stage: str, inp: int, pas: int) -> dict:
     return {"stage": stage, "input_count": inp, "pass_count": pas, "filtered_count": inp - pas}
 
 
-def test_protective_when_score_line_zero_pass_with_candidates():
-    """候选进入 score_line 但全被有效线拦截 = 保护性 0 推荐（D 项设计意图）。"""
+def _audit(stages: list[dict], *, opportunity: bool = False) -> dict:
+    rows = []
+    if opportunity:
+        rows.append({
+            "price": 10.0,
+            "hard_veto": False,
+            "score_line": {
+                "final_score": 80.0,
+                "score_line_meta": {
+                    "base_score_line": 72.0,
+                    "execution_status": "tradable",
+                    "execution_blocked": False,
+                    "regime_struct_strong_hard_veto": False,
+                    "regime_oscillation_hard_veto": False,
+                },
+            },
+        })
+    return {"stage_summary": stages, "rows": rows}
+
+
+def test_reasonable_abstain_when_score_line_rejects_opportunity():
     stages = [
         _stage("market_universe", 5200, 4950),
         _stage("prefilter", 4950, 60),
         _stage("skill_gate", 60, 60),
         _stage("skill_review", 60, 60),
-        _stage("score_line", 60, 0),  # 60 候选进分数线，0 过线
+        _stage("score_line", 60, 0),
     ]
-    assert self_check._zero_rec_day_is_protective([stages]) is True
+    assert self_check.classify_zero_output_health([_audit(stages, opportunity=True)]) == "reasonable_abstain"
 
 
-def test_protective_across_multiple_runs_one_reaches_score_line():
-    """多个 completed run 中只要有一个走到 score_line 0 通过即算保护性。"""
-    run_a = [_stage("prefilter", 4950, 0)]  # prefilter 卡住
+def test_reasonable_abstain_across_multiple_runs():
+    run_a = [_stage("prefilter", 4950, 0)]
     run_b = [
         _stage("prefilter", 4950, 52),
         _stage("skill_gate", 52, 52),
-        _stage("score_line", 52, 0),  # 保护性
+        _stage("score_line", 52, 0),
     ]
-    assert self_check._zero_rec_day_is_protective([run_a, run_b]) is True
+    audits = [_audit(run_a), _audit(run_b, opportunity=True)]
+    assert self_check.classify_zero_output_health(audits) == "reasonable_abstain"
 
 
 def test_faulty_when_prefilter_blocks_all():
@@ -53,7 +61,7 @@ def test_faulty_when_prefilter_blocks_all():
         _stage("market_universe", 5200, 4950),
         _stage("prefilter", 4950, 0),  # prefilter 全过滤
     ]
-    assert self_check._zero_rec_day_is_protective([stages]) is False
+    assert self_check.classify_zero_output_health([_audit(stages)]) == "pipeline_fault"
 
 
 def test_faulty_when_skill_gate_blocks_all():
@@ -62,13 +70,13 @@ def test_faulty_when_skill_gate_blocks_all():
         _stage("prefilter", 4950, 200),
         _stage("skill_gate", 200, 0),  # 全被 gate 卡
     ]
-    assert self_check._zero_rec_day_is_protective([stages]) is False
+    assert self_check.classify_zero_output_health([_audit(stages)]) == "pipeline_fault"
 
 
 def test_faulty_when_no_completed_runs():
     """无 completed run（全 interrupted/failed）= 故障性（空列表）。"""
-    assert self_check._zero_rec_day_is_protective([]) is False
-    assert self_check._zero_rec_day_is_protective([[]]) is False
+    assert self_check.classify_zero_output_health([]) == "pipeline_fault"
+    assert self_check.classify_zero_output_health([_audit([])]) == "pipeline_fault"
 
 
 def test_faulty_when_score_line_has_passes_but_rec_still_zero():
@@ -79,7 +87,7 @@ def test_faulty_when_score_line_has_passes_but_rec_still_zero():
         _stage("prefilter", 4950, 60),
         _stage("score_line", 60, 5),  # 5 只过线
     ]
-    assert self_check._zero_rec_day_is_protective([stages]) is False
+    assert self_check.classify_zero_output_health([_audit(stages, opportunity=True)]) == "pipeline_fault"
 
 
 # --------------------------------------------------------------------------- #

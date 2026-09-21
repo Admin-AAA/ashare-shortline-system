@@ -1,4 +1,3 @@
-"""Pre-registered return-improvement hypotheses with zero production effect."""
 from __future__ import annotations
 
 from typing import Any
@@ -77,8 +76,10 @@ def annotate_return_improvement_shadow(
                 "applies": weak_active,
                 "target_daily_output_limit": 2 if weak_active else None,
                 "target_position_cap_pct": (
-                    15.0 if weak_active and is_twenty_cm
-                    else 20.0 if weak_active
+                    15.0
+                    if weak_active and is_twenty_cm
+                    else 20.0
+                    if weak_active
                     else None
                 ),
             },
