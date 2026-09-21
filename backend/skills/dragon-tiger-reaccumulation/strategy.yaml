@@ -1,0 +1,52 @@
+id: dragon-tiger-reaccumulation
+name: 龙虎榜涨停后整理再启动
+enabled: false
+weight: 1.0
+default_entry_mode: next_open
+require_setup: true
+meta:
+  version: 0.1.0
+  author: system
+  style: event-sequence
+  holding_days: [5]
+  research_status: falsified
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+universe:
+  include:
+    - "dtr_data_ready == true"
+    - "dtr_event_count >= 1"
+    - "dtr_limit_count >= 1"
+    - "amount_yi >= 2"
+  exclude:
+    - "is_st == true"
+    - "is_limit_up == true"
+phases:
+  - name: 上榜后整理
+    when: "dtr_event_age >= 3"
+    score_cap: 90
+setups:
+  - name: 缩量整理后温和放量
+    when: "dtr_event_age >= 3 and dtr_volume_contraction <= 0.8 and dtr_range_pct <= 10 and dtr_support_ratio >= 0.97 and dtr_event_return_pct <= 10 and dtr_restart_volume >= 1.2 and dtr_restart_volume <= 2.5 and pct >= 0.5 and pct <= 6 and dtr_close_location >= 0.65 and dtr_near_range_high == true"
+    score_delta: 10
+    entry_rule: 信号收盘确认，下一交易日按声明的 next_open 判断可成交性
+    invalid_rule: 整理支撑失效，或下一交易日不能按执行规则成交
+scoring:
+  base: 60
+  rules:
+    - when: "dtr_volume_contraction <= 0.65"
+      delta: 5
+      reason: 整理成交量低于上榜日的百分之六十五
+    - when: "dtr_range_pct <= 6"
+      delta: 5
+      reason: 整理区间振幅不超过百分之六
+    - when: "dtr_support_ratio >= 1"
+      delta: 5
+      reason: 整理期间守住上榜日最低价
+    - when: "dtr_close_location >= 0.8"
+      delta: 5
+      reason: 信号收盘位于当日价格区间上部
+risk:
+  rules: []
