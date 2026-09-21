@@ -147,16 +147,13 @@ def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, An
     enriched = dict(signal)
     enriched["agent_skill_review"] = review
     enriched["runtime"] = "strategy_yaml+agent_skill"
-    # score_delta is deliberately retained inside agent_skill_review for
-    # audit/ablation, but never written back to the rule-owned score.
+    # score_delta 只留在 agent_skill_review 里供审计/消融，绝不回写规则分。
     enriched["llm_influence_mode"] = "risk_overlay"
+    # LLM 复核不参与分数：review 的 summary/risks 只保留在 agent_skill_review
+    # 供审计与展示，不再并入 risk_flags / evidence —— 这两个字段会进入聚合器
+    # 的 risk、evidence 分量。LLM 生效时只保留硬否决。
     enriched.setdefault("evidence", [])
-    review_runtime = str(review.get("runtime") or "")
-    summary = str(review.get("summary", "")).strip()
-    if summary and review_runtime != "agent_skill_fallback_prelim" and not bool(review.get("summary_is_warning")):
-        enriched["evidence"] = list(enriched["evidence"]) + [summary]
     enriched.setdefault("risk_flags", [])
-    enriched["risk_flags"] = list(dict.fromkeys(list(enriched["risk_flags"]) + review.get("risks", [])))
     if review.get("stance") == "veto":
         enriched["hard_veto"] = True
         enriched["veto_reason"] = str(review.get("summary") or "Agent Skill 风险否决")
@@ -167,6 +164,9 @@ def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, An
 
 def agent_only_signal(skill: StrategySkill, stock: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     # 没有规则信号时，LLM 只能提供风险信息，不能凭审查结果创造 alpha。
+    # 同时为满足「LLM 不影响分数」：weight=0 使其不参与 strategy_rule 加权，
+    # LLM 的 risks/summary 只留在 agent_skill_review 供展示，不写入 risk_flags /
+    # evidence（这两个字段会进入聚合器的 risk、evidence 分量）。硬否决保留。
     score = 50.0
     return {
         "strategy_id": skill.skill_id,
@@ -181,9 +181,9 @@ def agent_only_signal(skill: StrategySkill, stock: dict[str, Any], review: dict[
         "setup_quality": 50.0,
         "hard_veto": review.get("stance") == "veto",
         "veto_reason": "Agent Skill 风险否决" if review.get("stance") == "veto" else "",
-        "risk_flags": review.get("risks", []),
-        "evidence": review.get("supports", []) + [review.get("summary", "")],
-        "weight": 1.0,
+        "risk_flags": [],
+        "evidence": [],
+        "weight": 0.0,
         "runtime": "agent_skill_only",
         "llm_influence_mode": "risk_overlay",
         "agent_skill_review": review,

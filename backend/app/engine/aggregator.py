@@ -594,19 +594,21 @@ def _consensus_boost(
     signals: list[dict[str, Any]],
     stance_summary: list[dict[str, Any]] | None = None,
 ) -> tuple[float, list[str]]:
-    """共识加权 + 立场协同/冲突机制。
+    """共识加权（只基于策略规则信号）。
 
-    包含四个维度：
-    1. 高分一致性加成（经技能独立性衰减）
-    2. 联合否决打击
-    3. 一致方向加成
-    4. 严重分歧惩罚
+    设计约定：LLM 复核不影响任何分数。历史上 ``multi_oppose_strike``
+    （LLM oppose >= 2 时 ×0.90）与 ``high_controversy``（strong_support 与
+    veto 并存时 ×0.88）会按 LLM 输出改写最终分，使 LLM 服务不稳定时同一批
+    候选分数漂移；现全部下线。LLM 生效时只保留硬否决与 review_status 标记。
+
+    ``stance_summary`` 参数保留以兼容既有调用方，不再参与计算。
     """
+    del stance_summary  # 兼容签名：LLM 立场不再参与分数
     consensus_tags: list[str] = []
     boost = 1.0
     indep_factor = _skill_independence_factor(signals)
 
-    # ── 1. 高分一致性加成（独立性衰减） ──
+    # ── 高分一致性加成（独立性衰减，基于规则分） ──
     agreeing_skills = sum(
         1 for signal in signals
         if float(signal.get("score", 0)) >= 70
@@ -615,25 +617,6 @@ def _consensus_boost(
         raw_boost = 0.1 * (agreeing_skills - 1)
         boost = 1.0 + raw_boost * indep_factor
         consensus_tags.append("high_agreement")
-
-    # ── 2. 联合否决打击 ──
-    oppose_count = sum(
-        1 for signal in signals
-        if (review := signal.get("agent_skill_review"))
-        and isinstance(review, dict)
-        and review.get("stance") == "oppose"
-    )
-    if oppose_count >= 2:
-        boost *= 0.90
-        consensus_tags.append("multi_oppose_strike")
-
-    # ── 3. 严重分歧惩罚 ──
-    if stance_summary:
-        has_strong_support = any(s.get("stance") == "strong_support" for s in stance_summary)
-        has_veto = any(s.get("stance") == "veto" for s in stance_summary)
-        if has_strong_support and has_veto:
-            boost *= 0.88
-            consensus_tags.append("high_controversy")
 
     return boost, consensus_tags
 

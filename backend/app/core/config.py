@@ -109,7 +109,10 @@ class Settings(BaseSettings):
     agent_skill_api_key: str = ""          # 弃用：不再作为任何路由的回退 key
     agent_skill_base_url: str = ""         # 弃用：不再作为任何路由的回退 base_url
     agent_skill_model: str = ""            # 弃用
-    agent_skill_timeout_seconds: float = 300.0  # 正式链路默认按分钟级超时控制长尾，避免单Skill异常把整次推荐拖到 10+ 分钟
+    agent_skill_timeout_seconds: float = 300.0  # 单次 Skill 调用超时，避免单 Skill 异常拖长整次推荐
+    # LLM 复核是可选标记，不阻塞推荐：整批复核超过该秒数即放弃未完成部分，
+    # 未完成候选按「未复核」处理（不影响分数与出票）。
+    agent_review_stage_timeout_seconds: float = 600.0
     agent_skill_prompt_char_limit: int = 22000
     agent_retry_count: int = 3
     agent_retry_backoff: float = 1.5

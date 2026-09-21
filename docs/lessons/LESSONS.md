@@ -1498,3 +1498,21 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 永久规则：研究持续参与必须保留原始上榜原因、统计区间、席位身份和发布时间；多日榜与单日榜不得直接累加推断持仓。未上榜期间的持仓变化保持未知。上榜且涨停只定义候选范围，交易信号需要独立的可得证据验证。
 - 吸收位置：`backend/skills/dragon-tiger-reaccumulation/SKILL.md`、`backend/scripts/research_dragon_tiger_reaccumulation.py`。
 - 相关：L-014、L-078、L-133、L-134。
+
+## L-136 运行 worker 租约只在阶段边界续期，长阶段必须自带段内超时与降级
+
+- 状态：active。
+- 适用：任何新增或耗时不确定的 pipeline 阶段，尤其含外部 LLM／网络调用的阶段。
+- 证据：2026-09-21 两次 formal run（`run_20260921_030714_c569e4`、`run_20260921_033539_d3143d`）在 REVIEW 阶段连续运行 22–24 分钟，超过 `RUN_HEARTBEAT_STALE_SECONDS=1200`；阶段内不续租，lease 到期后被判定 stale 并 interrupt，两轮推荐全部作废（候选、分数、辅助数据都白跑）。
+- 永久规则：**(a) 耗时不可控的阶段必须自带段内超时，并在超时时产出明确降级产物（超时=降级，不是失败）；(b) 不得依赖阶段边界续租来覆盖单阶段长尾；(c) 任何「外部依赖变慢」的新阶段上线前，先确认最坏耗时可被 lease 覆盖。**
+- 吸收位置：`app/services/runs/stages/adapters.py::ProductionReviewExecutor.review_candidates`（`asyncio.wait` + 整批超时，超时条目标记 `agent_review_stage_timeout`）、`app/core/config.py::agent_review_stage_timeout_seconds`。
+- 相关：L-137（LLM 复核口径）、L-010（发布判定）。
+
+## L-137 LLM 复核不参与分数，只做标记与「生效时」的硬否决
+
+- 状态：active。
+- 适用：聚合权重、共识惩罚、风险/证据分量、LLM 提供方可用性波动。
+- 证据：LLM 的 `summary`/`risks` 曾并入 signal 的 `evidence`/`risk_flags`，直接进入聚合器 risk 与 evidence 分量；`_consensus_boost` 还按 `oppose>=2`（×0.90）与 `strong_support`+`veto` 并存（×0.88）改写最终分。LLM 网关当日出现 `model_circuit_open`/`model_rate_limited`（2026-09-21 formal run：verified 4 / partial 8 / degraded 48），同一批候选的分数与出票随 LLM 可用性漂移。
+- 永久规则：**(a) `skill_agent` 聚合权重恒为 0；(b) LLM 的 summary/risks 不得写入 `risk_flags`/`evidence` 等评分字段，只留在 `agent_skill_review` 供审计与展示；(c) 共识加成只基于策略规则分；(d) LLM 仅在真实生效（无 error 的真实复核结论）时保留硬否决与 `llm_reviewed` 标记，失败/降级/超时一律不影响分数与出票集合。**
+- 吸收位置：`app/engine/aggregator.py::_consensus_boost`、`app/engine/agent_skill_runner.py::enrich_signal_with_agent_review` / `agent_only_signal`、`app/services/workbench_service.py::_build_recommendation_card`、`tests/test_run_workbench_golden_master.py`、`tests/test_aggregator.py`。
+- 相关：L-136（长阶段超时）、L-023（`final_score` 口径）、L-133（策略声明入场方式）。

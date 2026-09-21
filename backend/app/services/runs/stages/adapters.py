@@ -417,7 +417,9 @@ class ProductionReviewExecutor(ReviewExecutorPort):
         agent_review_disabled: bool,
     ) -> tuple[StageMapping, ...]:
         import asyncio
+
         from app.agents.review_runner import run_skill_reviews
+        from app.core.config import get_settings
 
         if agent_review_disabled:
             return tuple(
@@ -445,10 +447,36 @@ class ProductionReviewExecutor(ReviewExecutorPort):
             )
             return {**entry, "skill_reviews": skill_reviews}
 
-        results = []
-        tasks = [asyncio.create_task(_process(dict(entry))) for entry in candidates]
-        for task in asyncio.as_completed(tasks):
-            results.append(await task)
+        entries = [dict(entry) for entry in candidates]
+        timeout_seconds = float(get_settings().agent_review_stage_timeout_seconds or 0)
+        if timeout_seconds <= 0:
+            results = []
+            tasks = [asyncio.create_task(_process(entry)) for entry in entries]
+            for task in asyncio.as_completed(tasks):
+                results.append(await task)
+            return tuple(results)
+
+        # LLM 复核是可选标记，禁止阻塞推荐管线：整批超过时限即放弃未完成候选，
+        # 未完成项按「未复核」返回（skill_reviews 为空），既不否决也不改分数。
+        ordered_tasks = [asyncio.create_task(_process(entry)) for entry in entries]
+        done, pending = await asyncio.wait(ordered_tasks, timeout=timeout_seconds)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        results: list[dict[str, Any]] = []
+        for index, task in enumerate(ordered_tasks):
+            if task in done and not task.cancelled() and task.exception() is None:
+                results.append(task.result())
+            else:
+                results.append(
+                    {
+                        **entries[index],
+                        "skill_reviews": [],
+                        "agent_review_stage_timeout": True,
+                    }
+                )
         return tuple(results)
 
 
