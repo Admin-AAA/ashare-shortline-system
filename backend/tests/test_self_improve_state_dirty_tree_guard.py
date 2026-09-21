@@ -230,6 +230,7 @@ def test_identity_context_marks_production_owned(tmp_path):
     # 使 parents[2] = 仓库根），先复制再提交保持树干净
     scripts = repo / "backend" / "scripts"
     scripts.mkdir(parents=True)
+    (repo / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="utf-8")
     import shutil
     shutil.copy(Path(sis.__file__), scripts / "self_improve_state.py")
     git("add", "-A")
