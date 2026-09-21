@@ -2057,6 +2057,10 @@ def _build_recommendation_card(
         skill_reviews,
         agent_review_disabled=bool(entry.get("agent_review_disabled")),
     )
+    # LLM 复核只做标记与（生效时的）硬否决，不参与分数与出票集合。
+    # llm_reviewed=True 表示本次确实拿到过真实复核结论（verified/partial）。
+    card["llm_reviewed"] = card["review_status"] in ("verified", "partial")
+    card["llm_review_timeout"] = bool(entry.get("agent_review_stage_timeout"))
     feature_snapshot["review_status"] = card["review_status"]
     card["recent_repeat"] = stock["code"] in (recent_codes or set())
     card["same_day_repeat"] = stock["code"] in (same_day_codes or set())

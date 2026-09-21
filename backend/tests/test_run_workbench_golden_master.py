@@ -296,7 +296,9 @@ def test_run_workbench_pure_computation_matches_golden_master():
             "consensus_score": 87.8,
             "setup_type": "突破确认",
             "strategy_ids": ["golden-momentum"],
-            "evidence": ["量能放大", "主线共振", "突破后承接稳定"],
+            # LLM 复核不再写入评分字段：review.summary/risks 只留在
+            # agent_skill_review 供审计，不再并入 evidence（2026-09-21 口径）。
+            "evidence": ["量能放大", "主线共振"],
             "risk_flags": ["情绪冰点，仅允许小仓试错主线龙头"],
             "effective_score_line": 35.0,
             "passed": True,

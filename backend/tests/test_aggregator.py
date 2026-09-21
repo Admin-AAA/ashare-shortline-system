@@ -138,12 +138,12 @@ def test_consensus_boost_two_agreeing():
     assert "high_agreement" in tags
 
 
-def test_consensus_boost_multi_oppose():
+def test_consensus_boost_ignores_llm_oppose():
     signals = [_signal("oppose", 45), _signal("oppose", 40)]
     boost, tags = _consensus_boost(signals)
-    # 2 opposes → boost *= 0.90
-    assert boost == 0.90
-    assert "multi_oppose_strike" in tags
+    # LLM 立场不再影响分数：oppose 不产生惩罚
+    assert boost == 1.0
+    assert "multi_oppose_strike" not in tags
 
 
 def test_consensus_boost_all_bullish_aligned():
@@ -154,12 +154,13 @@ def test_consensus_boost_all_bullish_aligned():
     assert "all_bullish_aligned" not in tags
 
 
-def test_consensus_boost_high_controversy():
+def test_consensus_boost_ignores_llm_controversy():
     signals = [_signal("strong_support", 85), _signal("veto", 10)]
     stances = [{"stance": "strong_support"}, {"stance": "veto"}]
     boost, tags = _consensus_boost(signals, stances)
-    assert boost == 0.88
-    assert "high_controversy" in tags
+    # LLM 立场冲突不再惩罚分数
+    assert boost == 1.0
+    assert "high_controversy" not in tags
 
 
 def test_consensus_boost_no_agreement():
