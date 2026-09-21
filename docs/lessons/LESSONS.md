@@ -1516,3 +1516,12 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 永久规则：**(a) `skill_agent` 聚合权重恒为 0；(b) LLM 的 summary/risks 不得写入 `risk_flags`/`evidence` 等评分字段，只留在 `agent_skill_review` 供审计与展示；(c) 共识加成只基于策略规则分；(d) LLM 仅在真实生效（无 error 的真实复核结论）时保留硬否决与 `llm_reviewed` 标记，失败/降级/超时一律不影响分数与出票集合。**
 - 吸收位置：`app/engine/aggregator.py::_consensus_boost`、`app/engine/agent_skill_runner.py::enrich_signal_with_agent_review` / `agent_only_signal`、`app/services/workbench_service.py::_build_recommendation_card`、`tests/test_run_workbench_golden_master.py`、`tests/test_aggregator.py`。
 - 相关：L-136（长阶段超时）、L-023（`final_score` 口径）、L-133（策略声明入场方式）。
+
+## L-138 涨停预测、成交状态与交易净收益分别验收
+
+- 状态：active。
+- 适用：首板、触板修复、涨停回调及涨停预测研究。
+- 证据：`output/limit-up-benchmark-metrics-2026-09-21.json` 保留三个固定形态的逐笔预测与生产模拟结果。最近 40 日首板次日收盘涨停率 20.51%，成交净收益胜率 44.97%，PF 0.71。三个形态均未达到三窗目标。
+- 永久规则：涨停预测分别报告次日触及与收盘涨停，分母保留所有次日数据可判断的信号；交易 WR 仅使用已结算成交。官方每日涨停价缺失时标签保持未知。日期窗口必须按交易日计数。信号累计回撤与单笔仓位不能标为账户净值回撤或账户资金利用率。
+- 吸收位置：`backend/scripts/research_limit_up_benchmark.py`、`backend/tests/test_limit_up_benchmark.py`。
+- 相关：L-021、L-134、L-135。

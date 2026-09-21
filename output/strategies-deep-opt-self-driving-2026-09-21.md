@@ -18,3 +18,15 @@
 | W3 | 57 | 49.12% | -1.1881% | -67.72% | 0.5403 | -32.43% | +2.8425% | -5.0797% | 90.48% | 21.11% | [-1.2185%, +1.6253%] |
 
 回撤与仓位列采用信号研究口径，账户净值回撤与组合资金利用率尚未计算。W1 月初所需的完整历史龙虎榜不足，W3 指定日期范围包含 35 个交易日。完整范围、公式、逐笔证据和复现命令见 `output/dragon-tiger-reaccumulation-review-2026-09-21.json` 与 `docs/reviews/dragon-tiger-strategy-correctness-2026-09-21.md`。
+
+## 第 2 轮，2026-09-21：三个公开形态方向的固定规则比较
+
+- 候选分支：`feat/limit-up-benchmark-20260921`。
+- 固定规则：首板接力、触板未封修复、涨停次日阴线回调；假设与完整条件保存在 `backend/scripts/limit_up_benchmark.yaml`。
+- 回归测试：2 项通过，使用真实历史数据与本次逐笔产物。
+- 三窗指标表及 bootstrap：见 `output/strategies-deep-opt-report-2026-09-21.md`，逐笔证据与复现命令见 `output/limit-up-benchmark-metrics-2026-09-21.json`。
+- 闸门结果：FALSIFIED。三个方向均有三窗 WR、PF、Σ 不达标，原始 evaluate_challenger 返回值保留在 JSON。
+- 归档位置：JSON 的 `archived_falsified_directions`；方向键以 `limit-up-benchmark-20260921:` 开头。
+- 新建 / 删除技能：0 / 0，仅新增研究声明。
+- 下一轮方向：本次准确度比较结束；进一步研究需加入信号形成时可取得的席位参与或盘口证据，保持本组参数归档。
+- 当日累计：2 轮 / 0 PASS / 2 FALSIFIED 轮次（4 个方向）/ 0 删除 / 1 新建研究策略。
