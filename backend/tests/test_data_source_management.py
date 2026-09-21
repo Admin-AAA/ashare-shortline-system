@@ -111,7 +111,7 @@ def test_test_provider_unknown_raises_keyerror(db_session, monkeypatch):
         ds.test_provider(db_session, "nonexist")
 
 
-def test_test_provider_xiaoshi_checks_quote_kline_and_pinned_skill(db_session, monkeypatch):
+def test_test_provider_xiaoshi_checks_contract_history_and_dataset(db_session, monkeypatch):
     calls: list[str] = []
 
     class _Client:
@@ -119,44 +119,26 @@ def test_test_provider_xiaoshi_checks_quote_kline_and_pinned_skill(db_session, m
             calls.append("manifest")
             return {"version": "2026-08-14.1"}
 
-        def get_quant_skill(self, *, version, expected_sha256):
-            calls.append(f"skill:{version}:{expected_sha256}")
-            return SimpleNamespace(version=version, sha256=expected_sha256)
+        def get_history_catalog(self, **params):
+            calls.append(f"history:{params.get('dataset')}")
+            return {"total": 21, "items": [{"dataset": "cn-daily", "year": 2025}]}
 
-        def get_quote(self, code):
-            calls.append(f"quote:{code}")
-            return {"code": code, "price": 10.0, "quote_time": "2026-08-16T15:00:00+08:00"}
-
-        def get_kline(self, code, *, limit):
-            calls.append(f"kline:{code}:{limit}")
-            return {"count": 2, "bars": [{"date": "2026-08-15"}, {"date": "2026-08-16"}]}
+        def get_quant_catalog(self):
+            calls.append("dataset")
+            return {"datasets": [{"id": "stock_fundflow"}]}
 
     monkeypatch.setattr("app.services.xiaoshi_client.get_xiaoshi_client", lambda: _Client())
-    monkeypatch.setattr(
-        ds,
-        "get_settings",
-        lambda: SimpleNamespace(
-            xiaoshi_skill_version="2026-08-14.1",
-            xiaoshi_skill_sha256="expected-sha",
-        ),
-    )
 
     out = ds.test_provider(db_session, "xiaoshi")
 
     assert out["ok"] is True
     assert out["details"] == {
         "manifest_version": "2026-08-14.1",
-        "skill_version": "2026-08-14.1",
-        "quote_time": "2026-08-16T15:00:00+08:00",
-        "kline_count": 2,
+        "history_total": 21,
+        "dataset_count": 1,
     }
-    assert calls == [
-        "manifest",
-        "skill:2026-08-14.1:expected-sha",
-        "quote:000001",
-        "kline:000001:2",
-    ]
-    for source_type in ("quote", "kline"):
+    assert sorted(calls) == ["dataset", "history:cn-daily", "manifest"]
+    for source_type in ("history", "dataset"):
         health = db_session.get(DataSourceHealth, {"source": "xiaoshi", "source_type": source_type})
         assert health is not None and health.success_count == 1
 
@@ -315,14 +297,14 @@ def test_list_data_sources_excludes_provider_history(db_session, monkeypatch):
     assert all(row["source"] != "fastapic" for row in rows)
 
 
-def test_management_sources_include_xiaoshi_market_source(db_session, monkeypatch):
+def test_management_sources_include_xiaoshi_history_and_dataset_capabilities(db_session, monkeypatch):
     db_session.add_all(
         [
-            DataSourceConfig(source="xiaoshi", source_type="quote", enabled=True, priority=0),
-            DataSourceConfig(source="xiaoshi", source_type="kline", enabled=True, priority=0),
+            DataSourceConfig(source="xiaoshi", source_type="history", enabled=True, priority=0),
+            DataSourceConfig(source="xiaoshi", source_type="dataset", enabled=True, priority=0),
             DataSourceHealth(
                 source="xiaoshi",
-                source_type="quote",
+                source_type="history",
                 success_count=3,
                 failure_count=1,
                 latency_ms=800.0,
@@ -330,7 +312,7 @@ def test_management_sources_include_xiaoshi_market_source(db_session, monkeypatc
             ),
             DataSourceHealth(
                 source="xiaoshi",
-                source_type="kline",
+                source_type="dataset",
                 success_count=2,
                 failure_count=0,
                 latency_ms=900.0,
@@ -361,14 +343,14 @@ def test_management_sources_include_xiaoshi_market_source(db_session, monkeypatc
     assert xiaoshi["success_count"] == 5
     assert xiaoshi["failure_count"] == 1
     assert xiaoshi["latency_ms"] == 900.0
-    assert "全市场快照:主源" in xiaoshi["apis"]
+    assert "分钟历史:已发布文件" in xiaoshi["apis"]
 
 
-def test_set_provider_enabled_toggles_xiaoshi_quote_and_kline(db_session, monkeypatch):
+def test_set_provider_enabled_toggles_xiaoshi_history_and_dataset(db_session, monkeypatch):
     db_session.add_all(
         [
-            DataSourceConfig(source="xiaoshi", source_type="quote", enabled=True, priority=0),
-            DataSourceConfig(source="xiaoshi", source_type="kline", enabled=True, priority=0),
+            DataSourceConfig(source="xiaoshi", source_type="history", enabled=True, priority=0),
+            DataSourceConfig(source="xiaoshi", source_type="dataset", enabled=True, priority=0),
         ]
     )
     db_session.commit()
@@ -384,7 +366,7 @@ def test_set_provider_enabled_toggles_xiaoshi_quote_and_kline(db_session, monkey
     assert result is not None
     assert result["provider_name"] == "xiaoshi"
     assert result["enabled"] is False
-    for source_type in ("quote", "kline"):
+    for source_type in ("history", "dataset"):
         row = db_session.get(
             DataSourceConfig,
             {"source": "xiaoshi", "source_type": source_type},

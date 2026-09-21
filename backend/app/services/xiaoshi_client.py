@@ -1,43 +1,42 @@
 """Authenticated Xiaoshi API client with a process-local QPS guard.
 
-The client deliberately owns only the HTTP boundary.  Dataset-specific
-normalization belongs to ``xiaoshi_market_source`` so the rest of the system
-does not depend on Xiaoshi response details.
+The client owns only the HTTP boundary: 只覆盖当前公开契约里的行情、量化数据集
+与历史文件地址，不封装已经下线的旧查询接口。
 """
 from __future__ import annotations
 
-import hashlib
 import threading
 import time
 from collections import deque
 from collections.abc import Mapping
-from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
 
 import httpx
 
 
+_DOWNLOAD_SESSION_RETRY_CAP_SECONDS = 2.0
+
+
 class XiaoshiError(RuntimeError):
     """A sanitized Xiaoshi request or response failure."""
 
-    def __init__(self, message: str, *, status_code: int | None = None, path: str = "") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        path: str = "",
+        retry_after_seconds: float | None = None,
+    ) -> None:
         self.status_code = status_code
         self.path = path
+        self.retry_after_seconds = retry_after_seconds
         super().__init__(message)
 
 
 class XiaoshiConfigurationError(XiaoshiError):
     """The Xiaoshi client has no usable API key or endpoint configuration."""
-
-
-@dataclass(frozen=True)
-class XiaoshiSkillArtifact:
-    """Pinned, integrity-checked copy of the upstream quant Skill."""
-
-    version: str
-    sha256: str
-    content: str
 
 
 class _QPSLimiter:
@@ -107,6 +106,7 @@ class XiaoshiClient:
         json: Mapping[str, Any] | None = None,
         cache_control: str | None = None,
         accept: str = "application/json",
+        retry_after_cap_seconds: float = 5.0,
     ) -> httpx.Response:
         if not self.configured:
             raise XiaoshiConfigurationError("Xiaoshi API Key 或 API 地址未配置")
@@ -149,17 +149,23 @@ class XiaoshiClient:
 
             status = int(response.status_code)
             if status == 429 or status >= 500:
+                retry_after_seconds: float | None = None
+                raw_retry_after = response.headers.get("Retry-After", "")
+                try:
+                    retry_after_seconds = float(raw_retry_after)
+                except (TypeError, ValueError):
+                    retry_after_seconds = None
                 last_error = XiaoshiError(
                     f"Xiaoshi HTTP {status}: {normalized_path}",
                     status_code=status,
                     path=normalized_path,
+                    retry_after_seconds=retry_after_seconds,
                 )
                 if attempt + 1 < self.max_attempts:
-                    retry_after = response.headers.get("Retry-After", "")
-                    try:
-                        delay = max(0.2, min(5.0, float(retry_after)))
-                    except (TypeError, ValueError):
+                    if retry_after_seconds is None:
                         delay = 0.2 * (attempt + 1)
+                    else:
+                        delay = max(0.2, min(retry_after_cap_seconds, retry_after_seconds))
                     time.sleep(delay)
                     continue
                 raise last_error
@@ -182,6 +188,7 @@ class XiaoshiClient:
         params: Mapping[str, Any] | None = None,
         json: Mapping[str, Any] | None = None,
         cache_control: str | None = None,
+        retry_after_cap_seconds: float = 5.0,
     ) -> dict[str, Any]:
         response = self._request_response(
             method,
@@ -189,6 +196,7 @@ class XiaoshiClient:
             params=params,
             json=json,
             cache_control=cache_control,
+            retry_after_cap_seconds=retry_after_cap_seconds,
         )
         try:
             payload = response.json()
@@ -206,64 +214,11 @@ class XiaoshiClient:
             )
         return dict(payload)
 
-    def request_text(
-        self,
-        path: str,
-        *,
-        params: Mapping[str, Any] | None = None,
-        cache_control: str | None = None,
-    ) -> str:
-        response = self._request_response(
-            "GET",
-            path,
-            params=params,
-            cache_control=cache_control,
-            accept="text/markdown, text/plain",
-        )
-        return response.text
-
     def get_manifest(self) -> dict[str, Any]:
         return self.request("GET", "/api/v3/manifest", cache_control="no-store, no-cache")
 
     def get_capabilities(self) -> dict[str, Any]:
         return self.request("GET", "/api/v3/market/capabilities")
-
-    def get_sources(self) -> dict[str, Any]:
-        return self.request("GET", "/api/v3/market/sources")
-
-    def get_stocks(
-        self,
-        *,
-        market: str = "CN",
-        exchange: str = "",
-        industry: str = "",
-        offset: int = 0,
-        limit: int = 6000,
-    ) -> dict[str, Any]:
-        return self.request(
-            "GET",
-            "/api/v3/data/stocks",
-            params={
-                "market": market,
-                "exchange": exchange,
-                "industry": industry,
-                "offset": offset,
-                "limit": min(6000 if market == "CN" else 20000, max(1, int(limit))),
-            },
-        )
-
-    def get_market_snapshot(
-        self, *, market: str = "CN", offset: int = 0, limit: int = 6000
-    ) -> dict[str, Any]:
-        return self.request(
-            "GET",
-            "/api/v3/data/market-snapshot",
-            params={
-                "market": market,
-                "offset": offset,
-                "limit": min(6000 if market == "CN" else 20000, max(1, int(limit))),
-            },
-        )
 
     def get_quote(
         self, code: str, *, market: str = "CN", instrument: str = "stock"
@@ -274,40 +229,6 @@ class XiaoshiClient:
             params={"market": market, "instrument": instrument},
         )
 
-    def get_kline(
-        self,
-        code: str,
-        *,
-        market: str = "CN",
-        period: str = "daily",
-        adjust: str = "qfq",
-        limit: int = 2500,
-        since: str | None = None,
-        to: str | None = None,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        params: dict[str, Any] = {
-            "market": market,
-            "period": period,
-            "adjust": adjust,
-            "limit": min(20000, max(1, int(limit))),
-            "offset": max(0, int(offset)),
-        }
-        if since:
-            params["since"] = since
-        if to:
-            params["to"] = to
-        return self.request("GET", f"/api/v3/data/kline/{code}", params=params)
-
-    def get_financials(
-        self, code: str, *, statement_type: str = "all", periods: int = 8
-    ) -> dict[str, Any]:
-        return self.request(
-            "GET",
-            f"/api/v3/data/financials/{code}",
-            params={"type": statement_type, "periods": max(1, int(periods))},
-        )
-
     def get_quant_catalog(self) -> dict[str, Any]:
         return self.request("GET", "/api/v3/quant-data/catalog")
 
@@ -316,39 +237,20 @@ class XiaoshiClient:
             raise ValueError("dataset must be a simple quant-data identifier")
         return self.request("GET", f"/api/v3/quant-data/{dataset}", params=params)
 
-    def get_factor_library(self) -> dict[str, Any]:
-        return self.request("GET", "/api/v3/factors/library")
-
-    def get_market_sentiment(self) -> dict[str, Any]:
-        return self.request("GET", "/api/v3/data/market-sentiment")
+    def get_history_catalog(self, **params: Any) -> dict[str, Any]:
+        return self.request("GET", "/api/v3/history/catalog", params=params)
 
     def get_history_manifest(self) -> dict[str, Any]:
         return self.request("GET", "/api/v3/history/manifest")
 
     def get_history_download_session(self, **params: Any) -> dict[str, Any]:
-        return self.request("GET", "/api/v3/history/download-session", params=params)
-
-    def get_quant_skill(
-        self,
-        *,
-        version: str,
-        expected_sha256: str,
-    ) -> XiaoshiSkillArtifact:
-        content = self.request_text(
-            "/api/v3/skills/xiaoshi-quant-expert/SKILL.md",
-            params={"v": version},
-            cache_control="no-store, no-cache",
-        )
-        actual_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        if actual_sha256 != expected_sha256.strip().lower():
-            raise XiaoshiError(
-                "Xiaoshi 量化 Skill 完整性校验失败",
-                path="/api/v3/skills/xiaoshi-quant-expert/SKILL.md",
-            )
-        return XiaoshiSkillArtifact(
-            version=version,
-            sha256=actual_sha256,
-            content=content,
+        # 签名接口有独立的配额窗口。这里不做长等待：调用方按 Retry-After 记录冷却并
+        # 立刻返回，本轮不再逐个试探，等窗口过去由下一轮同步补数。
+        return self.request(
+            "GET",
+            "/api/v3/history/download-session",
+            params=params,
+            retry_after_cap_seconds=_DOWNLOAD_SESSION_RETRY_CAP_SECONDS,
         )
 
 

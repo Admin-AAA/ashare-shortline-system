@@ -44,6 +44,8 @@ def rollback_hint(item: dict[str, Any]) -> str:
         codes = [str(code) for code in item.get("codes") or [] if str(code or "").strip()]
         code_scope = f"且 code 限定在本次 {len(codes)} 个目标代码内" if codes else "并核对本次目标代码"
         return f"按 news_announcement.announce_date 覆盖窗口且 {code_scope}删除本次写入行，再重新诊断。"
+    if table == "auction":
+        return f"按 auction_data.trade_date = {target} 删除本次写入行，再重新诊断。"
     return ""
 
 
@@ -97,7 +99,7 @@ def remediation_status(*, dry_run: bool, actions: list[dict[str, Any]], failed_c
         return "no_action"
     if failed_count:
         return "partial_failed"
-    if any(item.get("status") in {"empty", "short_history", "stale"} for item in actions):
+    if any(item.get("status") in {"empty", "incomplete", "short_history", "stale"} for item in actions):
         return "partial_completed"
     return "completed"
 
@@ -107,6 +109,7 @@ def action_summary(plan: list[dict[str, Any]], actions: list[dict[str, Any]]) ->
         "planned_count": len(plan),
         "completed_count": sum(1 for item in actions if item.get("status") == "completed"),
         "empty_count": sum(1 for item in actions if item.get("status") == "empty"),
+        "incomplete_count": sum(1 for item in actions if item.get("status") == "incomplete"),
         "skipped_count": sum(1 for item in actions if item.get("status") == "skipped"),
         "failed_count": sum(1 for item in actions if item.get("status") == "failed"),
     }

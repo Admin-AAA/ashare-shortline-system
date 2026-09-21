@@ -12,19 +12,23 @@ Tushare 稳定数据源客户端。
 
 from __future__ import annotations
 
+import csv
 import functools
 import hashlib
 import json
 import logging
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from types import MappingProxyType
 from typing import Any
 
 import pandas as pd
+import requests
 from sqlalchemy import select
 
 from app.adapters.market_source.dataframe_contracts import MarketFrameContractError, validate_market_frame
@@ -100,7 +104,28 @@ class _PromaxHttpProvider(TushareHttpProvider):
         params: Mapping[str, Any],
         fields: str,
     ) -> Mapping[str, Any]:
-        envelope = super()._request_once(api_name, params=params, fields=fields)
+        request_params = dict(params)
+        request_fields = fields
+        if api_name == "limit_list_d":
+            request_params.setdefault("limit", 1000)
+            request_fields = request_fields or (
+                "ts_code,trade_date,industry,name,pct_chg,limit_times,first_time,last_time,"
+                "open_times,up_stat,limit_amount,turnover_ratio,fd_amount"
+            )
+        elif api_name == "ths_index":
+            request_params.setdefault("exchange", "A")
+            request_params.setdefault("limit", 1000)
+            request_fields = request_fields or "ts_code,name,count,exchange,list_date,type"
+        elif api_name == "stk_auction":
+            request_params.setdefault("limit", 10000)
+            request_fields = request_fields or (
+                "ts_code,trade_date,vol,price,amount,pre_close,turnover_rate,volume_ratio,float_share"
+            )
+        envelope = super()._request_once(
+            api_name,
+            params=request_params,
+            fields=request_fields,
+        )
         if api_name != "stk_mins":
             return envelope
         issue = _promax_minute_contract_issue(envelope)
@@ -359,7 +384,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                     excluded_apis=frozenset({"anns_d"}),
                     source="promax",
                     priority=4,
-                    **common,
+                    **{**common, "max_attempts": max(4, common["max_attempts"])},
                 )
             )
         )
@@ -1993,6 +2018,146 @@ def _fetch_baostock_minute_kbars(
 
 
 _REALTIME_MINUTE_FREQS = frozenset({"1MIN", "5MIN", "15MIN", "30MIN", "60MIN"})
+_EASTMONEY_MINUTE_CACHE_TTL_SECONDS = 300.0
+_eastmoney_minute_cache: dict[
+    str,
+    tuple[float, dict[str, tuple[tuple[str, float, float, float, float, float, float], ...]]],
+] = {}
+_eastmoney_minute_cache_lock = threading.Lock()
+_eastmoney_minute_failure_count = 0
+_eastmoney_minute_unavailable_until = 0.0
+# 小石批量命中后仍需逐只回退时使用的并发度；回退源本身有各自的限流保护。
+MINUTE_BATCH_FALLBACK_WORKERS = 8
+# 分片整体缺失时逐只回退最多处理的股票数量。超过该数量说明供应商本轮不可用，
+# 继续逐只试探既补不出数据又会触发更长的限流窗口。
+MINUTE_FALLBACK_MAX_CODES = 50
+
+
+def _fetch_eastmoney_recent_minute_kbars(
+    code: str,
+    *,
+    trade_date: str,
+    trace: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    global _eastmoney_minute_failure_count, _eastmoney_minute_unavailable_until
+
+    target = _normalize_trade_date(trade_date)
+    if not target or date.fromisoformat(target) < date.today() - timedelta(days=10):
+        return []
+
+    bare_code = str(code or "").split(".")[0]
+    now = time.monotonic()
+    with _eastmoney_minute_cache_lock:
+        if now < _eastmoney_minute_unavailable_until:
+            _record_minute_source_trace(
+                trace,
+                source="eastmoney_trends2",
+                code=bare_code,
+                status="unavailable",
+                row_count=0,
+                reason="Eastmoney 分钟接口处于短时保护期",
+            )
+            return []
+        cached = _eastmoney_minute_cache.get(bare_code)
+    rows_by_date = cached[1] if cached and now - cached[0] <= _EASTMONEY_MINUTE_CACHE_TTL_SECONDS else None
+
+    if rows_by_date is None:
+        market = "1" if bare_code.startswith(("5", "6", "9")) else "0"
+        response: requests.Response | None = None
+        last_error: requests.RequestException | None = None
+        session = requests.Session()
+        session.trust_env = False
+        try:
+            for attempt in range(3):
+                try:
+                    response = session.get(
+                        "https://push2his.eastmoney.com/api/qt/stock/trends2/get",
+                        params={
+                            "secid": f"{market}.{bare_code}",
+                            "ut": "7eea3edcaed734bea9cbfc24409ed989",
+                            "ndays": 5,
+                            "iscr": 0,
+                            "iscca": 0,
+                            "fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13",
+                            "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+                        },
+                        headers={
+                            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
+                            "Referer": "https://quote.eastmoney.com/",
+                        },
+                        timeout=(5, 20),
+                    )
+                    response.raise_for_status()
+                    break
+                except requests.RequestException as exc:
+                    last_error = exc
+                    if attempt < 2:
+                        time.sleep(0.3 * (attempt + 1))
+        finally:
+            session.close()
+        if response is None or last_error is not None and not response.ok:
+            with _eastmoney_minute_cache_lock:
+                _eastmoney_minute_cache[bare_code] = (now, {})
+                _eastmoney_minute_failure_count += 1
+                if _eastmoney_minute_failure_count >= 3:
+                    _eastmoney_minute_unavailable_until = time.monotonic() + 60.0
+            raise last_error or requests.RequestException("Eastmoney minute request failed")
+        payload = response.json()
+        raw_rows = ((payload.get("data") or {}).get("trends") or []) if isinstance(payload, dict) else []
+        grouped: dict[str, list[tuple[str, float, float, float, float, float, float]]] = {}
+        for values in csv.reader(str(item) for item in raw_rows):
+            if len(values) < 7:
+                continue
+            trade_time = str(values[0]).strip()
+            row_date = _normalize_trade_date(trade_time)
+            if not row_date or len(trade_time) < 16:
+                continue
+            open_price = _f(values[1])
+            close_price = _f(values[2])
+            high_price = _f(values[3])
+            low_price = _f(values[4])
+            if min(open_price, close_price, high_price, low_price) <= 0:
+                continue
+            grouped.setdefault(row_date, []).append((
+                trade_time[:16] + ":00",
+                open_price,
+                high_price,
+                low_price,
+                close_price,
+                _f(values[5]),
+                _f(values[6]),
+            ))
+        rows_by_date = {key: tuple(value) for key, value in grouped.items()}
+        with _eastmoney_minute_cache_lock:
+            _eastmoney_minute_cache[bare_code] = (now, rows_by_date)
+            _eastmoney_minute_failure_count = 0
+            _eastmoney_minute_unavailable_until = 0.0
+
+    target_rows = rows_by_date.get(target, ())
+    rows = [
+        {
+            "code": bare_code,
+            "trade_date": target,
+            "trade_time": item[0],
+            "open": item[1],
+            "high": item[2],
+            "low": item[3],
+            "close": item[4],
+            "volume": item[5],
+            "amount": item[6],
+            "source": "eastmoney_trends2",
+        }
+        for item in target_rows
+    ]
+    _record_minute_source_trace(
+        trace,
+        source="eastmoney_trends2",
+        code=bare_code,
+        status="success" if rows else "empty",
+        row_count=len(rows),
+        reason=None if rows else "目标日期不在 Eastmoney 最近 5 个交易日窗口内",
+    )
+    return rows
 
 
 def fetch_minute_kbars(
@@ -2003,7 +2168,7 @@ def fetch_minute_kbars(
 ) -> list[dict[str, Any]]:
     """获取个股分钟 K 线。
 
-    freq="1min"（默认）：仅使用 Tushare stk_mins。
+    freq="1min"（默认）：依次使用 Xiaoshi 历史文件、Eastmoney 最近 5 个交易日、Tushare stk_mins。
     freq="5min"/"15min"/"30min"/"60min"：Tushare 源均无权限，改用 Baostock 备用源
       （严格限速，见 _fetch_baostock_minute_kbars）。须配合 trade_date 使用；
       未传 trade_date 时回落到「最近一个有数据的交易日」。
@@ -2021,6 +2186,26 @@ def fetch_minute_kbars(
         )
         if xiaoshi_rows:
             return _attach_pre_close(xiaoshi_rows)
+
+    if target_trade_date and normalized_freq == "1min":
+        try:
+            eastmoney_rows = _fetch_eastmoney_recent_minute_kbars(
+                code,
+                trade_date=target_trade_date,
+                trace=trace,
+            )
+        except requests.RequestException as exc:
+            _record_minute_source_trace(
+                trace,
+                source="eastmoney_trends2",
+                code=code,
+                status="error",
+                row_count=0,
+                reason=type(exc).__name__,
+            )
+        else:
+            if eastmoney_rows:
+                return _attach_pre_close(eastmoney_rows)
 
     if normalized_freq != "1min":
         if target_trade_date:
@@ -2058,6 +2243,197 @@ def fetch_minute_kbars(
     rows = fetch_recent_minute_kbars(code, trace=trace)
     latest_trade_date = max((row["trade_date"] for row in rows), default="")
     return [row for row in rows if row["trade_date"] == latest_trade_date]
+
+
+def fetch_minute_kbars_batch(
+    codes: list[str],
+    *,
+    trade_date: str,
+    freq: str = "1min",
+    trace: list[dict[str, Any]] | None = None,
+    universe: list[str] | None = None,
+    audit: dict[str, Any] | None = None,
+    max_workers: int = MINUTE_BATCH_FALLBACK_WORKERS,
+) -> dict[str, list[dict[str, Any]]]:
+    """批量取分钟 K 线：小石按月分片批量读取，缺分片的股票再走其它供应商。
+
+    小石的签名接口只接受单只股票并对逐只枚举有严格限流；批量入口按代码分桶申请整月
+    分片，每个分片只下载解析一次，目标股票数量与签名请求数量无关。只对确实没有小石
+    分片覆盖的股票调用单只回退链（Eastmoney 最近交易日、Tushare stk_mins）。
+    """
+    target = _normalize_trade_date(trade_date)
+    normalized_freq = str(freq or "1min").lower()
+    target_codes = list(
+        OrderedDict.fromkeys(
+            str(code or "").strip() for code in codes if str(code or "").strip()
+        )
+    )
+    if not target or not target_codes:
+        return {}
+
+    rows_by_code: dict[str, list[dict[str, Any]]] = {}
+    pending_codes: list[str] = []
+    fallback_skipped = False
+    fallback_limited = False
+    batch_note: str | None = None
+    if normalized_freq == "1min":
+        batch_rows_by_code, unresolved_codes, batch_note = _fetch_xiaoshi_minute_kbars_batch(
+            target_codes, trade_date=target, trace=trace, universe=universe
+        )
+        for code in target_codes:
+            rows = (batch_rows_by_code or {}).get(code) or []
+            rows_by_code[code] = rows
+        # 只有分片都没拿到的股票才需要别的供应商。分片已覆盖但当天没有记录的股票是
+        # 供应商当天确实没有这笔数据；逐只重试会触发小石签名限流且不会补出数据。
+        pending_codes = [code for code in target_codes if code in unresolved_codes]
+        if len(pending_codes) > MINUTE_FALLBACK_MAX_CODES:
+            # 分片整体缺失通常意味着供应商本轮不可用；只保留有界数量的股票走回退，
+            # 避免把一次同步时间全部消耗在必然失败的逐只请求上。
+            logger.warning(
+                "分钟批量补数: 分片缺失 %d 只，超过逐只回退上限 %d，本轮只回退前 %d 只",
+                len(pending_codes),
+                MINUTE_FALLBACK_MAX_CODES,
+                MINUTE_FALLBACK_MAX_CODES,
+            )
+            fallback_limited = True
+            pending_codes = pending_codes[:MINUTE_FALLBACK_MAX_CODES]
+        logger.info(
+            "分钟批量补数: 小石有记录 %d/%d，分片缺失待回退 %d",
+            sum(1 for code in target_codes if rows_by_code[code]),
+            len(target_codes),
+            len(pending_codes),
+        )
+    if audit is not None:
+        audit["unresolved_code_count"] = sum(
+            1 for code in target_codes if not rows_by_code.get(code)
+        )
+        audit["fallback_code_count"] = len(pending_codes)
+        audit["fallback_skipped"] = fallback_skipped
+        audit["fallback_limited"] = fallback_limited
+        audit["provider_note"] = batch_note
+
+    if pending_codes:
+        with ThreadPoolExecutor(
+            max_workers=max(1, min(max_workers, len(pending_codes))),
+            thread_name_prefix="minute-fallback",
+        ) as pool:
+            futures = {
+                pool.submit(
+                    fetch_minute_kbars,
+                    code,
+                    trade_date=target,
+                    trace=None,
+                    freq=normalized_freq,
+                ): code
+                for code in pending_codes
+            }
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    rows_by_code[code] = future.result() or []
+                except Exception as exc:  # noqa: BLE001 - 单只失败不能中断整批
+                    logger.warning("分钟回退失败 code=%s: %s", code, exc)
+                    rows_by_code[code] = []
+    return rows_by_code
+
+
+def _fetch_xiaoshi_minute_kbars_batch(
+    codes: list[str],
+    *,
+    trade_date: str,
+    trace: list[dict[str, Any]] | None = None,
+    universe: list[str] | None = None,
+) -> tuple[dict[str, list[dict[str, Any]]], set[str], str | None]:
+    global _xiaoshi_minute_failure_count, _xiaoshi_minute_unavailable_until
+
+    from app.services.data_sources import xiaoshi_history_enabled
+    from app.services.xiaoshi_minute_source import session_cooldown_seconds
+
+    if not xiaoshi_history_enabled():
+        _record_minute_source_trace(
+            trace,
+            source="xiaoshi_min1",
+            code="batch",
+            status="disabled",
+            row_count=0,
+            reason="小石历史文件下载已在数据源配置页停用",
+        )
+        return {}, set(codes), "小石历史文件下载已在数据源配置页停用"
+    cooldown = session_cooldown_seconds()
+    if cooldown > 0:
+        _record_minute_source_trace(
+            trace,
+            source="xiaoshi_min1",
+            code="batch",
+            status="unavailable",
+            row_count=0,
+            reason="小石签名接口限流中",
+        )
+        return {}, set(codes), f"小石分钟签名接口限流，约 {int(cooldown)} 秒后恢复"
+    with _xiaoshi_minute_breaker_lock:
+        if time.monotonic() < _xiaoshi_minute_unavailable_until:
+            _record_minute_source_trace(
+                trace,
+                source="xiaoshi_min1",
+                code="batch",
+                status="unavailable",
+                row_count=0,
+                reason="Xiaoshi 分钟历史源处于短时保护期",
+            )
+            return {}, set(codes), "Xiaoshi 分钟历史源处于短时保护期"
+    try:
+        from app.services.xiaoshi_client import get_xiaoshi_client
+        from app.services.xiaoshi_minute_source import (
+            XiaoshiMinuteHistorySource,
+            default_xiaoshi_minute_cache_dir,
+        )
+
+        settings = get_settings()
+        with XiaoshiMinuteHistorySource(
+            client=get_xiaoshi_client(),
+            cache_dir=default_xiaoshi_minute_cache_dir(settings),
+        ) as source:
+            rows_by_code, unresolved_codes = source.fetch_many_detailed(
+                codes,
+                start_date=trade_date,
+                end_date=trade_date,
+                freq="1min",
+                universe=universe,
+            )
+    except Exception as exc:
+        with _xiaoshi_minute_breaker_lock:
+            _xiaoshi_minute_failure_count += 1
+            if _xiaoshi_minute_failure_count >= 3:
+                _xiaoshi_minute_unavailable_until = time.monotonic() + 60.0
+        _record_minute_source_trace(
+            trace,
+            source="xiaoshi_min1",
+            code="batch",
+            status="error",
+            row_count=0,
+            reason=type(exc).__name__,
+        )
+        logger.warning("小石批量分钟取数失败: %s", exc)
+        return {}, set(codes), f"小石分钟历史取数失败: {type(exc).__name__}"
+    with _xiaoshi_minute_breaker_lock:
+        _xiaoshi_minute_failure_count = 0
+        _xiaoshi_minute_unavailable_until = 0.0
+    result = {
+        code: _attach_pre_close(rows)
+        for code, rows in rows_by_code.items()
+        if rows
+    }
+    _record_minute_source_trace(
+        trace,
+        source="xiaoshi_min1",
+        code="batch",
+        status="success" if result else "empty",
+        row_count=sum(len(rows) for rows in result.values()),
+    )
+    note = None
+    if unresolved_codes:
+        note = f"小石分钟分片缺失 {len(unresolved_codes)} 只，已交给其它供应商"
+    return result, unresolved_codes, note
 
 
 def fetch_recent_minute_kbars(
@@ -2134,6 +2510,9 @@ def fetch_index_minute_kbars(
 
 _STK_MINS_MAX_ROWS = 8000
 _STK_MINS_WINDOW_DAYS = 20
+_xiaoshi_minute_failure_count = 0
+_xiaoshi_minute_unavailable_until = 0.0
+_xiaoshi_minute_breaker_lock = threading.Lock()
 
 
 def _minute_query_windows(start_time: str, end_time: str) -> list[tuple[str, str]]:
@@ -2170,6 +2549,31 @@ def _fetch_xiaoshi_minute_kbars(
     trace: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Read completed A-share minute history from Xiaoshi's cached R2 files."""
+    global _xiaoshi_minute_failure_count, _xiaoshi_minute_unavailable_until
+
+    from app.services.data_sources import xiaoshi_history_enabled
+
+    if not xiaoshi_history_enabled():
+        _record_minute_source_trace(
+            trace,
+            source="xiaoshi_min1",
+            code=code,
+            status="disabled",
+            row_count=0,
+            reason="小石历史文件下载已在数据源配置页停用",
+        )
+        return []
+    with _xiaoshi_minute_breaker_lock:
+        if time.monotonic() < _xiaoshi_minute_unavailable_until:
+            _record_minute_source_trace(
+                trace,
+                source="xiaoshi_min1",
+                code=code,
+                status="unavailable",
+                row_count=0,
+                reason="Xiaoshi 分钟历史源处于短时保护期",
+            )
+            return []
     try:
         from app.services.xiaoshi_client import get_xiaoshi_client
         from app.services.xiaoshi_minute_source import (
@@ -2195,8 +2599,15 @@ def _fetch_xiaoshi_minute_kbars(
             status="success" if rows else "empty",
             row_count=len(rows),
         )
+        with _xiaoshi_minute_breaker_lock:
+            _xiaoshi_minute_failure_count = 0
+            _xiaoshi_minute_unavailable_until = 0.0
         return rows
     except Exception as exc:
+        with _xiaoshi_minute_breaker_lock:
+            _xiaoshi_minute_failure_count += 1
+            if _xiaoshi_minute_failure_count >= 3:
+                _xiaoshi_minute_unavailable_until = time.monotonic() + 60.0
         _record_minute_source_trace(
             trace,
             source="xiaoshi_min1",

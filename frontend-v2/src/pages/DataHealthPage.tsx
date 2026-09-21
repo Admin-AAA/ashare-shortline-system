@@ -15,6 +15,7 @@ import type {
   DataDomainCategory,
   DataDomainCoverageSummary,
   DataHealthDiagnostic,
+  DataHealthRemediationAction,
   DataHealthRemediationResult,
   DataSourceHealthRow,
   DataSourceHealthSummary,
@@ -49,7 +50,7 @@ export function DataHealthSection() {
   const remediationStarting = remediationMutation.isPending;
 
   useEffect(() => {
-    if (!remediationTaskRun || !["completed", "failed", "partial_completed"].includes(remediationTaskRun.status)) return;
+    if (!remediationTaskRun || !["completed", "failed", "partial_completed", "partial_failed"].includes(remediationTaskRun.status)) return;
     const result = remediationTaskRun.result as unknown as DataHealthRemediationResult | undefined;
     if (result && typeof result === "object" && result.status) setRemediationResult(result);
     void diagQuery.refetch();
@@ -349,7 +350,7 @@ function RemediationStatusBanner({
       </Banner>
     );
   }
-  if (status === "completed" || status === "partial_completed") {
+  if (status === "completed") {
     const cmp = result?.comparison;
     const summary = result?.action_summary;
     const usedProviders = result?.provider_activity?.used_providers ?? [];
@@ -370,6 +371,33 @@ function RemediationStatusBanner({
             评分 {cmp.score_delta >= 0 ? "+" : ""}{cmp.score_delta}
           </span>
         )}
+        <RemediationActionDetails actions={result?.actions} />
+        {taskRun.error_message && <div className="text-muted" style={{ marginTop: 4 }}>{taskRun.error_message}</div>}
+      </Banner>
+    );
+  }
+  if (status === "partial_completed" || status === "partial_failed") {
+    const cmp = result?.comparison;
+    const summary = result?.action_summary;
+    const usedProviders = result?.provider_activity?.used_providers ?? [];
+    return (
+      <Banner tone="warn">
+        <AlertTriangle size={14} />
+        修复部分完成 · {taskRun.task_name}
+        {summary && (
+          <span className="text-muted">
+            {" "}（计划 {summary.planned_count ?? 0} · 成功 {summary.completed_count ?? 0} · 失败 {summary.failed_count ?? 0}）
+          </span>
+        )}
+        {usedProviders.length > 0 && (
+          <span className="text-muted">上游 {usedProviders.join(" + ")}</span>
+        )}
+        {cmp && cmp.score_delta != null && (
+          <span className="text-mono" style={{ marginLeft: 8 }}>
+            评分 {cmp.score_delta >= 0 ? "+" : ""}{cmp.score_delta}
+          </span>
+        )}
+        <RemediationActionDetails actions={result?.actions} />
         {taskRun.error_message && <div className="text-muted" style={{ marginTop: 4 }}>{taskRun.error_message}</div>}
       </Banner>
     );
@@ -384,6 +412,31 @@ function RemediationStatusBanner({
     );
   }
   return null;
+}
+
+function RemediationActionDetails({
+  actions,
+}: {
+  actions?: DataHealthRemediationAction[];
+}) {
+  const pending = (actions ?? []).filter(
+    (item) => item.status && !["completed", "planned"].includes(item.status),
+  );
+  if (pending.length === 0) return null;
+  return (
+    <div style={{ width: "100%", marginTop: 4 }}>
+      {pending.map((item, index) => (
+        <div key={`${item.table ?? "action"}-${item.trade_date ?? index}`} className="text-muted">
+          {item.table}
+          {item.trade_date ? ` ${item.trade_date}` : ""} · {item.status}
+          {item.target_hit_count != null && item.requested_code_count != null
+            ? ` · 命中 ${item.target_hit_count}/${item.requested_code_count}`
+            : ""}
+          {item.reason ? ` · ${item.reason}` : item.error ? ` · ${item.error}` : ""}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 function Banner({ tone, children }: { tone: "up" | "down" | "info" | "warn"; children: React.ReactNode }) {
@@ -658,7 +711,7 @@ function DomainCoverageSection({ summary }: { summary: DataDomainCoverageSummary
     <div>
       <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-2)" }}>
         共 {summary.total} 个数据域（指标级）。日频数据必须覆盖参考交易日才算最新；
-        <span style={{ color: "#d97706" }}> 滞后</span> = 接入过但策略未持续刷新，
+        <span style={{ color: "#d97706" }}> 滞后</span> = 接入过但最新日期未达参考交易日（含供应商发布进度），
         <span style={{ color: "#dc2626" }}> 空</span> = 无数据（未接入 / 未拉取）。
       </div>
       {summary.categories.map((cat) => (

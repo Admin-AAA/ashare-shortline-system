@@ -34,6 +34,7 @@ from app.models.tables import (
     LimitUpBoard,
     MarginDetail,
     PledgeStat,
+    Stock,
 )
 from app.services.auxiliary.contracts import (
     AuxiliaryDatasetRequest,
@@ -322,25 +323,34 @@ class TushareStateProvider:
         frame = self._client.ths_index()
         if frame is None or frame.empty:
             return ()
-        return tuple(
-            {
+        rows: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str]] = set()
+        for rank, (_, item) in enumerate(frame.iterrows(), start=1):
+            sector_code = str(item.get("ts_code") or "").strip()
+            sector_type = str(item.get("type") or "").strip()
+            natural_key = (sector_code, request.trade_date.isoformat())
+            if not sector_code or sector_type not in {"N", "TH"} or natural_key in seen_keys:
+                continue
+            seen_keys.add(natural_key)
+            rows.append({
                 "sector_code": str(item.get("ts_code") or ""),
                 "sector_name": str(item.get("name") or ""),
                 "member_count": int(_number(item.get("count"))),
                 "exchange": str(item.get("exchange") or ""),
                 "list_date": _iso_day(item.get("list_date")),
-                "type": str(item.get("type") or ""),
+                "type": sector_type,
                 "heat_rank": rank,
                 "trade_date": request.trade_date.isoformat(),
-            }
-            for rank, (_, item) in enumerate(frame.iterrows(), start=1)
-            if str(item.get("ts_code") or "").strip()
-        )
+            })
+        return rows
 
     def concept_sector_stock(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         sectors = self._session.scalars(
             select(ConceptSector)
-            .where(ConceptSector.trade_date == request.trade_date.isoformat())
+            .where(
+                ConceptSector.trade_date == request.trade_date.isoformat(),
+                ConceptSector.type == "N",
+            )
             .order_by(ConceptSector.heat_rank.asc())
             .limit(60)
         ).all()
@@ -581,25 +591,28 @@ class TushareStateProvider:
         return rows
 
     def auction(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
-        # 集合竞价按 trade_date 批量一次拉全市场（Tushare stk_auction）。
-        # 逐股循环调 stk_auction 在无权限账号下会触发 N 次 API 错误；这里改成
-        # 单次 trade_date 批量调用，失败即数据源不可用（无权限），返回 ()。
+        # 集合竞价按 trade_date 批量获取全市场，再以本地股票表过滤债券等同代码证券。
         target = _compact_day(request.trade_date)
-        try:
-            frame = self._client.stk_auction(trade_date=target)
-        except Exception:
-            return ()
+        frame = self._client.stk_auction(trade_date=target)
         if frame is None or frame.empty:
             return ()
-        wanted = set(request.requested_codes)
+        wanted = set(request.requested_codes) or {
+            str(code)
+            for code in self._session.scalars(select(Stock.code)).all()
+            if str(code or "").strip()
+        }
         rows: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str]] = set()
         for _, item in frame.iterrows():
             code = str(item.get("ts_code") or "").split(".")[0]
-            if len(code) != 6 or (wanted and code not in wanted):
+            trade_date = _iso_day(item.get("trade_date") or target)
+            natural_key = (code, trade_date)
+            if len(code) != 6 or code not in wanted or natural_key in seen_keys:
                 continue
+            seen_keys.add(natural_key)
             rows.append({
                 "code": code,
-                "trade_date": _iso_day(item.get("trade_date") or target),
+                "trade_date": trade_date,
                 "vol": _number(item.get("vol")),
                 "price": _number(item.get("price")),
                 "amount": _number(item.get("amount")),

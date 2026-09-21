@@ -55,6 +55,10 @@ POSTCLOSE_PIPELINE_TASK_ID = "post_sync_formal_recommendation"
 # 与标准 crontab 的 0=Sunday 差一天，"1-5" 会被解析成「周二到周六」——周一永不触发、
 # 周六反而跑。名称形式在两种语义下都无歧义，是唯一安全写法。
 POSTCLOSE_PIPELINE_CRON = "35 17 * * mon-fri"
+# 盘后流水线在 17:35 同步，龙虎榜、概念板块成分、集合竞价等供应商更晚才发布当日数据，
+# 该时间点补不回来只能等第二天。这里增加一轮晚间补数，只补数据、不重跑推荐。
+LATE_DATA_REPAIR_TASK_ID = "postclose_late_data_repair"
+LATE_DATA_REPAIR_CRON = "0 21 * * mon-fri"
 LEGACY_POSTCLOSE_TASK_IDS = (
     "postclose_quote_refresh",
     "postclose_daily_kbar_batch",
@@ -151,6 +155,11 @@ def _mark_done_memory(task_id: str) -> None:
 
 
 def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    from app.services.data_gap_remediation_service import (
+        AUXILIARY_REMEDIABLE_TABLES,
+        DEFAULT_REMEDIABLE_TABLES,
+    )
+
     payload = dict(existing or {})
     payload.update(
         {
@@ -166,20 +175,13 @@ def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[
             "score_line": float(payload.get("score_line") or 72),
             "output_count": int(payload.get("output_count") or 6),
             "skip_aux_refresh": True,
+            # 同步与补数共用的表集合来自同一份能力登记，盘后流水线不再维护第二份清单。
             "health_remediation_tables": [
-                "daily_kbar",
-                "minute_kbar",
-                "index_daily",
-                "limit_up_board",
-                "capital_flow",
+                table
+                for table in DEFAULT_REMEDIABLE_TABLES
+                if table not in AUXILIARY_REMEDIABLE_TABLES
             ],
-            "auxiliary_remediation_tables": [
-                "limit_up_board",
-                "concept_sector",
-                "dragon_tiger",
-                "news",
-                "capital_flow",
-            ],
+            "auxiliary_remediation_tables": sorted(AUXILIARY_REMEDIABLE_TABLES),
             "health_post_diagnosis": True,
             "auxiliary_post_diagnosis": False,
             "horizon_days": int(payload.get("horizon_days") or 5),
@@ -225,6 +227,41 @@ def _ensure_postclose_pipeline_task() -> None:
             db.close()
     except Exception:
         logger.exception("注册盘后全量同步流水线失败")
+
+
+def _ensure_late_data_repair_task() -> None:
+    """幂等注册晚间补数任务：只补数据，不重跑推荐。
+
+    盘后流水线在 17:35 同步，而龙虎榜、概念板块成分、集合竞价等供应商在更晚时间才
+    发布当日数据。缺了这轮补数，这些表要等到第二天同步才会回到参考交易日，期间的
+    健康分与推荐上下文都建立在滞后数据上。
+    """
+    from app.services.data_gap_remediation_service import DEFAULT_REMEDIABLE_TABLES
+
+    try:
+        db = SessionLocal()
+        try:
+            task = db.get(ScheduledTask, LATE_DATA_REPAIR_TASK_ID)
+            if task is None:
+                task = ScheduledTask(task_id=LATE_DATA_REPAIR_TASK_ID)
+                db.add(task)
+            task.name = "晚间数据补数"
+            task.task_type = "data_backfill"
+            task.cron_expression = LATE_DATA_REPAIR_CRON
+            task.payload_json = json.dumps(
+                {
+                    "sync_scope": "health_remediation",
+                    "health_remediation_tables": list(DEFAULT_REMEDIABLE_TABLES),
+                    "health_post_diagnosis": True,
+                },
+                ensure_ascii=False,
+            )
+            task.enabled = True
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册晚间数据补数任务失败")
 
 
 def _ensure_strategy_exposure_task() -> None:
@@ -355,6 +392,7 @@ def ensure_scheduled_task_registrations() -> None:
     startup 调用，确保新部署自动获得完整调度。
     """
     _ensure_postclose_pipeline_task()
+    _ensure_late_data_repair_task()
     _ensure_strategy_exposure_task()
     _ensure_intraday_lock_tasks()
     _ensure_formal_safety_net_task()
@@ -577,7 +615,9 @@ def start_data_health_remediation_now(payload: dict | None = None) -> dict:
         running = get_latest_data_health_remediation_task_run()
         if running and running.get("status") == "running":
             return {"started": False, "task_run": running}
-        raise RuntimeError("数据补数正在执行中，请等待当前批次完成")
+        _mark_done_memory(MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID)
+        if not _try_mark_running_memory(MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID):
+            raise RuntimeError("数据补数正在执行中，请等待当前批次完成")
 
     run_payload = _default_data_health_remediation_payload(payload or {})
     db = SessionLocal()
@@ -954,7 +994,21 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
 
     # 4. 最终健康补数与诊断，确保后续推荐读取的是所有同步阶段之后的快照。
     if sync_scope in ("health_remediation", "all") and not bool(payload.get("skip_health_remediation")):
-        health_remediation = _run_data_health_remediation(payload)
+        health_payload = dict(payload)
+        if sync_scope == "all" and not health_payload.get("health_remediation_tables"):
+            # 辅助数据阶段已经按同一份能力登记补齐了辅助表，这里只补它不覆盖的
+            # 行情与指数表，避免同一批外部请求在一轮同步里重复执行两次。
+            from app.services.data_gap_remediation_service import (
+                AUXILIARY_REMEDIABLE_TABLES,
+                DEFAULT_REMEDIABLE_TABLES,
+            )
+
+            health_payload["health_remediation_tables"] = [
+                table
+                for table in DEFAULT_REMEDIABLE_TABLES
+                if table not in AUXILIARY_REMEDIABLE_TABLES
+            ]
+        health_remediation = _run_data_health_remediation(health_payload)
         invalidate_pool_status_cache()
         clear_data_health_cache()
         result["health_remediation"] = health_remediation
@@ -1093,12 +1147,13 @@ def _backfill_missing_local_indicators(db, days: int = 7) -> dict:
 def _run_data_health_remediation(payload: dict) -> dict:
     from app.services.data_gap_remediation_service import (
         DEFAULT_DAILY_KBAR_CODE_LIMIT,
+        DEFAULT_REMEDIABLE_TABLES,
         remediate_data_health_gaps,
     )
 
     target_tables = payload.get("health_remediation_tables")
     if target_tables is None:
-        target_tables = ["daily_kbar", "minute_kbar", "index_daily", "limit_up_board", "capital_flow"]
+        target_tables = list(DEFAULT_REMEDIABLE_TABLES)
     db = SessionLocal()
     try:
         return remediate_data_health_gaps(
@@ -1114,12 +1169,15 @@ def _run_data_health_remediation(payload: dict) -> dict:
 
 
 def _run_auxiliary_remediation(payload: dict) -> dict:
-    from app.services.data_gap_remediation_service import remediate_data_health_gaps
+    from app.services.data_gap_remediation_service import (
+        AUXILIARY_REMEDIABLE_TABLES,
+        remediate_data_health_gaps,
+    )
     from app.services.auxiliary.production import AUXILIARY_DATASET_INVENTORY
 
     target_tables = payload.get("auxiliary_remediation_tables")
     if target_tables is None:
-        target_tables = ["limit_up_board", "concept_sector", "dragon_tiger", "news", "capital_flow"]
+        target_tables = sorted(AUXILIARY_REMEDIABLE_TABLES)
     db = SessionLocal()
     try:
         result = remediate_data_health_gaps(
@@ -2404,5 +2462,3 @@ async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) 
             f"失败 {failed_count} 个，推荐合计 {recommended_total} 条"
         ),
     }
-
-

@@ -265,8 +265,6 @@ def _fetch_first_kline(
 def _fetch_quotes(source: str, settings: Any) -> list[dict[str, Any]]:
     if source == "tushare":
         return _fetch_tushare_quotes(settings)
-    if source == "xiaoshi":
-        return _fetch_xiaoshi_quotes(settings)
     raise MarketDataError(f"未知行情源: {source}")
 
 
@@ -277,54 +275,9 @@ def _fetch_kline(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> list[dict[str, Any]]:
-    if source == "xiaoshi":
-        return _fetch_xiaoshi_kline(quote, settings, start_date=start_date, end_date=end_date)
+    if source != "tushare":
+        raise MarketDataError(f"未知行情源: {source}")
     return _fetch_tushare_kline(quote, settings, start_date=start_date, end_date=end_date)
-
-
-def _fetch_xiaoshi_quotes(settings: Any) -> list[dict[str, Any]]:
-    """Fetch and normalize one full A-share snapshot through Xiaoshi."""
-    from app.services.market_source.port import QuoteRequest
-    from app.services.xiaoshi_market_source import XiaoshiMarketSourceAdapter
-
-    batch = XiaoshiMarketSourceAdapter().fetch_quotes(
-        QuoteRequest(max_quote_count=getattr(settings, "market_scan_size", 5200))
-    )
-    if batch.errors:
-        raise MarketDataError(batch.errors[0].message)
-    return [row for row in batch.as_legacy_rows() if _num(row.get("price")) > 0]
-
-
-def _fetch_xiaoshi_kline(
-    quote: dict[str, Any],
-    settings: Any,
-    *,
-    start_date: str | None = None,
-    end_date: str | None = None,
-) -> list[dict[str, Any]]:
-    """Fetch one adjusted daily series through Xiaoshi's v3 kline contract."""
-    from app.services.market_source.port import DailyBarRequest, QuoteRef
-    from app.services.xiaoshi_market_source import XiaoshiMarketSourceAdapter
-
-    reference = QuoteRef(str(quote.get("code") or ""), str(quote.get("exchange") or ""))
-    request = DailyBarRequest(
-        instruments=(reference,),
-        start_date=start_date,
-        end_date=end_date,
-    )
-    from app.services.xiaoshi_client import get_xiaoshi_client
-
-    batch = XiaoshiMarketSourceAdapter(
-        client=get_xiaoshi_client(),
-        kline_limit=max(30, int(getattr(settings, "market_kline_days", 90))),
-    ).fetch_daily_bars(request)
-    if batch.errors and not batch.bars_by_instrument.get(reference):
-        raise MarketDataError(batch.errors[0].message)
-    return [
-        row
-        for row in batch.as_legacy_rows_by_code().get(reference.code, [])
-        if _num(row.get("close")) > 0
-    ]
 
 
 def _load_local_stock_basics() -> list[dict[str, Any]]:

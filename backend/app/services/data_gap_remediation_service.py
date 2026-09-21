@@ -7,6 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import select
@@ -38,6 +39,7 @@ from app.services.market_pool.core import (
     _quote_sources,
     _select_recall_candidates,
 )
+from app.services.market_auxiliary import _fetch_news
 from app.engine.trading_calendar import (
     latest_allowed_bar_date as _pool_latest_allowed_bar_date,
 )
@@ -51,7 +53,7 @@ from app.adapters.market_source import TushareMarketSourceAdapter
 from app.services.market_source.port import DailyBarRequest, MarketSourcePort, QuoteRef
 from app.services.tushare_client import (
     fetch_index_daily,
-    fetch_minute_kbars,
+    fetch_minute_kbars_batch,
     get_pro,
     get_tushare_provider_health,
 )
@@ -67,6 +69,7 @@ DEFAULT_REMEDIABLE_TABLES = (
     "concept_sector",
     "dragon_tiger",
     "news",
+    "auction",
 )
 # minute_kbar 由计划显式处理并保留失败审计；缺少供应商权限时不会阻止其余
 # 日线与辅助数据的补数动作。
@@ -83,9 +86,8 @@ DEFAULT_DAILY_KBAR_CODE_LIMIT = 6000
 DEFAULT_LOCAL_POOL_GAP_CODE_LIMIT = 0
 DEFAULT_LOCAL_POOL_GAP_DAYS = 90
 DEFAULT_LOCAL_POOL_MIN_BARS = 30
-# 分钟补数的外部请求彼此独立；有界并行显著缩短 300 只/交易日的等待时间，
-# 同时避免无限制并发冲击 xiaoshi/Tushare 的上游限流。
-MINUTE_REMEDIATION_WORKERS = 8
+# 部分命中后的第二次尝试前的等待时间；供应商短时抖动通常在这个量级恢复。
+MINUTE_RETRY_SLEEP_SECONDS = 2.0
 AUXILIARY_GAP_FIELDS = {
     "announcements",
     "capital_flow",
@@ -94,7 +96,143 @@ AUXILIARY_GAP_FIELDS = {
     "news",
     "theme_tags",
 }
-AUXILIARY_REMEDIABLE_TABLES = {"capital_flow", "concept_sector", "dragon_tiger", "news"}
+AUXILIARY_REMEDIABLE_TABLES = {"capital_flow", "concept_sector", "dragon_tiger", "news", "auction"}
+
+
+@dataclass(frozen=True)
+class RemediationCapability:
+    """单张表的补数能力：由哪个供应商提供数据，写回多少才算真正补齐。"""
+
+    table: str
+    label: str
+    dataset: str | None
+    providers: tuple[str, ...]
+    min_rows: int
+    min_coverage_rate: float
+    scope: str
+
+
+# 每张可补数表的唯一能力登记。人工修复与盘后自动同步共用这份登记：
+# - dataset：写入走哪个 S4 数据集；None 表示走该表专属的批量写入路径
+# - min_rows：整市场快照类的最低行数，低于该值说明供应商只回了残缺切片
+# - min_coverage_rate：按股票批量取数时要求的目标股票命中比例
+REMEDIATION_CAPABILITIES: dict[str, RemediationCapability] = {
+    "daily_kbar": RemediationCapability(
+        table="daily_kbar",
+        label="日K线",
+        dataset=None,
+        providers=("tushare:daily",),
+        min_rows=1,
+        min_coverage_rate=0.95,
+        scope="按候选股票补齐缺失交易日",
+    ),
+    "minute_kbar": RemediationCapability(
+        table="minute_kbar",
+        label="分钟K线",
+        dataset=None,
+        providers=("xiaoshi:min1", "eastmoney:trends2", "tushare:stk_mins"),
+        min_rows=1,
+        min_coverage_rate=0.95,
+        scope="小石历史文件批量取数，未命中再走逐只回退链",
+    ),
+    "index_daily": RemediationCapability(
+        table="index_daily",
+        label="指数日线",
+        dataset=None,
+        providers=("tushare:index_daily",),
+        min_rows=1,
+        min_coverage_rate=1.0,
+        scope="按指数代码补齐缺失交易日",
+    ),
+    "limit_up_board": RemediationCapability(
+        table="limit_up_board",
+        label="涨停板",
+        dataset="limit_up_board",
+        providers=("promax:limit_list_d",),
+        min_rows=1,
+        min_coverage_rate=1.0,
+        scope="按交易日整市场快照",
+    ),
+    "capital_flow": RemediationCapability(
+        table="capital_flow",
+        label="资金流向",
+        dataset="capital_flow",
+        providers=("promax:moneyflow",),
+        min_rows=100,
+        min_coverage_rate=1.0,
+        scope="按交易日活跃股票批量取数",
+    ),
+    "concept_sector": RemediationCapability(
+        table="concept_sector",
+        label="概念板块",
+        dataset="concept_sector",
+        providers=("promax:ths_index", "promax:ths_member"),
+        min_rows=50,
+        min_coverage_rate=1.0,
+        scope="主题清单与主题成员必须同时写入",
+    ),
+    "dragon_tiger": RemediationCapability(
+        table="dragon_tiger",
+        label="龙虎榜",
+        dataset="dragon_tiger",
+        providers=("promax:top_list",),
+        min_rows=1,
+        min_coverage_rate=1.0,
+        scope="按交易日整市场快照",
+    ),
+    "news": RemediationCapability(
+        table="news",
+        label="新闻公告",
+        dataset="news_announcement",
+        providers=("promax:anns_d", "eastmoney:news"),
+        min_rows=1,
+        min_coverage_rate=1.0,
+        scope="公告快照优先，空结果再按股票补新闻",
+    ),
+    "auction": RemediationCapability(
+        table="auction",
+        label="集合竞价",
+        dataset="auction",
+        providers=("promax:stk_auction",),
+        min_rows=1000,
+        min_coverage_rate=1.0,
+        scope="按交易日整市场快照",
+    ),
+}
+
+
+def _completion_status(
+    table: str,
+    *,
+    row_count: int,
+    coverage_rate: float | None = None,
+) -> str:
+    """统一的完成判定：零行是空结果，行数或命中率不达标是不完整。"""
+    capability = REMEDIATION_CAPABILITIES.get(table)
+    if row_count <= 0:
+        return "empty"
+    if capability is None:
+        return "completed"
+    if coverage_rate is not None and coverage_rate < capability.min_coverage_rate:
+        return "incomplete"
+    if row_count < capability.min_rows:
+        return "incomplete"
+    return "completed"
+
+
+def _public_capabilities() -> list[dict[str, Any]]:
+    return [
+        {
+            "table": item.table,
+            "label": item.label,
+            "dataset": item.dataset,
+            "providers": list(item.providers),
+            "min_rows": item.min_rows,
+            "min_coverage_rate": item.min_coverage_rate,
+            "scope": item.scope,
+        }
+        for item in REMEDIATION_CAPABILITIES.values()
+    ]
 
 
 def _refresh_auxiliary_dataset(
@@ -119,6 +257,101 @@ def _refresh_auxiliary_dataset(
     # 恢复单元，成功后必须立即提交；否则 Session close 会回滚，任务却仍报告成功。
     db.commit()
     return item.coverage.record_count, dict(result.audit_payload[dataset])
+
+
+def _refresh_concept_datasets(db: Session, *, trade_date: str) -> dict[str, int]:
+    result = run_auxiliary_application(
+        db,
+        instruments=(),
+        trade_date=trade_date,
+        refresh=True,
+        datasets=("concept_sector_stock",),
+    )
+    counts: dict[str, int] = {}
+    for dataset in ("concept_sector", "concept_sector_stock"):
+        item = result.orchestrated.result_for(dataset)
+        if item.errors:
+            raise RuntimeError(", ".join(error.message for error in item.errors))
+        counts[dataset] = item.coverage.record_count
+    db.commit()
+    return counts
+
+
+def _backfill_eastmoney_news(
+    db: Session,
+    *,
+    trade_date: str,
+    codes: list[str],
+    lookback_days: int = 14,
+) -> dict[str, Any]:
+    target_end = _normalize_trade_date(trade_date)
+    if not target_end:
+        return {"row_count": 0, "query_count": 0, "empty_code_count": 0}
+    target_start = (date.fromisoformat(target_end) - timedelta(days=lookback_days)).isoformat()
+    target_codes = list(OrderedDict.fromkeys(
+        str(code or "").strip() for code in codes if str(code or "").strip()
+    ))
+    settings = get_settings()
+    payload_by_id: dict[tuple[str, str], dict[str, Any]] = {}
+    empty_codes: list[str] = []
+
+    def _fetch_code(code: str) -> tuple[str, list[dict[str, Any]]]:
+        return code, _fetch_news("eastmoney", code, settings, trade_date=target_end)
+
+    with ThreadPoolExecutor(
+        max_workers=min(8, len(target_codes)) if target_codes else 1,
+        thread_name_prefix="eastmoney-news-remediation",
+    ) as pool:
+        futures = [pool.submit(_fetch_code, code) for code in target_codes]
+        for future in as_completed(futures):
+            code, rows = future.result()
+            accepted = 0
+            for row in rows:
+                announce_date = _normalize_trade_date(row.get("announce_date"))
+                title = str(row.get("title") or "").strip()
+                if not announce_date or not title or not (target_start <= announce_date <= target_end):
+                    continue
+                source = str(row.get("source") or "eastmoney").strip()[:40]
+                raw_article_id = str(row.get("article_id") or "").strip()
+                article_id = raw_article_id or hashlib.sha256(
+                    f"{source}|{code}|{announce_date}|{title}".encode("utf-8")
+                ).hexdigest()
+                payload_by_id[(source, article_id)] = {
+                    "source": source,
+                    "article_id": article_id,
+                    "code": code,
+                    "announce_date": announce_date,
+                    "title": title,
+                    "summary": str(row.get("summary") or "") or None,
+                    "category": str(row.get("category") or "news")[:40],
+                    "sentiment": str(row.get("sentiment") or "neutral")[:20],
+                    "is_risk_warning": bool(row.get("is_risk_warning")),
+                }
+                accepted += 1
+            if accepted == 0:
+                empty_codes.append(code)
+
+    payload = list(payload_by_id.values())
+    if payload:
+        statement = mysql_insert(NewsAnnouncement).values(payload)
+        db.execute(statement.on_duplicate_key_update(
+            code=statement.inserted.code,
+            announce_date=statement.inserted.announce_date,
+            title=statement.inserted.title,
+            summary=statement.inserted.summary,
+            category=statement.inserted.category,
+            sentiment=statement.inserted.sentiment,
+            is_risk_warning=statement.inserted.is_risk_warning,
+        ))
+        db.commit()
+    return {
+        "row_count": len(payload),
+        "query_count": len(target_codes),
+        "empty_code_count": len(empty_codes),
+        "empty_codes": empty_codes[:10],
+        "start_date": target_start,
+        "end_date": target_end,
+    }
 
 
 def _backfill_news_announcements(
@@ -330,7 +563,8 @@ def _provider_activity_delta(
         "used_providers": used_providers,
         "providers": providers,
         "route_policy": "通用接口按数据源配置优先级路由；特殊 API 按能力路由；失败时安全 fallback。",
-        "minute_scope": "仅修复诊断窗口内缺失交易日，默认最多 300 只；不触发三年回填。",
+        "minute_scope": "仅修复诊断窗口内缺失交易日，默认最多 300 只；小石历史文件按月份分片批量读取，不触发三年回填。",
+        "capabilities": _public_capabilities(),
     }
 
 
@@ -1263,11 +1497,13 @@ def _build_remediation_plan(
             )
 
     if "minute_kbar" in requested_tables:
+        minute_coverage = recent_tables.get("minute_kbar") or {}
         target_dates = _target_dates_with_closed_reference_gap(
-            (recent_tables.get("minute_kbar") or {}).get("missing_dates") or [],
+            _gap_dates(minute_coverage, include_incomplete=True),
             lag_days=lag_days,
             table_key="minute_kbar",
             reference_trade_date=reference_trade_date,
+            exclude_dates=set(minute_coverage.get("provider_pending_dates") or []),
         )
         missing_dates = _closed_target_dates(
             target_dates,
@@ -1342,7 +1578,15 @@ def _build_remediation_plan(
 
     if "concept_sector" in requested_tables:
         lag = int(lag_days.get("concept_sector", 0) or 0)
-        if reference_trade_date and lag > 0:
+        domain_gaps = [
+            *(diagnosis.get("data_domains") or {}).get("empty_domains", []),
+            *(diagnosis.get("data_domains") or {}).get("stale_domains", []),
+        ]
+        concept_domain_gap = any(
+            str(item.get("key") or "") in {"concept", "concept_member"}
+            for item in domain_gaps
+        )
+        if reference_trade_date and (lag > 0 or concept_domain_gap):
             plan.append({"table": "concept_sector", "trade_date": reference_trade_date})
 
     if "dragon_tiger" in requested_tables:
@@ -1360,6 +1604,14 @@ def _build_remediation_plan(
                     "code_limit": capital_flow_code_limit,
                 }
             )
+
+    if "auction" in requested_tables and reference_trade_date:
+        domain_gaps = [
+            *(diagnosis.get("data_domains") or {}).get("empty_domains", []),
+            *(diagnosis.get("data_domains") or {}).get("stale_domains", []),
+        ]
+        if any(str(item.get("key") or "") == "auction" for item in domain_gaps):
+            plan.append({"table": "auction", "trade_date": reference_trade_date})
 
     return plan
 
@@ -1487,11 +1739,19 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
                 "row_count": 0,
             }
         result = _backfill_daily_kbar_date(db, item["trade_date"], codes)
+        requested_count = len(codes)
+        hit_count = int(result.get("target_hit_count") or 0)
+        coverage_rate = hit_count / requested_count if requested_count else 0.0
         return {
             **item,
-            "status": "completed" if result.get("row_count") else "empty",
+            "status": _completion_status(
+                "daily_kbar",
+                row_count=int(result.get("row_count") or 0),
+                coverage_rate=coverage_rate,
+            ),
             **result,
-            "requested_code_count": len(codes),
+            "requested_code_count": requested_count,
+            "coverage_rate": round(coverage_rate, 3),
         }
     if table == "minute_kbar":
         codes = item.get("codes") or []
@@ -1503,17 +1763,30 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
                 "row_count": 0,
             }
         result = _backfill_minute_kbar_date(db, item["trade_date"], codes)
+        requested_count = len(codes)
+        hit_count = int(result.get("target_hit_count") or 0)
+        coverage_rate = hit_count / requested_count if requested_count else 0.0
         return {
             **item,
-            "status": "completed" if result.get("row_count") else "empty",
+            "status": _completion_status(
+                "minute_kbar",
+                row_count=int(result.get("row_count") or 0),
+                coverage_rate=coverage_rate,
+            ),
             **result,
-            "requested_code_count": len(codes),
+            "requested_code_count": requested_count,
+            "coverage_rate": round(coverage_rate, 3),
         }
     if table == "index_daily":
+        result = _backfill_index_daily_dates(
+            db, item.get("target_dates") or [], item.get("ts_codes") or []
+        )
         return {
             **item,
-            "status": "completed",
-            **_backfill_index_daily_dates(db, item.get("target_dates") or [], item.get("ts_codes") or []),
+            "status": _completion_status(
+                "index_daily", row_count=int(result.get("row_count") or 0)
+            ),
+            **result,
         }
     if table == "limit_up_board":
         row_count, _audit = _refresh_auxiliary_dataset(
@@ -1521,7 +1794,7 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             **item,
-            "status": "completed" if row_count else "empty",
+            "status": _completion_status("limit_up_board", row_count=row_count),
             "row_count": row_count,
         }
     if table == "capital_flow":
@@ -1538,18 +1811,25 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             **item,
-            "status": "completed" if row_count else "empty",
+            "status": _completion_status("capital_flow", row_count=row_count),
             "row_count": row_count,
             "requested_code_count": len(codes),
         }
     if table == "concept_sector":
-        row_count, _audit = _refresh_auxiliary_dataset(
-            db, dataset="concept_sector", trade_date=item["trade_date"]
+        counts = _refresh_concept_datasets(db, trade_date=item["trade_date"])
+        row_count = sum(counts.values())
+        dataset_coverage = (
+            sum(1 for value in counts.values() if value) / len(counts) if counts else 0.0
         )
         return {
             **item,
-            "status": "completed" if row_count else "empty",
+            "status": _completion_status(
+                "concept_sector",
+                row_count=row_count,
+                coverage_rate=dataset_coverage,
+            ),
             "row_count": row_count,
+            "dataset_counts": counts,
         }
     if table == "dragon_tiger":
         row_count, _audit = _refresh_auxiliary_dataset(
@@ -1557,7 +1837,7 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
         )
         return {
             **item,
-            "status": "completed" if row_count else "empty",
+            "status": _completion_status("dragon_tiger", row_count=row_count),
             "row_count": row_count,
         }
     if table == "news":
@@ -1570,35 +1850,59 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
                 "row_count": 0,
             }
         fallback: dict[str, Any] | None = None
+        fallback_source: str | None = None
         try:
             row_count, _audit = _refresh_auxiliary_dataset(
                 db, dataset="news_announcement", trade_date=item["trade_date"], codes=list(codes)
             )
         except RuntimeError as contract_error:
-            # The immutable event contract deliberately rejects unknown all-field schemas.
-            # Roll back that attempt, then use the canonical Router's explicit pagination
-            # to keep the operational NewsAnnouncement table fresh.
             db.rollback()
             logger.warning(
-                "news event snapshot unavailable; using paginated anns_d remediation: %s",
+                "news event snapshot unavailable; using operational news remediation: %s",
                 contract_error,
             )
-            fallback = _backfill_news_announcements(
+            row_count = 0
+        if not row_count:
+            fallback = _backfill_eastmoney_news(
                 db,
                 trade_date=item["trade_date"],
                 codes=list(codes),
             )
             row_count = int(fallback.get("row_count") or 0)
+            fallback_source = "eastmoney"
+        if not row_count:
+            target_end = _normalize_trade_date(item["trade_date"])
+            target_start = (
+                date.fromisoformat(target_end) - timedelta(days=14)
+            ).isoformat()
+            fallback = _backfill_news_announcements(
+                db,
+                trade_date=item["trade_date"],
+                codes=list(codes),
+                start_date=target_start,
+                end_date=target_end,
+            )
+            row_count = int(fallback.get("row_count") or 0)
+            fallback_source = "bounded_symbol_anns_d"
         return {
             **item,
-            "status": "completed" if row_count else "empty",
+            "status": _completion_status("news", row_count=row_count),
             "row_count": row_count,
             "requested_code_count": len(codes),
-            "fallback": "bounded_symbol_anns_d" if fallback is not None else None,
+            "fallback": fallback_source,
             "provider_row_count": fallback.get("provider_row_count") if fallback else None,
             "query_count": fallback.get("query_count") if fallback else None,
             "failed_code_count": fallback.get("failed_code_count") if fallback else None,
             "failed_codes": fallback.get("failed_codes") if fallback else None,
+        }
+    if table == "auction":
+        row_count, _audit = _refresh_auxiliary_dataset(
+            db, dataset="auction", trade_date=item["trade_date"]
+        )
+        return {
+            **item,
+            "status": _completion_status("auction", row_count=row_count),
+            "row_count": row_count,
         }
     return {**item, "status": "skipped", "reason": "unsupported_table"}
 
@@ -1978,37 +2282,31 @@ def _backfill_minute_kbar_date(
     if not target or not target_codes:
         return {"row_count": 0, "requested_code_count": len(target_codes), "target_hit_count": 0}
 
-    payload: list[dict[str, Any]] = []
-    provider_row_count = 0
-    failed_codes: list[str] = []
+    # 小石按月分桶发布分钟历史：给出该交易日的全市场股票池，分桶代表股票才覆盖到
+    # 全部 16 个分桶，目标股票不会因为所在分桶没有代表股票而拿不到数据。
+    probe_universe = _minute_probe_universe(db, target)
+    collect_audit: dict[str, Any] = {}
 
-    def _fetch_code(code: str) -> tuple[str, list[dict[str, Any]], Exception | None]:
-        try:
-            return code, fetch_minute_kbars(code, trade_date=target, freq=normalized_freq) or [], None
-        except Exception as exc:  # noqa: BLE001 - one provider failure must not abort the batch
-            return code, [], exc
-
-    # Fetching is I/O-bound and each code is independent. Keep DB work below
-    # single-threaded so the caller's SQLAlchemy Session is never shared across
-    # worker threads.
-    with ThreadPoolExecutor(
-        max_workers=min(MINUTE_REMEDIATION_WORKERS, len(target_codes)),
-        thread_name_prefix="minute-remediation",
-    ) as pool:
-        futures = [pool.submit(_fetch_code, code) for code in target_codes]
-        for future in as_completed(futures):
-            code, rows, error = future.result()
-            if error is not None:
-                failed_codes.append(code)
-            provider_row_count += len(rows)
-            for row in rows:
+    def _collect(fetch_codes: list[str]) -> list[dict[str, Any]]:
+        audit: dict[str, Any] = {}
+        rows_by_code = fetch_minute_kbars_batch(
+            fetch_codes,
+            trade_date=target,
+            freq=normalized_freq,
+            universe=probe_universe,
+            audit=audit,
+        )
+        collect_audit.update(audit)
+        collected: list[dict[str, Any]] = []
+        for code, rows in rows_by_code.items():
+            for row in rows or []:
                 trade_date_value = _normalize_trade_date(row.get("trade_date"))
                 if trade_date_value != target:
                     continue
                 trade_time = str(row.get("trade_time") or "").strip()
                 if not trade_time:
                     continue
-                payload.append(
+                collected.append(
                     {
                         "code": code,
                         "freq": normalized_freq,
@@ -2022,6 +2320,18 @@ def _backfill_minute_kbar_date(
                         "amount": _float(row.get("amount")),
                     }
                 )
+        return collected
+
+    payload = _collect(target_codes)
+    hit_codes = {row["code"] for row in payload}
+    # 部分命中说明供应商在线，只是单只股票这次没返回；这类缺口做一次有界重试。
+    # 全部为空说明整批不可用（权限、限流或该交易日供应商尚未发布），重试只会重复等待。
+    retry_codes = [code for code in target_codes if code not in hit_codes]
+    retried_code_count = 0
+    if hit_codes and retry_codes:
+        retried_code_count = len(retry_codes)
+        time.sleep(MINUTE_RETRY_SLEEP_SECONDS)
+        payload.extend(_collect(retry_codes))
 
     if payload:
         stmt = mysql_insert(MinuteKbar).values(payload)
@@ -2037,20 +2347,54 @@ def _backfill_minute_kbar_date(
 
     hit_codes = {row["code"] for row in payload}
     missing_codes = [code for code in target_codes if code not in hit_codes]
+    from app.services.xiaoshi_minute_source import session_cooldown_seconds
+
+    cooldown = session_cooldown_seconds()
+    provider_note = collect_audit.get("provider_note")
+    reason = None
+    if cooldown > 0:
+        reason = (
+            f"小石分钟签名接口限流，约 {int(cooldown)} 秒后恢复；"
+            "本轮未导入该交易日的分钟数据"
+        )
+    elif collect_audit.get("fallback_skipped") or collect_audit.get("fallback_limited"):
+        detail = str(provider_note or "小石分钟分片本轮不可用")
+        reason = f"{detail}；本轮只回退了有界数量的股票，剩余缺口留待下一轮同步"
     return {
         "row_count": len(payload),
-        "provider_row_count": provider_row_count,
         "requested_code_count": len(target_codes),
         "target_hit_count": len(hit_codes),
         "missing_code_count": len(missing_codes),
         "missing_codes": missing_codes[:10],
-        "failed_code_count": len(failed_codes),
-        "failed_codes": failed_codes[:10],
+        "retried_code_count": retried_code_count,
+        "empty_code_count": len(missing_codes),
+        "provider_unresolved_code_count": int(
+            collect_audit.get("unresolved_code_count") or 0
+        ),
+        "provider_cooldown_seconds": round(cooldown, 1),
+        "provider_note": provider_note,
+        "reason": reason,
     }
 
 
 def _capital_flow_target_codes(db: Session, trade_date: str, *, limit: int) -> list[str]:
     return _auxiliary_target_codes(db, trade_date, limit=limit)
+
+
+def _minute_probe_universe(db: Session, trade_date: str) -> list[str]:
+    """该交易日有行情的全部股票代码，用于给小石的每个代码分桶挑代表股票。"""
+    variants = _trade_date_variants(trade_date)
+    universe: list[str] = []
+    for source in (DailyKbar, StockQuote):
+        rows = db.scalars(
+            select(source.code)
+            .where(source.trade_date.in_(variants))
+            .order_by(source.code.asc())
+        ).all()
+        universe.extend(
+            str(code or "").strip() for code in rows if str(code or "").strip()
+        )
+    return list(OrderedDict.fromkeys(universe))
 
 
 def _minute_kbar_target_codes(db: Session, trade_date: str, *, limit: int) -> list[str]:
@@ -2179,9 +2523,19 @@ def _auxiliary_target_codes(db: Session, trade_date: str, *, limit: int) -> list
 
 
 def _gap_dates(coverage: dict[str, Any], *, include_incomplete: bool = False) -> list[str]:
-    dates = list(coverage.get("missing_dates") or [])
+    # 有 effective_* 时以它为准：这里已经排除了供应商尚未发布的交易日，
+    # 避免每个同步周期都去重试供应商还没出数的日期。
+    dates = list(
+        coverage.get("effective_missing_dates")
+        if "effective_missing_dates" in coverage
+        else coverage.get("missing_dates") or []
+    )
     if include_incomplete:
-        dates.extend(coverage.get("incomplete_dates") or [])
+        dates.extend(
+            coverage.get("effective_incomplete_dates")
+            if "effective_incomplete_dates" in coverage
+            else coverage.get("incomplete_dates") or []
+        )
     return sorted(set(_normalize_trade_date(date) for date in dates if _normalize_trade_date(date)))
 
 
@@ -2191,11 +2545,17 @@ def _target_dates_with_closed_reference_gap(
     lag_days: dict[str, Any],
     table_key: str,
     reference_trade_date: str,
+    exclude_dates: set[str] | None = None,
 ) -> list[str]:
     target_dates = [_normalize_trade_date(date) for date in dates if _normalize_trade_date(date)]
     if reference_trade_date and int(lag_days.get(table_key) or 0) > 0:
         target_dates.append(reference_trade_date)
-    return sorted(set(target_dates))
+    excluded = {
+        _normalize_trade_date(date)
+        for date in (exclude_dates or set())
+        if _normalize_trade_date(date)
+    }
+    return sorted(set(target_dates) - excluded)
 
 
 def _closed_target_dates(dates: list[str], reference_trade_date: str, max_closed_trade_date: str) -> list[str]:

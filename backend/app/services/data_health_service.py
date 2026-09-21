@@ -68,6 +68,7 @@ _RECENT_REFERENCE_WINDOW = 10
 _RECENT_WARN_MISSING_DAYS = 2
 _RECENT_HIGH_MISSING_DAYS = 4
 _MIN_RECENT_DAILY_KBAR_CODES = 3000
+_MIN_RECENT_MINUTE_KBAR_CODES = 285
 
 # ── 数据域（指标级）覆盖目录 ─────────────────────────────────────────
 # 与 provider 级「数据源接入」不同，这里站在「数据域 / 指标」维度，
@@ -88,7 +89,7 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 行情 K 线
     {"key": "daily_kbar", "label": "日K线(含技术指标)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     {"key": "chip", "label": "筹码分布(筹码峰)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "column": "chip_cost_50"},
-    {"key": "minute_kbar", "label": "分钟K线", "category": "行情K线", "table": MinuteKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
+    {"key": "minute_kbar", "label": "分钟K线", "category": "行情K线", "table": MinuteKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True, "provider_publication_lag": True},
     {"key": "index_daily", "label": "指数日线", "category": "行情K线", "table": IndexDaily, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     {"key": "stk_limit", "label": "涨跌停价格", "category": "行情K线", "table": StkLimit, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     {"key": "auction", "label": "集合竞价", "category": "行情K线", "table": AuctionData, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
@@ -420,14 +421,27 @@ def _recent_trade_day_coverage(
         try:
             present = _present_dates(db, col, ordered_days)
             missing = [day for day in ordered_days if day not in present]
-            incomplete_dates = _incomplete_daily_kbar_dates(db, ordered_days) if tdef["key"] == "daily_kbar" else []
+            if tdef["key"] == "daily_kbar":
+                incomplete_dates = _incomplete_daily_kbar_dates(db, ordered_days)
+            elif tdef["key"] == "minute_kbar":
+                incomplete_dates = _incomplete_minute_kbar_dates(db, ordered_days)
+            else:
+                incomplete_dates = []
             tolerated_gap_dates = _realtime_tolerated_gap_dates(
                 missing_dates=missing,
                 incomplete_dates=incomplete_dates,
                 reference_trade_date=reference_trade_date,
             )
-            effective_missing_dates = [day for day in missing if day not in tolerated_gap_dates]
-            effective_incomplete_dates = [day for day in incomplete_dates if day not in tolerated_gap_dates]
+            provider_pending_dates: list[str] = []
+            if tdef["key"] == "minute_kbar":
+                provider_pending_dates = _provider_pending_minute_dates(
+                    [*missing, *incomplete_dates]
+                )
+            skip_dates = tolerated_gap_dates | set(provider_pending_dates)
+            effective_missing_dates = [day for day in missing if day not in skip_dates]
+            effective_incomplete_dates = [
+                day for day in incomplete_dates if day not in skip_dates
+            ]
         except Exception as exc:
             _rollback_session_safely(db)
             logger.warning("最近交易日覆盖诊断 %s 失败: %s", tdef["key"], exc)
@@ -443,6 +457,7 @@ def _recent_trade_day_coverage(
                 "effective_missing_dates": [],
                 "effective_incomplete_dates": [],
                 "tolerated_gap_dates": [],
+                "provider_pending_dates": [],
                 "effective_gap_count": 0,
                 "error": str(exc),
             }
@@ -462,6 +477,8 @@ def _recent_trade_day_coverage(
             "effective_missing_dates": effective_missing_dates,
             "effective_incomplete_dates": effective_incomplete_dates,
             "tolerated_gap_dates": sorted(tolerated_gap_dates),
+            "provider_pending_dates": sorted(provider_pending_dates),
+            "provider_pending_note": _provider_pending_note(sorted(provider_pending_dates)),
             "effective_gap_count": effective_gap_count,
         }
         gap_count = effective_gap_count
@@ -656,7 +673,7 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
     状态判定：
       - empty：行数为 0 → 无数据（未接入 / 未拉取）
       - covered：有数据，且在 fresh_days 容忍窗口内（事件型域有数据即 covered）
-      - stale：有数据，但最新日期超出 fresh_days 容忍窗口（策略未持续刷新）
+      - stale：有数据，但最新日期超出 fresh_days 容忍窗口（含供应商发布进度）
     """
     ref = _fmt_date(reference_trade_date) if reference_trade_date else None
 
@@ -744,6 +761,13 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
                 # 当日数据未出而非补数链路故障，标注让用户优先排查系统侧。
                 if source_lag_prone and gap_days is not None and gap_days <= max(2, fresh + 1):
                     note = "可能数据源盘后延迟（非系统漏拉），下一盘后周期会自动补"
+                if ddef.get("provider_publication_lag") and gap_days is not None:
+                    published = _published_minute_last_date()
+                    if published and max_date and max_date <= published:
+                        note = (
+                            f"供应商分钟历史已发布至 {published}，参考交易日尚未发布；"
+                            "发布后下一轮同步自动补齐"
+                        )
 
         domains.append({
             "key": key,
@@ -844,20 +868,28 @@ def _find_issues(
     for key, coverage in recent_tables.items():
         missing_dates, incomplete_dates = _effective_coverage_dates(coverage, reference_trade_date)
         gap_dates = sorted(set([*missing_dates, *incomplete_dates]))
-        if not gap_dates:
-            continue
         label = coverage.get("label") or key
+        if not gap_dates:
+            pending = list(coverage.get("provider_pending_dates") or [])
+            if pending:
+                issues.append({
+                    "severity": "low",
+                    "message": f"{label} {coverage.get('provider_pending_note')}",
+                })
+            continue
         severity = "high" if coverage.get("critical") and len(gap_dates) >= _RECENT_HIGH_MISSING_DAYS else "medium"
         parts = []
         if missing_dates:
             parts.append(f"缺失 {len(missing_dates)} 天: {', '.join(missing_dates[:4])}" + (" ..." if len(missing_dates) > 4 else ""))
         if incomplete_dates:
             parts.append(f"不完整 {len(incomplete_dates)} 天: {', '.join(incomplete_dates[:4])}" + (" ..." if len(incomplete_dates) > 4 else ""))
+        pending_note = coverage.get("provider_pending_note")
         issues.append({
             "severity": severity,
             "message": (
                 f"{label} 最近 {recent_coverage.get('window', _RECENT_REFERENCE_WINDOW)} 个交易日"
                 f"{'，'.join(parts)}"
+                + (f"；另有 {pending_note}" if pending_note else "")
             ),
         })
 
@@ -875,7 +907,7 @@ def _find_issues(
             labels = "、".join(d.get("label") for d in stale)
             issues.append({
                 "severity": "low",
-                "message": f"数据域接入但数据滞后共 {len(stale)} 个（策略未持续刷新）：{labels}",
+                "message": f"数据域最新日期未达参考交易日共 {len(stale)} 个：{labels}",
             })
             # 对已知数据源延迟型数据域单独提示，避免把 Tushare 当日未出数据
             # 误当系统故障排查。
@@ -883,8 +915,8 @@ def _find_issues(
             if lag_notes:
                 issues.append({
                     "severity": "low",
-                    "message": "其中部分滞后可能源于 Tushare 盘后延迟出数，"
-                               "下一盘后周期会自动回填，非系统漏拉",
+                    "message": "其中部分滞后来自数据源发布进度（清单里有明确发布日期），"
+                               "下一盘后周期会自动回填，非系统漏拉：" + "；".join(lag_notes[:3]),
                 })
 
     return issues
@@ -1026,6 +1058,65 @@ def _incomplete_daily_kbar_dates(db: Session, ordered_days: list[str]) -> list[s
         if normalized in ordered_days:
             counts[normalized] = counts.get(normalized, 0) + int(count or 0)
     return [day for day in ordered_days if 0 < counts.get(day, 0) < _MIN_RECENT_DAILY_KBAR_CODES]
+
+
+def _incomplete_minute_kbar_dates(db: Session, ordered_days: list[str]) -> list[str]:
+    if not ordered_days:
+        return []
+    counts: dict[str, int] = {}
+    target_values = sorted({variant for day in ordered_days for variant in _date_variants(day)})
+    rows = db.execute(
+        select(MinuteKbar.trade_date, func.count(distinct(MinuteKbar.code)))
+        .where(MinuteKbar.trade_date.in_(target_values))
+        .group_by(MinuteKbar.trade_date)
+    ).all()
+    for trade_date, count in rows:
+        normalized = _fmt_date(trade_date)
+        if normalized in ordered_days:
+            counts[normalized] = counts.get(normalized, 0) + int(count or 0)
+    return [
+        day
+        for day in ordered_days
+        if 0 < counts.get(day, 0) < _MIN_RECENT_MINUTE_KBAR_CODES
+    ]
+
+
+def _provider_pending_minute_dates(dates: list[str]) -> list[str]:
+    """小石尚未发布的交易日：属于供应商发布进度，不是本系统漏拉。
+
+    判定依据是小石历史清单里 cn-minute 的已发布最新日期，而不是固定的容忍天数；
+    发布日历一推进，这些日期立即回到正常缺口判定。
+    """
+    if not dates:
+        return []
+    from app.services.xiaoshi_minute_source import published_minute_last_date
+
+    published_last = published_minute_last_date()
+    if not published_last:
+        return []
+    normalized_published = _fmt_date(published_last)
+    if not normalized_published:
+        return []
+    normalized_dates = sorted(
+        {day for item in dates if (day := _fmt_date(item))}
+    )
+    return [day for day in normalized_dates if day > normalized_published]
+
+
+def _published_minute_last_date() -> str | None:
+    from app.services.xiaoshi_minute_source import published_minute_last_date
+
+    return _fmt_date(published_minute_last_date())
+
+
+def _provider_pending_note(dates: list[str]) -> str | None:
+    if not dates:
+        return None
+    published_last = _published_minute_last_date()
+    window = f"{dates[0]}~{dates[-1]}" if len(dates) > 1 else dates[0]
+    if published_last:
+        return f"小石分钟历史已发布至 {published_last}，{window} 尚未发布，发布后下一轮同步自动补齐"
+    return f"{window} 尚未获得供应商发布确认，发布后下一轮同步自动补齐"
 
 
 def _coverage_gap_count(coverage: dict[str, Any], reference_trade_date: str | None = None) -> int:

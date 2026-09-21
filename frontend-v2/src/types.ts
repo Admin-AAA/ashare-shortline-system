@@ -655,6 +655,9 @@ export type RecentTradeCoverageTable = {
   expected_count?: number;
   coverage_rate?: number;
   missing_dates?: string[];
+  incomplete_dates?: string[];
+  provider_pending_dates?: string[];
+  provider_pending_note?: string | null;
 };
 
 export type DataHealthDiagnostic = {
@@ -710,6 +713,13 @@ export type DataHealthRemediationAction = {
   row_count?: number;
   requested_code_count?: number;
   requested_date_count?: number;
+  target_hit_count?: number;
+  coverage_rate?: number;
+  empty_code_count?: number;
+  retried_code_count?: number;
+  provider_unresolved_code_count?: number;
+  provider_cooldown_seconds?: number;
+  reason?: string | null;
   code_limit?: number;
   error?: string;
   error_type?: string;
@@ -759,6 +769,7 @@ export type DataHealthRemediationResult = {
     planned_count?: number;
     completed_count?: number;
     empty_count?: number;
+    incomplete_count?: number;
     skipped_count?: number;
     failed_count?: number;
   };

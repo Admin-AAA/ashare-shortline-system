@@ -354,6 +354,10 @@ def sync_data_source_configs(db: Session) -> None:
         "dragon_tiger": _dragon_tiger_sources(settings),
         "news": _news_sources(settings),
     }
+    # 小石不再承担全市场行情与日线，配置页按它当前的两类能力登记：历史文件与量化数据集。
+    if str(getattr(settings, "xiaoshi_api_key", "") or "").strip():
+        for source_type in _XIAOSHI_MANAGED_SOURCE_TYPES:
+            desired[source_type] = ["xiaoshi"]
     desired_set = {(src, st) for st, srcs in desired.items() for src in srcs}
 
     last_error: IntegrityError | None = None
@@ -721,7 +725,33 @@ def _unified_quote_rows_from_rows(all_rows: list, limit: int = 50, offset: int =
 # 数据源管理投影（配置页「数据源管理」Tab）：启停 + 测试
 # ═════════════════════════════════════════════════════════════════════════════
 
-_XIAOSHI_MANAGED_SOURCE_TYPES = ("quote", "kline")
+_XIAOSHI_MANAGED_SOURCE_TYPES = ("history", "dataset")
+
+_XIAOSHI_HISTORY_FLAG_TTL_SECONDS = 30.0
+_xiaoshi_history_flag: tuple[float, bool] | None = None
+
+
+def xiaoshi_history_enabled() -> bool:
+    """小石历史文件下载是否启用；进程内缓存 30 秒，避免逐股票查询数据库。"""
+    global _xiaoshi_history_flag
+    now = time.monotonic()
+    cached = _xiaoshi_history_flag
+    if cached is not None and now - cached[0] < _XIAOSHI_HISTORY_FLAG_TTL_SECONDS:
+        return cached[1]
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        enabled = bool(enabled_sources(db, "history", ["xiaoshi"]))
+    finally:
+        db.close()
+    _xiaoshi_history_flag = (now, enabled)
+    return enabled
+
+
+def invalidate_xiaoshi_history_flag() -> None:
+    global _xiaoshi_history_flag
+    _xiaoshi_history_flag = None
 
 
 def list_management_sources(db: Session) -> list[dict[str, Any]]:
@@ -789,12 +819,11 @@ def _xiaoshi_management_row(db: Session) -> dict[str, Any] | None:
         "enabled": enabled,
         "configured": configured,
         "priority": 1000,
-        "note": "小石 v3 独立数据源；全市场快照与前复权日线主源，分钟历史走 R2",
+        "note": "小石 v3 独立数据源；提供已发布历史文件与量化数据集，行情与日K由 tushare 承担",
         "apis": [
-            "全市场快照:主源",
-            "前复权日线:主源",
-            "分钟历史:R2",
-            "量化Skill:research",
+            "分钟历史:已发布文件",
+            "量化数据集:research",
+            "PIT 事件与新闻:research",
         ],
         "success_count": success_count,
         "failure_count": failure_count,
@@ -807,7 +836,7 @@ def _xiaoshi_management_row(db: Session) -> dict[str, Any] | None:
             (row.last_error for row in health_rows if row.last_error),
             None,
         ),
-        "last_api": "manifest+quote+kline" if health_rows else None,
+        "last_api": "manifest+history+dataset" if health_rows else None,
         "status": status,
         "auth_mode": "bearer",
         "rate_limit_per_minute": int(getattr(settings, "xiaoshi_max_qps", 30)) * 60,
@@ -844,6 +873,7 @@ def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict
             row.enabled = enabled
             row.updated_at = now
         db.commit()
+        invalidate_xiaoshi_history_flag()
         return _xiaoshi_management_row(db)
 
     if provider_name not in _known_provider_names():
@@ -931,20 +961,20 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
     ok = False
     error: str | None = None
     details: dict[str, Any] | None = None
-    quote_ok = False
-    quote_error: str | None = None
-    kline_ok = False
-    kline_error: str | None = None
+    history_ok = False
+    history_error: str | None = None
+    dataset_ok = False
+    dataset_error: str | None = None
     try:
         if provider_name == "xiaoshi":
             probe = _probe_xiaoshi_source()
             ok = probe["ok"]
             error = probe["error"]
             details = probe["details"]
-            quote_ok = probe["quote_ok"]
-            quote_error = probe["quote_error"]
-            kline_ok = probe["kline_ok"]
-            kline_error = probe["kline_error"]
+            history_ok = probe["history_ok"]
+            history_error = probe["history_error"]
+            dataset_ok = probe["dataset_ok"]
+            dataset_error = probe["dataset_error"]
         elif provider_name == "realtime_quote":
             from app.services.realtime_quote_client import fetch_realtime_quotes
 
@@ -963,10 +993,10 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
 
     if provider_name == "xiaoshi":
         _record_source_test(
-            db, provider_name, "quote", ok=quote_ok, latency_ms=latency_ms, error=quote_error
+            db, provider_name, "history", ok=history_ok, latency_ms=latency_ms, error=history_error
         )
         _record_source_test(
-            db, provider_name, "kline", ok=kline_ok, latency_ms=latency_ms, error=kline_error
+            db, provider_name, "dataset", ok=dataset_ok, latency_ms=latency_ms, error=dataset_error
         )
     else:
         _record_provider_test(db, provider_name, ok=ok, latency_ms=latency_ms, error=error)
@@ -981,11 +1011,11 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
 
 
 def _probe_xiaoshi_source() -> dict[str, Any]:
-    """Probe the xiaoshi data path with narrow single-stock calls, run concurrently.
+    """并行探测小石当前公开契约里的三条通路。
 
-    只测数据通路（manifest + 单股票 quote + 单股票 kline），三者并行以把端到端
-    延迟压到接近单个请求。Skill 契约校验（整份 SKILL.md 下载 + SHA-256）不在此处，
-    它验证的是 Skill 完整性而非数据通路，且每次重下整份文本是延迟大头。
+    只测实际接入的三条通路（平台契约 + 历史文件目录 + 量化数据集目录），三者并行
+    以把端到端延迟压到接近单个请求。全市场实时快照与在线单只日K不在公开契约内，
+    行情与日K由 tushare 承担，因此不在这里探测。
     """
     from app.services.xiaoshi_client import get_xiaoshi_client
 
@@ -996,63 +1026,61 @@ def _probe_xiaoshi_source() -> dict[str, Any]:
     def _probe_manifest() -> tuple[dict[str, Any], str | None]:
         try:
             manifest = client.get_manifest()
-            return ({"manifest_version": str(manifest.get("version") or "")}, None)
+            version = manifest.get("platform_version") or manifest.get("version") or ""
+            return ({"manifest_version": str(version)}, None)
         except Exception as exc:
             return ({}, f"manifest: {type(exc).__name__}: {str(exc)[:160]}")
 
-    def _probe_quote() -> tuple[bool, dict[str, Any], str | None]:
+    def _probe_history() -> tuple[bool, dict[str, Any], str | None]:
         try:
-            quote = client.get_quote("000001")
-            symbol = quote.get("symbol") or quote.get("code")
-            ok = bool(str(symbol or "").strip()) and float(quote.get("price") or 0) > 0
-            detail = {"quote_time": quote.get("quote_time") or quote.get("observed_at")}
-            if ok:
+            catalog = client.get_history_catalog(dataset="cn-daily", limit=1)
+            items = catalog.get("items") or []
+            detail = {"history_total": catalog.get("total")}
+            if items:
                 return (True, detail, None)
-            return (False, detail, "xiaoshi quote 返回空或价格无效")
+            return (False, detail, "小石历史目录未返回可用分区")
         except Exception as exc:
             return (False, {}, f"{type(exc).__name__}: {str(exc)[:160]}")
 
-    def _probe_kline() -> tuple[bool, dict[str, Any], str | None]:
+    def _probe_dataset() -> tuple[bool, dict[str, Any], str | None]:
         try:
-            payload = client.get_kline("000001", limit=2)
-            bars = payload.get("bars") or payload.get("data") or []
-            kline_count = len(bars) if isinstance(bars, list) else 0
-            ok = kline_count >= 2
-            detail = {"kline_count": kline_count}
-            if ok:
+            catalog = client.get_quant_catalog()
+            datasets = catalog.get("datasets") or []
+            detail = {"dataset_count": len(datasets)}
+            if datasets:
                 return (True, detail, None)
-            return (False, detail, "xiaoshi kline 返回不足 2 条")
+            return (False, detail, "小石量化数据集目录为空")
         except Exception as exc:
             return (False, {}, f"{type(exc).__name__}: {str(exc)[:160]}")
 
     with ThreadPoolExecutor(max_workers=3) as pool:
         manifest_future = pool.submit(_probe_manifest)
-        quote_future = pool.submit(_probe_quote)
-        kline_future = pool.submit(_probe_kline)
+        history_future = pool.submit(_probe_history)
+        dataset_future = pool.submit(_probe_dataset)
         manifest_detail, manifest_error = manifest_future.result()
-        quote_ok, quote_detail, quote_error = quote_future.result()
-        kline_ok, kline_detail, kline_error = kline_future.result()
+        history_ok, history_detail, history_error = history_future.result()
+        dataset_ok, dataset_detail, dataset_error = dataset_future.result()
 
     details.update(manifest_detail)
-    details.update(quote_detail)
-    details.update(kline_detail)
+    details.update(history_detail)
+    details.update(dataset_detail)
     if manifest_error:
         errors.append(manifest_error)
-    if quote_error:
-        errors.append(f"quote: {quote_error}")
-    if kline_error:
-        errors.append(f"kline: {kline_error}")
+    if history_error:
+        errors.append(f"history: {history_error}")
+    if dataset_error:
+        errors.append(f"dataset: {dataset_error}")
 
     contract_ok = manifest_error is None
 
     return {
-        "ok": contract_ok and quote_ok and kline_ok,
+        "ok": contract_ok and history_ok and dataset_ok,
         "error": "; ".join(errors) or None,
         "details": details,
-        "quote_ok": quote_ok,
-        "quote_error": quote_error,
-        "kline_ok": kline_ok,
-        "kline_error": kline_error,
+        "history_ok": history_ok,
+        "history_error": history_error,
+        "dataset_ok": dataset_ok,
+        "dataset_error": dataset_error,
     }
 
 

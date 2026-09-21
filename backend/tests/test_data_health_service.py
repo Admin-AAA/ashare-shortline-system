@@ -351,3 +351,27 @@ def test_find_issues_includes_reference_fallback_and_recent_gap_messages():
     assert any("回退到本地关键表最新交易日" in msg for msg in messages)
     assert any("最近 5 个交易日缺失 4 天" in msg for msg in messages)
     assert any("实时快照 未覆盖参考交易日" in msg for msg in messages)
+
+
+def test_provider_pending_minute_dates_follow_published_release(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.xiaoshi_minute_source.published_minute_last_date",
+        lambda: "2026-09-15",
+    )
+
+    pending = data_health_service._provider_pending_minute_dates(
+        ["2026-09-14", "2026-09-15", "2026-09-16", "2026-09-17"]
+    )
+
+    assert pending == ["2026-09-16", "2026-09-17"]
+    assert "2026-09-15" in data_health_service._provider_pending_note(pending)
+
+
+def test_provider_pending_minute_dates_is_empty_without_published_release(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.xiaoshi_minute_source.published_minute_last_date",
+        lambda: None,
+    )
+
+    assert data_health_service._provider_pending_minute_dates(["2026-09-16"]) == []
+    assert data_health_service._provider_pending_note([]) is None
