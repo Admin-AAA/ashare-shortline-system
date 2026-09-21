@@ -1,0 +1,12 @@
+{
+  "id": "dragon-tiger-reaccumulation",
+  "name": "龙虎榜涨停后整理再启动",
+  "version": "0.1.0",
+  "mode": "declarative",
+  "status": "disabled",
+  "enabled": false,
+  "requirements": ["stock_feature_context", "dragon_tiger_history", "daily_kbar_history", "point_in_time_metadata"],
+  "capabilities": ["signal_evaluation"],
+  "source_type": "local",
+  "description": "研究最近一个自然月上榜且收盘涨停的股票，识别上榜后缩量整理、价格支撑与温和放量转强。"
+}

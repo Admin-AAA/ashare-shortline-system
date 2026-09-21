@@ -1489,3 +1489,12 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 永久规则：**(a) WR70 优化前必须消除两条成交模拟的逐笔差异；同一选中集合的 n、入场状态和净收益未逐笔相同时，出场参数结果不得用于发布。 (b) `evaluate_challenger()` 通过不能代替绝对验收指标。 (c) 低止盈能提高 W1/W2 胜率，同时会压低 W3 PF；后续候选必须同时包含信号日质量和盈利保留机制。 (d) W3 未完成持有期的记录保持 provisional，不计入胜负。**
 - 证据：`backend/output/wr70/baseline_engine_compare.json`、`backend/output/wr70/round5_exit_screen_current_w3.json`、`output/strategies-wr70-bottleneck-metrics-2026-09-20.json`。
 - 相关：L-010（唯一发布判定）、L-021（累计收益与回撤）、L-113（出场轴冲突）、L-127（Top6）、L-133（策略声明入场方式）。
+
+## L-135 龙虎榜历史事件必须保留原因与统计区间，股票级汇总不能证明持续持仓
+
+- 状态：active。
+- 适用：龙虎榜事件序列、席位参与研究、上榜后整理策略。
+- 证据：当前 `dragon_tiger` 以股票和日期唯一保存；`state_adapters.py` 同日重复记录合并原因文字，金额保留第一条。单日榜与多日榜的金额统计范围因此无法完整恢复，表内也没有席位身份。固定整理规则三窗信号研究为 FALSIFIED，记录见 `docs/reviews/dragon-tiger-strategy-correctness-2026-09-21.md`。
+- 永久规则：研究持续参与必须保留原始上榜原因、统计区间、席位身份和发布时间；多日榜与单日榜不得直接累加推断持仓。未上榜期间的持仓变化保持未知。上榜且涨停只定义候选范围，交易信号需要独立的可得证据验证。
+- 吸收位置：`backend/skills/dragon-tiger-reaccumulation/SKILL.md`、`backend/scripts/research_dragon_tiger_reaccumulation.py`。
+- 相关：L-014、L-078、L-133、L-134。

@@ -20,6 +20,17 @@ class UnsafeExpression(ValueError):
 # 将由注入机制提供，可清理与之重复的硬编码项；在迁移前删除会打断策略对这些字段
 # 名的引用（变成谁都不提供的空窗），故清理留到 2.3 之后再做。
 ALLOWED_NAMES = {
+    "dtr_data_ready",
+    "dtr_event_count",
+    "dtr_limit_count",
+    "dtr_event_age",
+    "dtr_volume_contraction",
+    "dtr_range_pct",
+    "dtr_support_ratio",
+    "dtr_event_return_pct",
+    "dtr_restart_volume",
+    "dtr_close_location",
+    "dtr_near_range_high",
     "amount_yi",
     "announcement_negative_count",
     "avg_cost",
