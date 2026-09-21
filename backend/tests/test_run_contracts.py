@@ -44,7 +44,7 @@ def test_request_canonical_json_orders_keys_skills_and_explicit_defaults():
     assert [item.skill_id for item in request.skills] == ["alpha", "zeta"]
     canonical = request.to_canonical_json()
     assert canonical == canonical_request_json(request)
-    assert '"data_source":"local_pool_preferred"' in canonical
+    assert '"data_source":"local_pool_realtime"' in canonical
     assert canonical.index('"agent_review_concurrency"') < canonical.index('"run_mode"')
     with pytest.raises(Exception):
         request.run_name = "不可修改"  # type: ignore[misc]
@@ -85,7 +85,7 @@ def test_v1_defaults_are_explicit_and_parser_rejects_implicit_type_coercion():
 
     assert request.schema_version == RUN_REQUEST_SCHEMA_VERSION
     assert request.run_mode is RunMode.FORMAL
-    assert request.data_source is DataSourceId.LOCAL_POOL_PREFERRED
+    assert request.data_source is DataSourceId.LOCAL_POOL_REALTIME
     assert request.run_name == "临时运行"
     assert request.score_line == 72.0
     assert request.output_count == 6

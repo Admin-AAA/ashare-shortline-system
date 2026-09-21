@@ -50,6 +50,7 @@ from app.services.stats_service import get_overview_stats
 from app.services.workbench_service import (
     DATA_SOURCE_LOCAL_POOL,
     DATA_SOURCE_LOCAL_POOL_PREFERRED,
+    DATA_SOURCE_LOCAL_POOL_REALTIME,
     _build_recommendation_card,
     _build_pipeline_audit,
     _build_filter_audit,
@@ -371,12 +372,12 @@ class TestE2ERecommendationFlow:
         # Aggregate all stocks into cards and apply pool rules
         cards = []
 
-    def test_merge_run_params_defaults_formal_to_local_pool_preferred(self):
+    def test_merge_run_params_defaults_formal_to_local_pool_realtime(self):
         params = _merge_run_params(None, None, {"skills": []})
-        assert params["data_source"] == DATA_SOURCE_LOCAL_POOL_PREFERRED
+        assert params["data_source"] == DATA_SOURCE_LOCAL_POOL_REALTIME
 
         experiment_params = _merge_run_params(None, None, {"skills": []})
-        assert experiment_params["data_source"] == DATA_SOURCE_LOCAL_POOL_PREFERRED
+        assert experiment_params["data_source"] == DATA_SOURCE_LOCAL_POOL_REALTIME
 
     def test_merge_run_params_keeps_formal_auxiliary_refresh_enabled(self):
         params = _merge_run_params(

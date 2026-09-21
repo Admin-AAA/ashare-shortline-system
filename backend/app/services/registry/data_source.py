@@ -15,9 +15,12 @@ DATA_SOURCE_LOCAL_POOL_PREFERRED = "local_pool_preferred"
 DATA_SOURCE_LOCAL_POOL_REALTIME = "local_pool_realtime"
 DATA_SOURCE_REALTIME = "realtime"
 DATA_SOURCE_AUTO = "auto"
-# 普通运行默认读本地池；只有调用方显式选择 ``auto`` 时，盘中才会切换为
-# “本地历史 + 实时快照”。这样预设、回测和盘后运行不会意外打满实时接口。
-DEFAULT_RECOMMENDATION_DATA_SOURCE = DATA_SOURCE_LOCAL_POOL_PREFERRED
+# 普通运行默认走“本地历史 + 实时快照”：历史日K/技术指标读本地池，
+# 当日行情拼 ``realtime_quote`` 实时快照（见
+# ``market_pool.get_market_universe_from_pool_with_realtime``）。
+# 回测/历史补跑经 ``trade_date_override`` 走本地历史快照，盘后流水线则显式
+# 指定 ``local_pool``，二者都不受影响。
+DEFAULT_RECOMMENDATION_DATA_SOURCE = DATA_SOURCE_LOCAL_POOL_REALTIME
 ALLOWED_DATA_SOURCES = {
     DATA_SOURCE_LOCAL_POOL,
     DATA_SOURCE_LOCAL_POOL_PREFERRED,

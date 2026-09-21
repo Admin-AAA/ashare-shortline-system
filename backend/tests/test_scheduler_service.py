@@ -143,7 +143,7 @@ def test_run_preset_matrix_continues_after_single_preset_failure(monkeypatch, db
 
 
 @pytest.mark.parametrize("run_mode", ("formal", "experiment", "backtest"))
-def test_run_preset_matrix_defaults_to_local_pool_preferred(monkeypatch, db, run_mode):
+def test_run_preset_matrix_defaults_to_local_pool_realtime(monkeypatch, db, run_mode):
     db.execute(update(Preset).where(Preset.status == "active").values(status="disabled"))
     preset_id = f"preset_matrix_default_source_{uuid.uuid4().hex[:8]}"
     db.add(
@@ -178,7 +178,7 @@ def test_run_preset_matrix_defaults_to_local_pool_preferred(monkeypatch, db, run
     )
 
     assert result["completed_count"] == 1
-    assert calls[0]["data_source"] == "local_pool_preferred"
+    assert calls[0]["data_source"] == "local_pool_realtime"
     assert calls[0]["run_mode"] == run_mode
 
 

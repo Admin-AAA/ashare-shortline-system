@@ -7,8 +7,8 @@ export const RISK_TEMPLATE_MAP: Record<string, string> = {
 };
 
 export const DATA_SOURCE_MAP: Record<string, string> = {
-  local_pool_preferred: "仅用本地池",
-  auto: "本地池+盘中实时",
-  // 后端规范化后的实际存储值，显示时复用 auto 标签
   local_pool_realtime: "本地池+盘中实时",
+  local_pool_preferred: "本地池优先（缓存过期才刷新）",
+  local_pool: "仅用本地池",
+  auto: "自动（盘中实时/盘后本地）",
 };
