@@ -25,7 +25,7 @@ import { RISK_TEMPLATE_MAP, DATA_SOURCE_MAP } from "../utils/riskTemplates";
  */
 // 保留原始值用于内部逻辑处理
 const RISK_TEMPLATES = ["balanced", "aggressive", "conservative"];
-const DATA_SOURCES = ["local_pool_preferred", "auto"];
+const DATA_SOURCES = ["local_pool_realtime", "local_pool_preferred", "auto"];
 
 type SkillPick = {
   skill_id: string;
@@ -58,7 +58,7 @@ function emptyForm(skills: SkillSummary[]): PresetForm {
     risk_template: "balanced",
     score_line: 72,
     output_count: 6,
-    data_source: "local_pool_preferred",
+    data_source: "local_pool_realtime",
     hide_recent_repeats: true,
     skills: skills.map((s) => ({
       skill_id: s.skill_id,

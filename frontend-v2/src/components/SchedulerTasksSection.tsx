@@ -39,8 +39,8 @@ const TASK_TYPE_LABEL: Record<ScheduledTaskType, string> = {
   data_backfill: "数据补数",
 };
 
-/** 下拉框渲染用的选项列表（不包含后端存储值 local_pool_realtime） */
-const DATA_SOURCES = ["local_pool_preferred", "auto"];
+/** 下拉框渲染用的选项列表 */
+const DATA_SOURCES = ["local_pool_realtime", "local_pool_preferred", "auto"];
 
 const STATUS_LABEL: Record<string, string> = {
   running: "运行中",
@@ -148,9 +148,18 @@ const REMEDIABLE_TABLES = [
   "capital_flow",
   "concept_sector",
   "dragon_tiger",
+  "news",
+  "auction",
 ];
 
-const AUX_TABLES = ["limit_up_board", "concept_sector", "dragon_tiger"];
+const AUX_TABLES = [
+  "limit_up_board",
+  "concept_sector",
+  "dragon_tiger",
+  "news",
+  "capital_flow",
+  "auction",
+];
 
 function emptyPayload(taskType: ScheduledTaskType): PayloadForm {
   switch (taskType) {
@@ -159,7 +168,7 @@ function emptyPayload(taskType: ScheduledTaskType): PayloadForm {
         preset_id: "",
         run_name: "",
         run_mode: "formal",
-        data_source: "local_pool_preferred",
+        data_source: "local_pool_realtime",
         risk_template: "balanced",
         score_line: 72,
         output_count: 6,
@@ -169,7 +178,7 @@ function emptyPayload(taskType: ScheduledTaskType): PayloadForm {
       return {
         matrix_batch_name: "盘后预设矩阵",
         run_name_prefix: "",
-        data_source: "local_pool_preferred",
+        data_source: "local_pool_realtime",
         stop_on_error: false,
       };
     case "data_sync":
@@ -758,7 +767,7 @@ function TaskFormBody({
           <Field label="数据源">
             <select
               className="cfg-input"
-              value={form.payload.data_source ?? "auto"}
+              value={form.payload.data_source ?? "local_pool_realtime"}
               onChange={(e) => setPayload("data_source", e.target.value)}
             >
               {DATA_SOURCES.map((v) => (
@@ -829,7 +838,7 @@ function TaskFormBody({
           <Field label="数据源">
             <select
               className="cfg-input"
-              value={form.payload.data_source ?? "auto"}
+              value={form.payload.data_source ?? "local_pool_realtime"}
               onChange={(e) => setPayload("data_source", e.target.value)}
             >
               {DATA_SOURCES.map((v) => (

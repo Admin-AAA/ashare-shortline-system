@@ -20,7 +20,14 @@ from app.services.registry import data_source as data_source_registry
 def test_concept_sector_nan_member_count_is_normalized(db):
     client = SimpleNamespace(
         ths_index=lambda: pd.DataFrame(
-            [{"ts_code": "885001.TI", "name": "测试概念", "count": float("nan")}]
+            [
+                {
+                    "ts_code": "885001.TI",
+                    "name": "测试概念",
+                    "count": float("nan"),
+                    "type": "N",
+                }
+            ]
         )
     )
 
@@ -31,7 +38,7 @@ def test_concept_sector_nan_member_count_is_normalized(db):
     assert rows[0]["member_count"] == 0
 
 
-def test_default_is_local_first_but_explicit_auto_uses_local_plus_realtime_intraday(monkeypatch):
+def test_default_is_local_history_plus_realtime_snapshot(monkeypatch):
     class Intraday(__import__("datetime").datetime):
         @classmethod
         def now(cls, tz=None):
@@ -39,9 +46,12 @@ def test_default_is_local_first_but_explicit_auto_uses_local_plus_realtime_intra
 
     monkeypatch.setattr(data_source_registry, "datetime", Intraday)
 
-    assert data_source_registry.DEFAULT_RECOMMENDATION_DATA_SOURCE == "local_pool_preferred"
-    assert data_source_registry.normalize_data_source(None) == "local_pool_preferred"
+    # 默认：历史日K/指标走本地池，当日行情拼实时快照
+    assert data_source_registry.DEFAULT_RECOMMENDATION_DATA_SOURCE == "local_pool_realtime"
+    assert data_source_registry.normalize_data_source(None) == "local_pool_realtime"
     assert data_source_registry.normalize_data_source("auto") == "local_pool_realtime"
+    # 显式选择仍保留旧的纯本地优先模式
+    assert data_source_registry.normalize_data_source("local_pool_preferred") == "local_pool_preferred"
 
 
 def test_auxiliary_sync_uses_closed_trade_date_and_commits(monkeypatch):

@@ -793,7 +793,7 @@ class Preset(Base):
     score_line: Mapped[float] = mapped_column(Float, default=72.0)
     output_count: Mapped[int] = mapped_column(Integer, default=6)
     bucket_limits_json: Mapped[str] = mapped_column(Text, default="{}")
-    data_source: Mapped[str] = mapped_column(String(20), default="local_pool_preferred")
+    data_source: Mapped[str] = mapped_column(String(20), default="local_pool_realtime")
     hide_recent_repeats: Mapped[bool] = mapped_column(Boolean, default=True)
     status: Mapped[str] = mapped_column(String(20), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
