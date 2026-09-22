@@ -51,10 +51,12 @@ SAFETY_NET_TASK_ID = "formal_run_safety_net"
 # after this many failed runs; the safety net suppresses only an in-flight retry.
 SAFETY_NET_MAX_ATTEMPTS = 3
 POSTCLOSE_PIPELINE_TASK_ID = "post_sync_formal_recommendation"
+POSTCLOSE_LATE_DATA_REPAIR_TASK_ID = "postclose_late_data_repair"
 # 工作日使用 mon-fri，避免不同 cron 实现对数字星期的解释差异。
 # 与标准 crontab 的 0=Sunday 差一天，"1-5" 会被解析成「周二到周六」——周一永不触发、
 # 周六反而跑。名称形式在两种语义下都无歧义，是唯一安全写法。
 POSTCLOSE_PIPELINE_CRON = "35 17 * * mon-fri"
+POSTCLOSE_LATE_DATA_REPAIR_CRON = "0 21 * * mon-fri"
 LEGACY_POSTCLOSE_TASK_IDS = (
     "postclose_quote_refresh",
     "postclose_daily_kbar_batch",
@@ -168,6 +170,7 @@ def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[
             "skip_aux_refresh": True,
             "health_remediation_tables": [
                 "daily_kbar",
+                "chip",
                 "minute_kbar",
                 "index_daily",
                 "limit_up_board",
@@ -189,6 +192,51 @@ def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[
         }
     )
     return payload
+
+
+def _late_data_repair_payload(existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = dict(existing or {})
+    payload.update(
+        {
+            "sync_scope": "all",
+            "health_remediation_tables": [
+                "daily_kbar",
+                "chip",
+                "minute_kbar",
+                "index_daily",
+                "limit_up_board",
+                "capital_flow",
+            ],
+            "auxiliary_remediation_tables": [
+                "limit_up_board",
+                "concept_sector",
+                "dragon_tiger",
+                "news",
+                "capital_flow",
+            ],
+            "health_post_diagnosis": True,
+            "auxiliary_post_diagnosis": False,
+        }
+    )
+    return payload
+
+
+def _configure_late_data_repair_task(db) -> None:
+    task = db.get(ScheduledTask, POSTCLOSE_LATE_DATA_REPAIR_TASK_ID)
+    existing_payload: dict[str, Any] = {}
+    if task is None:
+        task = ScheduledTask(task_id=POSTCLOSE_LATE_DATA_REPAIR_TASK_ID)
+        db.add(task)
+    else:
+        try:
+            existing_payload = json.loads(task.payload_json or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            existing_payload = {}
+    task.name = "晚间全域数据补数"
+    task.task_type = "data_backfill"
+    task.cron_expression = POSTCLOSE_LATE_DATA_REPAIR_CRON
+    task.payload_json = json.dumps(_late_data_repair_payload(existing_payload), ensure_ascii=False)
+    task.enabled = True
 
 
 def _configure_postclose_pipeline_tasks(db) -> None:
@@ -213,6 +261,7 @@ def _configure_postclose_pipeline_tasks(db) -> None:
         legacy = db.get(ScheduledTask, task_id)
         if legacy is not None:
             legacy.enabled = False
+    _configure_late_data_repair_task(db)
     db.commit()
 
 
@@ -943,8 +992,10 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
     # 3. 回填辅助数据。all 模式必须先完成辅助数据，再做最终健康诊断。
     if sync_scope in ("auxiliary", "all"):
         auxiliary_payload = dict(payload)
-        if result.get("trade_date") and not auxiliary_payload.get("trade_date"):
-            auxiliary_payload["trade_date"] = result["trade_date"]
+        auxiliary_payload["trade_date"] = _bounded_auxiliary_trade_date(
+            auxiliary_payload.get("trade_date"),
+            _latest_allowed_bar_date(),
+        )
         auxiliary = _run_auxiliary_remediation(auxiliary_payload)
         invalidate_pool_status_cache()
         clear_data_health_cache()
@@ -964,6 +1015,19 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
     result["status"] = _task_result_status(result)
     result["summary_text"] = "；".join(summary_parts) if summary_parts else "自动任务执行完成"
     return result
+
+
+def _bounded_auxiliary_trade_date(requested: object, latest_closed: object) -> str:
+    def normalize(value: object) -> str:
+        raw = str(value or "").strip()
+        if len(raw) == 8 and raw.isdigit():
+            raw = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+        return datetime.strptime(raw, "%Y-%m-%d").date().isoformat()
+
+    closed = normalize(latest_closed)
+    if requested in (None, ""):
+        return closed
+    return min(normalize(requested), closed)
 
 
 def _task_result_status(result: dict | None) -> str:
@@ -2404,5 +2468,3 @@ async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) 
             f"失败 {failed_count} 个，推荐合计 {recommended_total} 条"
         ),
     }
-
-

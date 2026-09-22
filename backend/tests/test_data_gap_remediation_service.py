@@ -17,9 +17,11 @@ from app.services.data_gap_remediation_service import (
     _backfill_minute_kbar_date,
     _backfill_news_announcements,
     _candidate_quote_date,
+    _chip_target_dates,
     _daily_kbar_target_codes,
     _is_natural_short_history,
     _local_pool_gap_comparison,
+    _minute_probe_failed,
     _provider_activity_delta,
     _upsert_daily_kbar_payload,
     remediate_data_health_gaps,
@@ -35,6 +37,51 @@ def test_provider_activity_route_policy_does_not_claim_hard_coded_primary_provid
     assert activity["route_policy"] == "通用接口按数据源配置优先级路由；特殊 API 按能力路由；失败时安全 fallback。"
     assert "Fastapic" not in activity["route_policy"]
     assert "ai-tool" not in activity["route_policy"]
+
+
+def test_chip_target_dates_cover_field_gaps_after_daily_rows_exist():
+    diagnosis = {
+        "reference_trade_date": "2026-09-21",
+        "recent_trade_day_coverage": {
+            "trade_days": [
+                "2026-09-16",
+                "2026-09-17",
+                "2026-09-18",
+                "2026-09-21",
+            ],
+        },
+        "data_domains": {
+            "categories": [
+                {
+                    "category": "行情K线",
+                    "domains": [
+                        {
+                            "key": "chip",
+                            "status": "stale",
+                            "max_date": "2026-09-18",
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+
+    assert _chip_target_dates(diagnosis, max_closed_trade_date="2026-09-21") == ["2026-09-21"]
+
+
+def test_minute_probe_stops_only_when_every_probe_has_provider_error():
+    unavailable = [
+        ("000001", [], RuntimeError("data_pending")),
+        ("000002", [], RuntimeError("business_rate_limit")),
+        ("000003", [], RuntimeError("data_pending")),
+    ]
+    available = [
+        *unavailable[:2],
+        ("000003", [{"trade_date": "2026-09-21", "trade_time": "09:31:00"}], None),
+    ]
+
+    assert _minute_probe_failed(unavailable) is True
+    assert _minute_probe_failed(available) is False
 
 
 def test_remediate_data_health_gaps_executes_targeted_plan(monkeypatch):
@@ -1162,6 +1209,7 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
 
     assert result["requested_tables"] == [
         "daily_kbar",
+        "chip",
         "minute_kbar",
         "index_daily",
         "limit_up_board",
@@ -1170,7 +1218,7 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
         "dragon_tiger",
         "news",
     ]
-    assert {item["table"] for item in result["actions"]} == set(result["requested_tables"])
+    assert {item["table"] for item in result["actions"]} == set(result["requested_tables"]) - {"chip"}
     assert result["comparison"]["score_delta"] == 29
     assert result["comparison"]["table_deltas"]["daily_kbar"]["resolved_incomplete_dates"] == ["2026-05-27"]
     assert result["comparison"]["table_deltas"]["minute_kbar"]["resolved_missing_dates"] == ["2026-05-27"]

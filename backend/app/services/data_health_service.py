@@ -656,7 +656,7 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
     状态判定：
       - empty：行数为 0 → 无数据（未接入 / 未拉取）
       - covered：有数据，且在 fresh_days 容忍窗口内（事件型域有数据即 covered）
-      - stale：有数据，但最新日期超出 fresh_days 容忍窗口（策略未持续刷新）
+      - stale：有数据，但最新日期超出 fresh_days 容忍窗口
     """
     ref = _fmt_date(reference_trade_date) if reference_trade_date else None
 
@@ -875,16 +875,15 @@ def _find_issues(
             labels = "、".join(d.get("label") for d in stale)
             issues.append({
                 "severity": "low",
-                "message": f"数据域接入但数据滞后共 {len(stale)} 个（策略未持续刷新）：{labels}",
+                "message": f"数据域最新日期未达参考交易日共 {len(stale)} 个：{labels}",
             })
-            # 对已知数据源延迟型数据域单独提示，避免把 Tushare 当日未出数据
-            # 误当系统故障排查。
+            # 已知数据源延迟型数据域单独显示发布进度。
             lag_notes = [d["note"] for d in stale if d.get("note")]
             if lag_notes:
                 issues.append({
                     "severity": "low",
-                    "message": "其中部分滞后可能源于 Tushare 盘后延迟出数，"
-                               "下一盘后周期会自动回填，非系统漏拉",
+                    "message": "其中部分缺口可能源于 Tushare 盘后延迟发布，"
+                               "下一盘后周期会自动补齐",
                 })
 
     return issues

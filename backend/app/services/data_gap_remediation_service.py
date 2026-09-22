@@ -7,7 +7,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, Callable
 
 from sqlalchemy import select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -60,6 +60,7 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_REMEDIABLE_TABLES = (
     "daily_kbar",
+    "chip",
     "minute_kbar",
     "index_daily",
     "limit_up_board",
@@ -86,6 +87,7 @@ DEFAULT_LOCAL_POOL_MIN_BARS = 30
 # 分钟补数的外部请求彼此独立；有界并行显著缩短 300 只/交易日的等待时间，
 # 同时避免无限制并发冲击 xiaoshi/Tushare 的上游限流。
 MINUTE_REMEDIATION_WORKERS = 8
+MINUTE_REMEDIATION_PROBE_COUNT = 3
 AUXILIARY_GAP_FIELDS = {
     "announcements",
     "capital_flow",
@@ -1262,6 +1264,13 @@ def _build_remediation_plan(
                 }
             )
 
+    if "chip" in requested_tables:
+        for trade_date in _chip_target_dates(
+            diagnosis,
+            max_closed_trade_date=max_closed_trade_date,
+        ):
+            plan.append({"table": "chip", "trade_date": trade_date})
+
     if "minute_kbar" in requested_tables:
         target_dates = _target_dates_with_closed_reference_gap(
             (recent_tables.get("minute_kbar") or {}).get("missing_dates") or [],
@@ -1493,6 +1502,13 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
             **result,
             "requested_code_count": len(codes),
         }
+    if table == "chip":
+        result = _backfill_chip_date(db, item["trade_date"])
+        return {
+            **item,
+            "status": "completed" if result.get("row_count") else "empty",
+            **result,
+        }
     if table == "minute_kbar":
         codes = item.get("codes") or []
         if not codes:
@@ -1607,6 +1623,105 @@ def _index_ts_codes(db: Session) -> list[str]:
     rows = db.scalars(select(IndexDaily.ts_code).distinct().order_by(IndexDaily.ts_code.asc())).all()
     existing = [str(code) for code in rows if str(code or "").strip()]
     return existing or list(DEFAULT_INDEX_TS_CODES)
+
+
+def _data_domain_by_key(diagnosis: dict[str, Any], key: str) -> dict[str, Any]:
+    categories = ((diagnosis.get("data_domains") or {}).get("categories") or [])
+    for category in categories:
+        for domain in category.get("domains") or []:
+            if domain.get("key") == key:
+                return dict(domain)
+    return {}
+
+
+def _chip_target_dates(
+    diagnosis: dict[str, Any],
+    *,
+    max_closed_trade_date: str,
+) -> list[str]:
+    domain = _data_domain_by_key(diagnosis, "chip")
+    if not domain:
+        return []
+    if domain.get("status") == "covered":
+        return []
+
+    reference_trade_date = _normalize_trade_date(diagnosis.get("reference_trade_date"))
+    max_chip_date = _normalize_trade_date(domain.get("max_date"))
+    trade_days = [
+        normalized
+        for value in ((diagnosis.get("recent_trade_day_coverage") or {}).get("trade_days") or [])
+        if (normalized := _normalize_trade_date(value))
+    ]
+    if max_chip_date:
+        trade_days = [value for value in trade_days if value > max_chip_date]
+    if not trade_days and reference_trade_date and (
+        not max_chip_date or max_chip_date < reference_trade_date
+    ):
+        trade_days = [reference_trade_date]
+    return _closed_target_dates(
+        trade_days,
+        reference_trade_date or max_closed_trade_date,
+        max_closed_trade_date,
+    )
+
+
+def _backfill_chip_date(db: Session, trade_date: str) -> dict[str, Any]:
+    target = _normalize_trade_date(trade_date)
+    if not target:
+        return {"row_count": 0, "provider_row_count": 0}
+
+    frame = get_pro().cyq_perf(
+        trade_date=target.replace("-", ""),
+        fields="ts_code,trade_date,cost_15pct,cost_50pct,cost_85pct,weight_avg,winner_rate",
+    )
+    if frame is None or frame.empty:
+        return {"row_count": 0, "provider_row_count": 0}
+
+    rows_by_code: dict[str, dict[str, Any]] = {}
+    for _, row in frame.iterrows():
+        code = str(row.get("ts_code") or "").split(".")[0].strip()
+        cost_50 = _optional_float(row.get("cost_50pct"))
+        if len(code) != 6 or cost_50 is None:
+            continue
+        rows_by_code[code] = {
+            "code": code,
+            "trade_date": target,
+            "chip_cost_15": _optional_float(row.get("cost_15pct")),
+            "chip_cost_50": cost_50,
+            "chip_cost_85": _optional_float(row.get("cost_85pct")),
+            "chip_weight_avg": _optional_float(row.get("weight_avg")),
+            "chip_winner_rate": _optional_float(row.get("winner_rate")),
+        }
+    if not rows_by_code:
+        return {"row_count": 0, "provider_row_count": len(frame)}
+
+    existing_codes = set(
+        db.scalars(
+            select(DailyKbar.code).where(
+                DailyKbar.trade_date == target,
+                DailyKbar.code.in_(list(rows_by_code)),
+            )
+        ).all()
+    )
+    payload = [rows_by_code[code] for code in rows_by_code if code in existing_codes]
+    for start in range(0, len(payload), _DAILY_KBAR_UPSERT_BATCH_SIZE):
+        chunk = payload[start:start + _DAILY_KBAR_UPSERT_BATCH_SIZE]
+        stmt = mysql_insert(DailyKbar).values(chunk)
+        db.execute(
+            stmt.on_duplicate_key_update(
+                chip_cost_15=stmt.inserted.chip_cost_15,
+                chip_cost_50=stmt.inserted.chip_cost_50,
+                chip_cost_85=stmt.inserted.chip_cost_85,
+                chip_weight_avg=stmt.inserted.chip_weight_avg,
+                chip_winner_rate=stmt.inserted.chip_winner_rate,
+            )
+        )
+    db.commit()
+    return {
+        "row_count": len(payload),
+        "provider_row_count": len(frame),
+        "missing_daily_kbar_count": len(rows_by_code) - len(payload),
+    }
 
 
 def _backfill_daily_kbar_date(
@@ -1988,40 +2103,54 @@ def _backfill_minute_kbar_date(
         except Exception as exc:  # noqa: BLE001 - one provider failure must not abort the batch
             return code, [], exc
 
-    # Fetching is I/O-bound and each code is independent. Keep DB work below
-    # single-threaded so the caller's SQLAlchemy Session is never shared across
-    # worker threads.
-    with ThreadPoolExecutor(
-        max_workers=min(MINUTE_REMEDIATION_WORKERS, len(target_codes)),
-        thread_name_prefix="minute-remediation",
-    ) as pool:
-        futures = [pool.submit(_fetch_code, code) for code in target_codes]
-        for future in as_completed(futures):
-            code, rows, error = future.result()
-            if error is not None:
-                failed_codes.append(code)
-            provider_row_count += len(rows)
-            for row in rows:
-                trade_date_value = _normalize_trade_date(row.get("trade_date"))
-                if trade_date_value != target:
-                    continue
-                trade_time = str(row.get("trade_time") or "").strip()
-                if not trade_time:
-                    continue
-                payload.append(
-                    {
-                        "code": code,
-                        "freq": normalized_freq,
-                        "trade_date": trade_date_value,
-                        "trade_time": trade_time,
-                        "open": _float(row.get("open")),
-                        "high": _float(row.get("high")),
-                        "low": _float(row.get("low")),
-                        "close": _float(row.get("close")),
-                        "volume": _float(row.get("volume")),
-                        "amount": _float(row.get("amount")),
-                    }
-                )
+    probe_codes = target_codes[:MINUTE_REMEDIATION_PROBE_COUNT]
+    probe_results = _fetch_minute_code_batch(_fetch_code, probe_codes)
+    if _minute_probe_failed(probe_results):
+        errors = [str(error) for _, _, error in probe_results if error is not None]
+        return {
+            "status": "failed",
+            "row_count": 0,
+            "provider_row_count": 0,
+            "requested_code_count": len(target_codes),
+            "target_hit_count": 0,
+            "missing_code_count": len(target_codes),
+            "missing_codes": target_codes[:10],
+            "failed_code_count": len(probe_results),
+            "failed_codes": [code for code, _, _ in probe_results],
+            "skipped_code_count": len(target_codes) - len(probe_results),
+            "error_type": "MinuteProviderUnavailable",
+            "error": f"分钟K线供应商探测失败：{errors[0][:160]}",
+        }
+
+    fetch_results = [
+        *probe_results,
+        *_fetch_minute_code_batch(_fetch_code, target_codes[len(probe_codes):]),
+    ]
+    for code, rows, error in fetch_results:
+        if error is not None:
+            failed_codes.append(code)
+        provider_row_count += len(rows)
+        for row in rows:
+            trade_date_value = _normalize_trade_date(row.get("trade_date"))
+            if trade_date_value != target:
+                continue
+            trade_time = str(row.get("trade_time") or "").strip()
+            if not trade_time:
+                continue
+            payload.append(
+                {
+                    "code": code,
+                    "freq": normalized_freq,
+                    "trade_date": trade_date_value,
+                    "trade_time": trade_time,
+                    "open": _float(row.get("open")),
+                    "high": _float(row.get("high")),
+                    "low": _float(row.get("low")),
+                    "close": _float(row.get("close")),
+                    "volume": _float(row.get("volume")),
+                    "amount": _float(row.get("amount")),
+                }
+            )
 
     if payload:
         stmt = mysql_insert(MinuteKbar).values(payload)
@@ -2047,6 +2176,29 @@ def _backfill_minute_kbar_date(
         "failed_code_count": len(failed_codes),
         "failed_codes": failed_codes[:10],
     }
+
+
+def _fetch_minute_code_batch(
+    fetch_code: Callable[[str], tuple[str, list[dict[str, Any]], Exception | None]],
+    codes: list[str],
+) -> list[tuple[str, list[dict[str, Any]], Exception | None]]:
+    if not codes:
+        return []
+    results: list[tuple[str, list[dict[str, Any]], Exception | None]] = []
+    with ThreadPoolExecutor(
+        max_workers=min(MINUTE_REMEDIATION_WORKERS, len(codes)),
+        thread_name_prefix="minute-remediation",
+    ) as pool:
+        futures = [pool.submit(fetch_code, code) for code in codes]
+        for future in as_completed(futures):
+            results.append(future.result())
+    return results
+
+
+def _minute_probe_failed(
+    results: list[tuple[str, list[dict[str, Any]], Exception | None]],
+) -> bool:
+    return bool(results) and all(not rows and error is not None for _, rows, error in results)
 
 
 def _capital_flow_target_codes(db: Session, trade_date: str, *, limit: int) -> list[str]:
@@ -2217,6 +2369,28 @@ def _diagnosis_snapshot(diagnosis: dict[str, Any]) -> dict[str, Any]:
     summary = recent.get("summary") or {}
     tables = diagnosis.get("tables") or {}
     lag_days = diagnosis.get("lag_days") or {}
+    table_snapshots = {
+        key: {
+            "max_date": (tables.get(key) or {}).get("max_date"),
+            "lag_days": lag_days.get(key),
+            "missing_dates": list(((recent.get("tables") or {}).get(key) or {}).get("missing_dates") or []),
+            "incomplete_dates": list(((recent.get("tables") or {}).get(key) or {}).get("incomplete_dates") or []),
+        }
+        for key in DEFAULT_REMEDIABLE_TABLES
+    }
+    chip_domain = _data_domain_by_key(diagnosis, "chip")
+    chip_max_date = _normalize_trade_date(chip_domain.get("max_date"))
+    if chip_domain:
+        table_snapshots["chip"] = {
+            "max_date": chip_max_date,
+            "lag_days": chip_domain.get("gap_days"),
+            "missing_dates": [
+                trade_date
+                for trade_date in recent.get("trade_days") or []
+                if not chip_max_date or trade_date > chip_max_date
+            ],
+            "incomplete_dates": [],
+        }
     return {
         "score": int(diagnosis.get("score") or 0),
         "reference_trade_date": diagnosis.get("reference_trade_date"),
@@ -2227,15 +2401,7 @@ def _diagnosis_snapshot(diagnosis: dict[str, Any]) -> dict[str, Any]:
             "high_impact_tables": list(summary.get("high_impact_tables") or []),
             "warning_tables": list(summary.get("warning_tables") or []),
         },
-        "tables": {
-            key: {
-                "max_date": (tables.get(key) or {}).get("max_date"),
-                "lag_days": lag_days.get(key),
-                "missing_dates": list(((recent.get("tables") or {}).get(key) or {}).get("missing_dates") or []),
-                "incomplete_dates": list(((recent.get("tables") or {}).get(key) or {}).get("incomplete_dates") or []),
-            }
-            for key in DEFAULT_REMEDIABLE_TABLES
-        },
+        "tables": table_snapshots,
     }
 
 

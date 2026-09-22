@@ -96,6 +96,12 @@ def test_auxiliary_sync_uses_closed_trade_date_and_commits(monkeypatch):
     assert result["trade_date"] == "2026-07-16"
 
 
+def test_auxiliary_trade_date_never_exceeds_latest_closed_session():
+    assert scheduler_service._bounded_auxiliary_trade_date(None, "2026-09-21") == "2026-09-21"
+    assert scheduler_service._bounded_auxiliary_trade_date("20260918", "2026-09-21") == "2026-09-18"
+    assert scheduler_service._bounded_auxiliary_trade_date("2026-09-22", "2026-09-21") == "2026-09-21"
+
+
 def test_postclose_pipeline_orders_sync_health_gate_and_recommendation(monkeypatch):
     calls = []
 
@@ -233,6 +239,21 @@ def test_postclose_task_configuration_disables_racing_legacy_crons(db):
     assert pipeline.cron_expression == scheduler_service.POSTCLOSE_PIPELINE_CRON
     assert __import__("json").loads(pipeline.payload_json)["pre_run_full_sync"] is True
     assert all(db.get(ScheduledTask, task_id).enabled is False for task_id in scheduler_service.LEGACY_POSTCLOSE_TASK_IDS)
+
+
+def test_daily_sync_payloads_cover_delayed_domains_and_register_late_repair(db):
+    scheduler_service._configure_postclose_pipeline_tasks(db)
+
+    postclose = db.get(ScheduledTask, scheduler_service.POSTCLOSE_PIPELINE_TASK_ID)
+    postclose_payload = __import__("json").loads(postclose.payload_json)
+    late_repair = db.get(ScheduledTask, scheduler_service.POSTCLOSE_LATE_DATA_REPAIR_TASK_ID)
+    late_payload = __import__("json").loads(late_repair.payload_json)
+
+    assert "chip" in postclose_payload["health_remediation_tables"]
+    assert late_repair.enabled is True
+    assert late_repair.cron_expression == scheduler_service.POSTCLOSE_LATE_DATA_REPAIR_CRON
+    assert late_payload["sync_scope"] == "all"
+    assert "chip" in late_payload["health_remediation_tables"]
 
 
 def test_postclose_readiness_blocks_when_required_table_misses_closed_session():
