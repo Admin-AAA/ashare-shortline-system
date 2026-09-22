@@ -1525,3 +1525,12 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 永久规则：涨停预测分别报告次日触及与收盘涨停，分母保留所有次日数据可判断的信号；交易 WR 仅使用已结算成交。官方每日涨停价缺失时标签保持未知。日期窗口必须按交易日计数。信号累计回撤与单笔仓位不能标为账户净值回撤或账户资金利用率。
 - 吸收位置：`backend/scripts/research_limit_up_benchmark.py`、`backend/tests/test_limit_up_benchmark.py`。
 - 相关：L-021、L-134、L-135。
+
+## L-139 龙虎榜单侧金额保持未知，排行榜重复不累计
+
+- 状态：已验证。
+- 适用：`top_inst` 席位金额标准化、同一营业部跨日参与研究。
+- 证据：`docs/reviews/strategies-deep-review-2026-09-22.md`；真实披露样本与回归见 `backend/tests/test_dragon_seat_repeat.py`。
+- 永久规则：`side` 表示买入额或卖出额排行榜，不能当成金额的方向标记。同一具名席位的重复榜单只计算一次；单日买卖金额分别披露时，只有两项均明确且唯一才计算净额。单侧金额未知不得填零，也不得直接使用该条 `net_buy` 声称完整净买入。无法确认身份的同名席位不用于跨日持仓推断。
+- 吸收位置：`backend/scripts/research_dragon_seat_repeat.py::normalize_seats`，生产接入席位历史时必须保留相同检查。
+- 相关：L-078、L-135、L-138。

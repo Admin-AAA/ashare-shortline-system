@@ -1,0 +1,18 @@
+default_entry_mode: next_open
+output_count: 6
+horizon_days: 5
+scoring:
+  base: 70
+  rules: []
+setups:
+  - name: 席位再次净买入后观察
+    when: "amount_yi > 0"
+    score_delta: 0
+strategies:
+  seat_reference:
+    name: 近期涨停与前日席位净买入
+    rule: T 日未收盘涨停；前一个自然月内至少一次收盘涨停；T 前一交易日至少一个具名营业部的单日买入额大于卖出额。
+  seat_repeat:
+    name: 同一席位再次净买入
+    hypothesis: 同一具名营业部在不同日期再次净买入，可能反映持续需求；预期改善次日涨停率与交易净收益。
+    rule: 满足参照条件；前日净买入的同一营业部，在 T 前一个自然月内另外至少一个日期净买入。仅使用单日榜单中买卖两侧金额均可确认的席位。

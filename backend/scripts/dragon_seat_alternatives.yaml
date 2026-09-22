@@ -1,0 +1,22 @@
+default_entry_mode: next_open
+output_count: 6
+horizon_days: 5
+scoring:
+  base: 70
+  rules: []
+setups:
+  - name: 前日席位事件确认
+    when: "amount_yi > 0"
+    score_delta: 0
+strategies:
+  seat_reference:
+    name: 近期涨停与前日席位净买入
+    rule: T 日未收盘涨停；前一个自然月内至少一次收盘涨停；T 前一交易日至少一个具名营业部的单日买入额大于卖出额。
+  institution_agreement:
+    name: 机构记录一致净买入
+    hypothesis: 前日机构记录均为净买入，可能代表多类资金共同需求；预期改善次日涨停率与交易净收益。
+    rule: 满足参照条件；前一交易日至少一条单日机构专用记录，所有机构专用记录的买卖两侧金额均已知，且每条买入金额大于卖出金额。不跨日识别机构身份，不累加重复金额。
+  seat_reversal:
+    name: 同一营业部由净卖出转为净买入
+    hypothesis: 最近一次可确认的净卖出之后出现净买入，可能反映该营业部重新参与；预期改善次日涨停率与交易净收益。
+    rule: 满足参照条件；前日净买入营业部在前一个自然月的上一次金额完整的单日上榜记录为净卖出。未上榜期间的买卖行为保持未知。
