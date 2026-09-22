@@ -24,6 +24,11 @@ def rollback_hint(item: dict[str, Any]) -> str:
         codes = [str(code) for code in item.get("codes") or [] if str(code or "").strip()]
         code_scope = f"且 code 限定在本次 {len(codes)} 个目标代码内" if codes else "并核对本次目标代码"
         return f"按 daily_kbars.trade_date = {target} {code_scope}删除本次写入行，再重新诊断。"
+    if table == "chip":
+        return (
+            f"筹码补数仅更新 daily_kbars.trade_date = {target} 的 chip_* 字段；"
+            "如需撤回，使用备份按 code + trade_date 恢复这些字段，再重新诊断。"
+        )
     if table == "minute_kbar":
         codes = [str(code) for code in item.get("codes") or [] if str(code or "").strip()]
         code_scope = f"且 code 限定在本次 {len(codes)} 个目标代码内" if codes else "并核对本次目标代码"
