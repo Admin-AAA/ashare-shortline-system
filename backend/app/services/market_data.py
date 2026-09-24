@@ -978,13 +978,16 @@ def _build_stock_from_bars(
     # 注意: ma 字段缓存值可能是 0.0(backfill 缺数据时写入),0.0 对均线无效,
     # 必须视为缺失并 fallback 到 _ma(closes,N) 重算,否则 dist60/breakout 连锁归零
     # 导致依赖趋势/突破的策略 prefilter 死锁(high-range-breakout-momentum 等)。
-    latest_indicator = latest.get("_indicator") or {}
-
+    # 其余派生指标（rsi/macd/bias/vol5_20/max_dd/breakout/upper_shadow）一律无条件
+    # 重算，不再读 latest["_indicator"] 缓存投影——判空抓不到「有值但值是错的」。
     ma5 = latest.get("ma5") or _ma(closes, 5)
     ma10 = latest.get("ma10") or _ma(closes, 10)
     ma20 = latest.get("ma20") or _ma(closes, 20)
     ma60 = latest.get("ma60") or _ma(closes, 60)
-    vol5_20 = latest.get("volume_ratio_5d") if latest.get("volume_ratio_5d") is not None else _safe_div(_ma(volumes, 5), _ma(volumes, 20), 1.0)
+    # 量比 vol5_20 — 始终从 volumes 重算，不信任缓存列（同 rsi / macd / bias）。
+    # 原判空是 `is not None`，0.0 会被当有效值；而 vol5_20 被多个策略当硬条件
+    # （vol5_20 >= 1.1 / <= 0.85 等），恒 0 会把「缩量」判定变成永真（L-142 同型）。
+    vol5_20 = _safe_div(_ma(volumes, 5), _ma(volumes, 20), 1.0)
 
     chg20 = _chg(closes, 20)
     chg60 = _chg(closes, 60)
@@ -1004,16 +1007,16 @@ def _build_stock_from_bars(
     if not quote.get("pe_ttm"):
         market_data_gaps.append("valuation")
 
-    # Bias values — prefer cached from DailyIndicator, fall back to computation
-    bias_ma5_val = latest_indicator.get("bias_ma5")
-    bias_ma10_val = latest_indicator.get("bias_ma10")
-    bias_ma20_val = latest_indicator.get("bias_ma20")
-    if bias_ma5_val is None:
-        bias_ma5_val = _bias(price, ma5)
-    if bias_ma10_val is None:
-        bias_ma10_val = _bias(price, ma10)
-    if bias_ma20_val is None:
-        bias_ma20_val = _bias(price, ma20)
+    # Bias values — 始终从实时 price 与重算均线算，不信任 daily_kbars.bias_* 缓存列
+    # （同 rsi / macd / max_dd / breakout）。两个理由：
+    # (1) 判空原本是 `is None`，而日常同步会把这批列写成 0.0 或 NULL——0.0 会被当成
+    #     有效值，而 support_ma5/ma10 直接由 abs(bias) 阈值判定，bias 恒 0 会让
+    #     「贴近均线」恒成立，静默放宽多个策略的支撑判定（L-142 同型）。
+    # (2) 缓存列是按 daily_kbars 的收盘价算的，盘中运行时 price ≠ close，缓存值已
+    #     过时；bias 的语义是「当前价相对均线的偏离」，必须用当前 price。
+    bias_ma5_val = _bias(price, ma5)
+    bias_ma10_val = _bias(price, ma10)
+    bias_ma20_val = _bias(price, ma20)
 
     support_ma5 = abs(bias_ma5_val) <= 2 and price >= ma5
     support_ma10 = abs(bias_ma10_val) <= 2.8 and price >= ma10
@@ -1026,44 +1029,38 @@ def _build_stock_from_bars(
     rsi6 = _rsi(closes, 6)
     rsi24 = _rsi(closes, 24)
 
-    # MACD — prefer cached
-    cached_dif = latest_indicator.get("macd_dif")
-    cached_dea = latest_indicator.get("macd_dea")
-    if cached_dif is not None and cached_dea is not None:
-        macd_dif_val = float(cached_dif)
-        macd_dea_val = float(cached_dea)
-        macd_bar_val = round((macd_dif_val - macd_dea_val) * 2, 4)
-        if macd_dif_val > 0 and macd_dif_val > macd_dea_val:
-            macd_status = "零轴上金叉"
-        elif macd_dif_val > macd_dea_val:
-            macd_status = "金叉"
-        elif macd_dif_val < 0 and macd_dif_val < macd_dea_val:
-            macd_status = "空头"
-        else:
-            macd_status = "多头" if macd_dif_val > 0 else "下穿零轴"
+    # MACD — 始终从收盘价重算，不信任 daily_kbars.macd_* 缓存列（同 rsi / max_dd /
+    # breakout / upper_shadow）。原实现是 `prefer cached` + `is not None` 判空，而
+    # 日常同步会把 Tushare stk_factor 缺失的这批列写成 **0.0 而非 NULL**：
+    # 2026-09-09~09-22 连续 12 个交易日全表 macd_dif/dea 都是 0.0，`0.0 is not None`
+    # 为真，于是直接采用 0，macd_status 被恒定算成「下穿零轴」（0 > 0 为假）。
+    # 判空永远抓不到「有值但值是错的」，纯 OHLC 派生量一律重算（L-142）。
+    dif, dea = _macd(closes)
+    macd_dif_val = round(dif, 4)
+    macd_dea_val = round(dea, 4)
+    macd_bar_val = round((macd_dif_val - macd_dea_val) * 2, 4)
+    if macd_dif_val > 0 and macd_dif_val > macd_dea_val:
+        macd_status = "零轴上金叉"
+    elif macd_dif_val > macd_dea_val:
+        macd_status = "金叉"
+    elif macd_dif_val < 0 and macd_dif_val < macd_dea_val:
+        macd_status = "空头"
     else:
-        dif, dea = _macd(closes)
-        macd_dif_val = round(dif, 4)
-        macd_dea_val = round(dea, 4)
-        macd_bar_val = round((macd_dif_val - macd_dea_val) * 2, 4)
-        if macd_dif_val > 0 and macd_dif_val > macd_dea_val:
-            macd_status = "零轴上金叉"
-        elif macd_dif_val > macd_dea_val:
-            macd_status = "金叉"
-        elif macd_dif_val < 0 and macd_dif_val < macd_dea_val:
-            macd_status = "空头"
-        else:
-            macd_status = "多头" if macd_dif_val > 0 else "下穿零轴"
+        macd_status = "多头" if macd_dif_val > 0 else "下穿零轴"
 
     # Breakout — 用原始 highs 重算(backfill 缓存的 breakout 可能为 0 误判,
     # 且依赖 previous_high60 等需 ma60 正确;直接重算避免连锁错误)
     breakout20 = int(price >= previous_high20 * 0.995) if previous_high20 else 0
     breakout60 = int(price >= previous_high60 * 0.995) if len(highs) >= 2 else 0
 
-    # Upper shadow count — prefer cached
-    upper_shadow_count20 = latest_indicator.get("upper_shadow_count20")
-    if upper_shadow_count20 is None:
-        upper_shadow_count20 = _upper_shadow_count(bars[-20:])
+    # Upper shadow count — 始终从 OHLC 重算，不信任 daily_kbars.upper_shadow_count20
+    # 缓存列（同 rsi / max_dd / breakout）。日常同步走 market_pool upsert 的
+    # `int(bar.get("upper_shadow_count20") or 0)`，而 Tushare 不返回这个本地派生指标，
+    # 于是 `or 0` 把 backfill 算好的真值覆盖成 0：2026-09-09 起全表 100% 为 0。
+    # 后果是 6 个策略 prefilter 的 upper_shadow_count20 上限条件全部静默失效
+    # （0 永远满足 <=5/<=6），长上影过多的票照样进候选池，而复核阶段用重算值
+    # 判定"原策略已失效"——同一条规则在推荐与复核两侧结论相反（L-142）。
+    upper_shadow_count20 = _upper_shadow_count(bars[-20:])
 
     # Max drawdown — 始终从收盘价重算，不信任 daily_kbars.max_dd* 缓存列
     # （同 rsi，回填列失真：如 301047 max_dd20 缓存 -19.4 但按收盘价实为 -7.3；

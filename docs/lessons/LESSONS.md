@@ -1534,3 +1534,62 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 永久规则：`side` 表示买入额或卖出额排行榜，不能当成金额的方向标记。同一具名席位的重复榜单只计算一次；单日买卖金额分别披露时，只有两项均明确且唯一才计算净额。单侧金额未知不得填零，也不得直接使用该条 `net_buy` 声称完整净买入。无法确认身份的同名席位不用于跨日持仓推断。
 - 吸收位置：`backend/scripts/research_dragon_seat_repeat.py::normalize_seats`，生产接入席位历史时必须保留相同检查。
 - 相关：L-078、L-135、L-138。
+
+## L-140 移动的工作树 HEAD 不能作为跨进程相等护栏的比对分量
+
+- 状态：encoded（已修 + 真实故障取证 + 回归测试）
+- 适用：任何「入队进程算一次指纹、执行进程重算并要求相等」的护栏，尤其是把部署身份塞进该指纹的情形
+- 证据：2026-09-22 驾驶舱手动推荐三连失败（`run_20260922_051327_9df153`、`run_20260922_051409_2ac04a`、`run_20260922_051518_66ccb8`），报错「Run 已持久化的 execution_version 与当前策略/因子/执行策略身份不一致」。并排比对入队侧 `result_summary_json.execution` 与执行侧重算值：`execution_policy.fingerprint`（`0904d443…`）、`factor_plan.fingerprint`（`f6218434…`，7 个 factor）、全部策略 `effective_version` **完全一致**，唯一漂移分量是 `application.revision`（入队 `e3ba2fe` vs. 执行侧另一个 SHA）。根因是 L-068 的残留面：`resolve_application_revision` 用 `lru_cache` 在每个进程首次调用时固化 `git rev-parse HEAD` 并回写 `os.environ`，长驻 API 与长驻 Prefect worker 在不同时刻启动即 pin 不同 SHA；而该仓库每隔数小时就落一个 commit（当轮 22:57、22:58 两次提交把 HEAD 从 `e3ba2fe` 推到 `f9b26d9`），于是页面推荐结构性必挂，只有「入队与执行同进程」的脚本运行能成功，长期掩盖了问题。
+- 永久规则：**活动工作树的 `git rev-parse HEAD` 不是进程所加载代码的身份**——进程启动后 HEAD 再动，运行中的代码并不改变。因此禁止把它放进任何要求跨进程相等的指纹；跨进程护栏只比对**会改变行为**的分量（request schema、execution policy、策略 descriptor、factor plan），部署 revision 作为「实际执行于哪个版本」**记录而不比对**（推荐运行已有 `recommendation_runs.code_revision` 独立承载，重复放进 hash 属冗余）。执行进程是「实际运行了什么」的权威方，identity 以执行侧为准写入；入队侧与执行侧 revision 不同时，两者都记进 audit（`execution.application` 与 `execution.enqueue_application`）而不是静默覆盖。护栏抛错必须并排打印两侧分量并点名差异分量（承接 L-068）。
+- 回归验证：`backend/tests/test_execution_version.py` 新增三组——revision 中途变化被接受、policy/factor/strategy 三种行为漂移仍 fail-closed 且报错含两侧值、无可比对 audit 时退回严格 hash 比对；`test_execution_version.py`+`test_deployment_identity.py` 19 passed，prepare/stage/workbench/run_state/provenance 相关 85 passed。
+- 吸收位置：`backend/app/services/workbench_service.py::_behaviour_identity`/`_behaviour_identity_differences`/`_persist_execution_version`/`_persist_run_start`；audit 经 `runs/stages/prepare.py::RunStartPort` 与 `runs/stages/adapters.py::ProductionRunStart` 透传。共享的 `ExecutionVersionInput` 哈希公式**未改动**，以免动摇 research/governance 已冻结的 claim 身份。
+- 相关：L-068（同一护栏的解析器统一，只修了「解析器不同」没修「pin 时机不同 + HEAD 会动」）。
+
+## L-141 失败写入路径本身必须不可能失败；批量 INSERT 报 1206 先查锁内存而不是缩批量
+
+- 状态：encoded（已修 + 真实故障取证 + 回归测试 213 passed）
+- 适用：任何把异常消息写进数据库列的失败处理路径；任何宽表批量 upsert 报 MySQL 1206
+- 证据：2026-09-23 单策略 run 反复卡死在 market_data。真实异常被彻底吞掉，日志只剩 `DataError (1406, "Data too long for column 'progress_message'")`。截断后原始异常才现形：`OperationalError (1206, 'The total number of locks exceeds the lock table size')`，SQL 是 366KB 的 `INSERT INTO daily_kbars`。双重失败链：daily_kbars 批量 INSERT 触发 1206 → 失败处理把 366KB 的 SQLAlchemy 异常（内含完整语句+绑定参数）写进 TEXT 列（上限 65535 字节）→ DataError 1406 → 失败处理自身崩溃 → run 永久挂在 RUNNING → 20 分钟后 stale-recovery 误标 interrupted 并写「服务重启或进程退出」。该 bug 早于 execution_version 改动：8 月 `run_20260824_010037_af33c5`、以及前一天被误归因为「服务重启」的 `run_20260922_000310_92d1b9`/`000318_c59079` 都是它。把批量从 1000 降到 200 后**仍报 1206**（SQL 366KB→73KB），证明批量不是根因——`innodb_buffer_pool_size` 仅 128MiB（MySQL 默认值从未调优）才是，该库有 234 万行 daily_kbars + 4754 万行 minute_kbars。在线 `SET GLOBAL` 调到 512MiB 后 market_data 135 秒通过、universe=4949、零错误。
+- 永久规则：**写 `error_message` / `progress_message` 前必须在不可变契约层统一截断**（`RunTransition.__post_init__`），一处覆盖所有调用点；失败处理绝不能因为自己的消息太长而失败。**外层 failure handler 即使不该覆写 worker-owned 行，也必须把异常 log 出来**，否则真实原因永久不可见、stale-recovery 的兜底文案会冒充根因。**批量 INSERT 报 1206 时先查 `innodb_buffer_pool_size` 等锁内存配置**：InnoDB 锁内存从 buffer pool 分配，批量已很小仍报 1206 就说明根因在资源配置而非批量大小。宽表（daily_kbars 80 列）每行取锁远多于窄表，不能与窄表共用批量常量。
+- 回归验证：`test_run_state_machine_repository.py` 新增 3 组（超长消息被截断到上限且保留头部、截断值经 CAS 真实落库、短消息不被动）；相关 213 passed。
+- 吸收位置：`runs/contracts.py::truncate_run_error_message`/`RUN_ERROR_MESSAGE_MAX_CHARS`/`RunTransition.__post_init__`；`workbench_service.py::_update_run_progress` 与外层 failure handler；`workbench_service.py::DAILY_BAR_UPSERT_BATCH_SIZE=200`（原共用 `UPSERT_BATCH_SIZE=1000`）；`market_pool/core.py::DAILY_KBAR_UPSERT_BATCH_SIZE=200`（StockQuote 早已分批 500，只有 DailyKbar 漏了）。buffer pool 已于 2026-09-24 持久化到 `/opt/homebrew/etc/my.cnf` 的 `[mysqld] innodb_buffer_pool_size = 512M`（此前仅为在线 `SET GLOBAL`，MySQL 一重启即回落 128MiB 使 1206 复现）；取值必须是 `innodb_buffer_pool_chunk_size` x `innodb_buffer_pool_instances` 的整数倍，本机为 128MiB x 1。
+
+## L-142 本地派生指标的缓存列会被日常同步恒写 0，消费侧一律重算，禁止 prefer cached
+
+- 状态：encoded（已修 + 全表取证 + 影响量化）
+- 适用：所有 Tushare 不返回、由本地计算的 daily_kbars 派生指标列（upper_shadow_count20、breakout*、max_dd*、rsi_* 等）
+- 证据：2026-09-23 盘后推荐出 688352（基础短线策略），用户点开记录立刻显示「原策略已失效，建议退出 / 硬风控阶段命中 / 20 日长上影次数需不高于 6（当前 10）」——同一条规则在推荐侧与复核侧结论相反。取证：688352 最近 20 根真实有 **10 根**长上影（上影/全幅≥0.45：0.500/0.451/0.498/0.579/0.736/0.507/0.548/0.805/0.688/0.596），而 `daily_kbars.upper_shadow_count20` 缓存列 20 根**全是 0**，推荐的 `feature_snapshot.upper_shadow_count20` 也记着 0，`0 <= 6` 于是通过 `prefilter.market.include`。全表扫描确认断点：2026-06-08~09-08 该列有非零值（34477 行），**2026-09-09 起每天 5500 只票 100% 为 0**；同表 max_dd20/ma5 空值 0/4949、breakout20=0 占 50% 属正常分布，只有这一列全零。0 传播链：`market_pool/core.py` upsert 用 `int(bar.get("upper_shadow_count20") or 0)`，而 Tushare 不返回该键 → `or 0` 把 backfill 真值覆盖成 0 → `_indicator` 带出 0 → `market_data.py` 的 `latest_indicator.get(...)` 拿到 **0 而非 None**，所以永不触发重算。影响量化：全市场抽样 400 只，真实 count>6 占 4.2%、>5 占 18.0%——这些候选自 09-09 起本该在 prefilter 被挡却一路放行；6 个策略（chen-xiaoqun/high-range-breakout/sector-relative/trend-pullback/chao-gu-yang-jia 的 ≤5，daily-stock-analysis 的 ≤6）的该项风控**全部静默失效**，反向 risk 规则（`>=4`/`>=5`）也从未触发。
+- 永久规则：**Tushare 不提供的本地派生指标，消费侧一律从原始 OHLC 重算，禁止 `prefer cached`**——日常同步的 `or 0` 兜底会把这类列恒写 0，而 `dict.get()` 拿到 0 不是 None，任何"缺失才重算"的写法都会被静默绕过。同文件里 rsi/max_dd/breakout 都因缓存列失真改成了始终重算，新增此类字段必须跟随同一约定。**推荐侧与复核侧必须共用同一份指标口径**：同一条 `when` 表达式在两侧取到不同值，会产出"刚推荐就说失效"的自相矛盾输出，比直接报错更伤信任。缓存列即使不再被读也仍是脏数据，下一个开发者会再次 prefer cached——要么回填要么从 upsert 的 update 列表移除。
+- 回归验证：修复后 market_data 与 indicator_computer 两侧口径对 688352/000510/002897/300726 全部一致（10/5/5/4），688352 现会在 prefilter 被拒，与复核结论一致；market_data/indicator/prefilter/feature/tools/equivalence 相关 301 passed。
+- 吸收位置：`app/services/market_data.py`（`upper_shadow_count20` 改为无条件 `_upper_shadow_count(bars[-20:])`）、`app/agents/tools.py`（同上，Agent 侧口径对齐）。**未动**：`market_pool/core.py:1587` 写入侧仍恒写 0（属 backfill 与日常同步的职责划分，需单独决策）、历史缓存列未回填。
+- 相关：L-141（同一轮排查暴露）。
+
+## L-143 健康度必须有值分布维度：结构性检查看不见「有值但值是错的」
+
+- 状态：encoded（已修 + 真实数据验证 + 回归测试 6 passed）
+- 适用：任何「数据健康度/质量评分」体系；任何用 `IS NOT NULL` 或行数/日期滞后判定数据可用性的检查
+- 证据：2026-09-23~24 体检扫出 daily_kbars **24 个列失真而 `./ashare data-health` 报满分 100**。根因是评分函数 `_compute_health_score` 的四类扣分**全是结构性的**：critical 表 `total_rows=0` 扣 20、最新日期 `lag>5` 扣 10、近 10 交易日 `gap_count*3` 最多扣 15、数据源连通 penalty。这些回答「管道有没有在跑」，回答不了「值可不可信」——一列恒零时行数完整、lag=0、覆盖 10/10，全部绿灯。唯一的列级检查 `_data_domain_coverage` 谓词是 `value_col.is_not(None)`，而失真值是**整数 0 不是 NULL**，照样通过；且 `presence_query.limit(1)` 使「全表有 1 行非 NULL」就算有数据，覆盖率从 100% 崩到 1 行也报正常。三次实测失真全部躲过它：`upper_shadow_count20` 自 09-09 起全表恒 0 达 14 天（6 个策略长上影 prefilter 静默失效、全市场 18% 本该被挡的候选混入）；`macd_dif/dea` 连续 12 个交易日全表 0.0（`macd_status` 恒为「下穿零轴」，因 `0 > 0` 为假）；`pct_chg` 在两次人工体检之间被刷成全零（`limit_up_days20` 直接数 `pct_chg>=9.8`，使 `limit-up-reseal-relay` 的 `universe.include` 硬条件全拒，而当日真实涨停 82 只）。过去 60 个交易日该表关键列有 **11 次状态切换**，健康度一次都没报过。
+- 永久规则：**健康度必须同时覆盖「结构」与「值分布」两个维度**。值分布按**当日横截面**检查三件事：整列是否 NULL、**唯一值个数**（`<=1` 即恒同值，恒零是其特例）、**非零占比**。判空谓词（`IS NOT NULL` / `is None` / `is not None`）在原理上抓不到「有值但值是错的」，不能作为数据可用性的唯一依据。**每列必须显式声明期望阈值**（`min_distinct` / `min_nonzero_ratio`），否则布尔型列（`breakout20` 只有 0/1 两个唯一值）必然误报。**直接进选股决策的列必须标 critical 并按更高权重扣分**，与「消费侧已改重算、仅属脏数据」的列区分开——后者仍要可观测，因为下一个开发者可能再次 prefer cached。单一维度的 penalty 必须封顶（本实现 20），避免独吞整个评分。只查参考交易日单日（约 5 千行）而非全表，`COUNT(DISTINCT)` 成本才可接受。
+- 回归验证：`backend/tests/test_data_health_value_sentinel.py` 6 passed，锁定——结构性全绿且无值分布输入时才是满分（基线，即失真能潜伏的原因）、恒零列必须扣分、critical 列按更高权重扣、penalty 封顶、布尔列期望必须放宽、`pct_chg`/`turnover_rate`/`close`/`volume`/`amount` 必须标 critical。真实数据验证：12 列受检，11 健康、抓出 `upper_shadow_count20` 恒同值，评分**由恒 100 变为 96** 且 issues 点名具体列与原因。
+- 吸收位置：`app/services/data_health_service.py::_VALUE_SENTINEL_DEFS`（每列期望声明）、`_value_distribution_sentinel`（检查实现）、`_compute_health_score`（接入扣分）、`_find_issues`（critical 报 high、其余报 medium）、`diagnose_all` 结果新增 `value_distribution` 字段。
+- 相关：L-142（被它抓到的第一个失真列）、L-141（同一轮排查暴露）。
+
+## L-144 upsert 的 on_duplicate_key_update 不得包含派生列：同步会用空值刷掉补好的真值
+
+- 状态：encoded（已修 + 受控端到端 + 真实 run 闭环验证 + 回归测试 5 passed）
+- 适用：任何「权威字段与派生字段同表」的 upsert；任何有独立 backfill 作业补列的表
+- 证据：2026-09-24 实测覆盖链。`daily_kbars` 的两处 upsert（`market_pool/core.py` 28 列、`workbench_service.py::_upsert_daily_bar_rows` 5 列）把派生指标全放进 `on_duplicate_key_update`，而日常同步只带回权威行情（OHLCV/pct_chg/turnover_rate），派生列当批是 `NULL`，或经写入侧 `int(bar.get(...) or 0)` 兜底成 `0`。于是**每跑一次同步/推荐就把 backfill 补好的真值刷掉一次**：Stage 4 把 09-23 的 `vol_ratio_5` 补成 4949 行非空，下一个 run 的 market_data 阶段（02:08~02:21）即清回 **0 行**，值分布哨兵（L-143）当场抓到；`pct_chg` 也是这样在两次人工体检之间被刷成全零，进而使 `limit_up_days20` 恒 0、`limit-up-reseal-relay` 的 `universe.include` 硬条件全拒。这解释了为什么「补缓存列」从来没有效果——不是补错了，是下一个 run 又刷掉了。
+- 永久规则：**按列语义拆分 update 列表，不要一刀切。**（1）权威字段（每次同步都带回新值）保持直接覆盖。（2）浮点派生字段（均线、乖离、量比、回撤、RSI/MACD/KDJ/BOLL/CCI、筹码成本——0 与 NULL 都不是有效取值）用 `COALESCE(NULLIF(VALUES(col), 0), col)`：当批带真值就更新，当批无效就保留库中已有值。（3）**整型计数字段（`breakout20/60`、`upper_shadow_count20`）的 0 是合法取值**（"没有突破"/"零根长上影"），`NULLIF` 会把合法 0 误判成缺失，只能整列退出 `UPDATE` 子句、由 backfill 独占写入权（`INSERT` 新行时仍写当批值）。消费侧重算（L-142）是必要的兜底，但**不能替代写入侧止损**——否则脏数据永久存在，且下一个开发者会再次 prefer cached。
+- 回归验证：`backend/tests/test_daily_kbar_upsert_preserves_derived.py` 5 passed（编译 SQL 断言 25 个浮点派生列全部带 `coalesce(nullif(...))`、3 个计数列完全不出现在 UPDATE 子句、权威列仍直接覆盖、两个集合不重叠、保护语义真值表）。受控端到端（测试 code T99999）4 场景全过：NULL 不覆盖真值、0 不覆盖真值、有效新值正常更新、行情列照常更新。**真实 run 闭环**：跑 run 前 `ma5=4949 vol_ratio_5=4949 bias_5=4934 max_dd20=4949`，market_data 执行后逐项完全一致——而修复前同样操作把 `vol_ratio_5` 刷成 0。
+- 吸收位置：`app/services/market_pool/core.py::_DERIVED_NUMERIC_COLUMNS`/`_DERIVED_COUNTER_COLUMNS`/`_preserve_derived_on_duplicate`；`app/services/workbench_service.py::_upsert_daily_bar_rows`（run 的实际执行路径）。
+- 相关：L-142（消费侧重算，本课是它的写入侧对偶）、L-143（哨兵抓到了这次覆盖）。
+
+## L-145 重启 worker 会在编排器侧留下 RUNNING 僵尸，占满并发槽使全队列静默堵死
+
+- 状态：encoded（已修 + 真实故障取证 + 回归测试 6 passed）
+- 适用：任何「DB 侧有 run 状态机、编排器侧另有 flow run 状态」的双状态系统；任何用 SIGTERM/kickstart 重启 worker 的部署
+- 证据：2026-09-24 用户报告「今天运行都失败了，从右上角点运行推荐进去的」。取证：`work_pools/ashare-local/queues/filter` 显示 work queue `default` 的 **`concurrency_limit = 2`**（不是 work pool 的 4），而 `flow_runs/filter` 有**正好 2 个** flow run 卡在 `RUNNING`（`quirky-cuttlefish` 06:51:20、`aggressive-sparrow` 06:55:26）——它们的子进程早已随我 `launchctl kickstart -k` 重启 worker 被 SIGTERM 杀掉。**2 个僵尸 × 并发上限 2 = 槽位永久占满**，worker `status=ONLINE`、心跳正常（07:20:35），却再也取不到任何活：`SCHEDULED` 积压 **39** 个、`CRASHED` 18 个，我 07:02:15 入队的 run（flow run `cobalt-porpoise`，预定时间早已过期）在 queued 停了 9 分钟纹丝不动。**DB 侧有 stale-run-recovery 兜底把 `RecommendationRun` 标 interrupted，编排器侧的 flow run 却无人收尾**——这个不对称是根因。手工把两个僵尸置 `CRASHED` 后，worker 45 秒内恢复取活。
+- 永久规则：**双状态系统的两侧都要有回收机制。** worker 启动时必须收尾上次残留的 RUNNING flow run，否则并发槽会被永久占用；只修 DB 侧不修编排器侧，故障表现是「worker 在线、心跳正常、队列却完全不动」，极难归因。收尾的安全判据用**时间**而非「是否有 ONLINE worker」：worker 刚被 kill 时心跳可能尚未超时、Prefect 仍标它 ONLINE，按 worker 状态判断会把该收的僵尸漏掉；而本 worker 启动后自己提交的 flow run，`start_time` 必然晚于本进程启动时刻。取不到/解析不了时间时**保守跳过**——宁可漏收一个僵尸，也不能误杀活任务（本轮就真的误伤过一次：在 worker 运行中手工调用收尾函数，把正在跑的验证 run 直接 CRASHED 了）。收尾失败只记日志、绝不阻塞 worker 启动。另外记住 **work queue 的 concurrency_limit 与 work pool 的是两个独立配额**，排查堵塞要看前者。
+- 回归验证：`backend/tests/test_prefect_worker_orphan_reap.py` 6 passed——残留被判僵尸、本进程启动后开始的活任务绝不收尾（回归那次真实误伤）、`...Z` 后缀与 naive 时间戳正确解析、缺失/非法时间戳保守跳过、退回 `expected_start_time`、Prefect 不可达时不抛异常。
+- 吸收位置：`backend/scripts/run_prefect_worker.py::_reap_orphan_running_flow_runs`/`_started_before_this_process`/`_PROCESS_START`，在 `prefect worker start` 之前执行。
+- 相关：L-141（同样是「兜底路径自身失效」的形态）。

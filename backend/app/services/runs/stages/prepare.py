@@ -53,6 +53,7 @@ class RunStartPort(Protocol):
         *,
         request: RunRequest,
         execution_version: str | None,
+        execution_audit: StageMapping | None = None,
     ) -> None:
         """Write the queued/running row with all canonical request columns."""
 
@@ -115,6 +116,7 @@ class PrepareStage:
                 selected_skills,
                 request=request,
                 execution_version=exec_version,
+                execution_audit=exec_audit,
             )
 
         result = RunStageResult(

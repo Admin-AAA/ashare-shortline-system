@@ -112,6 +112,47 @@ STRICT_CONSENSUS_FIELDS = {"price": 0.018, "pct": 0.08}
 DERIVED_RETURN_FIELDS = {"chg60", "ytd_chg"}
 LOCAL_DAILY_BAR_FIELDS = DERIVED_RETURN_FIELDS | {"ma5", "ma10", "ma20"}
 STOCK_QUOTE_UPSERT_BATCH_SIZE = 500
+# daily_kbars is an 80-column wide table, so its upsert takes far more row locks
+# per statement than stock_quotes.  Matches the batch size the gap-remediation
+# service already uses for the same table (L-141).
+DAILY_KBAR_UPSERT_BATCH_SIZE = 200
+
+# ---------------------------------------------------------------------------
+# 派生列的 upsert 覆盖保护（L-144）
+#
+# 日常同步只带回权威行情（OHLCV/pct_chg/turnover_rate），派生指标要么由本地
+# backfill 计算、要么来自 Tushare stk_factor/cyq_perf 这类可能拉不到的接口。
+# 但它们此前全在 on_duplicate_key_update 列表里，于是每跑一次同步/推荐就用当批
+# 的 NULL（或 `or 0` 兜底出来的 0）把 backfill 补好的真值刷掉——实测每跑一次
+# 推荐就发生一次，Stage 4 刚补满的 vol_ratio_5 在下一个 run 里即被清零。
+#
+# 按列语义分两类处理：
+#   _DERIVED_NUMERIC_COLUMNS: 0 与 NULL 都不是有效取值（均线、乖离、量比、回撤、
+#       RSI/MACD/KDJ/BOLL/CCI、筹码成本），用 COALESCE(NULLIF(新值,0), 旧值)——
+#       当批带真值就更新，当批无效就保留库里已有的值。
+#   _DERIVED_COUNTER_COLUMNS: 0 是**合法**取值（"没有突破"/"零根长上影"），
+#       NULLIF 会把合法的 0 误判成缺失，所以只能整列退出 update，由 backfill
+#       独占写入权；INSERT 新行时仍会写入当批值。
+# ---------------------------------------------------------------------------
+_DERIVED_NUMERIC_COLUMNS = (
+    "ma5", "ma10", "ma20", "ma60", "ma250",
+    "macd_dif", "macd_dea", "macd_bar",
+    "kdj_k", "kdj_d", "kdj_j",
+    "rsi_6", "rsi_12", "rsi_24",
+    "boll_upper", "boll_mid", "boll_lower", "cci",
+    "bias_5", "bias_10", "bias_20",
+    "vol_ratio_5", "vol_ratio_20",
+    "max_dd20", "max_dd60",
+)
+_DERIVED_COUNTER_COLUMNS = ("breakout20", "breakout60", "upper_shadow_count20")
+
+
+def _preserve_derived_on_duplicate(stmt: Any) -> dict[str, Any]:
+    """构造派生列的 ON DUPLICATE KEY UPDATE 表达式：当批无效则保留库中旧值。"""
+    return {
+        name: func.coalesce(func.nullif(getattr(stmt.inserted, name), 0), getattr(DailyKbar, name))
+        for name in _DERIVED_NUMERIC_COLUMNS
+    }
 
 
 def _new_snapshot_id(prefix: str, trade_date: str, *, now: datetime | None = None) -> str:
@@ -1587,45 +1628,29 @@ def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
     if not rows:
         return
 
-    stmt = mysql_insert(DailyKbar).values(rows)
-    db.execute(stmt.on_duplicate_key_update(
-        open=stmt.inserted.open,
-        high=stmt.inserted.high,
-        low=stmt.inserted.low,
-        close=stmt.inserted.close,
-        volume=stmt.inserted.volume,
-        amount=stmt.inserted.amount,
-        pct_chg=stmt.inserted.pct_chg,
-        turnover_rate=stmt.inserted.turnover_rate,
-        ma5=stmt.inserted.ma5,
-        ma10=stmt.inserted.ma10,
-        ma20=stmt.inserted.ma20,
-        ma60=stmt.inserted.ma60,
-        ma250=stmt.inserted.ma250,
-        macd_dif=stmt.inserted.macd_dif,
-        macd_dea=stmt.inserted.macd_dea,
-        macd_bar=stmt.inserted.macd_bar,
-        kdj_k=stmt.inserted.kdj_k,
-        kdj_d=stmt.inserted.kdj_d,
-        kdj_j=stmt.inserted.kdj_j,
-        rsi_6=stmt.inserted.rsi_6,
-        rsi_12=stmt.inserted.rsi_12,
-        rsi_24=stmt.inserted.rsi_24,
-        boll_upper=stmt.inserted.boll_upper,
-        boll_mid=stmt.inserted.boll_mid,
-        boll_lower=stmt.inserted.boll_lower,
-        cci=stmt.inserted.cci,
-        bias_5=stmt.inserted.bias_5,
-        bias_10=stmt.inserted.bias_10,
-        bias_20=stmt.inserted.bias_20,
-        vol_ratio_5=stmt.inserted.vol_ratio_5,
-        vol_ratio_20=stmt.inserted.vol_ratio_20,
-        breakout20=stmt.inserted.breakout20,
-        breakout60=stmt.inserted.breakout60,
-        max_dd20=stmt.inserted.max_dd20,
-        max_dd60=stmt.inserted.max_dd60,
-        upper_shadow_count20=stmt.inserted.upper_shadow_count20,
-    ))
+    # Chunked exactly like the StockQuote upsert above.  One giant
+    # ``INSERT ... ON DUPLICATE KEY UPDATE`` takes a row lock per row, and
+    # daily_kbars is an 80-column wide table, so a full-market batch overflowed
+    # InnoDB's lock table (MySQL 1206 "total number of locks exceeds the lock
+    # table size") and aborted the market_data stage — the single reason
+    # single-strategy runs could not complete (L-141).
+    for start in range(0, len(rows), DAILY_KBAR_UPSERT_BATCH_SIZE):
+        chunk = rows[start:start + DAILY_KBAR_UPSERT_BATCH_SIZE]
+        stmt = mysql_insert(DailyKbar).values(chunk)
+        # 权威行情列每次同步都带回新值，直接覆盖；派生列交给
+        # _preserve_derived_on_duplicate 保护，计数型派生列（breakout/长上影）
+        # 整列退出 update 由 backfill 独占写入（L-144）。
+        db.execute(stmt.on_duplicate_key_update(
+            open=stmt.inserted.open,
+            high=stmt.inserted.high,
+            low=stmt.inserted.low,
+            close=stmt.inserted.close,
+            volume=stmt.inserted.volume,
+            amount=stmt.inserted.amount,
+            pct_chg=stmt.inserted.pct_chg,
+            turnover_rate=stmt.inserted.turnover_rate,
+            **_preserve_derived_on_duplicate(stmt),
+        ))
 
 
 def _load_cached_bars_batch(

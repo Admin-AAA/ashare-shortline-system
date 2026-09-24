@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.tables import RecommendationRun
 from app.services.runs.contracts import (
+    RUN_ERROR_MESSAGE_MAX_CHARS,
     RunActor,
     RunErrorCode,
     RunPhase,
@@ -443,3 +444,72 @@ def test_stage_failure_and_terminal_paths_release_counted_agent_db_and_temp_leas
         assert [lease.release_count for lease in leases] == [1, 1, 1]
     finally:
         session.close()
+
+
+def test_oversized_failure_message_is_clamped_so_the_failure_write_cannot_fail():
+    """A failure message must never be able to overflow ``error_message`` (TEXT).
+
+    Regression for a real production stall: a SQLAlchemy error carried its whole
+    statement plus bound parameters (a large JSON column) into the message, the
+    UPDATE recording the failure then raised DataError 1406 "Data too long for
+    column 'error_message'", and the run sat in RUNNING until stale-run recovery
+    relabelled it "服务重启或进程退出" — hiding the true cause.
+    """
+    oversized = "原始异常：" + "x" * 100_000
+
+    transition = RunStateMachine.transition(
+        current_status=RunStatus.RUNNING,
+        trigger=RunTrigger.STAGE_FAILED,
+        actor=RunActor.WORKER,
+        error_message=oversized,
+    )
+
+    assert transition.error_message is not None
+    assert len(transition.error_message) == RUN_ERROR_MESSAGE_MAX_CHARS
+    # The head carries the diagnosis, and the tail says it was cut.
+    assert transition.error_message.startswith("原始异常：")
+    assert transition.error_message.endswith("（错误信息过长已截断）")
+    # MySQL TEXT is byte-limited; stay inside it even for all-CJK messages.
+    assert len(("中" * RUN_ERROR_MESSAGE_MAX_CHARS).encode("utf-8")) < 65535
+
+
+def test_clamped_failure_message_persists_through_compare_and_set():
+    session, repo = _repository()
+    try:
+        _create(repo, session, "run-oversized-failure")
+        leased = _start_and_lease(repo, session, "run-oversized-failure")
+        assert leased.lease is not None
+        transition = RunStateMachine.transition(
+            current_status=RunStatus.RUNNING,
+            trigger=RunTrigger.STAGE_FAILED,
+            actor=RunActor.WORKER,
+            error_message="y" * 100_000,
+        )
+        assert repo.compare_and_set_transition(
+            "run-oversized-failure",
+            TransitionCommit(
+                expected_revision=leased.revision,
+                transition=transition,
+                now=NOW + timedelta(seconds=2),
+                lease_token=leased.lease.token,
+            ),
+        ).applied
+        session.commit()
+
+        row = session.get(RecommendationRun, "run-oversized-failure")
+        assert row is not None
+        assert row.status == "failed"
+        assert row.error_message is not None
+        assert len(row.error_message) == RUN_ERROR_MESSAGE_MAX_CHARS
+    finally:
+        session.close()
+
+
+def test_short_failure_message_is_left_untouched():
+    transition = RunStateMachine.transition(
+        current_status=RunStatus.RUNNING,
+        trigger=RunTrigger.STAGE_FAILED,
+        actor=RunActor.WORKER,
+        error_message="stage failed: no candidates",
+    )
+    assert transition.error_message == "stage failed: no candidates"

@@ -262,6 +262,7 @@ async def run_staged_pipeline(
     from app.services.workbench_service import (
         _build_run_summary,
         _dumps,
+        _loads,
         _serialize_recommendation,
         _serialize_run_summary,
         _slim_market_snapshot,
@@ -441,7 +442,18 @@ async def run_staged_pipeline(
                 if bool((data.params or {}).get("disable_agent_review"))
                 else summary.get("agent_runtime")
             )
-            summary["execution"] = dict(data.execution_audit or {})
+            # Carry forward the identity facts PREPARE persisted.  Clobbering the
+            # whole sub-document would drop the stored execution_version and the
+            # enqueue-side application identity recorded when a commit landed
+            # between enqueue and execution (L-140), which are exactly the values a
+            # later investigation needs side by side.
+            execution = dict(data.execution_audit or {})
+            prepared = _loads(run.result_summary_json, {}).get("execution")
+            if isinstance(prepared, dict) and prepared.get("enqueue_application") is not None:
+                execution["enqueue_application"] = prepared["enqueue_application"]
+            if run.execution_version:
+                execution["execution_version"] = run.execution_version
+            summary["execution"] = execution
             summary["stage_timings_ms"] = dict(data.stage_timings_ms or {})
             summary["stages"] = dict(data.stage_audit or {})
             summary["degraded_watch_count"] = len(data.degraded_watchlist)

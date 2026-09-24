@@ -216,11 +216,11 @@ def query_stock_detail(code: str, session_id: str) -> dict:
             dist20 = _bias(price, _ma20)
             dist60 = _bias(price, _ma60)
 
-            # 量能
+            # 量能：始终从 volumes 重算，不信任 daily_kbars.vol_ratio_5 缓存列。
+            # 与 market_data.py 的 vol5_20 保持同一口径——原本 `is not None` 判空对
+            # 被写成 0.0 的缓存值失效，会让 Agent 看到的量比与策略规则口径不一致（L-142）。
             ma_vol20 = _ma(volumes, 20)
-            vol5_20 = float(latest.vol_ratio_5) if latest.vol_ratio_5 is not None else (
-                _ma(volumes, 5) / ma_vol20 if ma_vol20 else 1.0
-            )
+            vol5_20 = _ma(volumes, 5) / ma_vol20 if ma_vol20 else 1.0
 
             # primary_excess20 用 chg20 近似：相对于市场均值的超额
             chg20 = ((closes[-1] - closes[-21]) / closes[-21] * 100) if len(closes) >= 21 else 0.0
@@ -229,21 +229,19 @@ def query_stock_detail(code: str, session_id: str) -> dict:
             max_high20 = max(highs[-20:]) if len(highs) >= 20 else max(highs)
             off_high_pct = (price - max_high20) / max_high20 * 100 if max_high20 else 0.0
 
+            # 始终从收盘价重算，不信任 daily_kbars.max_dd20 缓存列（market_data.py
+            # 早已因该列失真改为始终重算，这里对齐同一口径）。
             max_dd20: float = 0.0
-            if latest.max_dd20 is not None:
-                max_dd20 = float(latest.max_dd20)
-            else:
-                peak = closes[-min(20, len(closes))]
-                for i in range(len(closes) - min(20, len(closes)) + 1, len(closes)):
-                    peak = max(peak, closes[i])
-                    dd = (closes[i] - peak) / peak * 100 if peak else 0
-                    max_dd20 = min(max_dd20, dd)
+            peak = closes[-min(20, len(closes))]
+            for i in range(len(closes) - min(20, len(closes)) + 1, len(closes)):
+                peak = max(peak, closes[i])
+                dd = (closes[i] - peak) / peak * 100 if peak else 0
+                max_dd20 = min(max_dd20, dd)
 
-            upper_shadow_count20: int = 0
-            if latest.upper_shadow_count20 is not None:
-                upper_shadow_count20 = int(latest.upper_shadow_count20 or 0)
-            else:
-                upper_shadow_count20 = _upper_shadow_count(bars[-20:])
+            # 始终从 OHLC 重算，不信任 daily_kbars.upper_shadow_count20 缓存列：
+            # 日常同步把这个 Tushare 不提供的本地指标恒写 0（L-142），信任缓存会让
+            # Agent 看到的长上影次数与策略规则口径不一致。
+            upper_shadow_count20 = _upper_shadow_count(bars[-20:])
 
             limit_up_days20 = sum(1 for bar in bars[-20:] if float(bar.pct_chg or 0) >= 9.8)
 

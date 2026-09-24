@@ -4,6 +4,7 @@ import threading
 import time
 import uuid
 from collections import Counter
+from collections.abc import Mapping
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -164,6 +165,7 @@ from app.services.runs.contracts import (
     application_identity_from_environment,
     parse_run_request,
     selected_recommendation_execution_policy,
+    truncate_run_error_message,
     validate_run_request_no_credentials,
 )
 from app.services.runs.request_persistence import (
@@ -197,6 +199,12 @@ RUN_ACTIVE_STATUSES = {"queued", "running"}
 RUN_RESUMABLE_STATUSES = {"interrupted"}
 PROGRESS_COMMIT_INTERVAL_SECONDS = 10.0
 UPSERT_BATCH_SIZE = 1000
+# daily_kbars is an 80-column wide table whose upsert takes far more row locks per
+# statement than the narrow stocks table, so it cannot share the batch size above:
+# a full-market batch of 1000 overflowed InnoDB's lock table (MySQL 1206) and
+# aborted the market_data stage.  200 matches what the gap-remediation service and
+# the market pool already use for this same table (L-141).
+DAILY_BAR_UPSERT_BATCH_SIZE = 200
 
 def _resolve_aux_prefetch_count(
     prefiltered_count: int,
@@ -300,13 +308,93 @@ def _execution_audit_from_result_summary(raw_summary: str | None) -> dict[str, A
     return dict(execution) if isinstance(execution, dict) else None
 
 
-def _persist_execution_version(run: RecommendationRun, candidate: str) -> None:
-    """Write a version once, or reject descriptor/policy drift before execution."""
-    if not run.execution_version:
-        run.execution_version = candidate
-        return
-    if run.execution_version != candidate:
-        raise RuntimeError("Run 已持久化的 execution_version 与当前策略/因子/执行策略身份不一致")
+def _behaviour_identity(audit: Mapping[str, Any]) -> dict[str, Any]:
+    """Project only the execution-audit facts that change what a run does.
+
+    ``application`` is deliberately excluded.  The deployed revision resolves to
+    ``git rev-parse HEAD`` of a working tree that keeps moving, and the enqueueing
+    API process and the executing Prefect worker pin it at their own startup — so
+    any commit landing between enqueue and execution makes the two sides disagree
+    on a fact that does not affect behaviour at all.  The executing revision is
+    already recorded per run in ``recommendation_runs.code_revision``, so blocking
+    on it here only bricks runs (L-068 follow-up).
+    """
+    policy = audit.get("execution_policy")
+    policy = policy if isinstance(policy, Mapping) else {}
+    factor_plan = audit.get("factor_plan")
+    factor_plan = factor_plan if isinstance(factor_plan, Mapping) else {}
+    fingerprints = audit.get("strategy_fingerprints")
+    return {
+        "request_schema_version": audit.get("request_schema_version"),
+        "execution_policy_fingerprint": policy.get("fingerprint"),
+        "factor_plan_fingerprint": factor_plan.get("fingerprint"),
+        "strategy_fingerprints": list(fingerprints) if isinstance(fingerprints, list) else [],
+    }
+
+
+def _behaviour_identity_differences(
+    persisted: Mapping[str, Any],
+    candidate: Mapping[str, Any],
+) -> list[str]:
+    """Return one readable line per drifted component, both sides side by side.
+
+    L-068 requires a fingerprint comparison to be able to print both sides; the
+    previous message only said "不一致" and forced a manual investigation.
+    """
+    before = _behaviour_identity(persisted)
+    after = _behaviour_identity(candidate)
+    differences: list[str] = []
+    for key in ("request_schema_version", "execution_policy_fingerprint", "factor_plan_fingerprint"):
+        if before[key] != after[key]:
+            differences.append(f"{key}: 入队={before[key]!r} 执行={after[key]!r}")
+    if before["strategy_fingerprints"] != after["strategy_fingerprints"]:
+        keyed_before = {
+            str(item.get("strategy_id")): item
+            for item in before["strategy_fingerprints"]
+            if isinstance(item, Mapping)
+        }
+        keyed_after = {
+            str(item.get("strategy_id")): item
+            for item in after["strategy_fingerprints"]
+            if isinstance(item, Mapping)
+        }
+        for strategy_id in sorted(set(keyed_before) | set(keyed_after)):
+            if keyed_before.get(strategy_id) != keyed_after.get(strategy_id):
+                differences.append(
+                    f"strategy[{strategy_id}]: 入队={keyed_before.get(strategy_id)!r} "
+                    f"执行={keyed_after.get(strategy_id)!r}"
+                )
+    return differences
+
+
+def _persist_execution_version(
+    run: RecommendationRun,
+    candidate: str,
+    candidate_audit: Mapping[str, Any] | None = None,
+) -> None:
+    """Record the executing identity, failing closed only on behaviour drift.
+
+    The executing process is authoritative for what actually ran, so its identity
+    is what gets stored.  Strategy descriptor, factor-plan and execution-policy
+    drift between enqueue and execution still aborts the run before it produces
+    recommendations under a contract nobody requested.
+    """
+    enqueue_audit = _execution_audit_from_result_summary(run.result_summary_json)
+    if candidate_audit is not None and enqueue_audit is not None:
+        differences = _behaviour_identity_differences(enqueue_audit, candidate_audit)
+        if differences:
+            raise RuntimeError(
+                "Run 的执行身份与入队时的策略/因子/执行策略不一致："
+                + "；".join(differences)
+            )
+    elif run.execution_version and run.execution_version != candidate:
+        # No audit on one of the sides: keep the strict hash comparison rather than
+        # silently accepting an identity that cannot be diffed.
+        raise RuntimeError(
+            "Run 已持久化的 execution_version 与当前身份不一致，且缺少可并排比对的 execution audit："
+            f"已持久化={run.execution_version} 当前={candidate}"
+        )
+    run.execution_version = candidate
 
 
 def _mark_run_dispatched(db: Session, run_id: str) -> bool:
@@ -1157,14 +1245,22 @@ def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
                 # The lifecycle CAS owns status, finished_at, heartbeat and lease
                 # cleanup.  Only legacy projection fields are written here.
                 run.progress_phase = "failed"
-                run.progress_message = str(exc)
+                run.progress_message = truncate_run_error_message(str(exc))
                 db.commit()
                 invalidate_bootstrap_cache()
                 _record_progress_commit(run)
             elif record.status is RunStatus.RUNNING:
+                # The worker owns this row, so its status must not be overwritten
+                # here — but staying silent used to make the real cause invisible:
+                # the run then sat in RUNNING until stale-run recovery relabelled
+                # it "服务重启或进程退出", which is not what happened.  Log the
+                # exception so the actual failure is recoverable from the log.
                 logger.warning(
-                    "outer failure handler refuses to overwrite worker-owned run %s",
+                    "outer failure handler refuses to overwrite worker-owned run %s; "
+                    "original failure: %s",
                     run_id,
+                    truncate_run_error_message(str(exc)),
+                    exc_info=exc,
                 )
             return
 
@@ -1174,11 +1270,11 @@ def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
         if run is None or run.status not in {"queued", "running"}:
             return
         run.status = "failed"
-        run.error_message = str(exc)
+        run.error_message = truncate_run_error_message(str(exc))
         run.finished_at = now
         run.heartbeat_at = now
         run.progress_phase = "failed"
-        run.progress_message = str(exc)
+        run.progress_message = truncate_run_error_message(str(exc))
         db.commit()
         invalidate_bootstrap_cache()
         _record_progress_commit(run)
@@ -1213,7 +1309,11 @@ def _update_run_progress(
     if total is not None:
         run.progress_total = max(0, int(total))
     if message is not None:
-        run.progress_message = message
+        # A failure path may pass a raw SQLAlchemy error whose message embeds the
+        # whole statement and its bound parameters.  Clamp it here too: this
+        # column is the other TEXT field a failure write lands in, and an
+        # overflowing write would make the failure handler fail (L-141).
+        run.progress_message = truncate_run_error_message(message)
     if status is not None:
         run.status = status
         if status in RUN_ACTIVE_STATUSES:
@@ -1374,6 +1474,7 @@ def _persist_run_start(
     *,
     request: RunRequest,
     execution_version: str | None = None,
+    execution_audit: Mapping[str, Any] | None = None,
     phase: str = "prepare",
     message: str = "同步 Skill 与运行参数完成，准备拉取市场数据",
 ) -> RecommendationRun:
@@ -1408,11 +1509,24 @@ def _persist_run_start(
     run.request_schema_version = request.schema_version
     run.request_json = request.to_canonical_json()
     if execution_version is not None:
-        _persist_execution_version(run, execution_version)
+        _persist_execution_version(run, execution_version, execution_audit)
     run.market_snapshot_json = run.market_snapshot_json or _dumps({})
     result_summary = {"agent_runtime": "starting"}
     existing_execution_audit = _execution_audit_from_result_summary(run.result_summary_json)
-    if existing_execution_audit is not None:
+    if execution_audit is not None:
+        # The executing process is authoritative for what actually ran.  Keep the
+        # enqueue-side application identity when it differs so a commit landing
+        # mid-flight stays visible instead of being silently overwritten.
+        recorded = {**dict(execution_audit), "execution_version": execution_version}
+        enqueue_application = (
+            (existing_execution_audit or {}).get("application")
+            if existing_execution_audit is not None
+            else None
+        )
+        if enqueue_application is not None and enqueue_application != recorded.get("application"):
+            recorded["enqueue_application"] = enqueue_application
+        result_summary["execution"] = recorded
+    elif existing_execution_audit is not None:
         result_summary["execution"] = existing_execution_audit
     run.result_summary_json = _dumps(result_summary)
     run.filter_audit_json = run.filter_audit_json or _dumps({})
@@ -2778,7 +2892,7 @@ def _upsert_stock_rows(db: Session, rows: list[dict[str, Any]]) -> None:
 def _upsert_daily_bar_rows(db: Session, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
-    for chunk in _chunked(rows, UPSERT_BATCH_SIZE):
+    for chunk in _chunked(rows, DAILY_BAR_UPSERT_BATCH_SIZE):
         stmt = mysql_insert(DailyKbar).values(chunk)
         db.execute(
             stmt.on_duplicate_key_update(
@@ -2790,11 +2904,16 @@ def _upsert_daily_bar_rows(db: Session, rows: list[dict[str, Any]]) -> None:
                 amount=stmt.inserted.amount,
                 pct_chg=stmt.inserted.pct_chg,
                 turnover_rate=stmt.inserted.turnover_rate,
-                ma5=stmt.inserted.ma5,
-                ma10=stmt.inserted.ma10,
-                ma20=stmt.inserted.ma20,
-                ma60=stmt.inserted.ma60,
-                vol_ratio_5=stmt.inserted.vol_ratio_5,
+                # 派生列：当批为 NULL / 0 时保留库中已有值，不再用空值刷掉
+                # backfill 补好的真值（L-144）。实测哨兵抓到的正是这里——本 run 的
+                # market_data 阶段把 Stage 4 刚补满的 vol_ratio_5 清回 0 行。
+                ma5=func.coalesce(func.nullif(stmt.inserted.ma5, 0), DailyKbar.ma5),
+                ma10=func.coalesce(func.nullif(stmt.inserted.ma10, 0), DailyKbar.ma10),
+                ma20=func.coalesce(func.nullif(stmt.inserted.ma20, 0), DailyKbar.ma20),
+                ma60=func.coalesce(func.nullif(stmt.inserted.ma60, 0), DailyKbar.ma60),
+                vol_ratio_5=func.coalesce(
+                    func.nullif(stmt.inserted.vol_ratio_5, 0), DailyKbar.vol_ratio_5
+                ),
             )
         )
 

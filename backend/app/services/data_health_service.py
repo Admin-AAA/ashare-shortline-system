@@ -84,6 +84,44 @@ _DAILY_DATA_FRESH_DAYS = 0
 _MARGIN_LIKE_FRESH_DAYS = 1
 _HK_HOLD_FRESH_DAYS = 130
 
+# ---------------------------------------------------------------------------
+# 值分布哨兵（L-143）
+#
+# 既有的四类扣分全是**结构性**的：表是否为空、最新日期滞后几天、近 N 个交易日缺
+# 哪几天、数据源是否连通。它们回答「数据管道有没有在跑」，回答不了「数据值可不可
+# 信」——一列恒零、恒同值或整列 NULL 时，行数、lag、覆盖天数全都正常，评分满分。
+#
+# 实测代价：daily_kbars.upper_shadow_count20 自 2026-09-09 起全表恒 0 达 14 天，
+# 使 6 个策略的长上影 prefilter 静默失效、全市场 18% 本该被挡的候选混入；
+# macd_dif/dea 连续 12 个交易日全表 0.0，使 macd_status 恒为「下穿零轴」；
+# pct_chg 更是在两次人工体检之间被刷成全零，而 limit_up_days20 直接数它，
+# 导致 limit-up-reseal-relay 的 universe 硬条件全拒。健康度全程 100 分。
+#
+# 哨兵按「当日横截面」检查三件事：整列是否 NULL、唯一值个数、非零占比。
+# 每列必须显式声明期望，否则布尔型列（breakout20 只有 0/1 两个值）会误报。
+# critical=True 的列失真按更高权重扣分——它们直接进选股决策。
+# ---------------------------------------------------------------------------
+_VALUE_SENTINEL_DEFS: list[dict[str, Any]] = [
+    # 核心行情：任何一列失真都直接污染决策
+    {"column": "close", "label": "收盘价", "critical": True, "min_distinct": 100, "min_nonzero_ratio": 0.99},
+    {"column": "volume", "label": "成交量", "critical": True, "min_distinct": 100, "min_nonzero_ratio": 0.90},
+    {"column": "amount", "label": "成交额", "critical": True, "min_distinct": 100, "min_nonzero_ratio": 0.90},
+    # pct_chg：limit_up_days20 直接数它（>=9.8），全零会让涨停类策略 universe 全拒
+    {"column": "pct_chg", "label": "涨跌幅", "critical": True, "min_distinct": 100, "min_nonzero_ratio": 0.50},
+    # turnover_rate：9 个策略的 prefilter 用它
+    {"column": "turnover_rate", "label": "换手率", "critical": True, "min_distinct": 100, "min_nonzero_ratio": 0.80},
+    # 本地派生指标：消费侧已改为无条件重算，缓存失真不污染决策，但仍是脏数据，
+    # 且下一个开发者可能再次 prefer cached，所以照样要可观测（非 critical）。
+    {"column": "ma5", "label": "MA5", "critical": False, "min_distinct": 100, "min_nonzero_ratio": 0.95},
+    {"column": "ma20", "label": "MA20", "critical": False, "min_distinct": 100, "min_nonzero_ratio": 0.95},
+    {"column": "bias_5", "label": "5日乖离", "critical": False, "min_distinct": 100, "min_nonzero_ratio": 0.80},
+    {"column": "vol_ratio_5", "label": "5日量比", "critical": False, "min_distinct": 100, "min_nonzero_ratio": 0.90},
+    {"column": "max_dd20", "label": "20日最大回撤", "critical": False, "min_distinct": 100, "min_nonzero_ratio": 0.80},
+    {"column": "upper_shadow_count20", "label": "20日长上影次数", "critical": False, "min_distinct": 3, "min_nonzero_ratio": 0.05},
+    # 布尔型：唯一值只有 0/1，期望必须放宽否则必然误报
+    {"column": "breakout20", "label": "20日突破", "critical": False, "min_distinct": 2, "min_nonzero_ratio": 0.0},
+]
+
 _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 行情 K 线
     {"key": "daily_kbar", "label": "日K线(含技术指标)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
@@ -228,11 +266,20 @@ def _diagnose_all_uncached(db: Session) -> dict[str, Any]:
     # 4b. 数据域（指标级）覆盖：哪些数据域有接入策略且持续拉取
     domain_summary = _data_domain_coverage(db, reference_trade_date)
 
+    # 4c. 值分布哨兵：抓恒零/恒同值/整列 NULL——结构性检查看不见的失真（L-143）
+    value_sentinel = _value_distribution_sentinel(db, reference_trade_date)
+
     # 5. 健康评分 (0-100)
-    score = _compute_health_score(table_stats, lag_days, reference_trade_date, recent_coverage, source_health, domain_summary)
+    score = _compute_health_score(
+        table_stats, lag_days, reference_trade_date, recent_coverage,
+        source_health, domain_summary, value_sentinel,
+    )
 
     # 6. 关键问题列表
-    issues = _find_issues(table_stats, lag_days, reference_trade_date, recent_coverage, reference_info, domain_summary)
+    issues = _find_issues(
+        table_stats, lag_days, reference_trade_date, recent_coverage,
+        reference_info, domain_summary, value_sentinel,
+    )
 
     result = {
         "score": score,
@@ -246,6 +293,7 @@ def _diagnose_all_uncached(db: Session) -> dict[str, Any]:
         "issues": issues,
         "data_sources": source_health,
         "data_domains": domain_summary,
+        "value_distribution": value_sentinel,
         "recommendation_summary": _recommendation_summary(db),
     }
     result["recommendation_readiness"] = recommendation_readiness_from_diagnosis(result)
@@ -491,6 +539,7 @@ def _compute_health_score(
     recent_coverage: dict[str, Any],
     source_health: dict[str, Any] | None = None,
     domain_summary: dict[str, Any] | None = None,
+    value_sentinel: dict[str, Any] | None = None,
 ) -> int:
     """0-100 健康评分。"""
     if not reference_trade_date:
@@ -547,6 +596,13 @@ def _compute_health_score(
     # 扣分：数据域覆盖缺口（来自 domain_summary 的预计算 penalty）
     if domain_summary:
         penalty = int(domain_summary.get("score_penalty", 0) or 0)
+        if penalty:
+            score -= penalty
+
+    # 扣分：值分布失真（恒零/恒同值/整列 NULL）。结构性检查全绿但值不可信时，
+    # 这是唯一能把分数压下来的维度——否则一列恒零 14 天仍是满分（L-143）。
+    if value_sentinel:
+        penalty = int(value_sentinel.get("score_penalty", 0) or 0)
         if penalty:
             score -= penalty
 
@@ -792,6 +848,115 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
     }
 
 
+def _value_distribution_sentinel(db: Session, reference_trade_date: str | None) -> dict[str, Any]:
+    """按当日横截面检查 daily_kbars 关键列的值分布，抓「有值但值是错的」（L-143）。
+
+    结构性检查（行数/lag/覆盖天数）看不见恒零与恒同值：整列被写成 0 时行数依然
+    完整、日期依然最新。这里用三个指标补上：
+      - 整列 NULL      -> 该列当日完全没有数据
+      - 唯一值个数     -> <= 1 即恒同值（恒零是它的特例）
+      - 非零占比       -> 低于该列声明的期望即可疑（布尔列期望为 0，不误报）
+
+    只查参考交易日单日（约 5 千行），COUNT(DISTINCT) 成本可接受；不做全表扫描。
+    """
+    if not reference_trade_date:
+        return {
+            "reference_trade_date": None,
+            "checked": 0,
+            "distorted": [],
+            "healthy_count": 0,
+            "score_penalty": 0,
+            "note": "无参考交易日，跳过值分布检查",
+        }
+
+    aggregates = []
+    for spec in _VALUE_SENTINEL_DEFS:
+        col = spec["column"]
+        aggregates.append(f"SUM(CASE WHEN `{col}` IS NOT NULL THEN 1 ELSE 0 END) AS nn_{col}")
+        aggregates.append(f"COUNT(DISTINCT `{col}`) AS ud_{col}")
+        aggregates.append(f"SUM(CASE WHEN `{col}` <> 0 THEN 1 ELSE 0 END) AS nz_{col}")
+
+    sql = (
+        "SELECT COUNT(*) AS rows_n, " + ", ".join(aggregates) +
+        " FROM daily_kbars WHERE trade_date = :ref"
+    )
+    try:
+        row = db.execute(text(sql), {"ref": reference_trade_date}).mappings().first()
+    except Exception as exc:
+        _rollback_session_safely(db)
+        logger.warning("值分布哨兵查询失败: %s", exc)
+        return {
+            "reference_trade_date": reference_trade_date,
+            "checked": 0,
+            "distorted": [],
+            "healthy_count": 0,
+            "score_penalty": 0,
+            "note": f"查询失败: {exc}",
+        }
+
+    total_rows = int((row or {}).get("rows_n") or 0)
+    if not total_rows:
+        return {
+            "reference_trade_date": reference_trade_date,
+            "checked": 0,
+            "distorted": [],
+            "healthy_count": 0,
+            "score_penalty": 0,
+            "note": "参考交易日无 daily_kbars 行，值分布无法判定",
+        }
+
+    distorted: list[dict[str, Any]] = []
+    healthy = 0
+    penalty = 0
+    for spec in _VALUE_SENTINEL_DEFS:
+        col = spec["column"]
+        critical = bool(spec.get("critical"))
+        not_null = int(row.get(f"nn_{col}") or 0)
+        distinct = int(row.get(f"ud_{col}") or 0)
+        non_zero = int(row.get(f"nz_{col}") or 0)
+        nonzero_ratio = round(non_zero / total_rows, 4) if total_rows else 0.0
+
+        reason: str | None = None
+        if not_null == 0:
+            reason = "整列 NULL"
+        elif distinct <= 1:
+            reason = f"恒同值（唯一值 {distinct}）"
+        elif distinct < int(spec.get("min_distinct") or 0):
+            reason = f"唯一值过少（{distinct} < 期望 {spec['min_distinct']}）"
+        elif nonzero_ratio < float(spec.get("min_nonzero_ratio") or 0.0):
+            reason = f"非零占比过低（{nonzero_ratio:.1%} < 期望 {float(spec['min_nonzero_ratio']):.0%}）"
+
+        if reason is None:
+            healthy += 1
+            continue
+
+        penalty += 5 if critical else 2
+        distorted.append({
+            "column": col,
+            "label": spec.get("label") or col,
+            "critical": critical,
+            "reason": reason,
+            "not_null": not_null,
+            "distinct": distinct,
+            "non_zero": non_zero,
+            "nonzero_ratio": nonzero_ratio,
+            "total_rows": total_rows,
+        })
+
+    # 与 domain penalty 同量级封顶，避免单一维度独吞整个评分
+    capped = min(penalty, 20)
+    return {
+        "reference_trade_date": reference_trade_date,
+        "total_rows": total_rows,
+        "checked": len(_VALUE_SENTINEL_DEFS),
+        "healthy_count": healthy,
+        "distorted": distorted,
+        "distorted_count": len(distorted),
+        "critical_distorted_count": sum(1 for d in distorted if d["critical"]),
+        "score_penalty": capped,
+    }
+
+
 def _find_issues(
     table_stats: dict[str, Any],
     lag_days: dict[str, int],
@@ -799,6 +964,7 @@ def _find_issues(
     recent_coverage: dict[str, Any],
     reference_info: dict[str, str | None],
     domain_summary: dict[str, Any] | None = None,
+    value_sentinel: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """列出所有需要关注的问题。"""
     issues = []
@@ -885,6 +1051,24 @@ def _find_issues(
                     "message": "其中部分缺口可能源于 Tushare 盘后延迟发布，"
                                "下一盘后周期会自动补齐",
                 })
+
+    if value_sentinel:
+        distorted = value_sentinel.get("distorted") or []
+        critical = [d for d in distorted if d.get("critical")]
+        others = [d for d in distorted if not d.get("critical")]
+        if critical:
+            detail = "、".join(f"{d['label']}（{d['reason']}）" for d in critical)
+            issues.append({
+                "severity": "high",
+                "message": f"关键列值分布失真共 {len(critical)} 列，直接影响选股决策：{detail}",
+            })
+        if others:
+            detail = "、".join(f"{d['label']}（{d['reason']}）" for d in others)
+            issues.append({
+                "severity": "medium",
+                "message": f"派生指标列值分布失真共 {len(others)} 列"
+                           f"（消费侧已改重算，不污染决策但属脏数据）：{detail}",
+            })
 
     return issues
 

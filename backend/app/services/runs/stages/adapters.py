@@ -71,6 +71,7 @@ class ProductionRunStart(RunStartPort):
         *,
         request: Any,
         execution_version: str | None,
+        execution_audit: StageMapping | None = None,
     ) -> None:
         from app.services.workbench_service import _persist_run_start
 
@@ -81,6 +82,7 @@ class ProductionRunStart(RunStartPort):
             list(selected_skills),
             request=request,
             execution_version=execution_version,
+            execution_audit=execution_audit,
         )
 
 

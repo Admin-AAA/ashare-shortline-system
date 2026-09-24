@@ -1,6 +1,7 @@
 """ExecutionVersionBuilder contract and recommendation-run persistence tests."""
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -320,8 +321,88 @@ def test_historic_nullable_execution_version_remains_readable():
         engine.dispose()
 
 
-def test_workbench_execution_version_is_written_once_and_rejects_identity_drift():
-    run = SimpleNamespace(execution_version=None)
+def _execution_audit(
+    *,
+    revision: str,
+    policy_fingerprint: str = "policy-fingerprint",
+    factor_fingerprint: str = "factor-fingerprint",
+    strategy_version: str = "strategy-a-v1",
+) -> dict[str, object]:
+    """Shape one persisted execution audit exactly as ``_execution_version_identity`` does."""
+    return {
+        "execution_version_schema_version": 1,
+        "application": {"revision": revision, "version": "development"},
+        "request_schema_version": 1,
+        "strategy_fingerprints": [
+            {
+                "strategy_id": "alpha",
+                "effective_version": strategy_version,
+                "manifest_fingerprint": "manifest-a",
+                "implementation_fingerprint": "implementation-a",
+            }
+        ],
+        "factor_plan": {
+            "contract_version": "factor-execution-plan/v1",
+            "fingerprint": factor_fingerprint,
+            "factor_ids": ["pos20"],
+        },
+        "execution_policy": {
+            "policy_id": "recommendation-run",
+            "policy_version": "v1",
+            "fingerprint": policy_fingerprint,
+        },
+    }
+
+
+def _run_with_enqueue_audit(audit: dict[str, object], execution_version: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        execution_version=execution_version,
+        result_summary_json=json.dumps(
+            {"agent_runtime": "queued", "execution": {**audit, "execution_version": execution_version}}
+        ),
+    )
+
+
+def test_persist_execution_version_accepts_a_deployment_revision_that_moved_mid_flight():
+    """The API and the worker pin git HEAD at their own startup; a commit landing
+    between enqueue and execution must not brick the run (L-068 follow-up)."""
+    run = _run_with_enqueue_audit(_execution_audit(revision="a" * 40), "execution-v1:enqueued")
+
+    workbench_service._persist_execution_version(
+        run,
+        "execution-v1:executing",
+        _execution_audit(revision="b" * 40),
+    )
+
+    # The executing process is authoritative for what actually ran.
+    assert run.execution_version == "execution-v1:executing"
+
+
+@pytest.mark.parametrize(
+    "drift",
+    (
+        {"policy_fingerprint": "policy-changed"},
+        {"factor_fingerprint": "factor-changed"},
+        {"strategy_version": "strategy-a-v2"},
+    ),
+)
+def test_persist_execution_version_rejects_behaviour_drift_and_prints_both_sides(drift):
+    run = _run_with_enqueue_audit(_execution_audit(revision="a" * 40), "execution-v1:enqueued")
+
+    with pytest.raises(RuntimeError) as error:
+        workbench_service._persist_execution_version(
+            run,
+            "execution-v1:executing",
+            _execution_audit(revision="a" * 40, **drift),
+        )
+
+    message = str(error.value)
+    assert "入队=" in message and "执行=" in message
+    assert run.execution_version == "execution-v1:enqueued"
+
+
+def test_persist_execution_version_keeps_strict_compare_without_a_diffable_audit():
+    run = SimpleNamespace(execution_version=None, result_summary_json=None)
 
     workbench_service._persist_execution_version(run, "execution-v1:first")
 

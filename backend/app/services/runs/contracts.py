@@ -161,6 +161,29 @@ class RunErrorCode(str, Enum):
     LEASE_LOST = "lease_lost"
 
 
+# ``recommendation_runs.error_message`` is MySQL TEXT (65535 *bytes*).  A failure
+# message built from a SQLAlchemy error carries the whole statement and its bound
+# parameters, so a single large JSON parameter can push it past that limit — and
+# then the write that records the failure fails too, leaving the run stuck in
+# RUNNING until stale-run recovery relabels it with a misleading "服务重启" text.
+# Truncating here keeps the failure path unable to fail on its own message.
+# Budget in characters: 4000 CJK characters is 12000 UTF-8 bytes, well inside
+# TEXT, and the head of an exception is where the diagnosis lives.
+RUN_ERROR_MESSAGE_MAX_CHARS = 4000
+_RUN_ERROR_MESSAGE_TRUNCATION_SUFFIX = "…（错误信息过长已截断）"
+
+
+def truncate_run_error_message(message: str | None) -> str | None:
+    """Clamp a lifecycle error message so persisting it can never overflow TEXT."""
+    if message is None:
+        return None
+    text = str(message)
+    if len(text) <= RUN_ERROR_MESSAGE_MAX_CHARS:
+        return text
+    head = RUN_ERROR_MESSAGE_MAX_CHARS - len(_RUN_ERROR_MESSAGE_TRUNCATION_SUFFIX)
+    return text[:head] + _RUN_ERROR_MESSAGE_TRUNCATION_SUFFIX
+
+
 @dataclass(frozen=True, slots=True)
 class RunTransition:
     """A state-machine-approved mutation for a repository compare-and-set call.
@@ -180,6 +203,13 @@ class RunTransition:
     terminal: bool = False
     requires_active_lease: bool = False
     recovery_condition: str | None = None
+
+    def __post_init__(self) -> None:
+        # Every lifecycle failure write passes through this contract, so clamping
+        # the message once here covers all coordinator triggers and adapters.
+        clamped = truncate_run_error_message(self.error_message)
+        if clamped != self.error_message:
+            object.__setattr__(self, "error_message", clamped)
 
 
 class SkillSelection(BaseModel):
