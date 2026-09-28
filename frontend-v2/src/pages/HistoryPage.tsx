@@ -721,7 +721,7 @@ export function HistoryPage() {
                               title={executionConditionTitle(currentCondition)}
                               style={{ color: currentCondition.passed ? "var(--market-up)" : "var(--muted)" }}
                             >
-                              {currentCondition.passed ? "当前买入条件已满足" : "当前买入判断条件"}: {clip(currentCondition.label, 32)}
+                              {executionConditionPrefix(currentCondition)}: {clip(currentCondition.label, 32)}
                             </span>
                           )}
                           <span
@@ -1022,6 +1022,13 @@ function savedExecutionTitle(state: RecommendationExecutionState) {
     ? ` · 判断于 ${formatApiDateTime(state.latest_checked_at)}`
     : "";
   return `${state.latest_decision_label || state.latest_decision_code}${state.latest_reason ? ` · ${state.latest_reason}` : ""}${checkedAt}`;
+}
+
+function executionConditionPrefix(condition: ExecutionConditionSummary) {
+  if (condition.passed) return "当前买入条件已满足";
+  // pending：门槛按全日累计量校准，盘中累计值还在增长，收盘前既不算满足也不算不满足
+  if (condition.status === "pending") return "当前买入条件待收盘确认";
+  return "当前买入判断条件";
 }
 
 function executionConditionTitle(condition: ExecutionConditionSummary) {

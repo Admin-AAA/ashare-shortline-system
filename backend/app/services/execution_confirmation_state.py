@@ -33,9 +33,7 @@ def persist_execution_assessments(db: Session, assessments: list[dict[str, Any]]
             continue
 
         state = db.get(RecommendationExecutionState, recommendation_id)
-        is_first_buy = decision_code == "buy" and not bool(
-            state and (state.ever_buy_confirmed or state.cancelled_before_entry)
-        )
+        is_first_buy = decision_code == "buy" and not bool(state and state.ever_buy_confirmed)
         if state is None:
             state = RecommendationExecutionState(
                 recommendation_id=recommendation_id,
@@ -57,7 +55,10 @@ def persist_execution_assessments(db: Session, assessments: list[dict[str, Any]]
         state.latest_condition_json = json.dumps(
             assessment.get("condition_summary") or {}, ensure_ascii=False, default=str
         )
-        if decision_code == "buy" and not bool(state.cancelled_before_entry):
+        # 入场窗口内一旦拿到买入确认就记为「确认过买入」，先前的取消不再屏蔽它：
+        # 取消判断是窗口内某一时刻的采样，同一窗口后续恢复到买入是有效事实，否则一次
+        # 采样就把这笔推荐永久踢出交易统计。
+        if decision_code == "buy":
             state.ever_buy_confirmed = True
         if is_first_buy:
             state.first_buy_confirmed_at = checked_at

@@ -182,3 +182,33 @@ def test_fresh_cancel_fills_reference_fields_for_migration_backfill():
         assert projected["cancelled_before_entry"] is True
         assert projected["first_cancelled_at"] == "2026-07-29T10:20:00"
         assert projected["first_cancelled_price"] == 8.10
+
+
+def test_buy_after_earlier_cancel_restores_buy_confirmed_fact():
+    """同一入场窗口内先取消后恢复买入：买入确认是有效事实，不被先前的取消屏蔽。
+
+    取消判断是窗口内某一时刻的采样（开盘累计成交额未达标等），若一次采样就永久屏蔽后续
+    买入确认，这笔推荐会被 execution_outcome_policy 永久踢出交易胜负统计。
+    """
+    engine = create_engine("sqlite:///:memory:")
+    RecommendationExecutionState.__table__.create(engine)
+
+    with Session(engine) as db:
+        persist_execution_assessments(
+            db,
+            [_assessment("cancel", checked_at="2026-07-29T09:33:00", price=8.10)],
+        )
+        persist_execution_assessments(
+            db,
+            [_assessment("buy", checked_at="2026-07-29T13:40:00", price=8.55)],
+        )
+        db.commit()
+
+        projected = load_execution_state_map(db, ["rec_state_1"])["rec_state_1"]
+
+        assert projected["latest_decision_code"] == "buy"
+        assert projected["ever_buy_confirmed"] is True
+        assert projected["first_buy_confirmed_at"] == "2026-07-29T13:40:00"
+        assert projected["first_buy_confirmed_price"] == 8.55
+        # 取消发生过的事实仍然保留，供复盘；但不再冒充「买入前已取消」的终态
+        assert projected["first_cancelled_at"] == "2026-07-29T09:33:00"

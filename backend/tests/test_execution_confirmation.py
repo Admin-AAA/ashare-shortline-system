@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models.tables import DailyKbar
 from app.services.execution_confirmation import (
     _adjust_stop_loss_for_ex_right,
+    _condition_summary,
     _derive_decisions,
     _entry_window_closed,
 )
@@ -282,3 +283,194 @@ def test_stop_loss_unchanged_when_no_bars(db_session):
     """无中间日K：无法判断除权，原样返回止损基准。"""
     adjusted = _adjust_stop_loss_for_ex_right(db_session, "600000", "2026-06-01", "2026-06-03", 18.0)
     assert adjusted == 18.0
+
+
+# ── #8: 全日累计量门槛在盘中不作为取消依据 ──────────────────────────────────
+
+def _prefilter_detail(expression: str, observed: dict, label: str) -> dict:
+    return {
+        "passed": False,
+        "scope": "universe_include",
+        "code": "universe_include",
+        "label": label,
+        "expression": expression,
+        "observed": observed,
+    }
+
+
+def test_session_amount_shortfall_waits_instead_of_cancelling():
+    """开盘十几分钟累计成交额 2.601 亿低于 3 亿下限：全日仍可能达标，判继续观察。"""
+    entry, holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=1,
+        entry_window_closed=False,
+        prefilter_ok=False,
+        signal=_signal(
+            prefilter_reason="amount_too_low",
+            prefilter_detail=_prefilter_detail(
+                "amount_yi >= 3",
+                {"amount_yi": 2.601},
+                "成交额（亿元）需不低于 3（当前 2.601）",
+            ),
+        ),
+        review=None,
+        current_price=241.02,
+        stop_loss=210.0,
+    )
+
+    assert entry["code"] == "wait"
+    assert "成交额（亿元）需不低于 3（当前 2.601）" in entry["reason"]
+    assert "盘中累计值仍可能继续增长" in entry["reason"]
+    # 盘中累计量未达标不构成降低仓位的依据
+    assert holding["code"] != "reduce"
+
+
+def test_session_amount_shortfall_never_emits_buy():
+    """累计成交额尚未证明达标时，即使规则分足够也不放行买入。"""
+    entry, _holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=1,
+        entry_window_closed=False,
+        prefilter_ok=False,
+        signal=_signal(
+            score=88.0,
+            prefilter_detail=_prefilter_detail(
+                "amount_yi >= 3",
+                {"amount_yi": 0.174},
+                "成交额（亿元）需不低于 3（当前 0.174）",
+            ),
+        ),
+        review={"status": "ok", "stance": "strong_support", "summary": "主线仍成立"},
+        current_price=18.38,
+        stop_loss=16.0,
+    )
+
+    assert entry["code"] == "wait"
+
+
+def test_breached_cumulative_upper_bound_still_cancels():
+    """累计成交额已越过 15 亿上限，当日只增不减，立即取消。"""
+    entry, holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=1,
+        entry_window_closed=False,
+        prefilter_ok=False,
+        signal=_signal(
+            prefilter_reason="成交额（亿元）需低于 15（当前 18.4）",
+            prefilter_detail=_prefilter_detail(
+                "amount_yi < 15",
+                {"amount_yi": 18.4},
+                "成交额（亿元）需低于 15（当前 18.4）",
+            ),
+        ),
+        review=None,
+        current_price=15.2,
+        stop_loss=14.0,
+    )
+
+    assert entry["code"] == "cancel"
+    assert entry["reason"] == "成交额（亿元）需低于 15（当前 18.4）"
+    assert holding["code"] == "reduce"
+
+
+def test_structural_prefilter_failure_still_cancels():
+    """长上影次数与当日累计量无关，失败仍然取消。"""
+    entry, holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=1,
+        entry_window_closed=False,
+        prefilter_ok=False,
+        signal=_signal(
+            prefilter_reason="20 日长上影次数需不高于 6（当前 10）",
+            prefilter_detail=_prefilter_detail(
+                "upper_shadow_count20 <= 6",
+                {"upper_shadow_count20": 10},
+                "20 日长上影次数需不高于 6（当前 10）",
+            ),
+        ),
+        review=None,
+        current_price=15.2,
+        stop_loss=14.0,
+    )
+
+    assert entry["code"] == "cancel"
+    assert entry["reason"] == "20 日长上影次数需不高于 6（当前 10）"
+    assert holding["code"] == "reduce"
+
+
+def test_stop_loss_break_still_cancels_under_cumulative_shortfall():
+    """跌破止损是价格事实，不因累计量不可判定而降级为继续观察。"""
+    entry, holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=1,
+        entry_window_closed=False,
+        prefilter_ok=False,
+        signal=_signal(
+            prefilter_detail=_prefilter_detail(
+                "amount_yi >= 3",
+                {"amount_yi": 0.5},
+                "成交额（亿元）需不低于 3（当前 0.5）",
+            ),
+        ),
+        review=None,
+        current_price=14.4,
+        stop_loss=14.5,
+    )
+
+    assert entry["code"] == "cancel"
+    assert entry["reason"] == "当前价格已经跌破原推荐止损位"
+    assert holding["code"] == "exit"
+
+
+def test_hard_veto_still_cancels_under_cumulative_shortfall():
+    """策略硬否决优先于累计量不可判定。"""
+    entry, _holding = _derive_decisions(
+        fresh=True,
+        signal_age_trade_days=1,
+        entry_window_closed=False,
+        prefilter_ok=False,
+        signal=_signal(
+            hard_veto=True,
+            veto_reason="退潮期加速末端",
+            prefilter_detail=_prefilter_detail(
+                "amount_yi >= 3",
+                {"amount_yi": 0.5},
+                "成交额（亿元）需不低于 3（当前 0.5）",
+            ),
+        ),
+        review=None,
+        current_price=15.2,
+        stop_loss=14.0,
+    )
+
+    assert entry["code"] == "cancel"
+    assert entry["reason"] == "退潮期加速末端"
+
+
+def test_condition_summary_marks_cumulative_shortfall_as_pending():
+    """不可判定的条件不能留下 failed 证据，取消原因另有其事时同样如此。"""
+    cumulative = _prefilter_detail(
+        "amount_yi >= 3",
+        {"amount_yi": 2.601},
+        "成交额（亿元）需不低于 3（当前 2.601）",
+    )
+    structural = _prefilter_detail(
+        "upper_shadow_count20 <= 6",
+        {"upper_shadow_count20": 10},
+        "20 日长上影次数需不高于 6（当前 10）",
+    )
+
+    waited = _condition_summary(
+        _signal(prefilter_detail=cumulative), False, {"code": "wait"}
+    )
+    # 硬风控取消这笔推荐，但累计量那条条件本身仍然只是尚未成立
+    vetoed = _condition_summary(
+        _signal(prefilter_detail=cumulative), False, {"code": "cancel"}
+    )
+    failed = _condition_summary(
+        _signal(prefilter_detail=structural), False, {"code": "cancel"}
+    )
+
+    assert waited["status"] == "pending"
+    assert vetoed["status"] == "pending"
+    assert failed["status"] == "failed"

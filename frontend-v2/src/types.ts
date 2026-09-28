@@ -1555,7 +1555,8 @@ export type RecommendationHistoryRow = {
 
 export type ExecutionConditionSummary = {
   passed?: boolean;
-  status?: "passed" | "failed" | string;
+  // pending：该条件卡在盘中累计量（成交额/换手率/量比）上，收盘前尚不可判定
+  status?: "passed" | "pending" | "failed" | string;
   scope?: string;
   code?: string;
   label?: string;

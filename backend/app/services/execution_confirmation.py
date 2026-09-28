@@ -21,6 +21,7 @@ from app.engine.strategy_runner import explain_skill_prefilter, run_strategy
 from app.engine.trading_calendar import latest_allowed_quote_date
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome
 from app.services.evidence.validation import canonical_live_forward_run_ids
+from app.services.intraday_cumulative_policy import intraday_cumulative_inconclusive
 from app.services.outcome_simulation import _is_intraday_recommendation
 
 
@@ -134,7 +135,14 @@ def _derive_decisions(
     review_available = bool(review and review.get("status") == "ok")
     hard_veto = bool(signal.get("hard_veto"))
     strategy_vetoed = hard_veto or stance in {"oppose", "veto"} or action == "不做"
-    entry_blocked = strategy_vetoed or not prefilter_ok
+    # 入场决策发生在交易时段内（收盘后走 expired 分支），成交额/换手率/量比等字段拿到的
+    # 是盘中累计值。这类条件在收盘前只能确认达标、不能确认不达标，未达标时判「继续观察」
+    # 而不是取消——否则开盘几分钟内每只待确认推荐都会被一次采样永久判死。
+    prefilter_inconclusive = not prefilter_ok and intraday_cumulative_inconclusive(
+        signal.get("prefilter_detail")
+    )
+    prefilter_failed = not prefilter_ok and not prefilter_inconclusive
+    entry_blocked = strategy_vetoed or prefilter_failed
     stop_broken = stop_loss > 0 and current_price > 0 and current_price <= stop_loss
     rule_supportive = bool(signal.get("setup_match")) and float(signal.get("score") or 0) >= 72
     supportive = stance in {"strong_support", "support"} or (not review_available and rule_supportive)
@@ -151,12 +159,18 @@ def _derive_decisions(
         entry = _decision("cancel", "取消买入", "当前价格已经跌破原推荐止损位")
     elif entry_blocked:
         reason = str(
-            (signal.get("prefilter_reason") if not prefilter_ok else "")
+            (signal.get("prefilter_reason") if prefilter_failed else "")
             or signal.get("veto_reason")
             or (review or {}).get("summary")
             or "原策略当前不再支持入场"
         )
         entry = _decision("cancel", "取消买入", reason)
+    elif prefilter_inconclusive:
+        entry = _decision(
+            "wait",
+            "继续观察",
+            f"{_inconclusive_condition_label(signal)}；该门槛按全日累计量校准，盘中累计值仍可能继续增长，收盘前不据此取消",
+        )
     elif signal.get("setup_match") and float(signal.get("score") or 0) >= 60 and supportive:
         entry = _decision("buy", "允许按策略轻仓执行", str((review or {}).get("summary") or signal.get("entry_rule") or "当前买点仍成立"))
     else:
@@ -167,13 +181,19 @@ def _derive_decisions(
     elif strategy_vetoed:
         reason = str(signal.get("veto_reason") or (review or {}).get("summary") or "原策略逻辑已经失效")
         holding = _decision("exit", "原策略已失效，建议退出", reason)
-    elif not prefilter_ok:
+    elif prefilter_failed:
         holding = _decision("reduce", "禁止加仓，降低仓位观察", "当前已不满足原策略候选条件")
     elif supportive:
         holding = _decision("hold", "继续持有，严格执行保护位", str((review or {}).get("summary") or "原策略逻辑仍成立"))
     else:
         holding = _decision("reduce", "禁止加仓，收紧保护位观察", str((review or {}).get("summary") or "当前策略未明确支持继续持有"))
     return entry, holding
+
+
+def _inconclusive_condition_label(signal: dict[str, Any]) -> str:
+    detail = signal.get("prefilter_detail")
+    label = str((detail or {}).get("label") or "") if isinstance(detail, dict) else ""
+    return label or str(signal.get("prefilter_reason") or "全日累计量门槛尚未达标")
 
 
 def _run_agent_review(skill: Any, stock: dict[str, Any], snapshot: dict[str, Any], signal: dict[str, Any]) -> dict[str, Any]:
@@ -197,11 +217,24 @@ def _build_signal_for_strategy(
     current: dict[str, Any],
     snapshot: dict[str, Any],
 ) -> tuple[dict[str, Any], bool, str]:
-    """对单只已 enriched 的 stock 跑原策略 prefilter + 运行，返回带 prefilter 元数据的 signal。"""
+    """对单只已 enriched 的 stock 跑原策略 prefilter + 运行，返回带 prefilter 元数据的 signal。
+
+    ``run_strategy`` 自己也查 universe，未通过时短路成 ``hard_veto`` + "不在策略股票池"，
+    只给出一个粗粒度否决、丢掉具体是哪条规则不过。确认路径改用 ``skip_universe_check=True``：
+    门槛判定统一由 ``explain_skill_prefilter`` 承担（它覆盖的规则是 ``_passes_universe``
+    的超集，还多出 ``prefilter.market.include``/``include_any``），结果带着失败规则与观测值
+    进入决策状态机，才能区分「真的不合格」和「盘中累计量还没到」。phases 里的 hard_veto
+    仍然照常生效。
+    """
     prefilter_detail = explain_skill_prefilter(skill, current)
     prefilter_ok = bool(prefilter_detail["passed"])
     prefilter_reason = "pass" if prefilter_ok else str(prefilter_detail["label"])
-    signal = dict(run_strategy(skill, current, list(snapshot.get("main_industries") or [])))
+    signal = dict(run_strategy(
+        skill,
+        current,
+        list(snapshot.get("main_industries") or []),
+        skip_universe_check=True,
+    ))
     signal["prefilter_ok"] = prefilter_ok
     signal["prefilter_reason"] = prefilter_reason
     signal["prefilter_detail"] = prefilter_detail
@@ -305,7 +338,10 @@ def _condition_summary(
     if not prefilter_ok:
         detail = signal.get("prefilter_detail")
         if isinstance(detail, dict):
-            return {**detail, "status": "failed"}
+            # 卡在盘中累计量上的条件收盘前不可判定，不留下 failed 的证据——即使这笔推荐
+            # 因为别的原因（硬风控、跌破止损）被取消，这条条件本身仍然只是尚未成立。
+            status = "pending" if intraday_cumulative_inconclusive(detail) else "failed"
+            return {**detail, "status": status}
     setup_match = str(signal.get("setup_match") or "").strip()
     return {
         "passed": entry_decision.get("code") == "buy",
