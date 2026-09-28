@@ -9,7 +9,7 @@ from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
@@ -55,6 +55,10 @@ from app.services.tushare_client import (
     get_pro,
     get_tushare_provider_health,
 )
+from app.services.daily_bar_write_policy import (
+    normalize_quote_metric,
+    quote_metrics_look_unready,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +72,11 @@ DEFAULT_REMEDIABLE_TABLES = (
     "concept_sector",
     "dragon_tiger",
     "news",
+    # 概念板块成分是独立数据域，此前未登记进可修复清单，最新日期滞后时按钮无从下手。
+    "concept_member",
+    # 值分布失真：把健康度的值分布哨兵接到修复路径，让「有数据但值是错的」也能被按钮修
+    # （此前哨兵只接评分路径，13 分扣分按一次也修不掉，L-146）。
+    "value_distribution",
 )
 # minute_kbar 由计划显式处理并保留失败审计；缺少供应商权限时不会阻止其余
 # 日线与辅助数据的补数动作。
@@ -97,6 +106,19 @@ AUXILIARY_GAP_FIELDS = {
     "theme_tags",
 }
 AUXILIARY_REMEDIABLE_TABLES = {"capital_flow", "concept_sector", "dragon_tiger", "news"}
+
+# 值分布哨兵报出的失真列按修复手段分两类：权威行情列重新拉当日全市场日线覆盖回去，
+# 本地派生列交给本地指标补数脚本重算。两类合起来正好覆盖哨兵登记的全部 12 列（L-146）。
+QUOTE_METRIC_REPAIR_COLUMNS = ("close", "volume", "amount", "pct_chg", "turnover_rate")
+LOCAL_DERIVED_REPAIR_COLUMNS = (
+    "ma5",
+    "ma20",
+    "bias_5",
+    "vol_ratio_5",
+    "max_dd20",
+    "upper_shadow_count20",
+    "breakout20",
+)
 
 
 def _refresh_auxiliary_dataset(
@@ -1370,6 +1392,39 @@ def _build_remediation_plan(
                 }
             )
 
+    if "concept_member" in requested_tables and reference_trade_date:
+        stale_keys = {
+            str(domain.get("key") or "")
+            for domain in ((diagnosis.get("data_domains") or {}).get("stale_domains") or [])
+        }
+        if "concept_member" in stale_keys:
+            plan.append({"table": "concept_member", "trade_date": reference_trade_date})
+
+    if "value_distribution" in requested_tables and reference_trade_date:
+        sentinel = diagnosis.get("value_distribution") or {}
+        distorted_columns = [
+            str(item.get("column") or "")
+            for item in (sentinel.get("distorted") or [])
+            if item.get("column")
+        ]
+        quote_columns = [c for c in distorted_columns if c in QUOTE_METRIC_REPAIR_COLUMNS]
+        local_columns = [c for c in distorted_columns if c in LOCAL_DERIVED_REPAIR_COLUMNS]
+        unsupported = [
+            c
+            for c in distorted_columns
+            if c not in QUOTE_METRIC_REPAIR_COLUMNS and c not in LOCAL_DERIVED_REPAIR_COLUMNS
+        ]
+        if quote_columns or local_columns:
+            plan.append(
+                {
+                    "table": "value_distribution",
+                    "trade_date": str(sentinel.get("reference_trade_date") or reference_trade_date),
+                    "quote_columns": quote_columns,
+                    "local_columns": local_columns,
+                    "unsupported_columns": unsupported,
+                }
+            )
+
     return plan
 
 
@@ -1484,6 +1539,124 @@ def _execute_plan_item_safely(db: Session, item: dict[str, Any]) -> dict[str, An
         }
 
 
+def _repair_value_distribution(
+    db: Session,
+    trade_date: str,
+    *,
+    quote_columns: list[str],
+    local_columns: list[str],
+) -> dict[str, Any]:
+    """按列修复值分布失真：权威行情列重拉当日日线覆盖，本地派生列重算。"""
+    target = _normalize_trade_date(trade_date)
+    if not target:
+        return {"row_count": 0, "reason": "缺少参考交易日，未执行值分布修复。"}
+
+    result: dict[str, Any] = {
+        "quote_row_count": 0,
+        "local_row_count": 0,
+        "repaired_quote_columns": [],
+        "repaired_local_columns": [],
+    }
+
+    if quote_columns:
+        quote_result = _repair_quote_metric_columns(db, target, quote_columns)
+        result["quote_row_count"] = quote_result["row_count"]
+        result["repaired_quote_columns"] = quote_result["columns"]
+        result["provider_row_count"] = quote_result["provider_row_count"]
+
+    if local_columns:
+        from scripts.backfill_indicators import backfill_date
+
+        fixed = backfill_date(db, target)
+        result["local_row_count"] = sum(int(value or 0) for value in fixed.values())
+        result["repaired_local_columns"] = list(local_columns)
+        result["local_backfill_detail"] = fixed
+
+    result["row_count"] = int(result["quote_row_count"]) + int(result["local_row_count"])
+    return result
+
+
+def _repair_quote_metric_columns(
+    db: Session,
+    trade_date: str,
+    columns: list[str],
+) -> dict[str, Any]:
+    """用当日全市场日线批量覆盖指定的权威行情列，其余列一律不动。
+
+    取数走与日K补数同一个类型化数据源端口（一次全市场批量），不直接调 tushare_client 的
+    日线助手——生产市场边界只允许经端口取数。
+    """
+    targets = [name for name in columns if name in QUOTE_METRIC_REPAIR_COLUMNS]
+    if not targets:
+        return {"row_count": 0, "columns": [], "provider_row_count": 0}
+
+    codes = [
+        str(code or "").strip()
+        for code in db.scalars(
+            select(DailyKbar.code).where(DailyKbar.trade_date == trade_date).distinct()
+        ).all()
+        if str(code or "").strip()
+    ]
+    if not codes:
+        return {
+            "row_count": 0,
+            "columns": targets,
+            "provider_row_count": 0,
+            "reason": "该交易日库内没有日K行，无需覆盖。",
+        }
+
+    source = _resolve_market_source(None)
+    batch = source.fetch_daily_bars(
+        DailyBarRequest(
+            instruments=tuple(QuoteRef(code) for code in codes),
+            trade_date=trade_date,
+        )
+    )
+    if batch.audit.failed_count:
+        raise RuntimeError("market source failed to retrieve the daily-bar trade-date batch")
+    rows = [
+        bar.as_legacy_row()
+        for bars in batch.bars_by_instrument.values()
+        for bar in bars
+        if _normalize_trade_date(bar.as_legacy_row().get("trade_date")) == trade_date
+    ]
+    if not rows:
+        return {"row_count": 0, "columns": targets, "provider_row_count": 0}
+
+    # 与日线批量同步同口径的防线：整批都没有非零涨跌幅说明数据源当日还没出数据，
+    # 此时覆盖等于把假值写进库，直接放弃本次修复（L-146）。
+    if quote_metrics_look_unready(rows):
+        return {
+            "row_count": 0,
+            "columns": targets,
+            "provider_row_count": len(rows),
+            "reason": "数据源当日 pct_chg 整批为空，判定未就绪，未覆盖任何列。",
+        }
+
+    assignments = ", ".join(f"{name} = :{name}" for name in targets)
+    statement = text(
+        f"UPDATE daily_kbars SET {assignments} WHERE code = :code AND trade_date = :trade_date"
+    )
+    updated = 0
+    for row in rows:
+        code = str(row.get("code") or "").strip()
+        if not code:
+            continue
+        params: dict[str, Any] = {"code": code, "trade_date": trade_date}
+        missing = False
+        for name in targets:
+            value = normalize_quote_metric(row.get(name))
+            if value is None:
+                missing = True
+                break
+            params[name] = value
+        if missing:
+            continue
+        updated += db.execute(statement, params).rowcount or 0
+    db.commit()
+    return {"row_count": updated, "columns": targets, "provider_row_count": len(rows)}
+
+
 def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
     table = item["table"]
     if table == "daily_kbar":
@@ -1566,6 +1739,27 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
             **item,
             "status": "completed" if row_count else "empty",
             "row_count": row_count,
+        }
+    if table == "concept_member":
+        row_count, _audit = _refresh_auxiliary_dataset(
+            db, dataset="concept_sector_stock", trade_date=item["trade_date"]
+        )
+        return {
+            **item,
+            "status": "completed" if row_count else "empty",
+            "row_count": row_count,
+        }
+    if table == "value_distribution":
+        result = _repair_value_distribution(
+            db,
+            item["trade_date"],
+            quote_columns=list(item.get("quote_columns") or []),
+            local_columns=list(item.get("local_columns") or []),
+        )
+        return {
+            **item,
+            "status": "completed" if result.get("row_count") else "empty",
+            **result,
         }
     if table == "dragon_tiger":
         row_count, _audit = _refresh_auxiliary_dataset(

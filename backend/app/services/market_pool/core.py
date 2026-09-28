@@ -47,6 +47,11 @@ from app.models.tables import (
     StockQuote,
 )
 from app.services.data_sources import enabled_sources
+from app.services.daily_bar_write_policy import (
+    group_rows_by_quote_metric_presence,
+    normalize_quote_metric,
+    quote_metrics_look_unready,
+)
 from app.services.market_data import (
     MarketDataError,
     _apply_relative_features,
@@ -1314,8 +1319,10 @@ def _backfill_latest_trade_date_bars(
             "close": price,
             "volume": _num(item.get("volume")),
             "amount": _num(item.get("amount_yi")) * 100000000,
-            "pct_chg": _num(item.get("pct")),
-            "turnover_rate": _num(item.get("turnover_rate")),
+            # 快照未带回这两个字段时写 None，由写入策略让它们退出 update，
+            # 保住库中已有真值（L-146）。
+            "pct_chg": normalize_quote_metric(item.get("pct")),
+            "turnover_rate": normalize_quote_metric(item.get("turnover_rate")),
             "source": "tushare",
         }
 
@@ -1593,8 +1600,8 @@ def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
             "close": float(bar.get("close") or 0),
             "volume": float(bar.get("volume") or 0),
             "amount": float(bar.get("amount") or 0),
-            "pct_chg": float(bar.get("pct_chg") or 0),
-            "turnover_rate": float(bar.get("turnover_rate") or 0),
+            "pct_chg": normalize_quote_metric(bar.get("pct_chg")),
+            "turnover_rate": normalize_quote_metric(bar.get("turnover_rate")),
             "ma5": _float_or_none(bar.get("ma5")),
             "ma10": _float_or_none(bar.get("ma10")),
             "ma20": _float_or_none(bar.get("ma20")),
@@ -1634,23 +1641,35 @@ def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
     # InnoDB's lock table (MySQL 1206 "total number of locks exceeds the lock
     # table size") and aborted the market_data stage — the single reason
     # single-strategy runs could not complete (L-141).
-    for start in range(0, len(rows), DAILY_KBAR_UPSERT_BATCH_SIZE):
-        chunk = rows[start:start + DAILY_KBAR_UPSERT_BATCH_SIZE]
-        stmt = mysql_insert(DailyKbar).values(chunk)
-        # 权威行情列每次同步都带回新值，直接覆盖；派生列交给
-        # _preserve_derived_on_duplicate 保护，计数型派生列（breakout/长上影）
-        # 整列退出 update 由 backfill 独占写入（L-144）。
-        db.execute(stmt.on_duplicate_key_update(
-            open=stmt.inserted.open,
-            high=stmt.inserted.high,
-            low=stmt.inserted.low,
-            close=stmt.inserted.close,
-            volume=stmt.inserted.volume,
-            amount=stmt.inserted.amount,
-            pct_chg=stmt.inserted.pct_chg,
-            turnover_rate=stmt.inserted.turnover_rate,
-            **_preserve_derived_on_duplicate(stmt),
-        ))
+    if quote_metrics_look_unready(rows):
+        logger.warning(
+            "daily_kbar 快照写入 %d 行：整批 pct_chg 全为空/0，判定行情快照未带回涨跌幅与换手率，"
+            "这两列本批不参与覆盖",
+            len(rows),
+        )
+        for row in rows:
+            row["pct_chg"] = None
+            row["turnover_rate"] = None
+
+    for group in group_rows_by_quote_metric_presence(rows):
+        for start in range(0, len(group.rows), DAILY_KBAR_UPSERT_BATCH_SIZE):
+            chunk = group.rows[start:start + DAILY_KBAR_UPSERT_BATCH_SIZE]
+            stmt = mysql_insert(DailyKbar).values(chunk)
+            # 权威行情列每次同步都带回新值，直接覆盖；派生列交给
+            # _preserve_derived_on_duplicate 保护，计数型派生列（breakout/长上影）
+            # 整列退出 update 由 backfill 独占写入（L-144）。
+            # pct_chg / turnover_rate 只在当批真的带回数值时才进 update：快照缺这两个
+            # 字段时若按 0 覆盖，会把当日真值抹成恒零（L-146）。
+            db.execute(stmt.on_duplicate_key_update(
+                open=stmt.inserted.open,
+                high=stmt.inserted.high,
+                low=stmt.inserted.low,
+                close=stmt.inserted.close,
+                volume=stmt.inserted.volume,
+                amount=stmt.inserted.amount,
+                **group.quote_metric_update(stmt),
+                **_preserve_derived_on_duplicate(stmt),
+            ))
 
 
 def _load_cached_bars_batch(

@@ -40,7 +40,14 @@ def test_xiaoshi_client_sends_bearer_key_and_retries_rate_limit(monkeypatch) -> 
         http_client.close()
 
 
-def test_xiaoshi_market_source_normalizes_snapshot_and_qfq_bars() -> None:
+def test_xiaoshi_market_source_normalizes_snapshot_and_declines_per_instrument_bars() -> None:
+    """快照照常归一化；逐标的日线在 v3 已无端点，必须如实声明能力缺口。
+
+    背景数据墙：小石 v3 把日线/分钟历史改成 catalog + R2 下载契约，
+    `/api/v3/data/kline/{code}` 随 `/api/v3/data/*` 整族退役，
+    `stability.legacy_aliases = false` 不保留别名。旧实现对每个标的重试那个地址，
+    只会恒得 404 并把「能力已迁移」误报成「连接失败」（L-149）。
+    """
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path.endswith("/data/stocks"):
             return httpx.Response(
@@ -73,17 +80,6 @@ def test_xiaoshi_market_source_normalizes_snapshot_and_qfq_bars() -> None:
                 },
                 request=request,
             )
-        if request.url.path.endswith("/data/kline/000001"):
-            return httpx.Response(
-                200,
-                json={
-                    "bars": [
-                        {"date": "2026-08-06", "open": 10, "high": 11, "low": 9, "close": 10, "volume": 1, "amount": 2},
-                        {"date": "2026-08-07", "open": 11, "high": 12, "low": 10, "close": 11, "volume": 2, "amount": 3},
-                    ]
-                },
-                request=request,
-            )
         return httpx.Response(404, request=request)
 
     http_client = httpx.Client(transport=httpx.MockTransport(handler))
@@ -103,10 +99,12 @@ def test_xiaoshi_market_source_normalizes_snapshot_and_qfq_bars() -> None:
         bars = adapter.fetch_daily_bars(
             DailyBarRequest((QuoteRef("000001", "SZ"),), start_date="2026-08-01", end_date="2026-08-07")
         )
-        rows = bars.as_legacy_rows_by_code()["000001"]
-        assert bars.audit.status.value == "success"
-        assert rows[-1]["trade_date"] == "2026-08-07"
-        assert rows[-1]["pct_chg"] == pytest.approx(10.0)
+        # 不再发起任何逐股票 kline 请求，直接以 SOURCE_UNAVAILABLE 表达能力缺口，
+        # 让调用方顺回落链走到其他日线源。
+        assert bars.audit.status.value == "failure"
+        assert bars.as_legacy_rows_by_code() == {"000001": []}
+        assert "does not serve per-instrument daily bars" in bars.errors[0].message
+        assert "download-session" in bars.errors[0].message
     finally:
         http_client.close()
 

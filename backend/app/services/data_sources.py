@@ -1013,15 +1013,25 @@ def _probe_xiaoshi_source() -> dict[str, Any]:
             return (False, {}, f"{type(exc).__name__}: {str(exc)[:160]}")
 
     def _probe_kline() -> tuple[bool, dict[str, Any], str | None]:
+        """探历史数据清单，而不是已退役的逐股票日线端点。
+
+        小石 v3 把日线/分钟历史改成 manifest + R2 下载契约（`/api/v3/history/*`），
+        `/api/v3/data/kline/{code}` 随 `/api/v3/data/*` 整族退役且
+        `stability.legacy_aliases = false` 不保留别名。继续探那个地址只会恒报 404，
+        把「能力已迁移」误报成「连接失败」（L-149）。
+        """
         try:
-            payload = client.get_kline("000001", limit=2)
-            bars = payload.get("bars") or payload.get("data") or []
-            kline_count = len(bars) if isinstance(bars, list) else 0
-            ok = kline_count >= 2
-            detail = {"kline_count": kline_count}
-            if ok:
+            payload = client.get_history_catalog(product="stock", market="CN", limit=1)
+            items = payload.get("items")
+            available = len(items) if isinstance(items, list) else 0
+            total = int(payload.get("total") or 0)
+            detail = {
+                "history_catalog_total": total,
+                "history_delivery": "catalog+download-session",
+            }
+            if available or total:
                 return (True, detail, None)
-            return (False, detail, "xiaoshi kline 返回不足 2 条")
+            return (False, detail, "xiaoshi 历史清单没有可交付条目")
         except Exception as exc:
             return (False, {}, f"{type(exc).__name__}: {str(exc)[:160]}")
 
@@ -1041,7 +1051,7 @@ def _probe_xiaoshi_source() -> dict[str, Any]:
     if quote_error:
         errors.append(f"quote: {quote_error}")
     if kline_error:
-        errors.append(f"kline: {kline_error}")
+        errors.append(f"history: {kline_error}")
 
     contract_ok = manifest_error is None
 

@@ -59,6 +59,11 @@ from app.services.auxiliary.application import (
     run_auxiliary_application,
 )
 from app.services.market_source.local_pool_adapter import load_legacy_market_universe
+from app.services.daily_bar_write_policy import (
+    group_rows_by_quote_metric_presence,
+    normalize_quote_metric,
+    quote_metrics_look_unready,
+)
 from app.services.failure_attribution import classify_false_positive
 from app.services.execution_confirmation_state import load_execution_state_map
 from app.services.execution_outcome_policy import build_cancel_observations, build_missed_observations
@@ -2858,8 +2863,8 @@ def _persist_stocks_and_bars(
                     "close": float(bar.get("close") or 0),
                     "volume": float(bar.get("volume") or 0),
                     "amount": float(bar.get("amount") or 0),
-                    "pct_chg": float(bar.get("pct_chg") or 0),
-                    "turnover_rate": float(bar.get("turnover_rate") or 0),
+                    "pct_chg": normalize_quote_metric(bar.get("pct_chg")),
+                    "turnover_rate": normalize_quote_metric(bar.get("turnover_rate")),
                     "ma5": _float_or_none(bar.get("ma5")),
                     "ma10": _float_or_none(bar.get("ma10")),
                     "ma20": _float_or_none(bar.get("ma20")),
@@ -2892,30 +2897,42 @@ def _upsert_stock_rows(db: Session, rows: list[dict[str, Any]]) -> None:
 def _upsert_daily_bar_rows(db: Session, rows: list[dict[str, Any]]) -> None:
     if not rows:
         return
-    for chunk in _chunked(rows, DAILY_BAR_UPSERT_BATCH_SIZE):
-        stmt = mysql_insert(DailyKbar).values(chunk)
-        db.execute(
-            stmt.on_duplicate_key_update(
-                open=stmt.inserted.open,
-                high=stmt.inserted.high,
-                low=stmt.inserted.low,
-                close=stmt.inserted.close,
-                volume=stmt.inserted.volume,
-                amount=stmt.inserted.amount,
-                pct_chg=stmt.inserted.pct_chg,
-                turnover_rate=stmt.inserted.turnover_rate,
-                # 派生列：当批为 NULL / 0 时保留库中已有值，不再用空值刷掉
-                # backfill 补好的真值（L-144）。实测哨兵抓到的正是这里——本 run 的
-                # market_data 阶段把 Stage 4 刚补满的 vol_ratio_5 清回 0 行。
-                ma5=func.coalesce(func.nullif(stmt.inserted.ma5, 0), DailyKbar.ma5),
-                ma10=func.coalesce(func.nullif(stmt.inserted.ma10, 0), DailyKbar.ma10),
-                ma20=func.coalesce(func.nullif(stmt.inserted.ma20, 0), DailyKbar.ma20),
-                ma60=func.coalesce(func.nullif(stmt.inserted.ma60, 0), DailyKbar.ma60),
-                vol_ratio_5=func.coalesce(
-                    func.nullif(stmt.inserted.vol_ratio_5, 0), DailyKbar.vol_ratio_5
-                ),
-            )
+    if quote_metrics_look_unready(rows):
+        logger.warning(
+            "daily_kbar 运行期写入 %d 行：整批 pct_chg 全为空/0，判定来源未带回涨跌幅与换手率，"
+            "这两列本批不参与覆盖",
+            len(rows),
         )
+        for row in rows:
+            row["pct_chg"] = None
+            row["turnover_rate"] = None
+
+    for group in group_rows_by_quote_metric_presence(rows):
+        for chunk in _chunked(group.rows, DAILY_BAR_UPSERT_BATCH_SIZE):
+            stmt = mysql_insert(DailyKbar).values(chunk)
+            db.execute(
+                stmt.on_duplicate_key_update(
+                    open=stmt.inserted.open,
+                    high=stmt.inserted.high,
+                    low=stmt.inserted.low,
+                    close=stmt.inserted.close,
+                    volume=stmt.inserted.volume,
+                    amount=stmt.inserted.amount,
+                    # pct_chg / turnover_rate 只在当批带回数值时才覆盖：缺失时按 0 覆盖
+                    # 会把当日真值抹成恒零，这正是 09-24 全表归零的写入侧成因（L-146）。
+                    **group.quote_metric_update(stmt),
+                    # 派生列：当批为 NULL / 0 时保留库中已有值，不再用空值刷掉
+                    # backfill 补好的真值（L-144）。实测哨兵抓到的正是这里——本 run 的
+                    # market_data 阶段把 Stage 4 刚补满的 vol_ratio_5 清回 0 行。
+                    ma5=func.coalesce(func.nullif(stmt.inserted.ma5, 0), DailyKbar.ma5),
+                    ma10=func.coalesce(func.nullif(stmt.inserted.ma10, 0), DailyKbar.ma10),
+                    ma20=func.coalesce(func.nullif(stmt.inserted.ma20, 0), DailyKbar.ma20),
+                    ma60=func.coalesce(func.nullif(stmt.inserted.ma60, 0), DailyKbar.ma60),
+                    vol_ratio_5=func.coalesce(
+                        func.nullif(stmt.inserted.vol_ratio_5, 0), DailyKbar.vol_ratio_5
+                    ),
+                )
+            )
 
 
 def _chunked(rows: list[dict[str, Any]], chunk_size: int) -> list[list[dict[str, Any]]]:

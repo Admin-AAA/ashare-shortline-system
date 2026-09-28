@@ -1217,8 +1217,16 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
         "concept_sector",
         "dragon_tiger",
         "news",
+        "concept_member",
+        "value_distribution",
     ]
-    assert {item["table"] for item in result["actions"]} == set(result["requested_tables"]) - {"chip"}
+    # 本夹具的诊断快照里没有值分布失真、也没有滞后数据域，因此这两项不产生动作；
+    # chip 同理（无缺口）。
+    assert {item["table"] for item in result["actions"]} == set(result["requested_tables"]) - {
+        "chip",
+        "concept_member",
+        "value_distribution",
+    }
     assert result["comparison"]["score_delta"] == 29
     assert result["comparison"]["table_deltas"]["daily_kbar"]["resolved_incomplete_dates"] == ["2026-05-27"]
     assert result["comparison"]["table_deltas"]["minute_kbar"]["resolved_missing_dates"] == ["2026-05-27"]

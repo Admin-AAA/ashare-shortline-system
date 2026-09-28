@@ -316,7 +316,6 @@ def _fetch_xiaoshi_kline(
 
     batch = XiaoshiMarketSourceAdapter(
         client=get_xiaoshi_client(),
-        kline_limit=max(30, int(getattr(settings, "market_kline_days", 90))),
     ).fetch_daily_bars(request)
     if batch.errors and not batch.bars_by_instrument.get(reference):
         raise MarketDataError(batch.errors[0].message)

@@ -111,7 +111,14 @@ def test_test_provider_unknown_raises_keyerror(db_session, monkeypatch):
         ds.test_provider(db_session, "nonexist")
 
 
-def test_test_provider_xiaoshi_checks_quote_kline_and_pinned_skill(db_session, monkeypatch):
+def test_test_provider_xiaoshi_probes_quote_and_history_catalog(db_session, monkeypatch):
+    """探针必须探 xiaoshi 真正提供的能力，不能探已退役的逐股票日线端点。
+
+    背景数据墙：小石 v3 把日线/分钟历史改成 catalog + R2 下载契约，
+    `/api/v3/data/kline/{code}` 随 `/api/v3/data/*` 整族退役，且
+    `stability.legacy_aliases = false` 不保留别名。继续探那个地址会恒报
+    `HTTP 404: /api/v3/data/kline/000001`，把「能力已迁移」误报成「连接失败」（L-149）。
+    """
     calls: list[str] = []
 
     class _Client:
@@ -127,9 +134,9 @@ def test_test_provider_xiaoshi_checks_quote_kline_and_pinned_skill(db_session, m
             calls.append(f"quote:{code}")
             return {"code": code, "price": 10.0, "quote_time": "2026-08-16T15:00:00+08:00"}
 
-        def get_kline(self, code, *, limit):
-            calls.append(f"kline:{code}:{limit}")
-            return {"count": 2, "bars": [{"date": "2026-08-15"}, {"date": "2026-08-16"}]}
+        def get_history_catalog(self, **params):
+            calls.append(f"history_catalog:{params.get('product')}:{params.get('market')}")
+            return {"total": 5845, "count": 1, "items": [{"dataset": "adjustment-factors"}]}
 
     monkeypatch.setattr("app.services.xiaoshi_client.get_xiaoshi_client", lambda: _Client())
     monkeypatch.setattr(
@@ -146,15 +153,16 @@ def test_test_provider_xiaoshi_checks_quote_kline_and_pinned_skill(db_session, m
     assert out["ok"] is True
     assert out["details"] == {
         "manifest_version": "2026-08-14.1",
-        "skill_version": "2026-08-14.1",
         "quote_time": "2026-08-16T15:00:00+08:00",
-        "kline_count": 2,
+        "history_catalog_total": 5845,
+        "history_delivery": "catalog+download-session",
     }
+    # Skill 契约校验（整份 SKILL.md 下载 + SHA-256）有意不在数据通路探针里：它验证的是
+    # Skill 完整性而非数据通路，且重下整份文本是延迟大头。
     assert calls == [
         "manifest",
-        "skill:2026-08-14.1:expected-sha",
         "quote:000001",
-        "kline:000001:2",
+        "history_catalog:stock:CN",
     ]
     for source_type in ("quote", "kline"):
         health = db_session.get(DataSourceHealth, {"source": "xiaoshi", "source_type": source_type})

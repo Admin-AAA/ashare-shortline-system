@@ -341,28 +341,36 @@ def _table_stats(db: Session) -> dict[str, Any]:
     return result
 
 
-def _get_tushare_latest_trade_date() -> str | None:
+def _get_tushare_recent_trade_dates() -> list[str]:
+    """Tushare 交易日历里最近的交易日（ISO 升序）；不可用时返回空列表。"""
     try:
-        from app.services.tushare_client import fetch_latest_trade_date
-        compact = fetch_latest_trade_date()
-        if compact and len(compact) == 8:
-            return f"{compact[:4]}-{compact[4:6]}-{compact[6:]}"
+        from app.services.tushare_client import fetch_recent_trade_dates
+
+        return [
+            f"{compact[:4]}-{compact[4:6]}-{compact[6:]}"
+            for compact in fetch_recent_trade_dates()
+            if compact and len(compact) == 8
+        ]
     except Exception:
-        pass
-    return None
+        return []
 
 
 def _resolve_reference_trade_date(db: Session) -> dict[str, str | None]:
-    external_trade_date = _get_tushare_latest_trade_date()
-    if external_trade_date:
-        latest_closed_trade_date = _latest_allowed_bar_date()
-        reference_trade_date = min(external_trade_date, latest_closed_trade_date)
-        return {
-            "reference_trade_date": reference_trade_date,
-            "external_trade_date": external_trade_date,
-            "source": "tushare",
-            "note": "参考交易日来自 Tushare 交易日历，并限制为当前已收盘交易日。",
-        }
+    # 参考交易日必须落在交易所日历的真实交易日上。`_latest_allowed_bar_date()` 只表达
+    # 「盘后 17:30 数据就绪」这个时间判据，它按工作日算术回退，会落到休市的工作日上
+    # （2026-09-25 即如此），于是所有表都被判成缺那一天。用它作时间上界，再与真实交易日
+    # 列表求交，取最后一个（L-147）。
+    trade_dates = _get_tushare_recent_trade_dates()
+    if trade_dates:
+        data_ready_cutoff = _latest_allowed_bar_date()
+        closed_trade_dates = [day for day in trade_dates if day <= data_ready_cutoff]
+        if closed_trade_dates:
+            return {
+                "reference_trade_date": closed_trade_dates[-1],
+                "external_trade_date": trade_dates[-1],
+                "source": "tushare",
+                "note": "参考交易日取 Tushare 交易日历中最新一个已收盘交易日，休市日不计入。",
+            }
 
     local_trade_date = _infer_local_reference_trade_date(db)
     if local_trade_date:
@@ -370,7 +378,7 @@ def _resolve_reference_trade_date(db: Session) -> dict[str, str | None]:
             "reference_trade_date": local_trade_date,
             "external_trade_date": None,
             "source": "local",
-            "note": "Tushare 最新交易日不可用，已回退到本地关键表最新交易日。",
+            "note": "Tushare 交易日历不可用，已回退到本地关键表最新交易日。",
         }
 
     return {

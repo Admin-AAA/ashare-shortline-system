@@ -115,38 +115,6 @@ def _stock_map(payload: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
-def _bars(code: str, payload: Mapping[str, Any]) -> list[dict[str, Any]]:
-    raw_bars = payload.get("bars") or payload.get("data") or []
-    rows: list[dict[str, Any]] = []
-    previous_close = 0.0
-    for raw in raw_bars:
-        if not isinstance(raw, Mapping):
-            continue
-        trade_date = _date_only(raw.get("date") or raw.get("trade_date"))
-        close = _number(raw.get("close"))
-        if not trade_date or close <= 0:
-            continue
-        pct_chg = _number(raw.get("pct_chg"))
-        if pct_chg == 0.0 and previous_close > 0:
-            pct_chg = (close / previous_close - 1.0) * 100.0
-        rows.append(
-            {
-                "code": code,
-                "trade_date": trade_date,
-                "open": _number(raw.get("open")),
-                "high": _number(raw.get("high")),
-                "low": _number(raw.get("low")),
-                "close": close,
-                "volume": _number(raw.get("volume") or raw.get("vol")),
-                "vol": _number(raw.get("volume") or raw.get("vol")),
-                "amount": _number(raw.get("amount")),
-                "pct_chg": pct_chg,
-            }
-        )
-        previous_close = close
-    return rows
-
-
 class XiaoshiMarketSourceAdapter:
     """Typed market-source adapter backed by Xiaoshi's v3 API."""
 
@@ -157,12 +125,7 @@ class XiaoshiMarketSourceAdapter:
         settings: object | None = None,
         *,
         client: XiaoshiClient | None = None,
-        kline_limit: int | None = None,
     ) -> None:
-        self.kline_limit = max(
-            30,
-            int(kline_limit or getattr(settings, "market_kline_days", 2500)),
-        )
         if client is None:
             if settings is None:
                 from app.services.xiaoshi_client import get_xiaoshi_client
@@ -229,77 +192,49 @@ class XiaoshiMarketSourceAdapter:
         )
 
     def fetch_daily_bars(self, request: DailyBarRequest) -> DailyBarBatch:
-        references = request.instruments
-        if request.is_trade_date_batch and not references:
-            error = MarketSourceError(
-                operation=MarketSourceOperation.DAILY_BARS,
-                code=MarketSourceErrorCode.SOURCE_UNAVAILABLE,
-                message="xiaoshi trade-date batch requires an explicit instrument list; use the history download contract for full-market history",
-            )
-            if request.failure_policy is FailurePolicy.RAISE:
-                raise MarketSourceRequestFailed(error)
-            return DailyBarBatch(
-                bars_by_instrument={},
-                item_audits={},
-                errors=(error,),
-                audit=MarketSourceAudit(
-                    source=self.source_name,
-                    operation=MarketSourceOperation.DAILY_BARS,
-                    failure_policy=request.failure_policy,
-                    status=BatchStatus.FAILURE,
-                    requested_count=0,
-                    returned_count=0,
-                    empty_count=0,
-                    failed_count=1,
-                ),
-            )
-        rows_by_instrument: dict[QuoteRef, tuple[DailyBar, ...]] = {}
-        audits: dict[QuoteRef, ItemAudit] = {}
-        errors: list[MarketSourceError] = []
-        for reference in references:
-            try:
-                payload = self.client.get_kline(
-                    reference.code,
-                    market="CN",
-                    adjust="qfq",
-                    limit=self.kline_limit,
-                    since=request.start_date or request.trade_date,
-                    to=request.end_date or request.trade_date,
-                )
-                bars = tuple(DailyBar.from_row(reference, row) for row in _bars(reference.code, payload))
-                rows_by_instrument[reference] = bars
-                audits[reference] = ItemAudit(
-                    reference,
-                    BatchStatus.SUCCESS if bars else BatchStatus.EMPTY,
-                    len(bars),
-                )
-            except Exception:
-                error = MarketSourceError(
-                    operation=MarketSourceOperation.DAILY_BARS,
-                    code=MarketSourceErrorCode.INSTRUMENT_UNAVAILABLE,
-                    message="xiaoshi daily-bar retrieval failed",
-                    reference=reference,
-                )
-                errors.append(error)
-                rows_by_instrument[reference] = ()
-                audits[reference] = ItemAudit(reference, BatchStatus.FAILURE, 0, error)
+        """小石 v3 不提供逐标的日线；历史只按 manifest + R2 下载契约批量交付。
 
-        returned_count = sum(len(value) for value in rows_by_instrument.values())
-        status = BatchStatus.FAILURE if errors and not returned_count else BatchStatus.PARTIAL if errors else BatchStatus.SUCCESS if returned_count else BatchStatus.EMPTY
-        if errors and request.failure_policy is FailurePolicy.RAISE:
-            raise MarketSourceRequestFailed(errors[0])
+        平台自述 `/api/v3/meta/data-contract` 的 `history` 段只给 manifest 与
+        download-session 两个入口，`stability.legacy_aliases = false` 明确不保留旧
+        别名，原先调用的 `/api/v3/data/kline/{code}` 已随 `/api/v3/data/*` 整族退役，
+        逐股票请求恒 404。与其对每个标的重试一个不存在的地址，这里如实声明能力缺口
+        并指明替代路径，让调用方回落到其他日线源（L-149）。
+        """
+        references = request.instruments
+        error = MarketSourceError(
+            operation=MarketSourceOperation.DAILY_BARS,
+            code=MarketSourceErrorCode.SOURCE_UNAVAILABLE,
+            message=(
+                "xiaoshi v3 does not serve per-instrument daily bars; "
+                "use the history manifest and download-session contract for bulk history"
+            ),
+        )
+        if request.failure_policy is FailurePolicy.RAISE:
+            raise MarketSourceRequestFailed(error)
+        item_errors = tuple(
+            MarketSourceError(
+                operation=error.operation,
+                code=error.code,
+                message=error.message,
+                reference=reference,
+            )
+            for reference in references
+        )
         return DailyBarBatch(
-            bars_by_instrument=rows_by_instrument,
-            item_audits=audits,
-            errors=tuple(errors),
+            bars_by_instrument={reference: () for reference in references},
+            item_audits={
+                reference: ItemAudit(reference, BatchStatus.FAILURE, 0, item_error)
+                for reference, item_error in zip(references, item_errors)
+            },
+            errors=item_errors or (error,),
             audit=MarketSourceAudit(
                 source=self.source_name,
                 operation=MarketSourceOperation.DAILY_BARS,
                 failure_policy=request.failure_policy,
-                status=status,
+                status=BatchStatus.FAILURE,
                 requested_count=len(references),
-                returned_count=returned_count,
-                empty_count=sum(1 for audit in audits.values() if audit.status is BatchStatus.EMPTY),
-                failed_count=len(errors),
+                returned_count=0,
+                empty_count=0,
+                failed_count=max(1, len(item_errors)),
             ),
         )

@@ -1,4 +1,7 @@
 .DS_Store
+
+# agent 工具的本地笔记目录。教训唯一写入 docs/lessons/LESSONS.md，不维护第二份副本。
+.learnings/
 .venv/
 .venv
 __pycache__/

@@ -25,6 +25,7 @@ from app.services.indicator_computer import (
     bias,
     compute_daily_bar_indicators,
     max_drawdown,
+    upper_shadow_count,
 )
 
 
@@ -50,7 +51,7 @@ def backfill_date(db, trade_date: str) -> dict:
         "SELECT DISTINCT code FROM daily_kbars WHERE trade_date = :d"
     ), {"d": trade_date}).scalars().all()
 
-    fixed = {"ma": 0, "vol": 0, "bias": 0, "breakout": 0, "dd": 0}
+    fixed = {"ma": 0, "vol": 0, "bias": 0, "breakout": 0, "dd": 0, "upper_shadow": 0}
 
     for code in codes:
         bars = db.query(DailyKbar).filter(
@@ -109,6 +110,17 @@ def backfill_date(db, trade_date: str) -> dict:
         if target.ma60 and closes[-1] > 0 and (target.holder_pct is None or target.holder_pct == 0):
             pct = (closes[-1] - target.ma60) / target.ma60 * 100
             target.holder_pct = round(pct, 2)
+
+        # 20 日长上影次数：同步侧永远写 0（Tushare 不返回本地派生指标），且 L-144 已把它
+        # 从 upsert 的 update 列表摘掉交给本脚本独占写入。它是近 20 根 OHLC 的确定性函数，
+        # 0 也是合法值（无长上影），因此无条件重算覆盖，不做「缺失才补」判定（L-146）。
+        target.upper_shadow_count20 = upper_shadow_count(
+            [
+                {"open": b.open, "high": b.high, "low": b.low, "close": b.close}
+                for b in bars[-20:]
+            ]
+        )
+        fixed["upper_shadow"] += 1
 
     db.commit()
     return fixed
@@ -204,7 +216,28 @@ def backfill_history(
                     b["ma20"] is None or b["ma20"] == 0
                     or b["ma5"] is None or b["ma5"] == 0
                 )
+                # upper_shadow_count20 由本脚本独占写入（L-144 把它从同步 upsert 的
+                # update 列表摘掉）。它是近 20 根 OHLC 的确定性函数，且同步侧永远写 0，
+                # 因此窗口内每一行都重算覆盖，不受 need 门控（L-146）。
+                shadow_window = dict_bars[max(0, idx - 19):idx + 1]
+                upper_shadow20 = upper_shadow_count(shadow_window)
                 if not need:
+                    updates.append({
+                        "code": code,
+                        "td": td,
+                        "ma5": None,
+                        "ma10": None,
+                        "ma20": None,
+                        "ma60": None,
+                        "vol_ratio_5": None,
+                        "bias_5": None,
+                        "bias_20": None,
+                        "breakout20": None,
+                        "breakout60": None,
+                        "max_dd20": None,
+                        "holder_pct": None,
+                        "upper_shadow_count20": upper_shadow20,
+                    })
                     continue
                 c = computed.get(td) or {}
                 ma5 = c.get("ma5")
@@ -235,6 +268,7 @@ def backfill_history(
                     "breakout60": br60,
                     "max_dd20": dd20,
                     "holder_pct": holder,
+                    "upper_shadow_count20": upper_shadow20,
                 })
 
         if updates:
@@ -250,7 +284,8 @@ def backfill_history(
                   breakout20 = COALESCE(:breakout20, breakout20),
                   breakout60 = COALESCE(:breakout60, breakout60),
                   max_dd20 = COALESCE(:max_dd20, max_dd20),
-                  holder_pct = COALESCE(:holder_pct, holder_pct)
+                  holder_pct = COALESCE(:holder_pct, holder_pct),
+                  upper_shadow_count20 = COALESCE(:upper_shadow_count20, upper_shadow_count20)
                 WHERE code = :code AND trade_date = :td
             """)
             for u in updates:

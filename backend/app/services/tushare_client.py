@@ -1523,6 +1523,30 @@ def fetch_latest_trade_date() -> str:
     return today
 
 
+def fetch_recent_trade_dates(lookback_days: int = 30) -> list[str]:
+    """最近 lookback_days 个自然日内的交易日列表（compact YYYYMMDD，升序）。
+
+    只返回交易所日历里 is_open=1 的日期。调用方要判定「最新已收盘交易日」时必须用
+    这份清单，而不能用工作日算术——休市的工作日（如 2026-09-25）会被算成交易日，
+    使下游把所有表都判成缺那一天（L-147）。
+    """
+    pro = get_pro()
+    today = date.today()
+    start = (today - timedelta(days=max(1, int(lookback_days)))).strftime("%Y%m%d")
+    try:
+        cal = pro.trade_cal(
+            exchange="SSE",
+            start_date=start,
+            end_date=today.strftime("%Y%m%d"),
+            is_open="1",
+        )
+        if cal is not None and not cal.empty:
+            return [str(value) for value in cal.sort_values("cal_date")["cal_date"].tolist()]
+    except Exception:
+        pass
+    return []
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 指数日线（用于回测基准对比）
 # ═════════════════════════════════════════════════════════════════════════════

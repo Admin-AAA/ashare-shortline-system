@@ -274,31 +274,6 @@ class XiaoshiClient:
             params={"market": market, "instrument": instrument},
         )
 
-    def get_kline(
-        self,
-        code: str,
-        *,
-        market: str = "CN",
-        period: str = "daily",
-        adjust: str = "qfq",
-        limit: int = 2500,
-        since: str | None = None,
-        to: str | None = None,
-        offset: int = 0,
-    ) -> dict[str, Any]:
-        params: dict[str, Any] = {
-            "market": market,
-            "period": period,
-            "adjust": adjust,
-            "limit": min(20000, max(1, int(limit))),
-            "offset": max(0, int(offset)),
-        }
-        if since:
-            params["since"] = since
-        if to:
-            params["to"] = to
-        return self.request("GET", f"/api/v3/data/kline/{code}", params=params)
-
     def get_financials(
         self, code: str, *, statement_type: str = "all", periods: int = 8
     ) -> dict[str, Any]:
@@ -322,8 +297,20 @@ class XiaoshiClient:
     def get_market_sentiment(self) -> dict[str, Any]:
         return self.request("GET", "/api/v3/data/market-sentiment")
 
-    def get_history_manifest(self) -> dict[str, Any]:
-        return self.request("GET", "/api/v3/history/manifest")
+    def get_history_manifest(self, **params: Any) -> dict[str, Any]:
+        """历史交付契约元数据：datasets 声明、coverage、schemas、download_contracts。
+
+        不含具体文件条目（那在 `get_history_catalog`）。小石 v3 的日线/分钟历史只按
+        清单 + R2 下载契约批量交付：平台在 `/api/v3/meta/data-contract` 声明
+        `history.manifest` / `history.download`，并声明
+        `stability.legacy_aliases = false`——旧的 `/api/v3/data/kline/{code}`
+        逐股票端点已随 `/api/v3/data/*` 整族退役且不保留别名（L-149）。
+        """
+        return self.request("GET", "/api/v3/history/manifest", params=params or None)
+
+    def get_history_catalog(self, **params: Any) -> dict[str, Any]:
+        """历史文件条目清单（items + total），可按 dataset/product/market/adjust 过滤。"""
+        return self.request("GET", "/api/v3/history/catalog", params=params or None)
 
     def get_history_download_session(self, **params: Any) -> dict[str, Any]:
         return self.request("GET", "/api/v3/history/download-session", params=params)

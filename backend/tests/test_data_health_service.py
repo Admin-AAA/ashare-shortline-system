@@ -22,7 +22,7 @@ from app.services.data_health_service import (
 
 def test_resolve_reference_trade_date_falls_back_to_local_when_tushare_unavailable():
     db = MagicMock()
-    with patch("app.services.data_health_service._get_tushare_latest_trade_date", return_value=None), patch(
+    with patch("app.services.data_health_service._get_tushare_recent_trade_dates", return_value=[]), patch(
         "app.services.data_health_service._infer_local_reference_trade_date",
         return_value="2026-05-26",
     ):
@@ -88,7 +88,10 @@ def test_diagnose_all_coalesces_concurrent_cold_requests(monkeypatch):
 
 def test_resolve_reference_trade_date_caps_external_calendar_at_latest_closed_session():
     db = MagicMock()
-    with patch("app.services.data_health_service._get_tushare_latest_trade_date", return_value="2026-05-27"), patch(
+    with patch(
+        "app.services.data_health_service._get_tushare_recent_trade_dates",
+        return_value=["2026-05-25", "2026-05-26", "2026-05-27"],
+    ), patch(
         "app.services.data_health_service._latest_allowed_bar_date",
         return_value="2026-05-26",
     ):
