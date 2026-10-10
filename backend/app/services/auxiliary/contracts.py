@@ -218,13 +218,16 @@ class CoveragePolicy(Generic[NormalizedT]):
             (not self.require_all_instruments or not missing)
             and ratio >= self.minimum_instrument_coverage
         )
+        # 空集与部分写入是两种状态：当日一行都没有，说明上游尚未披露，由新鲜度判据
+        # 决定是否取数；已经写入却明显少于应有规模，才是「有数据但数据不全」。
+        record_count_ok = record_count == 0 or record_count >= self.minimum_record_count
         return CoverageResult(
             record_count=record_count,
             requested_instruments=requested,
             covered_instruments=covered,
             missing_instruments=missing,
             instrument_coverage_ratio=ratio,
-            sufficient=record_count >= self.minimum_record_count and coverage_ok,
+            sufficient=record_count_ok and coverage_ok,
             source=source,
         )
 

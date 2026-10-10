@@ -1633,3 +1633,63 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 回归验证：既有 `tests/test_data_source_management.py` 与 `tests/test_market_source_architecture.py`（适配器仍只暴露 `fetch_quotes` / `fetch_daily_bars` 两个契约方法，能力缺口由返回值表达而非删方法）。清理了本次改动造成的孤儿：适配器内只服务于退役端点的 `_bars()` 解析函数、`kline_limit` 构造参数及 `market_data._fetch_xiaoshi_kline` 的对应传参；`_date_only` / `_number` 仍被 `fetch_quotes` 使用故保留。
 - 吸收位置：`backend/app/services/xiaoshi_client.py`（`get_kline` 换成 `get_history_manifest` / `create_history_download_session`）、`backend/app/services/xiaoshi_market_source.py::fetch_daily_bars`、`backend/app/services/data_sources.py::_probe_xiaoshi_source`（探历史清单，错误前缀 `kline:` 改 `history:`）。
 - 相关：L-138/L-139 一类的「数据源访问权限而非数据质量」判别；本条补上「端点存在性」这一层：权限问题会返回 4xx/5xx 业务错误，端点移除返回 404 且换任何参数都不变。
+
+## L-150 一份清单被按职责分成两半时，两半必须从权威定义派生，并集恒等于全集
+
+- 状态：encoded（已修 + 派生常量 + 库内 payload 刷新 + 实证修复生效）
+- 适用：任何「权威清单 + 按职责分流的子清单」结构；任何「手工按按钮能修、自动作业修不了」的现象；任何给权威清单新增条目的改动
+- 证据：2026-09-28 盘中 `turnover_rate` 全市场 4951 行恒为同一个值，21:00 的 `postclose_late_data_repair` 作业跑了但 `health_remediation` 步骤 `planned_count=1`、`failed_count=1`，健康度 87→87 原地不动。`DEFAULT_REMEDIABLE_TABLES` 有 11 项，而两个盘后作业注册 payload 里的两份硬编码清单（`health_remediation_tables` 与 `auxiliary_remediation_tables`）合起来只覆盖 9 项，差集正好是 L-146 新加的 `concept_member` 与 `value_distribution`。手工触发走默认清单所以能修，自动作业传显式清单绕过默认值。改成从权威定义派生后用同一入口 `_run_data_health_remediation({})` 实证：`planned=2`，`value_distribution` completed，`turnover_rate` 唯一值 1→4697、零值 4951→0，健康度 87→92。
+- 永久规则：**（一）按职责分流的子清单必须写成对权威清单的筛选，不得写字面量。** 正确形状是声明归属判据（本轮是 `AUXILIARY_REMEDIABLE_TABLES` 这个归属集合），两份子清单各取 `DEFAULT_REMEDIABLE_TABLES` 中属于/不属于该集合的部分；这样给权威清单加一项时，它必然进入某一半，不可能两边都漏。**（二）给权威清单新增条目后，必须验证并集等于全集且两半无交集。** 这是能用一行断言锁住的不变量，比逐处搜索调用点可靠。**（三）「手工能修、自动修不了」这个现象要直接怀疑显式参数绕过了默认值。** 手工入口通常不传参走默认，自动作业为了可复现会把参数写进 payload；两条路径的能力差异就藏在这里。**（四）payload 已经写进数据库的，改代码之后要刷新库内注册。** 本轮用 `ensure_scheduled_task_registrations()` 覆写了 `scheduled_tasks` 两行 payload，否则作业仍按旧清单运行。
+- 回归验证：`tests/test_auxiliary_coverage_policy.py`、`tests/test_auxiliary_application.py`；派生常量的并集/交集不变量在 `data_gap_remediation_service` 内由定义结构保证。
+- 吸收位置：`backend/app/services/data_gap_remediation_service.py`（新增 `AUXILIARY_REMEDIABLE_TABLES` 归属集合与 `AUXILIARY_REMEDIATION_TABLES` / `HEALTH_REMEDIATION_TABLES` 两个派生常量）、`backend/app/services/scheduler_service.py`（`_postclose_pipeline_payload`、`_late_data_repair_payload`、`_run_data_health_remediation`、`_run_auxiliary_remediation` 四处改为引用派生常量）。
+- 相关：L-146（同型：能力加了但某条调用路径绕过它，上次是哨兵没接修复路径，这次是修复路径的清单没接默认值）、L-143（同型的判据缺口）。
+
+## L-151 数据库时间戳存 UTC，读的时候必须换算；口径搞错会凭空造出一场故障
+
+- 状态：encoded（已纠正结论 + 口径实测）
+- 适用：任何读 `scheduled_task_runs` / `recommendation_runs` / `scheduled_tasks` 等表时间字段的排查；任何「某个时间点之后作业全都没跑」的判断
+- 证据：2026-09-28 我按本地时间读 `scheduled_task_runs.started_at`，把 UTC 13:00 当成下午一点，于是得出「17:00 之后一条作业都没跑、调度器失灵」的结论，并据此开始查 Prefect 服务端。实测 MySQL `NOW()` 返回 22:26 而 `UTC_TIMESTAMP()` 返回 14:26，相差 8 小时——表里存的是 UTC。按 UTC 换算后，当天全部 6 个作业都按点触发了（`strategy_exposure_run` 08:03、`formal_run_safety_net` 08:30、`intraday_lock_create_monitors` 09:20、`post_sync_formal_recommendation` 17:35、`intraday_lock_settle_signals` 17:40、`postclose_late_data_repair` 21:00），调度链路完全健康：12 个 deployment 全 READY、`paused=False`、时区正确写着 `Asia/Shanghai`，work pool 与 queue 均未暂停，worker ONLINE 心跳新鲜。整场「调度失灵」是我自己的读数错误造出来的。
+- 永久规则：**（一）读任何时间字段之前，先用 `SELECT NOW(), UTC_TIMESTAMP()` 确认口径。** 一次查询就能定性，比事后推翻结论便宜得多。**（二）展示给人看的时间一律显式换算。** 查询里直接写 `DATE_FORMAT(started_at + INTERVAL 8 HOUR, ...)` 并在列名或输出里标注 CST，不要让读数的人自己心算。**（三）「某时刻之后全都没有」这种现象，先怀疑自己的时间窗口而不是被查对象。** 全部消失且断点整齐，比随机失败更像是筛选条件本身错了；真实故障很少这么整齐。**（四）`SCHEDULED` 数为 0 不等于调度器坏了。** 已触发的作业会立刻进入 RUNNING 再转终态，巡检时刻看到 SCHEDULED/RUNNING 都是 0 属正常，要看历史执行记录而不是瞬时队列长度。
+- 回归验证：无代码改动，属排查方法。本轮后续所有时间查询均显式 `+ INTERVAL 8 HOUR` 并标注 CST。
+- 吸收位置：排查方法，不涉及具体文件。
+- 相关：L-145（同样是编排器侧状态的误读，那条是 RUNNING 僵尸占槽真实存在，本条是瞬时队列为空被当成故障）。
+
+## L-152 新鲜度判据只回答「那天有没有数据」时，缺一半的数据会永远补不回来且每次都报成功
+
+- 状态：encoded（已修 + 行数下限接到权威声明 + 09-24 补齐 2002→4452）
+- 适用：任何按 `trade_date` 判新鲜度的数据集；任何全市场刷新（不传 instruments）的补数路径；任何补数入口报 `errors=[]` 却一行未写的情形
+- 证据：2026-09-28 查到 `margin_detail` 的 2026-09-24 只有 2002 行，而上游 `pro.margin_detail(trade_date="20260924")` 返回 4452 行，缺 2450 只，连 000001 平安银行这类主流标的都不在库里。用标准入口 `run_auxiliary_application(datasets=("margin_detail",))` 补数，报 `record_count=2002 sufficient=True errors=[]` 自称成功，库内一行没变。逐层分析定位到 `RefreshDecision(required=False, reason=RefreshReason.FRESH)`——新鲜度判据只看那天有没有数据，2002 行和 4452 行在它眼里没有区别。覆盖率这道防线同时失效：`minimum_instrument_coverage` 的分母是 `requested_instruments`，全市场刷新传空集时 `ratio` 恒为 1.0；而 `minimum_record_count` 从未被任何数据集声明过，`CoveragePolicy` 的构造里根本没有传这个参数。两道判据同时放过，缺 55% 的数据能一直躺在库里。另有一处误导：报告出来的 `record_count` 来自 load 后回读视图，而视图按 `requested_codes` 过滤，全市场刷新时它报的不是真实写入量。
+- 永久规则：**（一）「有数据」与「数据全」是两个判据，全市场数据集必须声明绝对行数下限。** 按股票覆盖率在不传 instruments 时结构性失效（分母为空），只有不依赖 requested 的行数下限能判出部分写入。本轮给 `AuxiliaryDatasetInventoryEntry` 加了 `minimum_record_count` 并接到 `CoveragePolicy`，`margin_detail` 声明 3500（全市场约 4450）。**（二）空集与部分写入是两种状态，行数下限只约束非空写入。** 当日一行都没有说明上游尚未披露（`margin_detail` 是 T+1，T 日上游确实返回 0 行），由新鲜度判据决定是否取数；已经写入却明显少于应有规模，才是「有数据但数据不全」。把 0 行也判成缺口会让每个 T 日都误报。**（三）声明了新字段必须确认它被接到生效路径上。** `minimum_record_count` 在 `CoveragePolicy` 里存在已久，但 `assemble_standard_auxiliary_descriptors` 从不传它，等于这个维度一直没有生效；只加声明不接线，等于没加。**（四）补数入口报成功时，要用库内行数变化验证，不要信返回值。** 覆盖不足却不报错这件事本身比缺数严重，因为它让缺口永久隐形。
+- 回归验证：`tests/test_auxiliary_coverage_policy.py::test_margin_detail_partial_write_is_insufficient_but_empty_day_is_not`（行数下限之下判不足、之上判充足、0 行不误报三种情形各一条断言）。
+- 吸收位置：`backend/app/services/auxiliary/production.py`（`AuxiliaryDatasetInventoryEntry.minimum_record_count` 字段与校验、`margin_detail` 的声明、`CoveragePolicy` 构造处接线）、`backend/app/services/auxiliary/contracts.py`（`evaluate_snapshot` 的 `record_count_ok` 判据）。
+- 相关：L-143（同型：判空谓词抓不到「有值但值是错的」，本条是新鲜度谓词抓不到「有数据但数据不全」）、L-146（检测能力必须接到修复能力上，本条是声明必须接到判据上）。
+
+## L-153 数据源失败的归类必须保留上游原始标识；router 只剩粗标签时，排查会被引向错误方向
+
+- 状态：encoded（router 修复：40203 归权限、5xx 容量耗尽单独归类并冷却换源、全部失败路径保留上游标识进日志与汇总消息）
+- 适用：任何多 provider 路由层的失败归类；任何「全部 provider 都失败」的判断；后续接入的任何新数据源
+- 证据：2026-09-28 多轮把 `cyq_perf`（筹码分布）、`limit_list_d`、`ths_index`、`ths_member` 记为「三 provider 全挂」。逐层取证后看到两个被 router 抹掉的上游信号。其一，官方接口四个都返回 `code=40203`，原文「抱歉，您没有接口(xxx)访问权限」，属账号积分门槛；`_business_failure` 的限流分支写在权限分支之前，40203 先命中 `BUSINESS_RATE_LIMIT`，已存在的 `PERMISSION` 分支永远轮不到，而 `app/core/config.py` 的注释写着「40203 权限错误」。其二，在 router 内部记录 promax 的真实 HTTP 往返，失败那次是 `HTTP 503 {"ok":false,"error":"upstream_pool_exhausted"}`——代理自身容量耗尽；router 只看状态码、丢弃响应体，归成通用 `http_server` 并在几百毫秒后重试，日志与 `TushareProviderError` 汇总里只剩 `promax:http_server`。同一批接口单独、隔开时间调用全部成功（`limit_list_d` 100 行、`cyq_perf` 5557 行、`margin_detail` 4452 行），据此补上 09-28 筹码数据 4951 行，健康度 92→93。
+- 永久规则：**（一）`ProviderFailure` 必须携带上游自己给的短标识（`upstream_detail`），并出现在 provider 失败日志、换源日志与全部失败的汇总消息里。** 业务错误保留「错误码: 原文」，HTTP 错误从响应体的 `error/msg/message/detail/reason` 取第一个非空值，非 JSON 取正文前缀，统一截断，读不出响应体时返回空而不让失败处理本身出错。只有 category 时，「代理宕机」「代理容量耗尽」「账号无权限」「端点不存在」在日志里长得一样。**（二）权限不足、配额耗尽、容量耗尽、瞬时服务器错误是四种处理方式不同的失败，必须分开归类。** 权限不足（40203）重试永远不会成功，直接换源；配额耗尽（42901、频次类消息）与代理容量耗尽（5xx 且标识含 pool_exhausted / overloaded 等）要让该源冷却 `recovery_seconds` 再用，并立刻换源；只有普通 5xx 才按瞬时错误短退避重试。容量耗尽按瞬时错误重试，会在容量恢复前继续施压，把短暂拥塞放大成整批失败。**（三）判断规则写在 router 里，不要让调用方或排查者绕过 router 直连去猜。** 后续接入的数据源都经过同一套归类与日志，修 router 一处，所有数据源受益；绕过 router 得到的结论无法复现到生产路径上。**（四）「全部 provider 都失败」的结论必须逐个 provider 给出上游标识才能成立。** 汇总消息里没有标识时，先补标识再下结论。
+- 回归验证：`tests/test_tushare_dual_sources.py`（40203 判权限且不依赖消息措辞、42901 与频次消息判限流、503 `upstream_pool_exhausted` 判 `http_rate_limit` 且 `retry_after=recovery_seconds` 不重试、502 仍判可重试的 `http_server`、500/403/502 各自保留 `upstream_detail`、响应体不可读时正常归类、业务错误保留「错误码: 原文」、全部失败的汇总消息带每个 provider 的上游标识）。
+- 吸收位置：`backend/app/services/tushare_transport.py`（`ProviderFailure.upstream_detail`、`_extract_upstream_detail`、`_CAPACITY_EXHAUSTED_TERMS`、`_PERMISSION_BUSINESS_CODES` / `_RATE_LIMIT_BUSINESS_CODES` 与两组消息词表、`_business_failure` 权限先判、5xx 分支按容量标识分流、provider 失败与换源日志加 `upstream=`、`TushareProviderError` 汇总带标识）。
+- 相关：L-149（上游能力边界按官方声明定性）、L-155（xiaoshi 报价能力边界）、L-138/L-139（数据源访问权限与数据质量的判别）。
+
+## L-154 错误信息不得断言未经证实的原因；永远报同一个值的指标等于没有这个指标
+
+- 状态：encoded（已修归因消息 + 指标覆盖率改为实际统计）
+- 适用：任何写入数据库或展示给人看的失败原因；任何看板/汇总接口的统计字段；任何「心跳超时」「巡检判定」类的自动归因
+- 证据：2026-09-28 查 `recommendation_runs` 近 14 天有 24 条 interrupted，全部写着「服务重启或进程退出，后台任务已中断；请重新发起运行。」。按 `checkpoint_phase` 分组把两类分开后，18 条停在 `prepare` 阶段且 `universe_count=0`，6 条停在 `strategy_evaluation` 且 `universe_count≈4949`。那 18 条的标记时刻是 08:25:01、08:30:01、10:50:01，而当天 API 只在 16:35 重启过一次——那三个时刻没有任何重启，错误信息在断言一个没有发生的原因。`heartbeat_at`、`finished_at`、`interrupted_at` 三个字段值完全相同且都在整分，说明那不是真实心跳，是巡检写入的时刻。`_recover_stale_runs` 对所有心跳超时的 run 无条件写入这句话，而 run 在某阶段内部失败、执行者丢失、宿主重启都会走到这里。同一轮还查到 `pool-status` 的 `daily_indicator_count` 与 `indicator_coverage_pct` 被无条件硬编码成 0 / 0.0，看板永久显示「指标覆盖率 0%」，而实际派生指标是齐全的（改为按最新交易日实际统计后报 4951 行、100.0%）。
+- 永久规则：**（一）自动归因只能陈述可观测事实，不得断言原因。** 心跳超时能证明「运行停止推进」，不能证明为什么。正确形状是写清停在哪个阶段、心跳多久没更新，把归因线索留给读的人；断言单一原因会让后来者去查一件没发生的事。**（二）停留位置是归因的关键线索，必须出现在错误信息里。** 本轮正是靠 `checkpoint_phase` 才把 18 条误判与 6 条真实中断分开；如果错误信息里只有结论没有阶段，这两类永远混在一起。**（三）永远返回同一个值的统计字段必须当作缺陷处理。** 一个恒为 0 的覆盖率无法反映任何真实状态，它比没有这个字段更坏——它会让人相信系统真的没有指标数据。**（四）为了性能而简化统计时，要缩小统计范围而不是放弃统计。** 本轮把指标覆盖率限定在最新交易日那一天（有 `trade_date` 索引，单日约 5000 行），既避开百万级全表聚合，又报出真值；原先那个硬编码 0 旁边的注释只说明了避免全表扫描的理由，却把字段一起放弃了。**（五）口径要与既有判据一致。** 指标缺失沿用 `scripts/backfill_indicators.py` 的 `ma5 IS NULL OR ma5 = 0`，不另立标准。
+- 回归验证：`tests/test_scheduler_stale_run_recovery.py::test_stale_run_message_names_phase_and_avoids_unproven_restart_claim`（断言消息含停留阶段、且不含「服务重启」「进程退出」）、`tests/test_market_pool.py::test_local_pool_status_reports_real_indicator_coverage`（断言报的值等于按同一口径独立查询的结果，锁住「不能硬编码」）。
+- 吸收位置：`backend/app/services/workbench_service.py::recover_interrupted_runs`（`stale_message` 动态构造，两处写入点共用）、`backend/app/services/data_sources.py::get_local_pool_status`（指标覆盖率按最新交易日实际统计，移除上方冗余的无效赋值）。
+- 相关：L-151（同一轮的「读数错误造出一场故障」，本条是「错误信息造出一个不存在的原因」，两者都会让排查走向错误方向）、L-141（失败写入路径本身要能承受，那条是消息过长导致失败处理再失败）。
+
+## L-155 数据源能力边界按它当前的官方操作清单逐项实测定性；适配器只调用清单里存在且用法合规的端点
+
+- 状态：encoded（xiaoshi 报价能力如实声明缺失 + 删除五个清单外的 client 方法与孤儿辅助函数）
+- 适用：任何第三方数据源的适配器；任何数据源「最新数据停在某天」的排查；任何会枚举全市场代码去调用小批量接口的设计
+- 证据：2026-09-28 `pool-status` 显示 xiaoshi 报价停在 2026-09-02，数据源注册表里 xiaoshi 的 `quote` 与 `kline` 均为 `enabled=False`。`XiaoshiMarketSourceAdapter.fetch_quotes` 依赖 `get_stocks`（`/api/v3/data/stocks`）与 `get_market_snapshot`（`/api/v3/data/market-snapshot`），两者实测 404；client 另有 `get_sources`、`get_factor_library`、`get_market_sentiment` 同样 404。读 `/api/v3/capabilities` 的 38 个操作：market 段只有 `market/capabilities`、`market/quote/{symbol}`（单标的）与 `POST market/quotes`（官方用途写「小批量跨市场行情」，请求体 `{"requests":[{"market":"CN","symbol":"000001"}]}`，两只股票实测 200）。用 1000 只代码调用 `market/quotes`，平台返回 `429 bulk_download_required`「检测到全市场逐代码枚举，该类请求已暂停 24 小时」，并在 `alternative` 里指向 `/api/v3/data/market-snapshot`；该地址返回 `404 operation_not_in_public_contract`「该路径不属于当前公开 Agent 契约」。`QuoteRequest` 的语义是完整市场快照，公开操作清单里没有满足它的端点。
+- 永久规则：**（一）排查一个数据源，先读它当前的官方操作清单，再对清单里每个相关端点做一次真实调用。** 能力清单是判定「有没有」的唯一依据；本地 client 里定义了某个方法，不代表平台仍提供它。**（二）适配器只调用清单里存在、且调用方式符合官方用途的端点。** 清单外的端点恒 404，会把「能力不在清单里」持续误报成「连接失败」；把小批量接口当作全市场枚举使用会触发平台封禁，连带影响同一 key 的其他实时报价能力。**（三）能力缺失时返回明确的 `SOURCE_UNAVAILABLE`，并在消息里写清原因与替代源。** 不要在缺能力的地方组合其他接口去拼凑同一语义。**（四）平台错误里给出的替代地址也要对照能力清单核实。** 本次 `alternative` 指向的地址本身就不在公开操作清单里。**（五）删除清单外方法时同步清理它们留下的孤儿，并更新以它们为前提的测试。** 测试断言已移除能力的成功路径，会把错误的能力假设一直保留下来。
+- 回归验证：`tests/test_xiaoshi_client.py::test_xiaoshi_market_source_declines_bulk_quotes_and_per_instrument_bars`（报价与逐标的日线都返回 failure、错误消息写明原因与替代源、两条路径都不向任何端点发请求）、`test_xiaoshi_client_uses_current_history_contract`；`tests/test_data_source_management.py`、`tests/test_market_source_architecture.py`（适配器仍只暴露 `fetch_quotes` / `fetch_daily_bars`）。
+- 吸收位置：`backend/app/services/xiaoshi_market_source.py`（`fetch_quotes` 直接返回能力缺失，删除 `_snapshot_rows`、`_stock_map`、`_code`、`_exchange`、`_number`、`_date_only`、`_is_st` 与随之无用的 `Mapping`、`Quote` 导入）、`backend/app/services/xiaoshi_client.py`（删除 `get_sources`、`get_stocks`、`get_market_snapshot`、`get_factor_library`、`get_market_sentiment`）。
+- 相关：L-149（同一数据源的逐标的日线能力缺失）、L-153（数据源失败归类保留上游标识）。

@@ -7,6 +7,7 @@ projection tables.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -426,6 +427,13 @@ def test_injected_composition_freezes_full_inventory_and_routes_events_through_g
 
     raw_provider = FakeRawProvider({contract.endpoint: response_for for contract in EVENT_SNAPSHOT_CONTRACTS.values()})
     readiness = _ReadySchema()
+    # 本测试验证的是装配冻结与事件路由，每个数据集只喂一行样本；生产规模的行数下限
+    # （例如 margin_detail 的两融全市场约 4450 只）在这种样本量下必然判不足，与
+    # 被验证的行为无关，因此注入一份去掉该门槛的 inventory，让 no-errors 断言仍然严格。
+    inventory = tuple(
+        replace(entry, minimum_record_count=0) if entry.minimum_record_count else entry
+        for entry in AUXILIARY_DATASET_INVENTORY
+    )
     with engine.begin() as connection:
         composition = build_auxiliary_production_composition(
             connection=connection,
@@ -434,6 +442,7 @@ def test_injected_composition_freezes_full_inventory_and_routes_events_through_g
             schema_readiness=readiness,
             clock=lambda: NOW,
             batch_id_factory=lambda dataset, _request: f"event-test-{dataset}-{len(raw_provider.calls)}",
+            inventory=inventory,
         )
         result = composition.orchestrator.prepare(
             datasets=tuple(entry.key for entry in AUXILIARY_DATASET_INVENTORY),

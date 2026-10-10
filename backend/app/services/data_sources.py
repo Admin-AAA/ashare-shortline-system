@@ -129,7 +129,6 @@ def get_local_pool_status(
     raw_bar_count = 0
     unified_quote_count = approx.get("stock_quotes", 0)
     daily_bar_row_count = approx.get("daily_kbars", 0)
-    daily_indicator_count = 0
     limit_up_board_count = approx.get("limit_up_board", 0)
     concept_sector_count = approx.get("concept_sector", 0)
     capital_flow_count = approx.get("capital_flow", 0)
@@ -163,8 +162,24 @@ def get_local_pool_status(
     daily_bar_code_count = len({row.code for row in current_quote_rows})
     full_market_daily_bar_code_count = int(daily_bar_code_count)
     active_daily_bar_code_count = full_market_daily_bar_code_count
+    # 本地派生指标的覆盖率只统计最新交易日那一天：daily_kbars 有 trade_date 索引，
+    # 单日约 5000 行，避免对百万级全表求聚合。ma5 为 NULL 或 0 视为该行指标缺失，
+    # 与 scripts/backfill_indicators.py 判定缺口的口径一致。
     daily_indicator_count = 0
     indicator_coverage_pct = 0.0
+    if latest_bar_date:
+        indicator_row = db.execute(
+            text(
+                "SELECT COUNT(*) AS total, "
+                "SUM(CASE WHEN ma5 IS NOT NULL AND ma5 <> 0 THEN 1 ELSE 0 END) AS with_indicator "
+                "FROM daily_kbars WHERE trade_date = :trade_date"
+            ),
+            {"trade_date": latest_bar_date},
+        ).mappings().one()
+        total_bars = int(indicator_row["total"] or 0)
+        daily_indicator_count = int(indicator_row["with_indicator"] or 0)
+        if total_bars > 0:
+            indicator_coverage_pct = round(daily_indicator_count / total_bars * 100, 2)
     t_distinct_bars = time.perf_counter()
 
     from app.services.market_pool.core import (

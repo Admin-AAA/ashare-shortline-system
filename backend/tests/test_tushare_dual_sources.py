@@ -9,6 +9,7 @@ from app.services.tushare_transport import (
     ProviderConfig,
     ProviderFailure,
     TushareHttpProvider,
+    TushareProviderError,
     TushareProviderRouter,
 )
 
@@ -238,3 +239,199 @@ def test_promax_minute_contract_rejection_falls_back_to_next_provider(monkeypatc
         assert result["data"]["items"] == [["ai_tool"]]
     finally:
         promax.close()
+
+
+def _business_envelope_category(code: str, msg: str) -> FailureCategory:
+    provider = TushareHttpProvider(
+        ProviderConfig(
+            name="tushare_official",
+            base_url="https://api.tushare.pro",
+            credential="token",
+            auth_mode=AuthMode.JSON_TOKEN,
+            http_method=HttpMethod.POST,
+            rate_limit_per_minute=120,
+        )
+    )
+    failure = provider._business_failure("limit_list_d", {"code": code, "msg": msg})
+    return failure.category
+
+
+def test_business_code_40203_is_permission_not_rate_limit() -> None:
+    """40203 是账号无接口访问权限，等待重试永远不会成功。
+
+    上游原文为「抱歉，您没有接口(limit_list_d)访问权限」。把它归成限流会附带
+    retry_after_seconds 的无谓等待，并把排查引向「限流/代理故障」这个错误方向。
+    """
+    category = _business_envelope_category(
+        "40203",
+        "抱歉，您没有接口(limit_list_d)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。",
+    )
+    assert category is FailureCategory.PERMISSION
+
+
+def test_permission_verdict_does_not_depend_on_message_wording() -> None:
+    """错误码本身就足以定性，不依赖消息里出现「权限」二字。"""
+    assert _business_envelope_category("40203", "") is FailureCategory.PERMISSION
+
+
+def test_token_quota_exhausted_is_rate_limit() -> None:
+    """配额耗尽等到重置即可恢复，与权限不足是两回事，必须保留限流归类。"""
+    assert (
+        _business_envelope_category("42901", "token daily limit exceeded")
+        is FailureCategory.BUSINESS_RATE_LIMIT
+    )
+
+
+def test_request_frequency_message_remains_rate_limit() -> None:
+    assert (
+        _business_envelope_category("40004", "抱歉，您每分钟最多访问该接口的频次为 500 次")
+        is FailureCategory.BUSINESS_RATE_LIMIT
+    )
+
+
+def _provider_for_status_case(**overrides) -> TushareHttpProvider:
+    config_kwargs = {
+        "name": "promax",
+        "base_url": "https://promax.example/tushare/pro",
+        "credential": "key",
+        "auth_mode": AuthMode.API_KEY_HEADER,
+        "http_method": HttpMethod.GET,
+        "append_api_path": True,
+        "rate_limit_per_minute": 180,
+        "recovery_seconds": 60.0,
+        "max_attempts": 1,
+    }
+    config_kwargs.update(overrides)
+    return TushareHttpProvider(ProviderConfig(**config_kwargs))
+
+
+class _StatusResponse:
+    headers: dict[str, str] = {}
+
+    def __init__(self, status_code: int, payload: object | None, text: str = "") -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("response body is not json")
+        return self._payload
+
+    def close(self) -> None:
+        return None
+
+
+def _failure_for(status: int, payload: object | None, text: str = "") -> ProviderFailure:
+    provider = _provider_for_status_case()
+    response = _StatusResponse(status, payload, text)
+    provider._session.get = lambda *_args, **_kwargs: response
+    try:
+        provider.request("margin_detail", params={"trade_date": "20260928"}, fields="")
+    except ProviderFailure as failure:
+        return failure
+    raise AssertionError("expected the provider to fail")
+
+
+def test_proxy_capacity_exhaustion_is_rate_limit_with_cooldown() -> None:
+    """代理容量耗尽的 5xx 要让本源冷却并换源，不能按瞬时错误短退避重试。
+
+    实测 promax 在容量耗尽时返回 `HTTP 503 {"ok":false,"error":"upstream_pool_exhausted"}`。
+    按通用 5xx 处理会在几百毫秒后重试，容量尚未恢复就继续施压，把「等一会儿就好」
+    变成「这个源彻底不可用」——连续打多个接口时会观察到该源全线失败。
+    """
+    failure = _failure_for(503, {"ok": False, "error": "upstream_pool_exhausted"})
+
+    assert failure.category is FailureCategory.HTTP_RATE_LIMIT
+    assert failure.retryable is False
+    assert failure.retry_after_seconds == 60.0
+    assert failure.fallback_allowed is True
+    assert failure.upstream_detail == "upstream_pool_exhausted"
+
+
+def test_generic_server_error_stays_retryable_server_failure() -> None:
+    """真正的网关错误仍按瞬时服务器错误重试，不被容量语义吞掉。"""
+    failure = _failure_for(502, {"error": "bad gateway"})
+
+    assert failure.category is FailureCategory.HTTP_SERVER
+    assert failure.retryable is True
+    assert failure.retry_after_seconds is None
+
+
+def test_failure_carries_upstream_detail_for_every_http_class() -> None:
+    """上游给出的错误标识必须保留，否则日志里只剩 category 这个粗标签。
+
+    5xx 的响应体曾被整个丢弃，`http_server` 无法区分「代理宕机」与「代理容量耗尽」，
+    排查只能靠绕过 router 直连去猜。
+    """
+    assert _failure_for(500, None, text="Internal Server Error").upstream_detail == "Internal Server Error"
+    assert _failure_for(403, {"detail": "forbidden"}).upstream_detail == "forbidden"
+    assert _failure_for(502, {"message": "upstream closed"}).upstream_detail == "upstream closed"
+
+
+def test_unreadable_failure_body_does_not_break_failure_handling() -> None:
+    """响应体读不出来时也要正常归类：失败处理本身不能再失败。"""
+
+    class _Unreadable(_StatusResponse):
+        def json(self):
+            raise ValueError("boom")
+
+        @property
+        def text(self):  # type: ignore[override]
+            raise RuntimeError("body unavailable")
+
+        @text.setter
+        def text(self, _value):
+            return None
+
+    provider = _provider_for_status_case()
+    provider._session.get = lambda *_args, **_kwargs: _Unreadable(503, None)
+    try:
+        provider.request("margin_detail", params={"trade_date": "20260928"}, fields="")
+    except ProviderFailure as failure:
+        assert failure.category is FailureCategory.HTTP_SERVER
+        assert failure.upstream_detail is None
+    else:
+        raise AssertionError("expected the provider to fail")
+
+
+def test_business_failure_keeps_upstream_code_and_message() -> None:
+    """HTTP 200 但 code≠0 的业务错误也要保留上游原文，否则 40203 的「没有接口访问权限」只剩 permission 标签。"""
+    provider = _provider_for_status_case(name="tushare_official")
+    failure = provider._business_failure(
+        "cyq_perf",
+        {"code": 40203, "msg": "抱歉，您没有接口(cyq_perf)访问权限"},
+    )
+
+    assert failure.category is FailureCategory.PERMISSION
+    assert failure.upstream_detail == "40203: 抱歉，您没有接口(cyq_perf)访问权限"
+
+
+def test_all_providers_failed_message_carries_each_upstream_detail() -> None:
+    """作业结果与健康报告读到的是汇总消息，必须能直接看出每个 provider 各自失败的真实原因。"""
+    error = TushareProviderError(
+        "cyq_perf",
+        [
+            ProviderFailure(
+                provider="tushare_official",
+                api_name="cyq_perf",
+                category=FailureCategory.PERMISSION,
+                retryable=False,
+                fallback_allowed=True,
+                upstream_detail="40203: 抱歉，您没有接口(cyq_perf)访问权限",
+            ),
+            ProviderFailure(
+                provider="promax",
+                api_name="cyq_perf",
+                category=FailureCategory.HTTP_RATE_LIMIT,
+                retryable=False,
+                fallback_allowed=True,
+                retry_after_seconds=60.0,
+                upstream_detail="upstream_pool_exhausted",
+            ),
+        ],
+    )
+
+    message = str(error)
+    assert "tushare_official:permission(40203: 抱歉，您没有接口(cyq_perf)访问权限)" in message
+    assert "promax:http_rate_limit(upstream_pool_exhausted)" in message

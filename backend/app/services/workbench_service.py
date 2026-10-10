@@ -1383,11 +1383,20 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
             continue
 
         record = repository.get_run(run.run_id)
+        # 心跳超时只能证明「运行停止推进」，不能证明原因。此前这里一律写「服务重启或
+        # 进程退出」，但 run 在某个阶段内部失败、执行者丢失、宿主重启都会走到这里，
+        # 断言单一原因会把排查引向错误方向。改为陈述可观测事实：停在哪个阶段、心跳多久
+        # 没更新。停留阶段是归因的关键线索，必须出现在错误信息里。
+        stalled_phase = run.checkpoint_phase or run.progress_phase or "unknown"
+        stale_message = (
+            f"运行在 {stalled_phase} 阶段停止推进，心跳已超过 "
+            f"{RUN_HEARTBEAT_STALE_SECONDS // 60} 分钟未更新，判定为中断；请重新发起运行。"
+        )
         if record is not None:
             if lifecycle.heartbeat_timeout(
                 run.run_id,
                 now=now,
-                message="服务重启或进程退出，后台任务已中断；请重新发起运行。",
+                message=stale_message,
             ):
                 recovered += 1
                 db.expire_all()
@@ -1404,7 +1413,7 @@ def recover_interrupted_runs(db: Session, run_ids: list[str] | None = None) -> i
         run.interrupted_at = now
         run.finished_at = now
         run.heartbeat_at = now
-        run.error_message = "服务重启或进程退出，后台任务已中断；请重新发起运行。"
+        run.error_message = stale_message
         run.progress_phase = "interrupted"
         if not run.progress_message:
             run.progress_message = "任务未正常结束"

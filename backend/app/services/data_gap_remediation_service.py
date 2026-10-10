@@ -105,7 +105,20 @@ AUXILIARY_GAP_FIELDS = {
     "news",
     "theme_tags",
 }
-AUXILIARY_REMEDIABLE_TABLES = {"capital_flow", "concept_sector", "dragon_tiger", "news"}
+AUXILIARY_REMEDIABLE_TABLES = {"capital_flow", "concept_sector", "dragon_tiger", "news", "concept_member"}
+
+# 盘后作业把可修复清单分成两半分别交给两个执行器：辅助数据集走
+# `_run_auxiliary_remediation`（补完还要跑 run_auxiliary_application），其余走
+# `_run_data_health_remediation`。两半必须并起来等于 DEFAULT_REMEDIABLE_TABLES，
+# 否则新登记的可修复项在自动路径上永远规划不出动作——L-146 把 concept_member 与
+# value_distribution 加进默认清单后，盘后作业因为传的是硬编码显式清单而依旧修不了
+# turnover_rate 恒同值，手工按按钮却能修（L-150）。
+AUXILIARY_REMEDIATION_TABLES = tuple(
+    name for name in DEFAULT_REMEDIABLE_TABLES if name in AUXILIARY_REMEDIABLE_TABLES
+)
+HEALTH_REMEDIATION_TABLES = tuple(
+    name for name in DEFAULT_REMEDIABLE_TABLES if name not in AUXILIARY_REMEDIABLE_TABLES
+)
 
 # 值分布哨兵报出的失真列按修复手段分两类：权威行情列重新拉当日全市场日线覆盖回去，
 # 本地派生列交给本地指标补数脚本重算。两类合起来正好覆盖哨兵登记的全部 12 列（L-146）。

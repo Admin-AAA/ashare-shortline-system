@@ -162,6 +162,9 @@ class AuxiliaryDatasetInventoryEntry:
     dependencies: tuple[str, ...] = ()
     minimum_instrument_coverage: float = 0.0
     coverage_instrument_field: str | None = None
+    # 全市场刷新不传 instruments，此时 minimum_instrument_coverage 的分母为空、
+    # 覆盖率恒为 1.0，只有绝对行数下限能判出「有数据但数据不全」。
+    minimum_record_count: int = 0
     mysql_blockers: tuple[MySQLVerificationRequirement, ...] = (
         MySQLVerificationRequirement.VERSIONED_UNIQUE_MIGRATION,
         MySQLVerificationRequirement.STORED_DATA_DUPLICATE_PREFLIGHT,
@@ -178,6 +181,8 @@ class AuxiliaryDatasetInventoryEntry:
             raise AuxiliaryInventoryError("inventory dependency 不能为空")
         if not 0.0 <= self.minimum_instrument_coverage <= 1.0:
             raise AuxiliaryInventoryError("minimum_instrument_coverage 必须在 [0, 1] 范围内")
+        if self.minimum_record_count < 0:
+            raise AuxiliaryInventoryError("minimum_record_count 不能为负数")
         if self.minimum_instrument_coverage > 0 and not self.coverage_instrument_field:
             raise AuxiliaryInventoryError("按股票覆盖率校验必须声明 coverage_instrument_field")
         if not self.freshness_field.strip():
@@ -353,6 +358,9 @@ AUXILIARY_DATASET_INVENTORY: tuple[AuxiliaryDatasetInventoryEntry, ...] = (
         key="margin_detail", category="margin", view_key="market_pool.margin_details", model=MarginDetail,
         natural_key=("code", "trade_date"), freshness_field="trade_date",
         update_policy=_atomic(("rzye", "rqye", "rzmre", "rzche", "rzrqye", "rqyl")),
+        # 两融标的全市场约 4450 只，行数明显低于此下限说明当日写入只覆盖了一部分，
+        # 需要重新取数而不是按「那天有数据」判定新鲜。
+        minimum_record_count=3500,
     ),
     AuxiliaryDatasetInventoryEntry(
         key="block_trade", category="block_trade", view_key="market_pool.block_trades", model=BlockTrade,
@@ -866,6 +874,7 @@ def assemble_standard_auxiliary_descriptors(
                 view_key=entry.view_key,
                 natural_key=entry.natural_key,
                 coverage_policy=CoveragePolicy(
+                    minimum_record_count=entry.minimum_record_count,
                     minimum_instrument_coverage=entry.minimum_instrument_coverage,
                     instrument_extractor=_mapping_instrument(entry.coverage_instrument_field),
                 ),

@@ -87,3 +87,42 @@ def test_daily_state_repository_inspects_only_requested_trade_date() -> None:
     assert snapshot.record_count == 1
     assert snapshot.covered_instruments == frozenset({"000002"})
     assert snapshot.freshness == date(2026, 7, 21)
+
+
+def test_margin_detail_partial_write_is_insufficient_but_empty_day_is_not() -> None:
+    """全市场刷新不传 instruments，只有行数下限能判出「有数据但数据不全」。
+
+    margin_detail 曾经在库内只有 2002 行（上游 4452 行）的情况下被判为 fresh，
+    补数入口报 errors=[] 自称成功却一行未写。空集是另一回事：T+1 披露日当天
+    上游本就返回 0 行，不能判成缺口。
+    """
+    entry = next(item for item in AUXILIARY_DATASET_INVENTORY if item.key == "margin_detail")
+    assert entry.minimum_record_count > 0, "全市场数据集必须声明行数下限，否则部分写入无法被发现"
+
+    adapter = _Adapter()
+    descriptor = assemble_standard_auxiliary_descriptors(
+        {
+            "margin_detail": StandardAuxiliaryDatasetAdapters(
+                fetcher=adapter,
+                normalizer=adapter,
+                repository=adapter,
+                loader=adapter,
+            )
+        },
+        schema_readiness=_Ready(),
+        inventory=(entry,),
+    )[0]
+    policy = descriptor.coverage_policy
+    floor = entry.minimum_record_count
+
+    def evaluate(record_count: int):
+        return policy.evaluate_snapshot(
+            record_count=record_count,
+            covered_instruments=frozenset(),
+            requested_instruments=(),
+            source="test",
+        )
+
+    assert evaluate(floor - 1).sufficient is False
+    assert evaluate(floor).sufficient is True
+    assert evaluate(0).sufficient is True

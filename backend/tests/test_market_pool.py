@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
@@ -1524,6 +1524,32 @@ def test_local_pool_status_summarizes_unified_quotes_and_bars(db, monkeypatch):
     assert "daily_bars" in status
     assert isinstance(status["summary"]["active_unified_quote_count"], int)
     assert isinstance(status["summary"]["daily_bar_count"], int)
+
+
+def test_local_pool_status_reports_real_indicator_coverage(db):
+    """指标覆盖率必须按 daily_kbars 实际统计，不能恒为 0。
+
+    这两个字段曾被无条件硬编码成 0 / 0.0，看板因此永久显示「指标覆盖率 0%」，
+    而实际派生指标是齐全的——一个永远报 0 的指标无法反映任何真实状态。
+    """
+    summary = get_local_pool_status(db)["summary"]
+    latest_bar_date = summary["latest_bar_date"]
+    assert latest_bar_date, "测试库需要有日K数据才能校验指标覆盖率口径"
+
+    # ma5 为 NULL 或 0 视为该行缺指标，与 scripts/backfill_indicators.py 的口径一致。
+    expected = db.execute(
+        text(
+            "SELECT COUNT(*) AS total, "
+            "SUM(CASE WHEN ma5 IS NOT NULL AND ma5 <> 0 THEN 1 ELSE 0 END) AS with_indicator "
+            "FROM daily_kbars WHERE trade_date = :trade_date"
+        ),
+        {"trade_date": latest_bar_date},
+    ).mappings().one()
+    expected_count = int(expected["with_indicator"] or 0)
+    expected_total = int(expected["total"] or 0)
+
+    assert summary["daily_indicator_count"] == expected_count
+    assert summary["indicator_coverage_pct"] == round(expected_count / expected_total * 100, 2)
 
 
 def test_local_pool_status_reports_recommendation_readiness(db, monkeypatch):

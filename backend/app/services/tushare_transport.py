@@ -30,6 +30,60 @@ _RETRYABLE_EXCEPTIONS = (
     requests.exceptions.ChunkedEncodingError,
 )
 
+# Tushare 业务错误码。40203 是账号没有该接口的访问权限（需要积分），
+# 上游原文为「抱歉，您没有接口(xxx)访问权限」；换 token 或充积分才能解决，
+# 等待重试没有意义。42901 是 token 当日配额耗尽，等到配额重置即可恢复。
+_PERMISSION_BUSINESS_CODES = frozenset({"40203"})
+_RATE_LIMIT_BUSINESS_CODES = frozenset({"42901"})
+_PERMISSION_MESSAGE_TERMS = ("权限", "未开通", "积分", "permission", "unauthorized")
+_RATE_LIMIT_MESSAGE_TERMS = ("频率", "频次", "rate limit", "请求速度", "limit exceeded")
+
+# 代理型数据源在自身容量耗尽时会返回 5xx 并在响应体里给出标识，例如
+# `{"ok":false,"error":"upstream_pool_exhausted"}`。这类失败的正确反应是立刻换源并让
+# 该源冷却一段时间，而不是按瞬时服务器错误做几百毫秒的退避重试——短退避会在容量尚未
+# 恢复时继续施压，把「等一会儿就好」变成「这个源彻底不可用」。
+_CAPACITY_EXHAUSTED_TERMS = (
+    "pool_exhausted",
+    "pool exhausted",
+    "capacity",
+    "overloaded",
+    "too many",
+    "busy",
+    "quota",
+)
+# 5xx 响应体里承载错误标识的常见字段名，按优先级取第一个非空值。
+_UPSTREAM_ERROR_FIELDS = ("error", "msg", "message", "detail", "reason")
+_UPSTREAM_DETAIL_MAX_CHARS = 120
+
+
+def _extract_upstream_detail(response: Any) -> str | None:
+    """从失败响应里取出上游自己给的短错误标识，供归类与日志使用。
+
+    响应体可能不是 JSON，也可能根本读不出来；任何一种都不应该让失败处理本身出错，
+    因为那会把一个可以换源的失败变成不可恢复的异常。
+    """
+    try:
+        payload = response.json()
+    except Exception:
+        try:
+            text = (getattr(response, "text", "") or "").strip()
+        except Exception:
+            return None
+        return text[:_UPSTREAM_DETAIL_MAX_CHARS] or None
+
+    if isinstance(payload, Mapping):
+        for field in _UPSTREAM_ERROR_FIELDS:
+            value = payload.get(field)
+            if value is None:
+                continue
+            text = str(value).strip()
+            if text:
+                return text[:_UPSTREAM_DETAIL_MAX_CHARS]
+        return None
+    text = str(payload).strip()
+    return text[:_UPSTREAM_DETAIL_MAX_CHARS] or None
+
+
 
 class AuthMode(StrEnum):
     JSON_TOKEN = "json_token"
@@ -108,6 +162,7 @@ class ProviderFailure(RuntimeError):
         retryable: bool,
         fallback_allowed: bool,
         retry_after_seconds: float | None = None,
+        upstream_detail: str | None = None,
     ) -> None:
         self.provider = provider
         self.api_name = api_name
@@ -115,7 +170,12 @@ class ProviderFailure(RuntimeError):
         self.retryable = retryable
         self.fallback_allowed = fallback_allowed
         self.retry_after_seconds = retry_after_seconds
-        super().__init__(f"{provider} {api_name} failed ({category.value})")
+        # 上游自己给出的失败标识（例如代理的 `upstream_pool_exhausted`）。只保留短标识，
+        # 不保留完整响应体，避免把 token 或业务数据带进日志。没有这个字段时，5xx 在日志里
+        # 只剩 http_server 这个粗标签，无法区分「代理宕机」与「代理容量耗尽」。
+        self.upstream_detail = upstream_detail
+        suffix = f", upstream={upstream_detail}" if upstream_detail else ""
+        super().__init__(f"{provider} {api_name} failed ({category.value}{suffix})")
 
 
 class TushareProviderError(RuntimeError):
@@ -124,7 +184,13 @@ class TushareProviderError(RuntimeError):
     def __init__(self, api_name: str, failures: list[ProviderFailure]) -> None:
         self.api_name = api_name
         self.failures = tuple(failures)
-        summary = ", ".join(f"{item.provider}:{item.category.value}" for item in failures)
+        # 汇总里带上每个 provider 的上游标识：作业结果与 data-health 里看到的就是这条消息，
+        # 只有 category 时无法区分「代理容量耗尽」「账号无权限」「端点不存在」。
+        summary = ", ".join(
+            f"{item.provider}:{item.category.value}"
+            + (f"({item.upstream_detail})" if item.upstream_detail else "")
+            for item in failures
+        )
         super().__init__(f"Tushare {api_name} unavailable; providers={summary or 'none'}")
 
 
@@ -452,12 +518,14 @@ class TushareHttpProvider:
                 last_failure = failure
                 duration_ms = (time.perf_counter() - started) * 1000
                 logger.warning(
-                    "tushare provider failure provider=%s api=%s attempt=%d category=%s duration_ms=%.1f",
+                    "tushare provider failure provider=%s api=%s attempt=%d category=%s "
+                    "duration_ms=%.1f upstream=%s",
                     self.name,
                     api_name,
                     attempt + 1,
                     failure.category.value,
                     duration_ms,
+                    failure.upstream_detail or "-",
                 )
                 if failure.retryable and attempt < self.config.max_attempts - 1:
                     delay = min(5.0, 0.5 * (2**attempt)) + random.uniform(0.0, 0.2)
@@ -534,12 +602,26 @@ class TushareHttpProvider:
                         retry_after_seconds=retry_after,
                     )
                 if status >= 500:
+                    upstream_detail = _extract_upstream_detail(response)
+                    haystack = (upstream_detail or "").lower()
+                    if any(term in haystack for term in _CAPACITY_EXHAUSTED_TERMS):
+                        # 容量耗尽：让本源冷却 recovery_seconds 并立刻切换到下一个 provider。
+                        raise ProviderFailure(
+                            provider=self.name,
+                            api_name=api_name,
+                            category=FailureCategory.HTTP_RATE_LIMIT,
+                            retryable=False,
+                            fallback_allowed=True,
+                            retry_after_seconds=float(self.config.recovery_seconds),
+                            upstream_detail=upstream_detail,
+                        )
                     raise ProviderFailure(
                         provider=self.name,
                         api_name=api_name,
                         category=FailureCategory.HTTP_SERVER,
                         retryable=status in _RETRYABLE_HTTP_STATUS,
                         fallback_allowed=True,
+                        upstream_detail=upstream_detail,
                     )
                 raise ProviderFailure(
                     provider=self.name,
@@ -547,6 +629,7 @@ class TushareHttpProvider:
                     category=FailureCategory.HTTP_CLIENT,
                     retryable=False,
                     fallback_allowed=status in {401, 403},
+                    upstream_detail=_extract_upstream_detail(response),
                 )
             try:
                 envelope = response.json()
@@ -637,8 +720,24 @@ class TushareHttpProvider:
 
     def _business_failure(self, api_name: str, envelope: Mapping[str, Any]) -> ProviderFailure:
         code = str(envelope.get("code") or "")
-        message = str(envelope.get("msg") or "").lower()
-        if code == "40203" or any(term in message for term in ("频率", "频次", "rate limit", "请求速度")):
+        raw_message = str(envelope.get("msg") or "").strip()
+        message = raw_message.lower()
+        # 上游业务错误码与原文一起保留，例如「40203: 抱歉，您没有接口(cyq_perf)访问权限」。
+        upstream_detail = (f"{code}: {raw_message}" if code else raw_message)[:_UPSTREAM_DETAIL_MAX_CHARS] or None
+        if code in _PERMISSION_BUSINESS_CODES or any(
+            term in message for term in _PERMISSION_MESSAGE_TERMS
+        ):
+            return ProviderFailure(
+                provider=self.name,
+                api_name=api_name,
+                category=FailureCategory.PERMISSION,
+                retryable=False,
+                fallback_allowed=True,
+                upstream_detail=upstream_detail,
+            )
+        if code in _RATE_LIMIT_BUSINESS_CODES or any(
+            term in message for term in _RATE_LIMIT_MESSAGE_TERMS
+        ):
             return ProviderFailure(
                 provider=self.name,
                 api_name=api_name,
@@ -646,14 +745,7 @@ class TushareHttpProvider:
                 retryable=False,
                 fallback_allowed=True,
                 retry_after_seconds=60.0,
-            )
-        if any(term in message for term in ("权限", "未开通", "积分", "permission", "unauthorized")):
-            return ProviderFailure(
-                provider=self.name,
-                api_name=api_name,
-                category=FailureCategory.PERMISSION,
-                retryable=False,
-                fallback_allowed=True,
+                upstream_detail=upstream_detail,
             )
         if any(term in message for term in ("参数", "parameter", "invalid argument")):
             return ProviderFailure(
@@ -662,6 +754,7 @@ class TushareHttpProvider:
                 category=FailureCategory.INVALID_REQUEST,
                 retryable=False,
                 fallback_allowed=False,
+                upstream_detail=upstream_detail,
             )
         return ProviderFailure(
             provider=self.name,
@@ -669,6 +762,7 @@ class TushareHttpProvider:
             category=FailureCategory.PROVIDER_ERROR,
             retryable=False,
             fallback_allowed=True,
+            upstream_detail=upstream_detail,
         )
 
 
@@ -833,10 +927,11 @@ class TushareProviderRouter:
                     break
                 if index < len(providers) - 1:
                     logger.warning(
-                        "tushare provider fallback api=%s from=%s category=%s",
+                        "tushare provider fallback api=%s from=%s category=%s upstream=%s",
                         api_name,
                         provider.name,
                         failure.category.value,
+                        failure.upstream_detail or "-",
                     )
         self._persist_trace(api_name, params, attempts, selected_provider, final_outcome)
         raise TushareProviderError(api_name, failures)

@@ -228,43 +228,6 @@ class XiaoshiClient:
     def get_capabilities(self) -> dict[str, Any]:
         return self.request("GET", "/api/v3/market/capabilities")
 
-    def get_sources(self) -> dict[str, Any]:
-        return self.request("GET", "/api/v3/market/sources")
-
-    def get_stocks(
-        self,
-        *,
-        market: str = "CN",
-        exchange: str = "",
-        industry: str = "",
-        offset: int = 0,
-        limit: int = 6000,
-    ) -> dict[str, Any]:
-        return self.request(
-            "GET",
-            "/api/v3/data/stocks",
-            params={
-                "market": market,
-                "exchange": exchange,
-                "industry": industry,
-                "offset": offset,
-                "limit": min(6000 if market == "CN" else 20000, max(1, int(limit))),
-            },
-        )
-
-    def get_market_snapshot(
-        self, *, market: str = "CN", offset: int = 0, limit: int = 6000
-    ) -> dict[str, Any]:
-        return self.request(
-            "GET",
-            "/api/v3/data/market-snapshot",
-            params={
-                "market": market,
-                "offset": offset,
-                "limit": min(6000 if market == "CN" else 20000, max(1, int(limit))),
-            },
-        )
-
     def get_quote(
         self, code: str, *, market: str = "CN", instrument: str = "stock"
     ) -> dict[str, Any]:
@@ -290,12 +253,6 @@ class XiaoshiClient:
         if not dataset or not all(char.isalnum() or char in "-_" for char in dataset):
             raise ValueError("dataset must be a simple quant-data identifier")
         return self.request("GET", f"/api/v3/quant-data/{dataset}", params=params)
-
-    def get_factor_library(self) -> dict[str, Any]:
-        return self.request("GET", "/api/v3/factors/library")
-
-    def get_market_sentiment(self) -> dict[str, Any]:
-        return self.request("GET", "/api/v3/data/market-sentiment")
 
     def get_history_manifest(self, **params: Any) -> dict[str, Any]:
         """历史交付契约元数据：datasets 声明、coverage、schemas、download_contracts。

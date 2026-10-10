@@ -153,6 +153,11 @@ def _mark_done_memory(task_id: str) -> None:
 
 
 def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    from app.services.data_gap_remediation_service import (
+        AUXILIARY_REMEDIATION_TABLES,
+        HEALTH_REMEDIATION_TABLES,
+    )
+
     payload = dict(existing or {})
     payload.update(
         {
@@ -168,21 +173,10 @@ def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[
             "score_line": float(payload.get("score_line") or 72),
             "output_count": int(payload.get("output_count") or 6),
             "skip_aux_refresh": True,
-            "health_remediation_tables": [
-                "daily_kbar",
-                "chip",
-                "minute_kbar",
-                "index_daily",
-                "limit_up_board",
-                "capital_flow",
-            ],
-            "auxiliary_remediation_tables": [
-                "limit_up_board",
-                "concept_sector",
-                "dragon_tiger",
-                "news",
-                "capital_flow",
-            ],
+            # 两份清单从服务侧权威定义派生，不写字面量：往 DEFAULT_REMEDIABLE_TABLES
+            # 新登记可修复项时自动生效，避免自动作业规划不出动作（L-150）。
+            "health_remediation_tables": list(HEALTH_REMEDIATION_TABLES),
+            "auxiliary_remediation_tables": list(AUXILIARY_REMEDIATION_TABLES),
             "health_post_diagnosis": True,
             "auxiliary_post_diagnosis": False,
             "horizon_days": int(payload.get("horizon_days") or 5),
@@ -195,25 +189,18 @@ def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[
 
 
 def _late_data_repair_payload(existing: dict[str, Any] | None = None) -> dict[str, Any]:
+    from app.services.data_gap_remediation_service import (
+        AUXILIARY_REMEDIATION_TABLES,
+        HEALTH_REMEDIATION_TABLES,
+    )
+
     payload = dict(existing or {})
     payload.update(
         {
             "sync_scope": "all",
-            "health_remediation_tables": [
-                "daily_kbar",
-                "chip",
-                "minute_kbar",
-                "index_daily",
-                "limit_up_board",
-                "capital_flow",
-            ],
-            "auxiliary_remediation_tables": [
-                "limit_up_board",
-                "concept_sector",
-                "dragon_tiger",
-                "news",
-                "capital_flow",
-            ],
+            # 与盘后推荐同一口径，从服务侧权威定义派生（L-150）。
+            "health_remediation_tables": list(HEALTH_REMEDIATION_TABLES),
+            "auxiliary_remediation_tables": list(AUXILIARY_REMEDIATION_TABLES),
             "health_post_diagnosis": True,
             "auxiliary_post_diagnosis": False,
         }
@@ -1157,12 +1144,13 @@ def _backfill_missing_local_indicators(db, days: int = 7) -> dict:
 def _run_data_health_remediation(payload: dict) -> dict:
     from app.services.data_gap_remediation_service import (
         DEFAULT_DAILY_KBAR_CODE_LIMIT,
+        HEALTH_REMEDIATION_TABLES,
         remediate_data_health_gaps,
     )
 
     target_tables = payload.get("health_remediation_tables")
     if target_tables is None:
-        target_tables = ["daily_kbar", "minute_kbar", "index_daily", "limit_up_board", "capital_flow"]
+        target_tables = list(HEALTH_REMEDIATION_TABLES)
     db = SessionLocal()
     try:
         return remediate_data_health_gaps(
@@ -1178,12 +1166,15 @@ def _run_data_health_remediation(payload: dict) -> dict:
 
 
 def _run_auxiliary_remediation(payload: dict) -> dict:
-    from app.services.data_gap_remediation_service import remediate_data_health_gaps
+    from app.services.data_gap_remediation_service import (
+        AUXILIARY_REMEDIATION_TABLES,
+        remediate_data_health_gaps,
+    )
     from app.services.auxiliary.production import AUXILIARY_DATASET_INVENTORY
 
     target_tables = payload.get("auxiliary_remediation_tables")
     if target_tables is None:
-        target_tables = ["limit_up_board", "concept_sector", "dragon_tiger", "news", "capital_flow"]
+        target_tables = list(AUXILIARY_REMEDIATION_TABLES)
     db = SessionLocal()
     try:
         result = remediate_data_health_gaps(

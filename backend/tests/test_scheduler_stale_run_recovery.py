@@ -188,3 +188,38 @@ def test_recover_interrupted_runs_redispatches_stale_queued_not_interrupted():
                 db.delete(row)
         db.commit()
         db.close()
+
+
+def test_stale_run_message_names_phase_and_avoids_unproven_restart_claim():
+    """心跳超时只能证明「停止推进」，不能断言原因。
+
+    此前这条消息一律写「服务重启或进程退出」。实测有 18 条 run 停在 prepare 阶段
+    被这样标记，而那些时刻并没有发生任何重启——断言单一原因把排查引向了错误方向。
+    消息必须给出停留阶段（归因的关键线索），并且不得声称已知原因。
+    """
+    run_id = f"__test_phase_msg_{uuid.uuid4().hex[:12]}"
+    db = SessionLocal()
+    try:
+        run = _make_run(run_id, heartbeat_at=_utc_naive(-timedelta(hours=2)))
+        run.checkpoint_phase = "prepare"
+        run.progress_phase = "prepare"
+        run.progress_message = "阶段 prepare 完成"
+        run.universe_count = 0
+        db.add(run)
+        db.commit()
+
+        recover_interrupted_runs(db)
+
+        stalled = db.get(RecommendationRun, run_id)
+        assert stalled is not None and stalled.status == "interrupted"
+        message = stalled.error_message or ""
+        assert "prepare" in message, "必须指出停在哪个阶段，否则无法归因"
+        assert "服务重启" not in message
+        assert "进程退出" not in message
+    finally:
+        db.rollback()
+        row = db.get(RecommendationRun, run_id)
+        if row is not None:
+            db.delete(row)
+        db.commit()
+        db.close()
