@@ -1713,3 +1713,13 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 回归验证：`tests/test_exposure_run_concurrency_failure.py`（110KB 异常经流水线失败处理后 `progress_message` 与 fail 迁移消息都不超上限且保留错误开头、行情阶段在写完共享事实后、写 run 上下文前提交、共享写入按「拿锁→写入→提交→放锁」顺序、拿不到锁报错且不写入、行按主键排序、`utc_isoformat` 带 `Z`）、`tests/evidence/test_selectors.py`（运行摘要的 `actual_generated_at` 带 `Z`）；真实并发验证：2026-10-11 01:00 手动触发 `strategy_exposure_run`，4 个 run 全部 completed。
 - 吸收位置：`backend/app/services/runs/stages/adapters.py`（`ProductionMarketPersistence.persist_snapshot` 即写即提交、`persist_stocks_and_bars` 命名锁 `_SHARED_MARKET_WRITE_LOCK`、`commit_shared_market_facts`）、`backend/app/services/runs/stages/market_data.py`（`MarketPersistencePort.commit_shared_market_facts` 与调用点）、`backend/app/services/runs/pipeline.py::_mark_pipeline_run_failed`、`backend/app/services/workbench_service.py::_persist_stocks_and_bars`（按主键排序）、`backend/app/core/time.py::utc_isoformat`、`backend/app/services/cost_service.py`、`backend/app/services/recommendations/projection.py::_isoformat_or_none`。
 - 相关：L-141（失败写入路径必须不可能失败，本条补上流水线这条漏掉的路径）、L-154（中断归因只陈述事实，本条的 22 次中断正是靠阶段线索才追到写入点）。
+
+## L-158 Prefect 每 10 秒一条 database is locked 是 3.8.0 的事务模式缺陷，不是 SQLite 文件太大
+
+- 状态：encoded（Prefect 升到 3.8.8，flow run 历史保留 30 天）
+- 适用：Prefect server 日志刷 `sqlite3.OperationalError: database is locked`；任何「数据库文件大了所以锁冲突多」的推断
+- 证据：2026-10-11 统计 `ashare-prefect-server.err.log` 最后 5MB：558 条 ERROR 中 557 条是 `docket.dependencies` 的 `mark_deployments_ready(work_queue_ids=...)`，每条从开始到报错只用 5–8ms。SQLite 的 `busy_timeout` 设为 60 秒，5ms 就失败说明没有进入等待：Prefect 3.8.0 的 `mark_deployments_ready` 以 `begin_transaction=True` 但没带 `with_for_update=True` 打开会话，SQLite 发出 `BEGIN DEFERRED`，先读后写；读写之间若有其他连接提交，读事务无法升级为写事务，SQLite 为避免死锁直接返回 SQLITE_BUSY，不走 busy handler。worker 每次轮询都触发这一路径，周末零作业时同样刷屏。7 月起累计 2.07GB 日志；`prefect.db` 825MB 里活跃页只有约 250MB，其余是已删除行留下的空闲页，与锁冲突无关。Prefect 3.8.8 在该函数加上 `with_for_update=True`（源码注释写明原因）。
+- 永久规则：**（一）排查 SQLite 锁冲突先看失败耗时。** 远小于 `busy_timeout` 就失败，是事务升级冲突，加大超时、清理数据、换更大的机器都没用；修法是让写事务一开始就用 `BEGIN IMMEDIATE`。**（二）第三方组件的刷屏错误先按调用点聚合，再对照上游新版本源码。** 本次直接下载新版 wheel 对比同一函数即可确认修复，不必为此迁移数据库。**（三）flow run 历史清理靠 Prefect 自带的 `DB_VACUUM`（`flow_runs` 加 30 天保留），不手工删表。**
+- 回归验证：升级后观察 `ashare-prefect-server.err.log` 不再出现 `mark_deployments_ready` 的 `database is locked`；`prefect.db` 中 `flow_run` 最早记录约为 30 天前（2026-10-11 实测 2026-09-09）。
+- 吸收位置：`backend/requirements.txt`（`prefect==3.8.8`）、`backend/scripts/run_prefect_server.py`（`PREFECT_SERVER_SERVICES_DB_VACUUM_ENABLED=events,flow_runs` 与 30 天保留期）。
+- 相关：L-145（Prefect 僵尸占槽，同一编排层）。

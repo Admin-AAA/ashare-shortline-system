@@ -6,7 +6,7 @@ alembic==1.18.5
 pydantic==2.13.4
 pydantic-settings==2.14.1
 PyYAML==6.0.3
-prefect==3.8.0
+prefect==3.8.8
 python-multipart==0.0.28
 httpx==0.28.1
 httpx2==2.9.1
