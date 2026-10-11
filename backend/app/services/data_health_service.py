@@ -122,6 +122,11 @@ _VALUE_SENTINEL_DEFS: list[dict[str, Any]] = [
     {"column": "breakout20", "label": "20日突破", "critical": False, "min_distinct": 2, "min_nonzero_ratio": 0.0},
 ]
 
+# 成交额(元)/(成交量×收盘价)：按手计约 100，按股计约 1；低于该值即判定这一行按股写入。
+_VOLUME_UNIT_SHARES_RATIO_CEILING = 10
+# 按股写入的行超过该占比即判定成交量列失真（停牌、极端价格的个别行不误报）。
+_VOLUME_UNIT_MAX_SHARES_RATIO = 0.05
+
 _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 行情 K 线
     {"key": "daily_kbar", "label": "日K线(含技术指标)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
@@ -886,6 +891,10 @@ def _value_distribution_sentinel(db: Session, reference_trade_date: str | None) 
 
     sql = (
         "SELECT COUNT(*) AS rows_n, " + ", ".join(aggregates) +
+        # 成交量单位：daily_kbars 按手计，成交额(元)/(成交量×收盘价) 约为 100；
+        # 按股写入时约为 1。值分布指标看不出单位错，必须单独数（L-159）。
+        ", SUM(CASE WHEN volume > 0 AND close > 0 AND amount / (volume * close) < "
+        f"{_VOLUME_UNIT_SHARES_RATIO_CEILING} THEN 1 ELSE 0 END) AS volume_in_shares"
         " FROM daily_kbars WHERE trade_date = :ref"
     )
     try:
@@ -948,6 +957,22 @@ def _value_distribution_sentinel(db: Session, reference_trade_date: str | None) 
             "distinct": distinct,
             "non_zero": non_zero,
             "nonzero_ratio": nonzero_ratio,
+            "total_rows": total_rows,
+        })
+
+    volume_in_shares = int(row.get("volume_in_shares") or 0)
+    volume_in_shares_ratio = round(volume_in_shares / total_rows, 4) if total_rows else 0.0
+    already_flagged = any(item["column"] == "volume" for item in distorted)
+    if volume_in_shares_ratio > _VOLUME_UNIT_MAX_SHARES_RATIO and not already_flagged:
+        healthy -= 1
+        penalty += 5
+        distorted.append({
+            "column": "volume",
+            "label": "成交量",
+            "critical": True,
+            "reason": f"成交量按股写入（{volume_in_shares} 行，占 {volume_in_shares_ratio:.1%}），与日线按手计不一致",
+            "volume_in_shares": volume_in_shares,
+            "volume_in_shares_ratio": volume_in_shares_ratio,
             "total_rows": total_rows,
         })
 
@@ -1333,6 +1358,22 @@ def recommendation_readiness_from_diagnosis(
                 missing_dates=sorted(set(missing_dates)),
                 incomplete_dates=sorted(set(incomplete_dates)),
                 gap_count=gap_count,
+            )
+
+    # 结构性检查只回答「有没有」；关键行情列「值是错的」时（恒零、单位错）照常出票，
+    # 推荐就建在坏数据上。09-28 起四个交易日的涨跌幅与换手率被写成 0，盘后推荐全部放行（L-159）。
+    sentinel = diagnosis.get("value_distribution") or {}
+    sentinel_date = _fmt_date(sentinel.get("reference_trade_date"))
+    if reference and sentinel_date == reference:
+        for item in sentinel.get("distorted") or []:
+            if not item.get("critical"):
+                continue
+            add_blocker(
+                "value_distribution_distorted",
+                f"{item.get('label') or item.get('column')} {reference} 值失真：{item.get('reason')}",
+                table="value_distribution",
+                column=item.get("column"),
+                expected_trade_date=reference,
             )
 
     for issue in diagnosis.get("issues") or []:

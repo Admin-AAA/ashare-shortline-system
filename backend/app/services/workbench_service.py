@@ -61,6 +61,7 @@ from app.services.auxiliary.application import (
 from app.services.market_source.local_pool_adapter import load_legacy_market_universe
 from app.services.daily_bar_write_policy import (
     group_rows_by_quote_metric_presence,
+    is_transient_bar,
     normalize_quote_metric,
     quote_metrics_look_unready,
 )
@@ -2854,6 +2855,10 @@ def _persist_stocks_and_bars(
         if not persist_bars:
             continue
         for bar in stock.get("_bars", []):
+            # 盘中实时拼出的当日K线只供本次运行打分，写进 daily_kbars 会用按股计的成交量、
+            # 0 换手率和相对自身算出的 0 涨跌幅覆盖收盘后的权威日线（L-159）。
+            if is_transient_bar(bar):
+                continue
             bar_code = str(bar.get("code") or code).strip()
             trade_date = str(bar.get("trade_date") or "").strip()
             if not bar_code or not trade_date:

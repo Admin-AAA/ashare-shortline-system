@@ -123,7 +123,10 @@ class MarketDataStage:
         # 2. Persist market snapshot.
         if self.market_persistence is not None:
             self.market_persistence.persist_snapshot(snapshot_dict)
-            should_persist_bars = data_source in ("realtime", "local_pool_realtime")
+            # 只有 realtime 模式的历史日K是这次从外部日线接口新拉的，值得写回本地池。
+            # local_pool_realtime 的历史本来就读自 daily_kbars，唯一的新 K 线是盘中实时拼接的
+            # 临时 K 线，写回只会用盘中半截数据覆盖收盘后的权威日线（L-159）。
+            should_persist_bars = data_source == "realtime"
             if should_persist_bars:
                 self.market_persistence.persist_stocks_and_bars(stocks, persist_bars=True)
             self.market_persistence.commit_shared_market_facts()

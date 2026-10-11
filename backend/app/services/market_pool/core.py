@@ -48,6 +48,7 @@ from app.models.tables import (
 )
 from app.services.data_sources import enabled_sources
 from app.services.daily_bar_write_policy import (
+    SHARES_PER_LOT,
     group_rows_by_quote_metric_presence,
     normalize_quote_metric,
     quote_metrics_look_unready,
@@ -364,7 +365,11 @@ def get_market_universe_from_pool(db: Session, refresh: bool = False, as_of_date
 
 
 def _build_realtime_bar(realtime_row: dict[str, Any], prev_close: float, code: str) -> dict[str, Any]:
-    """将 realtime_quote 返回的实时行情拼接为一条日K。"""
+    """将 realtime_quote 返回的实时行情拼接为一条日K。
+
+    成交量换算成手，与 daily_kbars 历史日K同单位：realtime_quote 的 VOLUME 按股计，
+    不换算时当日成交量是历史的 100 倍，量比、放量突破等特征全部失真（L-159）。
+    """
     price = _num(_row_value(realtime_row, "PRICE", "price"))
     return {
         "code": code,
@@ -373,7 +378,7 @@ def _build_realtime_bar(realtime_row: dict[str, Any], prev_close: float, code: s
         "high": _num(_row_value(realtime_row, "HIGH", "high")),
         "low": _num(_row_value(realtime_row, "LOW", "low")),
         "close": price,
-        "volume": _num(_row_value(realtime_row, "VOLUME", "volume", "volumn")),
+        "volume": _num(_row_value(realtime_row, "VOLUME", "volume", "volumn")) / SHARES_PER_LOT,
         "amount": _num(_row_value(realtime_row, "AMOUNT", "amount")),
         "pct_chg": round((price - prev_close) / prev_close * 100, 4) if prev_close > 0 else 0.0,
         "turnover_rate": 0.0,
@@ -470,12 +475,19 @@ def get_market_universe_from_pool_with_realtime(db: Session) -> tuple[list[dict[
             kline_errors[code] = [f"daily_bars_cache: 本地日K不足30条，仅 {len(bars)} 条"]
             continue
 
-        # 拼接今日实时K线
-        prev_close = bars[-1]["close"] if bars else _num(quote.get("preclose"))
-        rt_bar = _build_realtime_bar(realtime_map[code], prev_close, code)
-        # 如果今日实时K线日期与最后一条历史K线相同，替换最后一条
-        if bars and bars[-1]["trade_date"] == rt_bar["trade_date"]:
+        # 拼接今日实时K线。实时K线与最后一条历史K线同日（收盘后或次日开盘前运行）时
+        # 替换掉那一条，昨收必须取被替换那条之前的收盘价：直接取 bars[-1] 会拿当日自身
+        # 收盘价当昨收，涨跌幅恒为 0（L-159）。实时行情自带昨收时优先用它。
+        rt_row = realtime_map[code]
+        rt_trade_date = _format_yyyymmdd(_row_value(rt_row, "DATE", "date"))
+        if bars and bars[-1]["trade_date"] == rt_trade_date:
             bars = bars[:-1]
+        prev_close = (
+            _num(_row_value(rt_row, "PRE_CLOSE", "pre_close", "preclose"))
+            or (bars[-1]["close"] if bars else 0.0)
+            or _num(quote.get("preclose"))
+        )
+        rt_bar = _build_realtime_bar(rt_row, prev_close, code)
         bars.append(rt_bar)
 
         selected_source = "daily_bars_cache+realtime"
