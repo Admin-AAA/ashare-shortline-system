@@ -12,6 +12,18 @@ from typing import Any
 # 由实时快照 / 日线同步带回的权威行情列，缺失时不得按 0 覆盖。
 QUOTE_METRIC_COLUMNS = ("pct_chg", "turnover_rate")
 
+# daily_kbars.volume 与 Tushare daily 同单位（手）；实时快照 realtime_quote 的 VOLUME 单位是股。
+SHARES_PER_LOT = 100
+
+# 只在内存里拼给当次运行使用的临时日K来源。它们是盘中半截数据（成交量按股、换手率缺失、
+# 涨跌幅相对的昨收可能就是当日自身），任何写库路径都不得把它们写进 daily_kbars（L-159）。
+TRANSIENT_BAR_SOURCES = frozenset({"realtime_quote"})
+
+
+def is_transient_bar(bar: dict[str, Any]) -> bool:
+    """当次运行临时拼出的日K，不是收盘后的权威日线。"""
+    return str(bar.get("source") or "") in TRANSIENT_BAR_SOURCES
+
 # 整批判定数据源未就绪的最小行数。逐股票补数（停牌、新股）出现全 0 属正常，不能误杀。
 UNREADY_BATCH_MIN_ROWS = 100
 

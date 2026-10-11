@@ -9,7 +9,7 @@ from collections import Counter, OrderedDict
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session
 
@@ -1967,13 +1967,12 @@ def _backfill_daily_kbar_date(
     audit_payload = _market_source_audit_payload(batch)
 
     if rows:
-        # 防线 B：若数据源返回的整批 pct_chg 全为 0/None，判定为
-        # 「Tushare 当日 daily 尚未就绪」（盘后数据未出），不落库——
-        # 避免用 0 覆盖已有的真实值或写入假数据，导致收益计算全 0。
-        # 阈值 >=100 行才触发，小批量逐股票补数（停牌/新股正常 0）不误杀。
-        if len(rows) >= 100 and not any(_float(r.get("pct_chg")) for r in rows):
+        # 防线 B：非零涨跌幅占比过低说明数据源当日日线还没出全，不落库，留给 21:00 兜底补数。
+        # 原判据「整批一个非零都没有」挡不住部分发布：只要少数股票已有涨跌幅，其余多数
+        # 就会以 0 写进库（L-147 已在其他写入路径改成占比判据，这条路径漏改，L-159）。
+        if quote_metrics_look_unready(rows):
             logger.warning(
-                "daily_kbar 批量同步 %s: %d 行 pct_chg 全 0，判定数据源未就绪，跳过写库",
+                "daily_kbar 批量同步 %s: %d 行非零涨跌幅占比过低，判定数据源未就绪，跳过写库",
                 target, len(rows),
             )
             return {
@@ -1984,7 +1983,7 @@ def _backfill_daily_kbar_date(
                 "missing_code_count": len(target_codes),
                 "missing_codes": target_codes[:10],
                 "status": "skipped",
-                "reason": "pct_chg_all_zero_data_not_ready",
+                "reason": "pct_chg_nonzero_ratio_too_low_data_not_ready",
                 "market_source_audit": audit_payload,
             }
         payload = [_daily_kbar_payload(row) for row in rows]
@@ -2015,6 +2014,13 @@ def _upsert_daily_kbar_payload(
     for start in range(0, len(payload), size):
         chunk = payload[start:start + size]
         stmt = mysql_insert(DailyKbar).values(chunk)
+        # 权威行情列直接覆盖；其余指标列当批为空或 0 时保留库中已有值。stk_factor 两个
+        # provider 都报 40203 无权限时这些列整批为空，直接覆盖会把本地补算好的 MA/乖离/
+        # 回撤清成 NULL（L-144 同型，L-159）。突破计数由本地补算独占，不参与 update。
+        preserved = {
+            name: func.coalesce(func.nullif(getattr(stmt.inserted, name), 0), getattr(DailyKbar, name))
+            for name in _BATCH_PRESERVED_INDICATOR_COLUMNS
+        }
         db.execute(stmt.on_duplicate_key_update(
             open=stmt.inserted.open,
             high=stmt.inserted.high,
@@ -2024,61 +2030,28 @@ def _upsert_daily_kbar_payload(
             amount=stmt.inserted.amount,
             pct_chg=stmt.inserted.pct_chg,
             turnover_rate=stmt.inserted.turnover_rate,
-            ma5=stmt.inserted.ma5,
-            ma10=stmt.inserted.ma10,
-            ma20=stmt.inserted.ma20,
-            ma60=stmt.inserted.ma60,
-            ma250=stmt.inserted.ma250,
-            macd_dif=stmt.inserted.macd_dif,
-            macd_dea=stmt.inserted.macd_dea,
-            macd_bar=stmt.inserted.macd_bar,
-            kdj_k=stmt.inserted.kdj_k,
-            kdj_d=stmt.inserted.kdj_d,
-            kdj_j=stmt.inserted.kdj_j,
-            rsi_6=stmt.inserted.rsi_6,
-            rsi_12=stmt.inserted.rsi_12,
-            rsi_24=stmt.inserted.rsi_24,
-            boll_upper=stmt.inserted.boll_upper,
-            boll_mid=stmt.inserted.boll_mid,
-            boll_lower=stmt.inserted.boll_lower,
-            cci=stmt.inserted.cci,
-            adj_factor=stmt.inserted.adj_factor,
-            asi=stmt.inserted.asi,
-            asit=stmt.inserted.asit,
-            atr=stmt.inserted.atr,
-            bbi=stmt.inserted.bbi,
-            brar_ar=stmt.inserted.brar_ar,
-            brar_br=stmt.inserted.brar_br,
-            dpo=stmt.inserted.dpo,
-            ema_12=stmt.inserted.ema_12,
-            ema_50=stmt.inserted.ema_50,
-            ma_volume_5=stmt.inserted.ma_volume_5,
-            ma_volume_10=stmt.inserted.ma_volume_10,
-            mtm=stmt.inserted.mtm,
-            obv=stmt.inserted.obv,
-            psy=stmt.inserted.psy,
-            trix=stmt.inserted.trix,
-            vr=stmt.inserted.vr,
-            wr_6=stmt.inserted.wr_6,
-            wr_10=stmt.inserted.wr_10,
-            bias_5=stmt.inserted.bias_5,
-            bias_10=stmt.inserted.bias_10,
-            bias_20=stmt.inserted.bias_20,
-            vol_ratio_5=stmt.inserted.vol_ratio_5,
-            vol_ratio_20=stmt.inserted.vol_ratio_20,
-            breakout20=stmt.inserted.breakout20,
-            breakout60=stmt.inserted.breakout60,
-            max_dd20=stmt.inserted.max_dd20,
-            max_dd60=stmt.inserted.max_dd60,
-            chip_cost_15=stmt.inserted.chip_cost_15,
-            chip_cost_50=stmt.inserted.chip_cost_50,
-            chip_cost_85=stmt.inserted.chip_cost_85,
-            chip_weight_avg=stmt.inserted.chip_weight_avg,
-            chip_winner_rate=stmt.inserted.chip_winner_rate,
+            **preserved,
             source=stmt.inserted.source,
             updated_at=stmt.inserted.updated_at,
         ))
     db.commit()
+
+
+# 全市场日线批量补数里除权威行情列外的全部指标列（stk_factor / cyq_perf / 本地派生）。
+_BATCH_PRESERVED_INDICATOR_COLUMNS = (
+    "ma5", "ma10", "ma20", "ma60", "ma250",
+    "macd_dif", "macd_dea", "macd_bar",
+    "kdj_k", "kdj_d", "kdj_j",
+    "rsi_6", "rsi_12", "rsi_24",
+    "boll_upper", "boll_mid", "boll_lower", "cci",
+    "adj_factor", "asi", "asit", "atr", "bbi", "brar_ar", "brar_br", "dpo",
+    "ema_12", "ema_50", "ma_volume_5", "ma_volume_10", "mtm", "obv", "psy", "trix", "vr",
+    "wr_6", "wr_10",
+    "bias_5", "bias_10", "bias_20",
+    "vol_ratio_5", "vol_ratio_20",
+    "max_dd20", "max_dd60",
+    "chip_cost_15", "chip_cost_50", "chip_cost_85", "chip_weight_avg", "chip_winner_rate",
+)
 
 
 def _insert_daily_kbar_payload_ignore(
