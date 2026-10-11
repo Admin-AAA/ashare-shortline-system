@@ -421,8 +421,20 @@ def _recommendation_run_error_to_skip(task_id: str, payload: dict, exc: Exceptio
     return None
 
 
-def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "schedule") -> None:
-    """执行单个调度任务（同步包装异步）。"""
+def _execute_task(
+    task_id: str,
+    *,
+    force: bool = False,
+    trigger_source: str = "schedule",
+    scheduled_at: datetime | None = None,
+) -> None:
+    """执行单个调度任务（同步包装异步）。
+
+    trigger_source=schedule 时必须带上 Prefect 计划触发时刻 scheduled_at，
+    用它判定休市日和迟到超时（见 schedule_gate）。手动触发不受这两条限制。
+    """
+    if trigger_source == "schedule" and scheduled_at is None:
+        raise ValueError(f"定时触发的调度任务 {task_id} 缺少计划触发时刻 scheduled_at")
     if _is_task_running(task_id):
         logger.warning("调度任务 %s 正在执行中，跳过重复触发", task_id)
         return
@@ -441,6 +453,30 @@ def _execute_task(task_id: str, *, force: bool = False, trigger_source: str = "s
         payload = json.loads(task.payload_json or "{}")
         task_type = task.task_type
         task_run_id = start_task_run(db, task, trigger_source=trigger_source).task_run_id
+
+        if trigger_source == "schedule":
+            from app.services.schedule_gate import schedule_skip_reason
+            from app.services.tushare_client import is_open_trade_date
+
+            skip_reason = schedule_skip_reason(
+                scheduled_at, datetime.now(timezone.utc), is_open_trade_date
+            )
+            if skip_reason is not None:
+                logger.info("调度任务 %s %s", task_id, skip_reason)
+                finish_task_run(
+                    db,
+                    task_run_id,
+                    status="skipped",
+                    summary=skip_reason,
+                    result={
+                        "status": "skipped",
+                        "skipped": True,
+                        "reason": skip_reason,
+                        "scheduled_at": scheduled_at.isoformat(),
+                        "summary_text": skip_reason,
+                    },
+                )
+                return
 
         if task_type == "recommendation_run":
             try:

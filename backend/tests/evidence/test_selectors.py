@@ -213,7 +213,8 @@ def test_projection_serializes_evidence_identity_in_slim_full_and_run_summary():
     for slim in (False, True):
         payload = serialize_recommendation(rec, run=run, slim=slim)
         assert payload["evidence_class"] == EvidenceClass.HISTORICAL_RECONSTRUCTION.value
-        assert payload["actual_generated_at"] == "2098-01-08T02:03:04.567890"
+        # 无时区 UTC 列序列化时带 Z，前端按 UTC 解析，北京时间页面不再早 8 小时
+        assert payload["actual_generated_at"] == "2098-01-08T02:03:04.567890Z"
         assert payload["reconstruction_batch_id"] == "batch-s1-projection"
 
     summary = serialize_run_summary(
@@ -224,5 +225,5 @@ def test_projection_serializes_evidence_identity_in_slim_full_and_run_summary():
         heartbeat_stale_seconds=60,
     )
     assert summary["evidence_class"] == EvidenceClass.HISTORICAL_RECONSTRUCTION.value
-    assert summary["actual_generated_at"] == "2098-01-08T02:03:04.567890"
+    assert summary["actual_generated_at"] == "2098-01-08T02:03:04.567890Z"
     assert summary["reconstruction_batch_id"] == "batch-s1-projection"

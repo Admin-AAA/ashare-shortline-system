@@ -9,6 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Sequence
 
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from .contracts import StageMapping
@@ -22,6 +23,10 @@ from .aggregation import RecommendationAssemblyPort
 from .persistence import RecommendationPersistencePort, SealedRecommendationCollection
 
 logger = logging.getLogger(__name__)
+
+_SHARED_MARKET_WRITE_LOCK = "ashare_shared_market_write"
+# 全市场日K一次写入实测约 1~2 分钟；排在后面的 run 最多再等两三个前序写入。
+_SHARED_MARKET_WRITE_LOCK_TIMEOUT_SECONDS = 600
 
 
 # ---------------------------------------------------------------------------
@@ -164,6 +169,9 @@ class ProductionMarketPersistence(MarketPersistencePort):
     def persist_snapshot(self, snapshot: StageMapping) -> None:
         from app.services.workbench_service import _persist_market
         _persist_market(self._db, dict(snapshot))
+        # 同一交易日的 run 共享 snapshot_id；立即提交，免得后到的 run 在等共享行情写入锁时
+        # 让别的 run 卡在这一行的唯一键锁上
+        self._db.commit()
 
     def persist_stocks_and_bars(
         self,
@@ -172,7 +180,29 @@ class ProductionMarketPersistence(MarketPersistencePort):
         persist_bars: bool,
     ) -> None:
         from app.services.workbench_service import _persist_stocks_and_bars
-        _persist_stocks_and_bars(self._db, list(stocks), persist_bars=persist_bars)
+
+        # 多个 run 会同时写同一批全市场 stocks/daily_kbars 行。按顺序排序或逐批提交都挡不住：
+        # 唯一索引上的 upsert 带间隙锁，按行情列分组写入又会多次扫过代码区间，实测分别报
+        # 1205 锁等待超时与 1213 死锁（L-157）。用 MySQL 命名锁让这段写入跨进程串行，
+        # 后到的 run 排队等前一个写完提交。锁挂在独立连接上，与 run 会话的连接归还无关。
+        with self._db.get_bind().connect() as lock_conn:
+            acquired = lock_conn.scalar(
+                text("SELECT GET_LOCK(:name, :timeout)"),
+                {"name": _SHARED_MARKET_WRITE_LOCK, "timeout": _SHARED_MARKET_WRITE_LOCK_TIMEOUT_SECONDS},
+            )
+            if acquired != 1:
+                raise RuntimeError(
+                    f"等待共享行情写入锁超过 {_SHARED_MARKET_WRITE_LOCK_TIMEOUT_SECONDS} 秒，"
+                    "另一个 run 仍在写全市场日K"
+                )
+            try:
+                _persist_stocks_and_bars(self._db, list(stocks), persist_bars=persist_bars)
+                self._db.commit()
+            finally:
+                lock_conn.execute(text("SELECT RELEASE_LOCK(:name)"), {"name": _SHARED_MARKET_WRITE_LOCK})
+
+    def commit_shared_market_facts(self) -> None:
+        self._db.commit()
 
     def persist_run_market_context(
         self,

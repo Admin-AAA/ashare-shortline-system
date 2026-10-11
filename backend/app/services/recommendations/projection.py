@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from app.core.time import utc_isoformat
 from app.engine.aggregator import market_regime_weights
 
 from app.schemas.dashboard import (
@@ -449,6 +450,9 @@ def _result_summary_for_run(run: Any, slim: bool) -> dict[str, Any]:
 
 
 def _isoformat_or_none(value: Any) -> str | None:
+    # 运行表时间列存无时区 UTC；带上 Z 让前端按 UTC 解析，避免北京时间页面早 8 小时。
+    if isinstance(value, datetime):
+        return utc_isoformat(value)
     return value.isoformat() if value is not None and hasattr(value, "isoformat") else None
 
 

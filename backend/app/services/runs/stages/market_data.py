@@ -54,6 +54,14 @@ class MarketPersistencePort(Protocol):
         universe_count: int,
     ) -> None: ...
 
+    def commit_shared_market_facts(self) -> None:
+        """提交 market_snapshots/stocks/daily_kbars 这类多 run 共享的行情事实。
+
+        这些写入是幂等 upsert，与本 run 的成败无关；若留在 run 的长事务里直到阶段末尾，
+        并发 run 写同一批行会排队等锁超过 innodb_lock_wait_timeout（1205）。
+        """
+        ...
+
 
 @runtime_checkable
 class MarketScopePort(Protocol):
@@ -118,6 +126,7 @@ class MarketDataStage:
             should_persist_bars = data_source in ("realtime", "local_pool_realtime")
             if should_persist_bars:
                 self.market_persistence.persist_stocks_and_bars(stocks, persist_bars=True)
+            self.market_persistence.commit_shared_market_facts()
             self.market_persistence.persist_run_market_context(
                 snapshot_dict,
                 universe_count=len(stocks),

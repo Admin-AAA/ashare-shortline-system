@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.services.evidence import EvidenceClass, apply_formal_run_provenance
 
-from .contracts import RunPhase, RunRequest, RunStatus
+from .contracts import RunPhase, RunRequest, RunStatus, truncate_run_error_message
 from .coordinator import RunCoordinator, RunCoordinatorDependencies, StageData, WorkerLease
 from .recovery import RecoveryCapabilityError, evaluate_recovery_capability
 from .sqlalchemy_repository import SQLAlchemyRunRepository
@@ -85,6 +85,9 @@ def _mark_pipeline_run_failed(
     from app.services.evidence.reconstruction_batch import mark_reconstruction_batch_failed
     from app.services.workbench_service import invalidate_bootstrap_cache
 
+    # 异常文本可能带整条 SQL 和全部绑定参数（10-09 实测 107KB），不截断写进
+    # progress_message 会触发 1406，连带回滚 fail 状态迁移，run 卡在 running 被判中断。
+    message = truncate_run_error_message(message)
     db.rollback()
     failed_at = datetime.now(timezone.utc).replace(tzinfo=None)
     managed_record = SQLAlchemyRunRepository(db).get_run(run_id)

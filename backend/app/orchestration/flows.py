@@ -18,12 +18,27 @@ def execute_scheduled_task(
     task_id: str,
     trigger_source: str,
     correlation_id: str | None = None,
+    scheduled_at: str | None = None,
 ) -> None:
+    from datetime import datetime
+
     from app.services.scheduler_service import _execute_task
 
     with correlation_scope(correlation_id):
         log_observation(logger, stage="prefect", reason_code="TASK_STARTED", identity=task_id)
-        _execute_task(task_id, force=trigger_source == "manual", trigger_source=trigger_source)
+        _execute_task(
+            task_id,
+            force=trigger_source == "manual",
+            trigger_source=trigger_source,
+            scheduled_at=datetime.fromisoformat(scheduled_at) if scheduled_at else None,
+        )
+
+
+def _scheduled_start_iso() -> str:
+    """当前 flow run 的计划触发时刻（带时区 ISO）；机器休眠后补跑时它早于实际开始时刻。"""
+    from prefect.runtime import flow_run as runtime_flow_run
+
+    return runtime_flow_run.scheduled_start_time.isoformat()
 
 
 @flow(name="scheduled-task", timeout_seconds=7200)
@@ -32,7 +47,7 @@ def scheduled_task_flow(
     trigger_source: str = "schedule",
     correlation_id: str | None = None,
 ) -> None:
-    execute_scheduled_task(task_id, trigger_source, correlation_id)
+    execute_scheduled_task(task_id, trigger_source, correlation_id, _scheduled_start_iso())
 
 
 @task(retries=1, retry_delay_seconds=30)
@@ -106,14 +121,23 @@ def manual_strategy_exposure_flow(task_run_id: str, payload: dict) -> None:
 
 
 @task(retries=0)
-def poll_intraday_lock() -> dict:
+def poll_intraday_lock(scheduled_at: str) -> dict:
     """Prefect-scheduled intraday lock polling (replaces in-process interval job)."""
+    from datetime import datetime, timezone
+
     from app.services.intraday_lock_service import poll_once
-    from app.services.tushare_client import get_pro
+    from app.services.schedule_gate import schedule_skip_reason
+    from app.services.tushare_client import get_pro, is_open_trade_date
     from app.db.session import SessionLocal
     import logging
 
     logger = logging.getLogger(__name__)
+    skip_reason = schedule_skip_reason(
+        datetime.fromisoformat(scheduled_at), datetime.now(timezone.utc), is_open_trade_date
+    )
+    if skip_reason is not None:
+        logger.info("盘中锁利轮询%s", skip_reason)
+        return {"skipped": True, "reason": skip_reason}
     try:
         db = SessionLocal()
         try:
@@ -130,7 +154,7 @@ def poll_intraday_lock() -> dict:
 
 @flow(name="intraday-lock-poll", timeout_seconds=900)
 def intraday_lock_poll_flow() -> None:
-    poll_intraday_lock()
+    poll_intraday_lock(_scheduled_start_iso())
 
 
 @task(retries=0)

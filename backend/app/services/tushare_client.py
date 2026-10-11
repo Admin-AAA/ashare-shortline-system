@@ -1547,6 +1547,20 @@ def fetch_recent_trade_dates(lookback_days: int = 30) -> list[str]:
     return []
 
 
+def is_open_trade_date(day: date) -> bool:
+    """交易所日历判定 day 是否开市（SSE is_open=1）。
+
+    定时作业的 cron 只能表达「周一到周五」，国庆、春节等工作日休市只能问交易所日历。
+    日历拿不到时直接抛错：把休市日当交易日会让盘后作业误报失败，把交易日当休市日
+    会漏跑整天推荐，两种猜测都不可接受。
+    """
+    compact = day.strftime("%Y%m%d")
+    cal = get_pro().trade_cal(exchange="SSE", start_date=compact, end_date=compact)
+    if cal is None or cal.empty:
+        raise RuntimeError(f"Tushare 交易日历未返回 {compact}，无法判定是否交易日")
+    return int(cal.iloc[0]["is_open"]) == 1
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # 指数日线（用于回测基准对比）
 # ═════════════════════════════════════════════════════════════════════════════

@@ -17,6 +17,7 @@ _RESULT_JSON_MAX_BYTES = 4 * 1024 * 1024
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, defer
 
+from app.core.time import utc_isoformat
 from app.models.tables import ApiCallLog, RecommendationRun, ScheduledTask, ScheduledTaskRun
 
 
@@ -191,10 +192,10 @@ def list_scheduled_tasks(db: Session) -> list[dict[str, Any]]:
             "payload": _loads(t.payload_json, {}),
             "enabled": t.enabled,
             "is_running": t.is_running,
-            "last_run_at": t.last_run_at.isoformat() if t.last_run_at else None,
+            "last_run_at": utc_isoformat(t.last_run_at),
             "last_status": t.last_status,
             "last_error": t.last_error,
-            "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+            "updated_at": utc_isoformat(t.updated_at),
         }
         for t in tasks
     ]
@@ -519,8 +520,8 @@ def _serialize_task_run(
         "task_name": run.task_name,
         "task_type": run.task_type,
         "trigger_source": run.trigger_source,
-        "started_at": run.started_at.isoformat() if run.started_at else None,
-        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "started_at": utc_isoformat(run.started_at),
+        "finished_at": utc_isoformat(run.finished_at),
         "status": run.status,
         "summary": run.summary,
         "summary_text": _task_run_summary_text(run, result) if include_result else (run.summary or run.error_message or ""),

@@ -192,7 +192,8 @@ function RunRecordsList() {
     [],
   );
 
-  // —— 筛选条件（默认近30天内已完成的 formal 运行；正常记录推荐数 > 0，另保留全量重放）——
+  // —— 筛选条件（默认近30天内已完成的 formal 运行，推荐数不限）——
+  // 推荐数默认不限：弱势市下自动正式推荐经常 0 出票，按推荐数>0 过滤会让这些真实执行过的运行从列表消失。
   // datePreset：近7天/近30天/本月/全部/自定义；自定义时用 dateFrom/dateTo 手选
   const [datePreset, setDatePreset] = useState<"7d" | "30d" | "month" | "all" | "custom">("30d");
   const [dateFrom, setDateFrom] = useState("");
@@ -201,8 +202,8 @@ function RunRecordsList() {
   const [presetFilter, setPresetFilter] = useState<string>("__all__");
   const [modeFilter, setModeFilter] = useState<string>("formal");
   // 推荐数下限：空 = 不筛选（任意推荐数）；填数字 = recommended_count > N。
-  // 默认 N=0 时，保留全量重放的零推荐记录，便于复盘完整筛选过程。
-  const [minRecsFilter, setMinRecsFilter] = useState<string>("0");
+  // 手动填 N=0 时，保留全量重放的零推荐记录，便于复盘完整筛选过程。
+  const [minRecsFilter, setMinRecsFilter] = useState<string>("");
 
   // —— 排序 ——
   const [sortKey, setSortKey] = useState<RunSortKey>("trade_date");
@@ -301,7 +302,7 @@ function RunRecordsList() {
     setStatusFilter("completed");
     setPresetFilter("__all__");
     setModeFilter("formal");
-    setMinRecsFilter("0");
+    setMinRecsFilter("");
     resetPage();
   };
 

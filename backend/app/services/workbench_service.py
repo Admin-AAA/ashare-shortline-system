@@ -2882,6 +2882,9 @@ def _persist_stocks_and_bars(
                 }
             )
 
+    # 按主键排序写入：并发 run 以相同顺序加行锁，只会排队，不会交叉等待成死锁（1213）。
+    stock_rows.sort(key=lambda row: row["code"])
+    bar_rows.sort(key=lambda row: (row["code"], row["trade_date"]))
     _upsert_stock_rows(db, stock_rows)
     if persist_bars:
         _upsert_daily_bar_rows(db, bar_rows)
