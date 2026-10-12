@@ -6,7 +6,9 @@
 #   universe pct∈[3,5] 追高区隔夜无惯性，反事实剔除全量 PF 1.95→2.26。权重已压至 0.35 地板。
 id: overnight-holding-method
 name: 隔夜持股法
-enabled: true
+# 2026-10-13 Stage 4 第三轮串行消融（去 DSA+trend-pullback 基线，417 交易日，生产口径）：剔除后平均 +0.04pp、
+# 累计 +17.7、PF +0.03、胜率与回撤持平，evaluate_challenger 判 PRODUCTION，下线（L-161）。
+enabled: false
 weight: 0.35
 
 meta:
@@ -15,13 +17,7 @@ meta:
   version: 0.1.0
   holding_days: [1]
   strategy_independence: 0.9
-  default_preset_groups:
-    formal_opening:
-      weight: 0.85
-      sort_order: 80
-    formal_trend_core:
-      weight: 0.90
-      sort_order: 80
+  # 已下线（L-161），不再声明进入任何预设组。
   backtest_adapter:
     module: app.services.overnight_holding_service
     default_action: run
