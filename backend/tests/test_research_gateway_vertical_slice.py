@@ -30,7 +30,7 @@ from app.services.backtest.research_repository import (
 )
 
 
-STRATEGY_ID = "daily-stock-analysis-skill"
+STRATEGY_ID = "chao-gu-yang-jia-skill"
 
 
 @pytest.fixture

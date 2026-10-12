@@ -90,7 +90,7 @@ def test_real_runner_persists_one_shared_snapshot_and_one_evidence_artifact() ->
             exit_slippage_bps=0,
         )
         common = {
-            "strategy_id": "daily-stock-analysis-skill",
+            "strategy_id": "chao-gu-yang-jia-skill",
             "date_selector": DateRange("2026-03-01", "2026-04-30"),
             "execution_policy": policy,
             "target_codes": ("000001",),

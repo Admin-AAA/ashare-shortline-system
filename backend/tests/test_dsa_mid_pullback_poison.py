@@ -41,6 +41,7 @@ def test_dsa_mid_pullback_expression_matches_band():
 
 
 def test_dsa_skill_loads_with_new_phase():
+    # 2026-10-13 DSA 已下线（L-161）：仍须可加载且契约完整，但必须保持 disabled。
     skills = {s.skill_id: s for s in load_skills(SKILLS_DIR)}
     assert SKILL_ID in skills
-    assert skills[SKILL_ID].enabled is True
+    assert skills[SKILL_ID].enabled is False

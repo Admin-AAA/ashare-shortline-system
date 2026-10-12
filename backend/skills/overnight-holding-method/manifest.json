@@ -3,10 +3,10 @@
   "name": "隔夜持股法",
   "version": "0.1.0",
   "mode": "declarative",
-  "status": "active",
+  "status": "disabled",
   "requirements": ["stock_feature_context"],
   "capabilities": ["signal_evaluation"],
-  "enabled": true,
+  "enabled": false,
   "source_type": "local",
-  "description": "尾盘 14:30 后筛选主板强势股隔夜持有，默认次日早盘兑现，例外处理一字/缩量涨停。【2026-08-06 重新启用】P0-3 注册诊断发现其仍被 preset_formal_opening(w0.85)/ef480d33af98(w1.0) 显式引用，enabled 与 preset 引用不一致触发 preflight fail-closed 阻塞 formal run，按可逆下线恢复一致。权重 0.35 地板 + 弱市否决/dist20/pos20 护栏保持不变。【历史】2026-07-21 曾因连续3轮低胜率(35%→25%→34.6%)+反事实剔除改善(全量PF 1.95→2.26)暂停。"
+  "description": "尾盘 14:30 后筛选主板强势股隔夜持有，默认次日早盘兑现，例外处理一字/缩量涨停。【2026-10-13 下线】Stage 4 第三轮串行消融（去 DSA+trend-pullback 基线，417 交易日）剔除后平均 +0.04pp、累计 +17.7，evaluate_challenger 判 PRODUCTION（L-161）。【2026-08-06 重新启用】P0-3 注册诊断发现其仍被 preset_formal_opening(w0.85)/ef480d33af98(w1.0) 显式引用，enabled 与 preset 引用不一致触发 preflight fail-closed 阻塞 formal run，按可逆下线恢复一致。权重 0.35 地板 + 弱市否决/dist20/pos20 护栏保持不变。【历史】2026-07-21 曾因连续3轮低胜率(35%→25%→34.6%)+反事实剔除改善(全量PF 1.95→2.26)暂停。"
 }
