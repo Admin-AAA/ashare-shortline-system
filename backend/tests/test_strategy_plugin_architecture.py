@@ -226,7 +226,7 @@ def test_strategies_use_shared_factors_with_different_contract_boundaries():
     assert "off_high60_pct" in breakout
     assert "experiment_limit_up_reseal_relay" in limit_up
     assert "limit_up_fd_amount_yi" in limit_up
-    assert "experiment_trend_pullback" in pullback
+    # trend-pullback 已下线（L-161），不再声明 experiment_trend_pullback 预设组；契约字段仍要求独立。
     assert "volume_shrink_pullback" in pullback
     assert "experiment_sector_relative_strength" in sector
     assert "industry_positive_excess20_count" in sector
