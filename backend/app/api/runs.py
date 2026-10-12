@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.engine.strategy_backtest_adapter import run_strategy_backtest_adapter
 from app.services.market_data import MarketDataError
+from app.services.registry.default_strategy import DEFAULT_SINGLE_STRATEGY_ID
 from app.services.runs.deletion_guard import DownstreamFactDeletionBlocked
 from app.services.runs.recovery import RecoveryCapabilityError
 from app.services.workbench_service import (
@@ -75,7 +76,7 @@ def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
         horizon_days: int (默认 5)
         baseline_score_line: float (默认 72.0)
         candidate_score_line: float (默认 65.0)
-        strategy_id: str (默认 daily-stock-analysis-skill)
+        strategy_id: str (默认炒股养家 chao-gu-yang-jia-skill)
     """
     from app.services.backtest.comparison import run_p0_comparison
 
@@ -88,7 +89,7 @@ def create_backtest_comparison(payload: dict, db: Session = Depends(get_db)):
     horizon_days = int(payload.get("horizon_days", 5))
     baseline_score_line = float(payload.get("baseline_score_line", 72.0))
     candidate_score_line = float(payload.get("candidate_score_line", 65.0))
-    strategy_id = str(payload.get("strategy_id") or payload.get("skill_id") or "daily-stock-analysis-skill").strip()
+    strategy_id = str(payload.get("strategy_id") or payload.get("skill_id") or DEFAULT_SINGLE_STRATEGY_ID).strip()
     try:
         return run_p0_comparison(
             db, start_date, end_date, horizon_days,
@@ -109,7 +110,7 @@ def analyze_single_stock(payload: dict, db: Session = Depends(get_db)):
         code: str           # 股票代码（必填）
         trade_date: str     # 分析日期 YYYY-MM-DD（默认最近交易日）
         include_llm: bool   # 是否允许正式管线触发 LLM skill 深审（会消耗 LLM 额度）
-        skill_id: str       # 指定 skill（默认 daily-stock-analysis-skill）
+        skill_id: str       # 指定 skill（默认炒股养家 chao-gu-yang-jia-skill）
     """
     from app.services.single_stock_analysis import analyze_stock
 
@@ -119,7 +120,7 @@ def analyze_single_stock(payload: dict, db: Session = Depends(get_db)):
 
     trade_date = str(payload.get("trade_date") or "").strip() or None
     include_llm = bool(payload.get("include_llm", False))
-    skill_id = str(payload.get("skill_id") or "daily-stock-analysis-skill").strip()
+    skill_id = str(payload.get("skill_id") or DEFAULT_SINGLE_STRATEGY_ID).strip()
     preset_id = str(payload.get("preset_id") or "").strip() or None
 
     try:

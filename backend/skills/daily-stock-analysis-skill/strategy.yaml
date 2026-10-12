@@ -1,6 +1,8 @@
 id: daily-stock-analysis-skill
 name: 基础短线策略
-enabled: true
+# 2026-10-13 Stage 3 串行消融（417 交易日，生产口径）：剔除后平均 +0.21pp、累计 +109、
+# 胜率 +1.1pp、PF +0.14、回撤收窄 5.3pp，evaluate_challenger 判 PRODUCTION，下线（L-161）。
+enabled: false
 weight: 0.3
 default_entry_mode: next_open
 
@@ -9,16 +11,7 @@ meta:
   style: technical-score
   version: 0.2.0
   holding_days: [1, 3, 5]
-  default_preset_groups:
-    formal_opening:
-      weight: 1.15
-      sort_order: 30
-    formal_trend_core:
-      weight: 0.95
-      sort_order: 30
-    experiment_single_factor:
-      weight: 1.0
-      sort_order: 10
+  # 已下线（L-161），不再声明进入任何预设组。
 
 contract:
   type: strategy

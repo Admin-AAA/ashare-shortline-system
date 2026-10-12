@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.engine.trading_calendar import normalize_trade_date, latest_allowed_bar_date
 from app.models.tables import Preset, RecommendationRun, Stock
+from app.services.registry.default_strategy import DEFAULT_SINGLE_STRATEGY_ID
 from app.services.evidence.validation import (
     canonical_historical_reconstruction_run_ids,
     canonical_live_forward_run_ids,
@@ -95,7 +96,7 @@ def analyze_stock(
     *,
     trade_date: str | None = None,
     include_llm: bool = False,
-    skill_id: str = "daily-stock-analysis-skill",
+    skill_id: str = DEFAULT_SINGLE_STRATEGY_ID,
     preset_id: str | None = None,
 ) -> dict[str, Any]:
     """以单只股票为输入，原样执行正式推荐管线的评分阶段。"""

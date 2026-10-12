@@ -18,6 +18,7 @@ from app.services.backtest.canonical_experiment import (
 )
 from app.services.backtest.research_repository import ResearchBacktestRepository
 from app.services.backtest.research_runner import ResearchBacktestRunner
+from app.services.registry.default_strategy import DEFAULT_SINGLE_STRATEGY_ID
 
 
 def run_p0_comparison(
@@ -27,7 +28,7 @@ def run_p0_comparison(
     horizon_days: int = 5,
     baseline_score_line: float = 72.0,
     candidate_score_line: float = 65.0,
-    strategy_id: str = "daily-stock-analysis-skill",
+    strategy_id: str = DEFAULT_SINGLE_STRATEGY_ID,
 ) -> dict[str, Any]:
     """Run the legacy score-line route through the one formal experiment interface."""
 

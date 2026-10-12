@@ -1743,3 +1743,13 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 回归验证：`app/services/auxiliary/tests/test_state_provider_batch.py::test_holder_number_skips_rows_announced_after_trade_date`（期末日已过但公告日未到、缺公告日的行都不入库）、`tests/test_auxiliary_application.py::test_replay_as_of_date_excludes_future_pledge_and_holder_rows`（期末日早于回放日、公告日晚于回放日的股票在回放视图中不可见）。
 - 吸收位置：`backend/alembic/versions/0020_holder_number_ann_date.py`、`backend/app/models/tables.py::HolderNumber.ann_date`、`backend/app/services/auxiliary/state_adapters.py`（`TushareStateProvider.holder_number` 入库过滤、`_StateViews.holder_number` 回放截断）、`backend/app/services/auxiliary/production.py`（更新策略含 `ann_date`）。
 - 相关：L-110（历史回放 universe 由 daily_kbars 重建）。
+
+## L-161 下线策略要串行复验，并清理所有把它当默认值、单策略预设或预设组成员的入口
+
+- 状态：encoded（daily-stock-analysis-skill 已下线：preset_formal_opening 移除、manifest 与 strategy.yaml 双停用、单策略 preset 删除、默认值改为炒股养家）
+- 适用：任何策略删除或下线；任何依据消融结论修改组合构成的决定
+- 证据：2026-10-13 生产口径全窗口消融（2025-01-15 ~ 2026-10-09，417 个交易日，preset_formal_opening 权重，每日最多 6 张，分数线 72）。9 策略全开 n=614、胜率 58.0%、平均 +0.55%、PF 1.33、回撤 -25.8；去掉 DSA 后 n=592、胜率 59.1%、平均 +0.75%、PF 1.47、回撤 -20.4，`evaluate_challenger` 判 PRODUCTION。单轮消融里另有两个候选判 PRODUCTION：陈小群（收益改善但回撤恶化 10pp）；以去 DSA 基线串行复验后，陈小群转为 FALSIFIED（累计 -65、回撤 -17pp），而单轮里 FALSIFIED 的 trend-pullback-continuation 与 overnight-holding-method 变为 PRODUCTION。候选之间的替代关系会随基线改变，同一轮结果不能直接叠加。下线时 registry 诊断还报出两处残留：id 为随机串的单策略 preset 仍引用 DSA（`preset_references_unavailable_strategy`），DSA 声明的 `experiment_single_factor` 组随之变空（`empty_executable_group`）；`app/api/runs.py`、`single_stock_analysis`、`backtest/comparison` 三处把 DSA 当默认策略，下线后会被指向不可执行策略。
+- 永久规则：**（一）一次只发布一个剔除，发布后用新基线重跑剩余候选。** 不叠加同一轮里的多个 PRODUCTION。**（二）下线同时改 manifest 与 strategy.yaml。** `skill_loader` 取两者的 AND，manifest 的 `status` 还决定 registry 诊断的归类。**（三）下线策略的 `default_preset_groups` 一并删除，并清理只服务于它的单策略 preset 与 `DEFAULT_PRESETS` 条目，最后以 `./ashare registry-diagnostics` 全绿为准。** **（四）代码里的默认策略集中到一个常量**（`app/services/registry/default_strategy.py`），不在各入口重复写字面量。
+- 回归验证：`./ashare registry-diagnostics` ok=true 且 DSA 归为 `inactive_strategy_unregistered`；`tests/test_e2e_recommendation_flow.py`、`tests/test_strategy_profile_entry_mode.py`、`tests/test_registry_diagnostics.py`、`tests/test_production_selection_policy.py`。
+- 吸收位置：`backend/skills/daily-stock-analysis-skill/{manifest.json,strategy.yaml}`、`backend/app/services/registry/default_strategy.py`、`backend/app/services/registry/data_source.py`（删 `preset_experiment_dsa`）、`backend/app/api/runs.py`、`backend/app/services/single_stock_analysis.py`、`backend/app/services/backtest/comparison.py`、`backend/scripts/research_strategy_ablation_fast.py`（`--exclude-skills`）。证据档案 `output/stage3-strategy-health-2026-10-13.md`。
+- 相关：L-010（串行 champion 规则）。

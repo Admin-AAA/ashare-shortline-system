@@ -1426,7 +1426,7 @@ class TestE2ERecommendationFlow:
             db,
             {
                 "run_name": "异步测试",
-                "single_skill_id": "daily-stock-analysis-skill",
+                "single_skill_id": "chen-xiaoqun-skill",
                 "single_skill_weight": 1,
             },
         )
@@ -1465,7 +1465,7 @@ class TestE2ERecommendationFlow:
                         db,
                         {
                             "run_name": run_name,
-                            "single_skill_id": "daily-stock-analysis-skill",
+                            "single_skill_id": "chen-xiaoqun-skill",
                             "single_skill_weight": 1,
                             "data_source": DATA_SOURCE_LOCAL_POOL,
                         },
