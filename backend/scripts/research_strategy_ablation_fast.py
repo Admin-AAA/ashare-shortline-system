@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from collections import defaultdict
@@ -102,6 +103,15 @@ GATE: dict = {"map": {}, "version": None}
 CTX_OVERRIDE: dict = {"params": None}
 ONLY_SKILL: dict = {"sid": None}   # 单策略端到端：只选该技能的卡（其它技能背书保留）
 SKILL_WEIGHTS: dict = {"mode": "equal", "map": None}  # equal | preset | json
+# 串行 champion（L-010）：已发布剔除的技能从基线里拿掉，再对剩余技能做剔除对比。
+# 经环境变量传递：spawn 子进程会重新 import 本模块，模块级变量不会自动带过去，环境变量会继承。
+EXCLUDED_SKILLS: set[str] = {
+    s.strip() for s in os.environ.get("ABLATION_EXCLUDE_SKILLS", "").split(",") if s.strip()
+}
+
+
+def _without_excluded(selected: list[dict]) -> list[dict]:
+    return [s for s in selected if str(s["skill_id"]) not in EXCLUDED_SKILLS]
 EP_OVERRIDE: dict = {"policy": None}                  # dataclasses.replace 出来的出场策略变体
 _IVOL_BY_DATE: dict[str, dict] = {}
 _IVOL_DN_BY_DATE: dict[str, dict] = {}
@@ -364,7 +374,7 @@ def _worker_setup(
         stock_metadata_provider=StockMetadataHistoryProvider(db),
         historical_replay=(UNIVERSE["mode"] == "historical"),
     )
-    selected_all = list(builder._selected_skills(None))  # noqa: SLF001
+    selected_all = _without_excluded(list(builder._selected_skills(None)))  # noqa: SLF001
     # 逐技能信号权重：生产 LIVE 走 `_build_recommendation_card` 的
     # `signal["weight"] = selected["weight"]`（即 preset_skills 权重），而本重放器
     # `_selected_skills` 默认给 1.0（等权）——两者差异会改变 strategy_rule 与最终排序。
@@ -613,7 +623,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
         stock_metadata_provider=StockMetadataHistoryProvider(db),
         historical_replay=(UNIVERSE["mode"] == "historical"),
     )
-    selected_all = list(builder._selected_skills(None))  # noqa: SLF001
+    selected_all = _without_excluded(list(builder._selected_skills(None)))  # noqa: SLF001
     all_ids = sorted(str(s["skill_id"]) for s in selected_all)
     arms = ["__all__"] + [t for t in targets if t in all_ids]
     trade_dates = [
@@ -876,7 +886,16 @@ def main() -> None:
              "与面板口径 only:<sid> 一致。",
     )
     ap.add_argument("--policy-note", default=None)
+    ap.add_argument(
+        "--exclude-skills",
+        default=None,
+        help="逗号分隔：从基线（A 臂）里拿掉这些技能，用于串行 champion 复验（L-010）。",
+    )
     args = ap.parse_args()
+    if args.exclude_skills:
+        os.environ["ABLATION_EXCLUDE_SKILLS"] = args.exclude_skills
+        EXCLUDED_SKILLS.update(s.strip() for s in args.exclude_skills.split(",") if s.strip())
+        print(f"[exclude] 基线已剔除：{sorted(EXCLUDED_SKILLS)}", flush=True)
     if args.policy_note is None:
         from app.engine.production_policy import DEFAULT_PRODUCTION_SELECTION_POLICY
         from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
