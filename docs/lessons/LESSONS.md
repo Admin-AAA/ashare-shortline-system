@@ -1733,3 +1733,13 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 回归验证：`tests/test_realtime_bar_isolation.py`（运行写回跳过实时K线、`local_pool_realtime` 不写回、实时K线成交量换算成手、收盘后同日替换取前一日收盘为昨收、部分发布整批拒写、完整发布正常写入、批量 upsert 保留指标列且不更新突破计数、哨兵识别按股写入与按手写入、关键列失真阻断推荐、非关键列与非参考日失真不阻断）。
 - 吸收位置：`backend/app/services/daily_bar_write_policy.py`（`SHARES_PER_LOT`、`TRANSIENT_BAR_SOURCES`、`is_transient_bar`）、`backend/app/services/workbench_service.py::_persist_stocks_and_bars`、`backend/app/services/runs/stages/market_data.py`（只有 `realtime` 模式写回）、`backend/app/services/market_pool/core.py`（`_build_realtime_bar` 与同日替换）、`backend/app/services/data_gap_remediation_service.py`（`_backfill_daily_kbar_date` 就绪判据、`_upsert_daily_kbar_payload` 保留指标列）、`backend/app/services/data_health_service.py`（`_value_distribution_sentinel` 成交量单位、`recommendation_readiness_from_diagnosis` 失真阻断）。
 - 相关：L-144（派生列覆盖战争，本条是批量补数路径的同型）、L-146/L-147（写入侧就绪判据，本条补上漏改的批量路径与整批多日混写的盲区）、L-143（值分布哨兵，本条让它进入闸门）。
+
+## L-160 低频披露数据按公告日判可见，不能按期末日；按期末日查询的接口会混入别的期末日
+
+- 状态：encoded（`holder_numbers` 新增 `ann_date`，回放视图与入库过滤都按公告日判定，存量 13397 行已回填）
+- 适用：任何「期末日 + 公告日」两个时间的数据（股东人数、质押、财务指标、分红、解禁）；任何回放 / 回测里的 as-of 截断
+- 证据：2026-10-12 审计回测未来函数。`_StateViews.holder_number` 回放时只按 `end_date <= as_of` 截断，`holder_numbers` 表没有公告日列；Tushare `stk_holdernumber` 实测公告日比期末日晚中位 2 天、90 分位 10 天、最长 41 天，回放会提前看到未公告的股东人数。`fina_indicator` 已按 `ann_date` 截断，`pledge_stat` 只有期末日（Tushare 不提供公告日），保持现状。消费方只有 `daily-stock-analysis-skill` 的 `holder_num_decreasing` 加 4 分，回放入选卡命中 22/335（W1）、8/198（W2）、5/74（W3X），影响面小但属于确定的前视偏差。回填时还发现：按 `end_date` 查询 `stk_holdernumber` 返回的结果里混有其他期末日的行，第一次按查询参数的期末日匹配，13119 行里 9625 行写出了「公告日早于期末日」的错值；改成用每一行自己的 `end_date` 匹配后，13359 行公告日不早于期末日，38 行早于（上游数据本身如此），800 行上游无公告日。
+- 永久规则：**（一）有公告日的数据，回放截断一律用公告日；缺公告日的行在回放中不可见。** 期末日只说明数据描述的是哪一天，不说明那天之后谁能看到。**（二）入库时也按公告日过滤，只存截至请求日已公告的行。** **（三）批量接口的返回行要用行内的自然键匹配，不要用请求参数。** 按 `end_date` / `trade_date` 查询不保证返回行的日期等于参数。**（四）审计未来函数按数据源逐个查「回放截断用的是哪个时间字段」**，比看特征值更快定位。
+- 回归验证：`app/services/auxiliary/tests/test_state_provider_batch.py::test_holder_number_skips_rows_announced_after_trade_date`（期末日已过但公告日未到、缺公告日的行都不入库）、`tests/test_auxiliary_application.py::test_replay_as_of_date_excludes_future_pledge_and_holder_rows`（期末日早于回放日、公告日晚于回放日的股票在回放视图中不可见）。
+- 吸收位置：`backend/alembic/versions/0020_holder_number_ann_date.py`、`backend/app/models/tables.py::HolderNumber.ann_date`、`backend/app/services/auxiliary/state_adapters.py`（`TushareStateProvider.holder_number` 入库过滤、`_StateViews.holder_number` 回放截断）、`backend/app/services/auxiliary/production.py`（更新策略含 `ann_date`）。
+- 相关：L-110（历史回放 universe 由 daily_kbars 重建）。

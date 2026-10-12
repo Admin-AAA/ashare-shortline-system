@@ -195,9 +195,11 @@ def test_replay_as_of_date_excludes_future_pledge_and_holder_rows() -> None:
                     rest_pledge=40.0,
                     pledge_ratio=30.0,
                 ),
-                HolderNumber(code="000001", end_date="2025-12-31", holder_num=1200),
-                HolderNumber(code="000001", end_date="2026-03-31", holder_num=1000),
-                HolderNumber(code="000001", end_date="2026-06-30", holder_num=600),
+                HolderNumber(code="000001", end_date="2025-12-31", ann_date="2026-01-10", holder_num=1200),
+                HolderNumber(code="000001", end_date="2026-03-31", ann_date="2026-03-31", holder_num=1000),
+                HolderNumber(code="000001", end_date="2026-06-30", ann_date="2026-07-08", holder_num=600),
+                # 期末日在回放日之前、公告日在之后：回放日不可见（L-160）
+                HolderNumber(code="000002", end_date="2026-03-20", ann_date="2026-04-02", holder_num=500),
             ]
         )
         db.flush()
@@ -229,6 +231,15 @@ def test_replay_as_of_date_excludes_future_pledge_and_holder_rows() -> None:
             "holder_num_change_pct": -16.67,
             "holder_num_decreasing": True,
         }
+        replay_codes = run_auxiliary_application(
+            db,
+            instruments=("000001", "000002"),
+            trade_date="2026-03-31",
+            as_of_date="2026-03-31",
+            refresh=False,
+            datasets=("holder_number",),
+        ).feature_views
+        assert "000002" not in replay_codes["holder_numbers"]
     finally:
         db.close()
 

@@ -409,7 +409,7 @@ AUXILIARY_DATASET_INVENTORY: tuple[AuxiliaryDatasetInventoryEntry, ...] = (
     AuxiliaryDatasetInventoryEntry(
         key="holder_number", category="holder_number", view_key="market_pool.holder_numbers", model=HolderNumber,
         natural_key=("code", "end_date"), freshness_field="end_date",
-        update_policy=_atomic(("holder_num",)),
+        update_policy=_atomic(("holder_num", "ann_date")),
     ),
     AuxiliaryDatasetInventoryEntry(
         key="holder_trade", category="holder_trade", view_key="market_pool.holder_trades", model=HolderTrade,

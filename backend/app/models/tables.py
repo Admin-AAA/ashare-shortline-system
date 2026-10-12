@@ -519,6 +519,9 @@ class HolderNumber(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(6), index=True)
     end_date: Mapped[str] = mapped_column(String(10), index=True)
+    # 公告日。期末日之后才披露（中位 2 天、90 分位 10 天），按 end_date 判可见会让回放
+    # 提前看到尚未公告的股东人数（L-160）。
+    ann_date: Mapped[str | None] = mapped_column(String(10), index=True)
     holder_num: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
