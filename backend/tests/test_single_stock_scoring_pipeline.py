@@ -90,9 +90,9 @@ def test_replay_stages_reuse_as_of_bounded_auxiliary_views():
                 rest_pledge=40.0,
                 pledge_ratio=30.0,
             ),
-            HolderNumber(code="000001", end_date="2025-12-31", holder_num=1200),
-            HolderNumber(code="000001", end_date="2026-03-31", holder_num=1000),
-            HolderNumber(code="000001", end_date="2026-06-30", holder_num=600),
+            HolderNumber(code="000001", end_date="2025-12-31", ann_date="2026-01-10", holder_num=1200),
+            HolderNumber(code="000001", end_date="2026-03-31", ann_date="2026-03-31", holder_num=1000),
+            HolderNumber(code="000001", end_date="2026-06-30", ann_date="2026-07-08", holder_num=600),
         ]
     )
     db.flush()

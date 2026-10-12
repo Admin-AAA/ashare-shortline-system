@@ -59,15 +59,29 @@ def test_pledge_stat_single_batch_call_filters_to_requested_codes():
 
 def test_holder_number_single_batch_call_empty_codes_no_filter():
     frame = pd.DataFrame([
-        {"ts_code": "000001.SZ", "end_date": "20260630", "holder_num": 10},
-        {"ts_code": "600000.SH", "end_date": "20260630", "holder_num": 20},
+        {"ts_code": "000001.SZ", "ann_date": "20260705", "end_date": "20260630", "holder_num": 10},
+        {"ts_code": "600000.SH", "ann_date": "20260710", "end_date": "20260630", "holder_num": 20},
     ])
     client = _RecordingClient({"stk_holdernumber": frame})
     provider = TushareStateProvider(client, session=None)
     rows = provider.holder_number(_request((), date(2026, 7, 16)))
-    # end_date <= 2026-07-16 keeps both quarterly rows; no codes → no filter
+    # 两行都已在 2026-07-16 前公告；no codes → no filter
     assert client.calls == [("stk_holdernumber", {"end_date": "20260630"})]
     assert {row["code"] for row in rows} == {"000001", "600000"}
+    assert {row["ann_date"] for row in rows} == {"2026-07-05", "2026-07-10"}
+
+
+def test_holder_number_skips_rows_announced_after_trade_date():
+    """期末日早于 trade_date 但公告日晚于 trade_date 的行当时还看不到（L-160）。"""
+    frame = pd.DataFrame([
+        {"ts_code": "000001.SZ", "ann_date": "20260710", "end_date": "20260630", "holder_num": 10},
+        {"ts_code": "600000.SH", "ann_date": "20260720", "end_date": "20260630", "holder_num": 20},
+        {"ts_code": "300001.SZ", "ann_date": None, "end_date": "20260630", "holder_num": 30},
+    ])
+    client = _RecordingClient({"stk_holdernumber": frame})
+    provider = TushareStateProvider(client, session=None)
+    rows = provider.holder_number(_request((), date(2026, 7, 16)))
+    assert {row["code"] for row in rows} == {"000001"}
 
 
 def test_fina_indicator_period_batch_single_call():
@@ -227,9 +241,9 @@ def test_holder_number_nan_and_duplicate_natural_key_handled():
     # 且同 (code, end_date) 可能重复（_assert_unique_batch 会抛错）。两者都需容错。
     import math
     frame = pd.DataFrame([
-        {"ts_code": "000001.SZ", "end_date": "20260630", "holder_num": 100},
-        {"ts_code": "000001.SZ", "end_date": "20260630", "holder_num": 100},  # 重复自然键
-        {"ts_code": "600000.SH", "end_date": "20260630", "holder_num": float("nan")},  # NaN
+        {"ts_code": "000001.SZ", "ann_date": "20260705", "end_date": "20260630", "holder_num": 100},
+        {"ts_code": "000001.SZ", "ann_date": "20260705", "end_date": "20260630", "holder_num": 100},  # 重复自然键
+        {"ts_code": "600000.SH", "ann_date": "20260705", "end_date": "20260630", "holder_num": float("nan")},  # NaN
     ])
     client = _RecordingClient({"stk_holdernumber": frame})
     provider = TushareStateProvider(client, session=None)

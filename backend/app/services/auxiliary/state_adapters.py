@@ -627,14 +627,21 @@ class TushareStateProvider:
             if len(code) != 6 or (wanted and code not in wanted):
                 continue
             end_date = _iso_day(item.get("end_date"))
-            if not (end_date and end_date <= iso_cutoff):
+            ann_date = _iso_day(item.get("ann_date"))
+            # 只保留截至 trade_date 已公告的期末数据：end_date 早于 trade_date 不代表已披露（L-160）。
+            if not (end_date and end_date <= iso_cutoff and ann_date and ann_date <= iso_cutoff):
                 continue
             key = (code, end_date)
             if key in seen_keys:
                 continue
             seen_keys.add(key)
             holder_num = _safe_int(item.get("holder_num"))
-            rows.append({"code": code, "end_date": end_date, "holder_num": holder_num if holder_num is not None else 0})
+            rows.append({
+                "code": code,
+                "end_date": end_date,
+                "ann_date": ann_date,
+                "holder_num": holder_num if holder_num is not None else 0,
+            })
         return rows
 
 
@@ -763,7 +770,12 @@ class _StateViews:
     def holder_number(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
         statement = select(HolderNumber).where(HolderNumber.code.in_(request.requested_codes))
         if self._as_of_date is not None:
-            statement = statement.where(HolderNumber.end_date <= self._as_of_date)
+            # 可见性按公告日判定；缺公告日的行无法证明当时已披露，一律不可见（L-160）。
+            statement = statement.where(
+                HolderNumber.end_date <= self._as_of_date,
+                HolderNumber.ann_date.is_not(None),
+                HolderNumber.ann_date <= self._as_of_date,
+            )
         rows = self._session.scalars(statement.order_by(HolderNumber.end_date.desc())).all()
         grouped: dict[str, list[Any]] = defaultdict(list)
         for item in rows:

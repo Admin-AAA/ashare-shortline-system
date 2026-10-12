@@ -5,7 +5,7 @@ adapter test compiles SQL and captures statements using an in-memory executor on
 """
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import date, datetime, timezone
 from typing import Any
 
@@ -730,7 +730,12 @@ def test_s4_inventory_exercises_every_state_descriptor_with_no_connection_fakes(
         build_production_auxiliary_orchestrator,
     )
 
-    state_inventory = tuple(entry for entry in AUXILIARY_DATASET_INVENTORY if entry.is_state_dataset)
+    state_inventory = tuple(
+        # 行数下限（margin_detail 3500）是全市场覆盖判据，这里只喂两行假数据，去掉下限只检验装配（L-152）。
+        replace(entry, minimum_record_count=0) if entry.minimum_record_count else entry
+        for entry in AUXILIARY_DATASET_INVENTORY
+        if entry.is_state_dataset
+    )
     readiness = NoConnectionSchemaReadiness()
     adapters = {
         entry.key: StandardAuxiliaryDatasetAdapters(
