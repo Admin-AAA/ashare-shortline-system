@@ -9,7 +9,9 @@
 # 下一步：等市场转活跃/强牛 regime 后验证是否自然命中；不强行放宽 max_dd20（破位股不该做回踩）。
 id: trend-pullback-continuation
 name: 强趋势缩量回踩
-enabled: true
+# 2026-10-13 Stage 4 第二轮串行消融（去 DSA 基线，417 交易日，生产口径）：剔除后平均 +0.24pp、
+# 累计 +119、胜率 +0.4pp、PF +0.16，回撤恶化 5.7pp，evaluate_challenger 判 PRODUCTION，下线（L-161）。
+enabled: false
 weight: 0.2
 
 meta:
@@ -18,16 +20,7 @@ meta:
   version: 0.1.0
   holding_days: [2, 3, 5]
   strategy_independence: 0.78
-  default_preset_groups:
-    formal_opening:
-      weight: 0.90
-      sort_order: 70
-    formal_trend_core:
-      weight: 1.05
-      sort_order: 70
-    experiment_trend_pullback:
-      weight: 1.0
-      sort_order: 10
+  # 已下线（L-161），不再声明进入任何预设组。
 
 contract:
   type: strategy

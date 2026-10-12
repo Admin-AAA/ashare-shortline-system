@@ -19,7 +19,7 @@ from app.services.entry_policy import (
 
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
 NEXT_OPEN_SKILLS = ("chao-gu-yang-jia-skill",)
-TARGET_TOUCH_SKILL = "trend-pullback-continuation"
+TARGET_TOUCH_SKILL = "sector-relative-strength-leader"
 
 
 def test_next_open_entry_keeps_exit_contract_of_current_policy() -> None:
