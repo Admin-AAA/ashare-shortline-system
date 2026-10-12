@@ -3,10 +3,10 @@
   "name": "基础短线策略",
   "version": "0.2.0",
   "mode": "declarative",
-  "status": "active",
+  "status": "disabled",
   "requirements": ["stock_feature_context"],
   "capabilities": ["signal_evaluation"],
-  "enabled": true,
+  "enabled": false,
   "source_type": "local",
   "description": "引入 github开源项目daily_stock_analysis 的技术评分框架，覆盖趋势、乖离、量能、支撑、MACD、RSI；正式信号使用次日开盘入场。"
 }

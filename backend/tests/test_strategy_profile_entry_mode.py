@@ -18,7 +18,7 @@ from app.services.entry_policy import (
 
 
 SKILLS_DIR = Path(__file__).resolve().parents[1] / "skills"
-NEXT_OPEN_SKILLS = ("chao-gu-yang-jia-skill", "daily-stock-analysis-skill")
+NEXT_OPEN_SKILLS = ("chao-gu-yang-jia-skill",)
 TARGET_TOUCH_SKILL = "trend-pullback-continuation"
 
 
