@@ -220,7 +220,8 @@ class CoveragePolicy(Generic[NormalizedT]):
         )
         # 空集与部分写入是两种状态：当日一行都没有，说明上游尚未披露，由新鲜度判据
         # 决定是否取数；已经写入却明显少于应有规模，才是「有数据但数据不全」。
-        record_count_ok = record_count == 0 or record_count >= self.minimum_record_count
+        # 行数下限只描述全市场规模：按股票请求时行数已被过滤到请求范围，改由覆盖率判定。
+        record_count_ok = bool(requested) or record_count == 0 or record_count >= self.minimum_record_count
         return CoverageResult(
             record_count=record_count,
             requested_instruments=requested,

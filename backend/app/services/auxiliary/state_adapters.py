@@ -99,6 +99,12 @@ def _iso_day(value: object) -> str:
     return str(value or "").strip()[:10]
 
 
+def _days_before(iso_day: str, days: int) -> str:
+    from datetime import timedelta
+
+    return (date.fromisoformat(iso_day) - timedelta(days=days)).isoformat()
+
+
 def _number(value: object, default: float = 0.0) -> float:
     import math
 
@@ -366,11 +372,10 @@ class TushareStateProvider:
         return rows
 
     def capital_flow(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
-        # 单股资金流向按 trade_date 批量一次拉全市场，再按 requested_codes 过滤；
-        # 逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。当日累计字段由
-        # backfill_moneyflow+compute_cumulative_inflows 在每日同步阶段补全，
-        # 本路径在 run 时通常已被本地表覆盖（refresh=False）；refresh=True 兜底
-        # 时仅入当日净额，累计窗口交给每日同步。
+        # 单股资金流向按 trade_date 批量一次拉全市场（~5500 行、<1s），再按
+        # requested_codes 过滤；逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。
+        # 本路径是资金流向唯一的定时写入口（scripts/daily_data_cron.py 从未排进调度），
+        # 所以累计窗口必须在这里就地算好（L-165）。
         target = _compact_day(request.trade_date)
         wanted = set(request.requested_codes)
         frame = self._client.moneyflow(trade_date=target)
@@ -382,26 +387,53 @@ class TushareStateProvider:
             code = str(latest.get("ts_code") or "").split(".")[0]
             if len(code) != 6 or (wanted and code not in wanted):
                 continue
+            # 单位契约：Tushare moneyflow 各 amount 字段是万元，转亿用 /1e4（L-059）。
+            super_large = round((_number(latest.get("buy_elg_amount")) - _number(latest.get("sell_elg_amount"))) / 1e4, 4)
+            large = round((_number(latest.get("buy_lg_amount")) - _number(latest.get("sell_lg_amount"))) / 1e4, 4)
             records.append({
                 "code": code,
                 "trade_date": _iso_day(latest.get("trade_date") or target),
-                # 单位契约：Tushare moneyflow 各 amount 字段是万元，转亿用 /1e4
-                # （与 backfill_moneyflow_concept.moneyflow_net_yi 一致）。旧 /1e8
-                # 使 main_net_inflow_yi 小 4 个量级（-0.0002 而非 -1.80），L-059。
-                "main_net_inflow_yi": round(_number(latest.get("net_mf_amount")) / 1e4, 4),
-                "super_large_net_inflow_yi": round((_number(latest.get("buy_elg_amount")) - _number(latest.get("sell_elg_amount"))) / 1e4, 4),
-                "large_net_inflow_yi": round((_number(latest.get("buy_lg_amount")) - _number(latest.get("sell_lg_amount"))) / 1e4, 4),
+                # 主力 = 超大单 + 大单，与 backfill_moneyflow_concept 写入的全部历史同口径。
+                # 旧实现用 net_mf_amount（另一套口径），使 08-17 起的行与历史不可比（L-165）。
+                "main_net_inflow_yi": round(super_large + large, 4),
+                "super_large_net_inflow_yi": super_large,
+                "large_net_inflow_yi": large,
                 "medium_net_inflow_yi": round((_number(latest.get("buy_md_amount")) - _number(latest.get("sell_md_amount"))) / 1e4, 4),
                 "small_net_inflow_yi": round((_number(latest.get("buy_sm_amount")) - _number(latest.get("sell_sm_amount"))) / 1e4, 4),
-                "main_net_inflow_ratio": round(_number(latest.get("net_mf_vol")), 2),
-                # 累计字段由每日同步 compute_cumulative_inflows 重算覆盖；本 refresh
-                # 兜底路径写 0.0 占位（保持与 upsert update_policy 的数值类型一致，
-                # 避免 NULL 覆盖；每日同步会重算为正确累计值）。
-                "cumulative_inflow_3d_yi": 0.0,
-                "cumulative_inflow_5d_yi": 0.0,
-                "cumulative_inflow_10d_yi": 0.0,
+                # 旧实现把 net_mf_vol（成交量，手）写成占比，规则 ratio>8 几乎恒真；
+                # 历史行一律为 NULL，这里保持同口径，需要时另行接入成交额重算。
+                "main_net_inflow_ratio": None,
             })
+        self._attach_cumulative_inflows(records, target_day=_iso_day(target))
         return records
+
+    def _attach_cumulative_inflows(self, records: list[dict[str, Any]], *, target_day: str) -> None:
+        """按每只股票自己最近的历史行算 3/5/10 日累计主力净流入（含当日）。
+
+        与 compute_cumulative_inflows 同口径：窗口取该股票最近 N 条记录，不按日历补零。
+        """
+        history: dict[str, list[float]] = defaultdict(list)
+        if self._session is not None and records:
+            codes = sorted({str(record["code"]) for record in records})
+            for start in range(0, len(codes), 1000):
+                chunk = codes[start:start + 1000]
+                rows = self._session.execute(
+                    select(CapitalFlow.code, CapitalFlow.trade_date, CapitalFlow.main_net_inflow_yi)
+                    .where(
+                        CapitalFlow.code.in_(chunk),
+                        CapitalFlow.trade_date < target_day,
+                        CapitalFlow.trade_date >= _days_before(target_day, 45),
+                    )
+                    .order_by(CapitalFlow.code, CapitalFlow.trade_date.desc())
+                ).all()
+                for code, _trade_date, value in rows:
+                    if len(history[code]) < 9:
+                        history[code].append(float(value or 0.0))
+        for record in records:
+            window = [float(record["main_net_inflow_yi"] or 0.0), *history.get(str(record["code"]), [])]
+            record["cumulative_inflow_3d_yi"] = round(sum(window[:3]), 4)
+            record["cumulative_inflow_5d_yi"] = round(sum(window[:5]), 4)
+            record["cumulative_inflow_10d_yi"] = round(sum(window[:10]), 4)
 
     def dragon_tiger(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         frame = self._client.top_list(trade_date=_compact_day(request.trade_date))

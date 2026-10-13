@@ -1363,7 +1363,7 @@ def _build_remediation_plan(
 
     if "capital_flow" in requested_tables:
         target_dates = _target_dates_with_closed_reference_gap(
-            (recent_tables.get("capital_flow") or {}).get("missing_dates") or [],
+            _gap_dates(recent_tables.get("capital_flow") or {}, include_incomplete=True),
             lag_days=lag_days,
             table_key="capital_flow",
             reference_trade_date=reference_trade_date,
@@ -1374,13 +1374,14 @@ def _build_remediation_plan(
             max_closed_trade_date,
         )
         for trade_date in missing_dates:
-            codes = _capital_flow_target_codes(db, trade_date, limit=capital_flow_code_limit)
+            # moneyflow(trade_date) 一次就返回全市场（<1s）；旧实现只留前 N 只，
+            # 正式推荐的候选大多不在其中（10-13：30/153），L-165。
             plan.append(
                 {
                     "table": "capital_flow",
                     "trade_date": trade_date,
-                    "codes": codes,
-                    "code_limit": capital_flow_code_limit,
+                    "codes": [],
+                    "scope": "full_market",
                 }
             )
 
@@ -1728,13 +1729,6 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
         }
     if table == "capital_flow":
         codes = item.get("codes") or []
-        if not codes:
-            return {
-                **item,
-                "status": "skipped",
-                "reason": "目标交易日缺少活跃股票样本，未执行资金流向补数。",
-                "row_count": 0,
-            }
         row_count, _audit = _refresh_auxiliary_dataset(
             db, dataset="capital_flow", trade_date=item["trade_date"], codes=list(codes)
         )
@@ -2379,10 +2373,6 @@ def _minute_probe_failed(
     results: list[tuple[str, list[dict[str, Any]], Exception | None]],
 ) -> bool:
     return bool(results) and all(not rows and error is not None for _, rows, error in results)
-
-
-def _capital_flow_target_codes(db: Session, trade_date: str, *, limit: int) -> list[str]:
-    return _auxiliary_target_codes(db, trade_date, limit=limit)
 
 
 def _minute_kbar_target_codes(db: Session, trade_date: str, *, limit: int) -> list[str]:

@@ -481,7 +481,13 @@ def _recent_trade_day_coverage(
         try:
             present = _present_dates(db, col, ordered_days)
             missing = [day for day in ordered_days if day not in present]
-            incomplete_dates = _incomplete_daily_kbar_dates(db, ordered_days) if tdef["key"] == "daily_kbar" else []
+            incomplete_dates = (
+                _incomplete_daily_kbar_dates(db, ordered_days)
+                if tdef["key"] == "daily_kbar"
+                else _incomplete_capital_flow_dates(db, ordered_days)
+                if tdef["key"] == "capital_flow"
+                else []
+            )
             tolerated_gap_dates = _realtime_tolerated_gap_dates(
                 missing_dates=missing,
                 incomplete_dates=incomplete_dates,
@@ -1242,6 +1248,22 @@ def _incomplete_daily_kbar_dates(db: Session, ordered_days: list[str]) -> list[s
         if normalized in ordered_days:
             counts[normalized] = counts.get(normalized, 0) + int(count or 0)
     return [day for day in ordered_days if 0 < counts.get(day, 0) < _MIN_RECENT_DAILY_KBAR_CODES]
+
+
+def _incomplete_capital_flow_dates(db: Session, ordered_days: list[str]) -> list[str]:
+    """资金流向当日有行但远少于全市场规模（例如只补了前 300 只），按不完整处理（L-165）。"""
+    if not ordered_days:
+        return []
+    from app.services.auxiliary.production import AUXILIARY_DATASET_BY_KEY
+
+    floor = AUXILIARY_DATASET_BY_KEY["capital_flow"].minimum_record_count
+    rows = db.execute(
+        select(CapitalFlow.trade_date, func.count())
+        .where(CapitalFlow.trade_date.in_(ordered_days))
+        .group_by(CapitalFlow.trade_date)
+    ).all()
+    counts = {_fmt_date(trade_date): int(count or 0) for trade_date, count in rows}
+    return [day for day in ordered_days if 0 < counts.get(day, 0) < floor]
 
 
 def _coverage_gap_count(coverage: dict[str, Any], reference_trade_date: str | None = None) -> int:
