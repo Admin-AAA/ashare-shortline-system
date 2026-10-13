@@ -1,0 +1,16 @@
+{
+  "id": "sector-laggard-catchup",
+  "name": "主线板块补涨",
+  "version": "0.1.0",
+  "mode": "declarative",
+  "status": "disabled",
+  "requirements": [
+    "stock_feature_context"
+  ],
+  "capabilities": [
+    "signal_evaluation"
+  ],
+  "enabled": false,
+  "source_type": "local",
+  "description": "主线板块补涨（研究原型，按 walk-forward 协议评估；默认不进入正式预设）"
+}

@@ -1,0 +1,89 @@
+# 龙头二板接力（研究原型，2026-10-13 Grok Bot）
+# 假设：主线题材里、封板质量好的二连板，是市场确认的短线龙头候选；次日开盘接力。
+# 状态：enabled=false，仅通过 ASHARE_RESEARCH_EXTRA_SKILLS 进入研究回放，按 walk-forward 协议评估。
+id: second-board-leader
+name: 龙头二板接力
+enabled: false
+weight: 1.0
+default_entry_mode: next_open
+meta:
+  author: grokbot
+  style: limit-up-relay
+  version: 0.1.0
+  holding_days: [1, 2, 3]
+  strategy_independence: 0.8
+  default_preset_groups:
+    experiment_second_board_leader:
+      weight: 1.0
+      sort_order: 10
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+universe:
+  include:
+    - "amount_yi >= 2"
+    - "amount_yi <= 30"
+    - "free_mv_yi >= 15"
+    - "turnover_rate >= 3"
+    - "turnover_rate <= 20"
+    - "is_limit_up == true"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 0"
+prefilter:
+  market:
+    include:
+      - when: "limit_up_consecutive_days == 2"
+        reason: "not_second_board"
+      - when: "limit_up_open_times <= 3"
+        reason: "seal_unstable"
+    include_any:
+      - when: "is_main_theme == true"
+        reason: "requires_main_theme"
+      - when: "sector_ladder_completeness_score >= 60"
+        reason: "requires_sector_ladder"
+    exclude:
+      - when: "limit_up_overheat_score >= 85"
+        reason: "emotion_overheat"
+phases:
+  - name: 冰点情绪不接力
+    when: "market_sentiment_phase == '冰点'"
+    score_cap: 55
+    hard_veto: false
+    risk_flags: ["冰点情绪，连板溢价低"]
+setups:
+  - name: 主线二板
+    when: "limit_up_consecutive_days == 2 and (is_main_theme == true or sector_ladder_completeness_score >= 60)"
+    score_delta: 10
+    entry_rule: "次日开盘接力，高开超过 6% 不追（执行层 gap 闸门）"
+    invalid_rule: "次日跌破二板涨停价下方 3%"
+scoring:
+  base: 50
+  rules:
+    - when: "shortline_leader_score >= 65"
+      delta: 6
+      reason: 短线龙头分高
+    - when: "limit_up_fd_amount_yi >= 0.5"
+      delta: 4
+      reason: 封单充足
+    - when: "limit_up_open_times == 0"
+      delta: 3
+      reason: 未开板
+    - when: "is_main_theme == true"
+      delta: 5
+      reason: 主线题材
+    - when: "sector_ladder_completeness_score >= 75"
+      delta: 4
+      reason: 板块梯队完整
+    - when: "main_net_inflow_yi > 0"
+      delta: 3
+      reason: 主力净流入
+risk:
+  rules:
+    - when: "limit_up_open_times >= 2"
+      level: medium
+      flag: 封板有分歧
+      score_delta: -4
