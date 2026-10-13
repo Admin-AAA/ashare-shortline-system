@@ -59,10 +59,43 @@ def test_capital_flow_uses_wan_to_yi_1e4_not_1e8():
     rows = provider.capital_flow(_request(["000021"]))
     assert len(rows) == 1
     row = rows[0]
-    # 主力净流入 = net_mf_amount(万元)/1e4 = -1.698 亿，绝不是 /1e8 的 -0.00017
-    assert row["main_net_inflow_yi"] == pytest.approx(-1.698, abs=1e-3)
+    # 主力 = 超大单 + 大单（与全部历史行同口径，L-165）
+    # = (40999.10-46580.0 + 86142.64-98529.15)/1e4 = -1.7967 亿，绝不是 /1e8 的 -0.00018
+    assert row["main_net_inflow_yi"] == pytest.approx(-1.7967, abs=1e-3)
     # 超大单 = (buy_elg - sell_elg)/1e4 = (40999.10-46580.0)/1e4 = -0.558 亿
     assert row["super_large_net_inflow_yi"] == pytest.approx(-0.558, abs=1e-3)
+
+
+def test_capital_flow_does_not_write_volume_as_ratio():
+    # 旧实现把 net_mf_vol（手）写进 main_net_inflow_ratio，规则「占比>8」几乎恒真。
+    provider = TushareStateProvider(client=_FakeClient(), session=None)
+    row = provider.capital_flow(_request(["000021"]))[0]
+    assert row["main_net_inflow_ratio"] is None
+
+
+def test_capital_flow_cumulative_inflows_use_local_history(tmp_path):
+    # 旧实现写 0.0 占位等「每日同步」重算，而那个同步从未排进调度：09-09 起累计全是 0（L-165）。
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from app.models.tables import Base, CapitalFlow
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'cf.db'}")
+    Base.metadata.create_all(engine, tables=[CapitalFlow.__table__])
+    with Session(engine) as session:
+        history = [("2026-08-05", 1.0), ("2026-08-06", 2.0), ("2026-08-07", 3.0), ("2026-08-10", 4.0),
+                   ("2026-08-11", 5.0), ("2026-08-12", 6.0), ("2026-08-13", 7.0)]
+        session.add_all(CapitalFlow(code="000021", trade_date=d, main_net_inflow_yi=v) for d, v in history)
+        # 目标日当天及之后的行不能进窗口
+        session.add(CapitalFlow(code="000021", trade_date="2026-08-17", main_net_inflow_yi=100.0))
+        session.commit()
+        provider = TushareStateProvider(client=_FakeClient(), session=session)
+        row = provider.capital_flow(_request(["000021"]))[0]
+    today = row["main_net_inflow_yi"]
+    assert row["cumulative_inflow_3d_yi"] == pytest.approx(today + 7.0 + 6.0, abs=1e-4)
+    assert row["cumulative_inflow_5d_yi"] == pytest.approx(today + 7.0 + 6.0 + 5.0 + 4.0, abs=1e-4)
+    # 只有 7 条历史：10 日窗口取全部可用行，不补零也不越过目标日
+    assert row["cumulative_inflow_10d_yi"] == pytest.approx(today + 28.0, abs=1e-4)
 
 
 def test_capital_flow_super_large_large_medium_small_units():

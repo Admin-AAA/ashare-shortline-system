@@ -149,15 +149,11 @@ def test_remediate_data_health_gaps_executes_targeted_plan(monkeypatch):
     )
     def _refresh_auxiliary(_db, *, dataset, trade_date, codes=None):
         del trade_date
-        return (len(codes or ()) if dataset == "capital_flow" else 1, {"dataset": dataset})
+        return (5500 if dataset == "capital_flow" else 1, {"dataset": dataset})
 
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
         _refresh_auxiliary,
-    )
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service._capital_flow_target_codes",
-        lambda _db, trade_date, limit: ["000001", "000002", "000003"],
     )
 
     result = remediate_data_health_gaps(db, target_tables=["index_daily", "limit_up_board", "capital_flow", "concept_sector"])
@@ -183,7 +179,8 @@ def test_remediate_data_health_gaps_executes_targeted_plan(monkeypatch):
     assert actions["index_daily"]["row_count"] == 2
     assert actions["index_daily"]["rollback_hint"].startswith("按 index_daily.ts_code")
     assert actions["limit_up_board"]["row_count"] == 1
-    assert actions["capital_flow"]["requested_code_count"] == 3
+    assert actions["capital_flow"]["scope"] == "full_market"
+    assert actions["capital_flow"]["row_count"] == 5500
     assert actions["concept_sector"]["row_count"] == 1
 
 
@@ -246,7 +243,6 @@ def test_remediate_data_health_gaps_targets_closed_reference_trade_date_when_lag
     monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-06-10")
     monkeypatch.setattr("app.services.data_gap_remediation_service._daily_kbar_target_codes", lambda _db, trade_date, limit: ["000001"])
     monkeypatch.setattr("app.services.data_gap_remediation_service._minute_kbar_target_codes", lambda _db, trade_date, limit: ["000001"])
-    monkeypatch.setattr("app.services.data_gap_remediation_service._capital_flow_target_codes", lambda _db, trade_date, limit: ["000001"])
     monkeypatch.setattr("app.services.data_gap_remediation_service._index_ts_codes", lambda _db: ["000001.SH"])
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._backfill_daily_kbar_date",
@@ -492,7 +488,7 @@ def test_remediate_recommendation_run_auxiliary_data_updates_candidate_snapshot(
     db.commit()
 
     def _refresh_auxiliary(_db, *, dataset, trade_date, codes=None):
-        return (len(codes or ()) if dataset in {"capital_flow", "news_announcement"} else 1, {"dataset": dataset})
+        return (5500 if dataset == "capital_flow" else len(codes or ()) if dataset == "news_announcement" else 1, {"dataset": dataset})
 
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
@@ -716,7 +712,9 @@ def test_remediate_data_health_gaps_preserves_actions_when_post_diagnosis_fails(
     db.rollback.assert_called_once()
 
 
-def test_remediation_plan_separates_daily_kbar_and_capital_flow_limits(monkeypatch):
+def test_remediation_plan_capital_flow_is_full_market_and_covers_incomplete_days(monkeypatch):
+    # L-165：capital_flow 补数一次拉全市场，不再截前 N 只；只写了一部分的交易日
+    # （incomplete_dates）也要重补，否则「前 300 只」的日子永远被当成已覆盖。
     db = MagicMock()
     before = {
         "score": 70,
@@ -729,7 +727,7 @@ def test_remediation_plan_separates_daily_kbar_and_capital_flow_limits(monkeypat
             "summary": {"max_missing_days": 1, "high_impact_tables": [], "warning_tables": ["daily_kbar", "capital_flow"]},
             "tables": {
                 "daily_kbar": {"missing_dates": [], "incomplete_dates": ["2026-05-27"]},
-                "capital_flow": {"missing_dates": ["2026-05-26"]},
+                "capital_flow": {"missing_dates": ["2026-05-26"], "incomplete_dates": ["2026-05-25"]},
             },
         },
     }
@@ -739,19 +737,11 @@ def test_remediation_plan_separates_daily_kbar_and_capital_flow_limits(monkeypat
         seen_limits["daily_kbar"] = limit
         return ["000001"]
 
-    def _capital_codes(_db, trade_date, limit):
-        seen_limits["capital_flow"] = limit
-        return ["000002"]
-
     monkeypatch.setattr("app.services.data_gap_remediation_service.diagnose_all", lambda _db: before)
     monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-05-27")
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._daily_kbar_target_codes",
         _daily_codes,
-    )
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service._capital_flow_target_codes",
-        _capital_codes,
     )
 
     result = remediate_data_health_gaps(
@@ -761,10 +751,12 @@ def test_remediation_plan_separates_daily_kbar_and_capital_flow_limits(monkeypat
         capital_flow_code_limit=15,
     )
 
-    assert seen_limits == {"daily_kbar": DEFAULT_DAILY_KBAR_CODE_LIMIT, "capital_flow": 15}
-    actions = {item["table"]: item for item in result["actions"]}
-    assert actions["daily_kbar"]["code_limit"] == DEFAULT_DAILY_KBAR_CODE_LIMIT
-    assert actions["capital_flow"]["code_limit"] == 15
+    assert seen_limits == {"daily_kbar": DEFAULT_DAILY_KBAR_CODE_LIMIT}
+    actions = [item for item in result["actions"] if item["table"] == "capital_flow"]
+    assert [item["trade_date"] for item in actions] == ["2026-05-25", "2026-05-26"]
+    assert all(item["codes"] == [] and item["scope"] == "full_market" for item in actions)
+    daily = next(item for item in result["actions"] if item["table"] == "daily_kbar")
+    assert daily["code_limit"] == DEFAULT_DAILY_KBAR_CODE_LIMIT
 
 
 def test_remediate_data_health_gaps_continues_after_single_action_failure(monkeypatch):
@@ -822,15 +814,11 @@ def test_remediate_data_health_gaps_continues_after_single_action_failure(monkey
         },
     )
 
-    monkeypatch.setattr(
-        "app.services.data_gap_remediation_service._capital_flow_target_codes",
-        lambda _db, trade_date, limit: ["000001"],
-    )
 
     def _refresh_auxiliary(_db, *, dataset, trade_date, codes=None):
         if dataset == "limit_up_board":
             raise RuntimeError(f"limit_up_board source failed: {trade_date}")
-        return (len(codes or ()) if dataset == "capital_flow" else 1, {"dataset": dataset})
+        return (5500 if dataset == "capital_flow" else 1, {"dataset": dataset})
 
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
@@ -1196,11 +1184,10 @@ def test_default_remediation_plan_covers_full_recommendation_data_dependencies(m
         },
     )
     monkeypatch.setattr("app.services.data_gap_remediation_service._auxiliary_target_codes", lambda _db, trade_date, limit: ["000001", "000002"])
-    monkeypatch.setattr("app.services.data_gap_remediation_service._capital_flow_target_codes", lambda _db, trade_date, limit: ["000001", "000002"])
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
         lambda _db, *, dataset, trade_date, codes=None: (
-            len(codes or ()) if dataset in {"capital_flow", "news_announcement"} else 1,
+            5500 if dataset == "capital_flow" else len(codes or ()) if dataset == "news_announcement" else 1,
             {"dataset": dataset},
         ),
     )
