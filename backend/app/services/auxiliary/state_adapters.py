@@ -375,7 +375,7 @@ class TushareStateProvider:
         # 单股资金流向按 trade_date 批量一次拉全市场（~5500 行、<1s），再按
         # requested_codes 过滤；逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。
         # 本路径是资金流向唯一的定时写入口（scripts/daily_data_cron.py 从未排进调度），
-        # 所以累计窗口必须在这里就地算好（L-165）。
+        # 所以累计窗口必须在这里就地算好（L-166）。
         target = _compact_day(request.trade_date)
         wanted = set(request.requested_codes)
         frame = self._client.moneyflow(trade_date=target)
@@ -394,7 +394,7 @@ class TushareStateProvider:
                 "code": code,
                 "trade_date": _iso_day(latest.get("trade_date") or target),
                 # 主力 = 超大单 + 大单，与 backfill_moneyflow_concept 写入的全部历史同口径。
-                # 旧实现用 net_mf_amount（另一套口径），使 08-17 起的行与历史不可比（L-165）。
+                # 旧实现用 net_mf_amount（另一套口径），使 08-17 起的行与历史不可比（L-166）。
                 "main_net_inflow_yi": round(super_large + large, 4),
                 "super_large_net_inflow_yi": super_large,
                 "large_net_inflow_yi": large,

@@ -1375,7 +1375,7 @@ def _build_remediation_plan(
         )
         for trade_date in missing_dates:
             # moneyflow(trade_date) 一次就返回全市场（<1s）；旧实现只留前 N 只，
-            # 正式推荐的候选大多不在其中（10-13：30/153），L-165。
+            # 正式推荐的候选大多不在其中（10-13：30/153），L-166。
             plan.append(
                 {
                     "table": "capital_flow",

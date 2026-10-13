@@ -1251,7 +1251,7 @@ def _incomplete_daily_kbar_dates(db: Session, ordered_days: list[str]) -> list[s
 
 
 def _incomplete_capital_flow_dates(db: Session, ordered_days: list[str]) -> list[str]:
-    """资金流向当日有行但远少于全市场规模（例如只补了前 300 只），按不完整处理（L-165）。"""
+    """资金流向当日有行但远少于全市场规模（例如只补了前 300 只），按不完整处理（L-166）。"""
     if not ordered_days:
         return []
     from app.services.auxiliary.production import AUXILIARY_DATASET_BY_KEY

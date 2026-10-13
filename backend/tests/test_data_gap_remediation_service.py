@@ -488,7 +488,7 @@ def test_remediate_recommendation_run_auxiliary_data_updates_candidate_snapshot(
     db.commit()
 
     def _refresh_auxiliary(_db, *, dataset, trade_date, codes=None):
-        return (5500 if dataset == "capital_flow" else len(codes or ()) if dataset == "news_announcement" else 1, {"dataset": dataset})
+        return (len(codes or ()) if dataset in {"capital_flow", "news_announcement"} else 1, {"dataset": dataset})
 
     monkeypatch.setattr(
         "app.services.data_gap_remediation_service._refresh_auxiliary_dataset",
@@ -713,7 +713,7 @@ def test_remediate_data_health_gaps_preserves_actions_when_post_diagnosis_fails(
 
 
 def test_remediation_plan_capital_flow_is_full_market_and_covers_incomplete_days(monkeypatch):
-    # L-165：capital_flow 补数一次拉全市场，不再截前 N 只；只写了一部分的交易日
+    # L-166：capital_flow 补数一次拉全市场，不再截前 N 只；只写了一部分的交易日
     # （incomplete_dates）也要重补，否则「前 300 只」的日子永远被当成已覆盖。
     db = MagicMock()
     before = {

@@ -59,7 +59,7 @@ def test_capital_flow_uses_wan_to_yi_1e4_not_1e8():
     rows = provider.capital_flow(_request(["000021"]))
     assert len(rows) == 1
     row = rows[0]
-    # 主力 = 超大单 + 大单（与全部历史行同口径，L-165）
+    # 主力 = 超大单 + 大单（与全部历史行同口径，L-166）
     # = (40999.10-46580.0 + 86142.64-98529.15)/1e4 = -1.7967 亿，绝不是 /1e8 的 -0.00018
     assert row["main_net_inflow_yi"] == pytest.approx(-1.7967, abs=1e-3)
     # 超大单 = (buy_elg - sell_elg)/1e4 = (40999.10-46580.0)/1e4 = -0.558 亿
@@ -73,14 +73,14 @@ def test_capital_flow_does_not_write_volume_as_ratio():
     assert row["main_net_inflow_ratio"] is None
 
 
-def test_capital_flow_cumulative_inflows_use_local_history(tmp_path):
-    # 旧实现写 0.0 占位等「每日同步」重算，而那个同步从未排进调度：09-09 起累计全是 0（L-165）。
+def test_capital_flow_cumulative_inflows_use_local_history():
+    # 旧实现写 0.0 占位等「每日同步」重算，而那个同步从未排进调度：09-09 起累计全是 0（L-166）。
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
     from app.models.tables import Base, CapitalFlow
 
-    engine = create_engine(f"sqlite:///{tmp_path / 'cf.db'}")
+    engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[CapitalFlow.__table__])
     with Session(engine) as session:
         history = [("2026-08-05", 1.0), ("2026-08-06", 2.0), ("2026-08-07", 3.0), ("2026-08-10", 4.0),

@@ -126,3 +126,46 @@ def test_margin_detail_partial_write_is_insufficient_but_empty_day_is_not() -> N
     assert evaluate(floor - 1).sufficient is False
     assert evaluate(floor).sufficient is True
     assert evaluate(0).sufficient is True
+
+
+def test_capital_flow_top_n_partial_day_is_insufficient_for_full_market_only() -> None:
+    """L-166：09-10 起资金流向每天只补前 300 只，全市场批量同步却按「当天有行」判 fresh。
+
+    行数下限只描述全市场规模；按股票请求时行数已被过滤到请求范围，由覆盖率判定，
+    否则正式推荐的 153 只候选会因为「153 < 4500」被误判不足。
+    """
+    entry = next(item for item in AUXILIARY_DATASET_INVENTORY if item.key == "capital_flow")
+    assert entry.minimum_record_count > 300
+
+    adapter = _Adapter()
+    descriptor = assemble_standard_auxiliary_descriptors(
+        {
+            "capital_flow": StandardAuxiliaryDatasetAdapters(
+                fetcher=adapter, normalizer=adapter, repository=adapter, loader=adapter,
+            )
+        },
+        schema_readiness=_Ready(),
+        inventory=(entry,),
+    )[0]
+    policy = descriptor.coverage_policy
+
+    full_market = policy.evaluate_snapshot(
+        record_count=300, covered_instruments=frozenset(), requested_instruments=(), source="test",
+    )
+    assert full_market.sufficient is False
+
+    requested = tuple(AuxiliaryInstrument(code=f"{i:06d}") for i in range(153))
+    all_covered = policy.evaluate_snapshot(
+        record_count=153,
+        covered_instruments=frozenset(item.code for item in requested),
+        requested_instruments=requested,
+        source="test",
+    )
+    assert all_covered.sufficient is True
+    mostly_missing = policy.evaluate_snapshot(
+        record_count=30,
+        covered_instruments=frozenset(item.code for item in requested[:30]),
+        requested_instruments=requested,
+        source="test",
+    )
+    assert mostly_missing.sufficient is False

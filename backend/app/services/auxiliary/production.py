@@ -341,7 +341,7 @@ AUXILIARY_DATASET_INVENTORY: tuple[AuxiliaryDatasetInventoryEntry, ...] = (
         natural_key=("code", "trade_date"), freshness_field="trade_date",
         minimum_instrument_coverage=0.90, coverage_instrument_field="code",
         # 全市场约 5100~5600 只（含北交所）。只写了一部分（例如旧的「前 300 只」补数）时
-        # 必须判为不足并重新取数，不能按「当天有行」判新鲜（L-165）。
+        # 必须判为不足并重新取数，不能按「当天有行」判新鲜（L-166）。
         minimum_record_count=4500,
         update_policy=_atomic(("main_net_inflow_yi", "super_large_net_inflow_yi", "large_net_inflow_yi", "medium_net_inflow_yi", "small_net_inflow_yi", "main_net_inflow_ratio", "cumulative_inflow_3d_yi", "cumulative_inflow_5d_yi", "cumulative_inflow_10d_yi")),
     ),

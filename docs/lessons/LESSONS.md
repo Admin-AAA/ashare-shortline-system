@@ -1782,3 +1782,17 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 永久规则：**样本不足 200 笔时校准只报告、不产出新权重。** 自动调参的样本门槛按「随机搜索的组合数会不会把噪声挑出来」定，不按「能跑起来」定。
 - 回归验证：`backend/tests/test_calibrator_min_samples.py`。
 - 吸收位置：`backend/app/services/calibrator.py`。
+
+## L-166 资金流向每天只补「前 300 只」且累计全是 0：接口一次给全市场，是补数入口自己截断的
+
+- 状态：encoded（补数改为全市场、全市场行数下限 4500、累计在写入口就地计算；2024-12-16 ~ 2026-10-13 共 440 个交易日已用生产 provider 重写）
+- 适用：`capital_flow` 的定时补数、批量同步、健康诊断；任何「上游一次返回全市场、本地却按 top-N 过滤」的辅助数据
+- 证据：2026-10-13 正式推荐资金流只覆盖 30/153 只候选。库里 09-10 起每天恰好 300 行（17:36 补数写入），08-17~08-26、06-25~07-14 也是；2025-01 ~ 2026-03-26 一行都没有。`pro.moneyflow(trade_date=)` 实测 0.3s 返回 5574 行。四处缺陷叠加：
+  1. 健康补数按 `capital_flow_code_limit=300`（成交额前 300 + 涨停）过滤，正式推荐的候选大多不在其中；
+  2. 随后的全市场批量同步不传 instruments，覆盖率恒为 1.0，`minimum_record_count=0`，300 行被判 fresh 跳过；
+  3. 健康诊断只看「当天有没有行」，300 行的日子不算缺口，补数计划永远不会重补；
+  4. 写入口把累计 3/5/10 日写成 0.0「等每日同步重算」，而那个同步（`scripts/daily_data_cron.py`）从未排进调度——09-09 起累计全为 0。另外写入口用 `net_mf_amount` 当主力净流入（历史行是超大单+大单）、把 `net_mf_vol`（手）写进占比列，陈小群「占比>8」在这些行上几乎恒真。
+- 永久规则：（一）**上游一次调用就返回全市场的数据，补数不截 top-N**；截断只用于必须逐股调用的接口。（二）全市场数据集必须声明行数下限，且下限只约束全市场请求——按股票请求时行数已被过滤，改由覆盖率判定。（三）派生列（累计窗口）在唯一的定时写入口就地算好，不写占位值等「另一个任务」覆盖；先确认那个任务真的在调度里。（四）同一列只能有一种口径，换写入口时对照历史行逐列核对。
+- 回归验证：`backend/tests/test_auxiliary_coverage_policy.py::test_capital_flow_top_n_partial_day_is_insufficient_for_full_market_only`、`backend/tests/test_capital_flow_state_adapter_units.py`、`backend/tests/test_data_gap_remediation_service.py::test_remediation_plan_capital_flow_is_full_market_and_covers_incomplete_days`。
+- 吸收位置：`backend/app/services/auxiliary/state_adapters.py`、`backend/app/services/auxiliary/production.py`、`backend/app/services/auxiliary/contracts.py`、`backend/app/services/data_gap_remediation_service.py`、`backend/app/services/data_health_service.py`。
+- 相关：L-059（资金流单位）、L-159（部分写入的就绪判定）。
