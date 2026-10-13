@@ -499,6 +499,6 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/refresh_strategy_bac
 ## 研究纪律与运维告警（2026-10-13）
 
 - **Hold-out 协议**：2026-07-01 之后为样本外，调参只用之前的数据，样本外只评估一次，两段都通过 `evaluate_challenger` 才发布。见 `docs/holdout-protocol.md`。
-- **决策时刻可见性**：龙虎榜、两融明细在 17:35 正式推荐时还没入库，实盘和回放统一读取信号日之前最近一个交易日的数据（L-163 / L-166）。
+- **决策时刻可见性**：龙虎榜、两融明细在 17:35 正式推荐时还没入库，实盘和回放统一读取信号日之前最近一个交易日的数据（L-163 / L-167）。
 - **告警**：LLM 熔断、Tushare 全部上游失败、未配置官方 Tushare 兜底时，`backend/logs/app.log` 会记录 `[ALERT:<kind>]`，可用 `grep '\[ALERT:' backend/logs/app.log` 查看。官方兜底需在 `.env` 设置 `ASHARE_TUSHARE_OFFICIAL_TOKEN`。
-- **组合回撤控制**：`app/engine/drawdown_control.py`（弱市限额 + 已结算亏损熔断），默认关闭：训练段过判、hold-out 段证伪，见 `docs/lessons/LESSONS.md` L-166。
+- **组合回撤控制**：`app/engine/drawdown_control.py`（弱市限额 + 已结算亏损熔断），默认关闭：训练段过判、hold-out 段证伪，见 `docs/lessons/LESSONS.md` L-167。

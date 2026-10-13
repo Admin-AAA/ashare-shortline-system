@@ -1797,7 +1797,7 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 吸收位置：`backend/app/services/auxiliary/state_adapters.py`、`backend/app/services/auxiliary/production.py`、`backend/app/services/auxiliary/contracts.py`、`backend/app/services/data_gap_remediation_service.py`、`backend/app/services/data_health_service.py`。
 - 相关：L-059（资金流单位）、L-159（部分写入的就绪判定）。
 
-## L-166 冻结 2026-07-01 起为 hold-out：组合回撤控制和两个新策略原型都没通过样本外
+## L-167 冻结 2026-07-01 起为 hold-out：组合回撤控制和两个新策略原型都没通过样本外
 
 - 状态：active（FINDING + 协议；`docs/holdout-protocol.md`）
 - 适用：任何策略增删、阈值、评分层、组合层（出票限额/熔断）提案
@@ -1806,8 +1806,8 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   2. 组合回撤控制（`app/engine/drawdown_control.py`）：在训练段 84 组网格里只有 1 组判 PRODUCTION（熔断 -5、回看 10 天、暂停 2 天：累计 +531.7→+536.9，回撤 -26.2→-21.6）；hold-out 段只评估一次判 FALSIFIED（累计 +50.8→+49.5，回撤 -22.7→-24.0）。弱市限 0 张在训练段回撤降到 -18.2，但累计 +531.7→+348.1，不过判定。**默认保持关闭。**
      注意：熔断模块首版有「暂停后同一段亏损反复触发导致永久停摆」的 bug，修复后重跑了一次，所以 hold-out 实际被看了两次（第一次结果同样是 FALSIFIED），已经不算完全干净。
   3. 低位首板启动（`skills/low-position-first-board`）：hold-out 段入选 8 张独持卡，平均 -1.95%；去掉它组合更好（累计 +70.3→+78.5）→ FALSIFIED，保持 enabled=false。
-  4. 超跌资金反包（`skills/oversold-capital-reversal`）：hold-out 段只产生 1 张候选卡、0 张入选，无法评估。可能原因：资金流向历史数据缺口（见 L-165，回放运行期间资金流正被重写）。
+  4. 超跌资金反包（`skills/oversold-capital-reversal`）：hold-out 段只产生 1 张候选卡、0 张入选，无法评估。可能原因：资金流向历史数据缺口（见 L-166，回放运行期间资金流正被重写）。
 - 永久规则：**（一）训练段只到 2026-06-30；hold-out 段只评估一次，两段都 PRODUCTION 才能发布。（二）这一段 hold-out 已经用过，下一个提案用 2026-10-10 之后新积累的数据做样本外。（三）研究原型策略一律 enabled=false，回放用 `ASHARE_RESEARCH_EXTRA_SKILLS` 临时纳入，不改注册表。**
 - 回归验证：`backend/scripts/research_holdout_protocol.py drawdown|only|baseline`；`backend/tests/test_drawdown_control.py`、`test_decision_time_visibility.py`。
 - 吸收位置：`docs/holdout-protocol.md`、`app/engine/drawdown_control.py`、`app/services/auxiliary/state_adapters.py`、`app/services/backtest/research_runner.py`。
-- 相关：L-010、L-161、L-162、L-163、L-165。
+- 相关：L-010、L-161、L-162、L-163、L-166。

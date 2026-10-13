@@ -938,7 +938,7 @@ class LocalResearchSnapshotBuilder:
                 "limit_up_fd_amount_yi": float(row.fd_amount_yi or 0),
                 "limit_up_seal_time": row.first_time,
             }
-        # 龙虎榜约 21:00 入库，17:35 决策时不可见（L-163/L-165）：T 日上榜记录只在下一个
+        # 龙虎榜约 21:00 入库，17:35 决策时不可见（L-163/L-167）：T 日上榜记录只在下一个
         # 回放交易日可见，与实盘 state_adapters._decision_visible_date 同口径。
         sorted_dates = sorted(str(d) for d in dates)
         try:

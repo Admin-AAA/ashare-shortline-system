@@ -689,7 +689,7 @@ class _StateViews:
         return request.trade_date.isoformat()
 
     def _decision_visible_date(self, model: Any, request: AuxiliaryDatasetRequest) -> str | None:
-        """盘后 17:35 决策时刻可见的最近交易日（L-163/L-165）。
+        """盘后 17:35 决策时刻可见的最近交易日（L-163/L-167）。
 
         龙虎榜约 21:00 入库、两融明细次日披露，17:35 正式推荐时拿不到当日数据。实盘与回放
         统一只读取严格早于信号日的最近一个有数据交易日，避免回放看到实盘看不到的信息。
