@@ -1,0 +1,16 @@
+{
+  "id": "northbound-accumulation",
+  "name": "北向资金增持",
+  "version": "0.1.0",
+  "mode": "declarative",
+  "status": "disabled",
+  "requirements": [
+    "stock_feature_context"
+  ],
+  "capabilities": [
+    "signal_evaluation"
+  ],
+  "enabled": false,
+  "source_type": "local",
+  "description": "北向资金增持（研究原型）。来源：浙大资本市场研究中心：北向资金是聪明的（北向持股变化预测 2~20 日超额收益）http://www.som.zju.edu.cn/2021/1205/c63655a2448615/page.htm ；深交所：普通投资者追踪北上资金能获利吗？ https://docs.static.szse.cn/www/aboutus/research/secuities/daily/W020230718361543565332.pdf"
+}

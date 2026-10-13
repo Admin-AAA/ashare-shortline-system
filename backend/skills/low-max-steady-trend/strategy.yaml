@@ -1,0 +1,88 @@
+# 低MAX稳健趋势（研究原型，2026-10-13 Grok Bot）
+# 假设：避开彩票型（近 20 日有涨停/长上影）股票，选均线多头、温和放量、回撤小的稳健趋势股。
+# 来源：Bali, Cakici & Whitelaw (2011) Maxing out, JFE https://www.nber.org/papers/w14804 ；Loss from the chasing of MAX stocks: Evidence from China https://www.sciencedirect.com/science/article/abs/pii/S1062940821000966
+# 状态：enabled=false；回放用 ASHARE_RESEARCH_EXTRA_SKILLS 临时纳入，按最近 12 个月单策略口径评估。
+id: low-max-steady-trend
+name: 低MAX稳健趋势
+enabled: false
+weight: 1.0
+default_entry_mode: next_open
+meta:
+  author: grokbot
+  style: low-lottery-trend
+  version: 0.1.0
+  holding_days: [1, 3, 5]
+  strategy_independence: 0.85
+  default_preset_groups:
+    experiment_low_max_steady_trend:
+      weight: 1.0
+      sort_order: 10
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "free_mv_yi >= 30"
+    - "turnover_rate >= 1"
+    - "turnover_rate <= 6"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 1"
+prefilter:
+  market:
+    include:
+      - when: "limit_up_days20 == 0"
+        reason: "lottery_like"
+      - when: "upper_shadow_count20 <= 3"
+        reason: "upper_shadow"
+      - when: "ma5 > ma10 and ma10 > ma20"
+        reason: "no_trend"
+      - when: "chg20 >= 5 and chg20 <= 20"
+        reason: "trend_strength"
+      - when: "pct >= 0 and pct <= 4"
+        reason: "day_move"
+      - when: "max_dd20 >= -8"
+        reason: "drawdown"
+    exclude:
+      - when: "vol5_20 > 1.8"
+        reason: "volume_spike"
+phases:
+  - name: 冰点情绪降权
+    when: "market_sentiment_phase == '冰点'"
+    score_cap: 60
+    hard_veto: false
+    risk_flags: ["冰点情绪"]
+setups:
+  - name: 低MAX稳健趋势
+    when: "limit_up_days20 == 0 and ma5 > ma10 and ma10 > ma20 and max_dd20 >= -8"
+    score_delta: 10
+    entry_rule: "次日开盘介入，高开超过 6% 不追（执行层 gap 闸门）"
+    invalid_rule: "跌破信号日低点"
+scoring:
+  base: 54
+  rules:
+    - when: "vol5_20 >= 1.0 and vol5_20 <= 1.5"
+      delta: 5
+      reason: 温和放量
+    - when: "breakout20 == 1"
+      delta: 4
+      reason: 突破平台
+    - when: "primary_excess20 >= 3"
+      delta: 4
+      reason: 跑赢行业
+    - when: "main_net_inflow_yi > 0"
+      delta: 3
+      reason: 主力净流入
+    - when: "rsi_12 <= 70"
+      delta: 3
+      reason: 未过热
+risk:
+  rules:
+    - when: "pledge_ratio >= 40"
+      level: high
+      flag: 高质押
+      score_delta: -10

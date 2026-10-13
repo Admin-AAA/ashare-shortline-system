@@ -1,0 +1,79 @@
+# 北向资金增持（研究原型，2026-10-13 Grok Bot）
+# 假设：北向十大成交股中净买入、趋势向上且当日未大涨的股票，短期顺北向方向。
+# 来源：浙大资本市场研究中心：北向资金是聪明的（北向持股变化预测 2~20 日超额收益）http://www.som.zju.edu.cn/2021/1205/c63655a2448615/page.htm ；深交所：普通投资者追踪北上资金能获利吗？ https://docs.static.szse.cn/www/aboutus/research/secuities/daily/W020230718361543565332.pdf
+# 状态：enabled=false；回放用 ASHARE_RESEARCH_EXTRA_SKILLS 临时纳入，按最近 12 个月单策略口径评估。
+id: northbound-accumulation
+name: 北向资金增持
+enabled: false
+weight: 1.0
+default_entry_mode: next_open
+meta:
+  author: grokbot
+  style: northbound-flow
+  version: 0.1.0
+  holding_days: [1, 3, 5]
+  strategy_independence: 0.85
+  default_preset_groups:
+    experiment_northbound_accumulation:
+      weight: 1.0
+      sort_order: 10
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+universe:
+  include:
+    - "amount_yi >= 5"
+    - "free_mv_yi >= 50"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 1"
+prefilter:
+  market:
+    include:
+      - when: "hsgt_net_buy > 0"
+        reason: "no_north_buy"
+      - when: "hsgt_rank > 0 and hsgt_rank <= 10"
+        reason: "not_top10"
+      - when: "pct >= -1 and pct <= 5"
+        reason: "day_move"
+      - when: "ma5 > ma20"
+        reason: "no_trend"
+    exclude:
+      - when: "chg20 > 30"
+        reason: "overextended"
+phases:
+  - name: 冰点情绪降权
+    when: "market_sentiment_phase == '冰点'"
+    score_cap: 60
+    hard_veto: false
+    risk_flags: ["冰点情绪"]
+setups:
+  - name: 北向资金增持
+    when: "hsgt_net_buy > 0 and ma5 > ma20"
+    score_delta: 10
+    entry_rule: "次日开盘介入，高开超过 6% 不追（执行层 gap 闸门）"
+    invalid_rule: "跌破信号日低点"
+scoring:
+  base: 54
+  rules:
+    - when: "hsgt_rank <= 5"
+      delta: 4
+      reason: 北向成交前五
+    - when: "primary_excess20 >= 0"
+      delta: 4
+      reason: 跑赢行业
+    - when: "main_net_inflow_yi > 0"
+      delta: 4
+      reason: 主力净流入
+    - when: "breakout20 == 1"
+      delta: 3
+      reason: 突破平台
+risk:
+  rules:
+    - when: "pledge_ratio >= 40"
+      level: high
+      flag: 高质押
+      score_delta: -10

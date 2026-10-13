@@ -1,0 +1,16 @@
+{
+  "id": "dragon-tiger-net-buy-followup",
+  "name": "龙虎榜净买次日跟随",
+  "version": "0.1.0",
+  "mode": "declarative",
+  "status": "disabled",
+  "requirements": [
+    "stock_feature_context"
+  ],
+  "capabilities": [
+    "signal_evaluation"
+  ],
+  "enabled": false,
+  "source_type": "local",
+  "description": "龙虎榜净买次日跟随（研究原型）。来源：实战社区常用的龙虎榜净买入次日跟踪思路（东方财富龙虎榜数据中心 https://data.eastmoney.com/stock/lhb.html ）；仓库 L-135/L-139/L-163；本仓库龙虎榜按 T-1 可见"
+}
