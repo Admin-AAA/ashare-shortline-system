@@ -145,16 +145,8 @@ class QualityGateResult:
     portfolio_rejected: int
 
 
-# The first two are the only current candidates for a future formal gate.
-# The third is intentionally kept shadow-only because the observed sample is
-# too small to satisfy the release gates.
+# trend-pullback-continuation 已于 2026-10-13 下线（L-161），其质量闸门配置一并移除。
 QUALITY_CONFIGS: Mapping[str, StrategyQualityConfig] = {
-    "trend-pullback-continuation": StrategyQualityConfig(
-        strategy_id="trend-pullback-continuation",
-        min_score=85.0,
-        allowed_regimes=("强势", "结构性强势"),
-        required_setup_keywords=("缩量回踩", "趋势"),
-    ),
     "limit-up-reseal-relay": StrategyQualityConfig(
         strategy_id="limit-up-reseal-relay",
         min_score=85.0,
