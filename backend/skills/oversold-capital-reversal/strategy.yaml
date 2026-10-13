@@ -1,0 +1,107 @@
+# 超跌资金反包（研究原型，2026-10-13 Grok Bot）
+# 假设：20 日深度回撤后的首根放量阳线 + 主力净流入，代表恐慌盘出清后的资金回补；
+# 与现有 6 个顺势/动量策略相关性低，用于弱势与震荡 regime 的分工。
+# 状态：enabled=false，仅通过 ASHARE_RESEARCH_EXTRA_SKILLS 进入研究回放；按 hold-out 协议评估后再决定。
+id: oversold-capital-reversal
+name: 超跌资金反包
+enabled: false
+weight: 1.0
+default_entry_mode: next_open
+meta:
+  author: grokbot
+  style: oversold-reversal
+  version: 0.1.0
+  holding_days: [1, 3, 5]
+  strategy_independence: 0.9
+  default_preset_groups:
+    experiment_oversold_capital_reversal:
+      weight: 1.0
+      sort_order: 10
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+universe:
+  include:
+    - "amount_yi >= 2"
+    - "free_mv_yi >= 20"
+    - "turnover_rate >= 1.5"
+    - "turnover_rate <= 15"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 0"
+prefilter:
+  market:
+    include:
+      - when: "chg20 <= -12"
+        reason: "not_oversold"
+      - when: "pct >= 3"
+        reason: "no_reversal_candle"
+      - when: "vol5_20 >= 1.1"
+        reason: "no_volume_confirmation"
+    include_any:
+      - when: "main_net_inflow_yi > 0"
+        reason: "requires_main_inflow"
+      - when: "capital_resonance_score >= 55"
+        reason: "requires_capital_resonance"
+    exclude:
+      - when: "max_dd60 < -45"
+        reason: "structural_collapse"
+      - when: "is_limit_up == false and pct >= 9.5"
+        reason: "intraday_spike_without_board"
+phases:
+  - name: 冰点情绪不抄底
+    when: "market_sentiment_phase == '冰点'"
+    score_cap: 55
+    hard_veto: false
+    risk_flags: ["冰点情绪，超跌可能继续超跌"]
+  - name: 长上影反包失败
+    when: "upper_shadow_count20 > 6"
+    score_cap: 50
+    hard_veto: true
+    risk_flags: ["抛压密集，反包失败率高"]
+setups:
+  - name: 超跌放量反包
+    when: "chg20 <= -12 and pct >= 3 and vol5_20 >= 1.1 and main_net_inflow_yi > 0"
+    score_delta: 10
+    entry_rule: "次日开盘介入，跌破反包阳线开盘价止损"
+    invalid_rule: "次日低开跌破反包阳线实体中部"
+scoring:
+  base: 50
+  rules:
+    - when: "chg20 <= -18"
+      delta: 6
+      reason: 深度超跌，反弹空间更大
+    - when: "pct >= 5"
+      delta: 6
+      reason: 反包力度强
+    - when: "is_limit_up == true"
+      delta: 4
+      reason: 涨停反包
+    - when: "vol5_20 >= 1.5"
+      delta: 5
+      reason: 放量明显
+    - when: "main_net_inflow_ratio >= 5"
+      delta: 5
+      reason: 主力净流入占比高
+    - when: "rsi_6 >= 50 and rsi_24 < 50"
+      delta: 4
+      reason: 短期动能反转、中期仍低位
+    - when: "is_main_theme == true"
+      delta: 4
+      reason: 主线题材内的超跌
+    - when: "ma5 < ma20"
+      delta: 2
+      reason: 均线空头内的首次反攻（非追高）
+risk:
+  rules:
+    - when: "max_dd20 < -30"
+      level: high
+      flag: 回撤过深，可能存在基本面问题
+      score_delta: -8
+    - when: "pledge_ratio >= 40"
+      level: high
+      flag: 高质押超跌
+      score_delta: -10

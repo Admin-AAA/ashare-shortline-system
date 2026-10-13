@@ -1,0 +1,16 @@
+{
+  "id": "low-position-first-board",
+  "name": "低位首板启动",
+  "version": "0.1.0",
+  "mode": "declarative",
+  "status": "disabled",
+  "requirements": [
+    "stock_feature_context"
+  ],
+  "capabilities": [
+    "signal_evaluation"
+  ],
+  "enabled": false,
+  "source_type": "local",
+  "description": "低位首板启动（研究原型，按 hold-out 协议评估；默认不进入正式预设）"
+}

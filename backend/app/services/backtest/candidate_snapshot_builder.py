@@ -346,13 +346,25 @@ class ProductionRuleReplayCandidateBuilder:
                 select(SkillRegistry.skill_id, SkillRegistry.enabled)
             ).all()
         }
+        # 研究专用：ASHARE_RESEARCH_EXTRA_SKILLS 列出的技能在历史回放里视为启用（不写注册表、
+        # 不进正式预设），用于 hold-out 协议下评估 enabled=false 的研究原型策略。
+        import os as _os
+
+        research_extra = (
+            {s.strip() for s in _os.environ.get("ASHARE_RESEARCH_EXTRA_SKILLS", "").split(",") if s.strip()}
+            if getattr(self, "_historical_replay", False) or _os.environ.get("ASHARE_RESEARCH_EXTRA_SKILLS")
+            else set()
+        )
         values = []
         for skill in load_skills(get_settings().skills_dir):
             if allowed is not None and skill.skill_id not in allowed:
                 continue
-            if not skill.enabled or not skill.executable or skill.contract is None:
+            is_extra = skill.skill_id in research_extra
+            if not skill.executable or skill.contract is None:
                 continue
-            if registry_enabled and not registry_enabled.get(skill.skill_id, False):
+            if not skill.enabled and not is_extra:
+                continue
+            if registry_enabled and not registry_enabled.get(skill.skill_id, False) and not is_extra:
                 continue
             values.append(
                 {
