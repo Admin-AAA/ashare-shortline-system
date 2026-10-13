@@ -1753,3 +1753,32 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 回归验证：`./ashare registry-diagnostics` ok=true 且 DSA 归为 `inactive_strategy_unregistered`；`tests/test_e2e_recommendation_flow.py`、`tests/test_strategy_profile_entry_mode.py`、`tests/test_registry_diagnostics.py`、`tests/test_production_selection_policy.py`。
 - 吸收位置：`backend/skills/daily-stock-analysis-skill/{manifest.json,strategy.yaml}`、`backend/app/services/registry/default_strategy.py`、`backend/app/services/registry/data_source.py`（删 `preset_experiment_dsa`）、`backend/app/api/runs.py`、`backend/app/services/single_stock_analysis.py`、`backend/app/services/backtest/comparison.py`、`backend/scripts/research_strategy_ablation_fast.py`（`--exclude-skills`）。证据档案 `output/stage3-strategy-health-2026-10-13.md`。
 - 相关：L-010（串行 champion 规则）。
+
+## L-162 评分层「全卡 IC≈0」不等于排序无效；在同一面板上再调评分层，样本外全部证伪
+
+- 状态：active（FINDING，Stage 5 评分层研究，未发布任何改动）
+- 适用：任何「换权重 / 换排序模型 / 平移分数线 / 按 regime 停用某策略」的评分层提案；任何用全卡 RankIC 评价选股层的结论
+- 证据：2026-10-13 6 策略生产口径面板（2025-01-15 ~ 2026-10-09，417 天，n=566，平均 +1.03%，PF 1.65，离线重跑 416/417 天复现入选集）。（一）全卡最终分 IC 只有 +0.008，但 policy 闸门后真正竞争名额的「合格卡」里，被每日上限挤掉的 148 张平均 +0.12%，入选 567 张平均 +1.03%：排序在起作用，收益主要来自闸门，Stage 3 报告里「打分层基本没有排序力」的说法不准确。每天合格卡超过 6 张的只有 35/417 天，230 天一张都没有。（二）候选全部以 2026-01-01 前后切分，前段选参、后段只看一次，用 `evaluate_challenger` 判：等权、训练段收缩权重、策略×regime 停用（训练段过判的 2 个格子）、分数线整体平移 ±2/4/6，测试段全部 FALSIFIED 或与训练段方向相反；训练段挑出的格子合并后训练段平均 +1.49%、测试段只有 +0.40%。（三）走步 GBM 排序模型（148 个特征，按月重训，8 个交易日禁区）样本外全卡 IC +0.010（t=0.93），合格卡内 IC +0.007；按模型重排、混合排序、按预测值剔除，329 个样本外交易日上全部 FALSIFIED。剔除预测 <0 的卡能把平均收益从 +1.13% 提到 +2.16%、回撤从 -26.2 收到 -14.1，但笔数 496→200、累计 +559→+433，属于「少做」而非「做对」，两个半段胜率方向也相反。（四）最大回撤 -26.2 集中在 2026-02-05 ~ 04-09，17 个出票日里 13 个是弱势市，多为单票日止损（-5.66% 连发）。
+- 永久规则：**（一）评价选股层用「合格卡内」排序（被上限挤掉的卡 vs 入选卡），不用全卡 IC。** 全卡里绝大多数卡先被闸门挡掉，它们的分数高低不影响结果。**（二）评分层候选必须过样本外切分：前段选参、后段只评一次，两段都要过 `evaluate_challenger`。** 训练段里过判的格子合并后必然好看，不能作为证据。**（三）现有特征上的评分层调参视为已挖尽**（与 L-061 一致），不要再在同一面板上扫权重、阈值或模型；新的收益来源只能来自新数据维度或出票率。
+- 回归验证：`backend/.cache/stage5/candidates.py`、`walkforward.py`、`eligible.py` 在新面板上复跑，结论应不变。
+- 吸收位置：证据档案 `output/stage5-scoring-layer-2026-10-13.md`；面板 `backend/output/research/stage5/panel6/`。
+- 相关：L-010、L-061、L-117。
+
+## L-163 龙虎榜在 17:35 正式推荐时还没有当日数据，回放却能看到；辅助数据的可见性要按实际入库时刻核对
+
+- 状态：active（FINDING，影响已量化为可忽略；发布时点探针在跑）
+- 适用：任何在盘后定时推荐里使用、但由晚间作业补齐的辅助数据；回放里按 `trade_date == 信号日` 读取的辅助表
+- 证据：2026-10-13 按入库时间（`created_at` 为 UTC，+8 换算北京时间）统计 09-15 以来每个信号日的首条入库时刻：涨停池、资金流、两融、竞价、概念、涨跌停价都在 17:36-17:42 由推荐运行自己拉取写入；`dragon_tiger` 14 天全部在 21:00 才首次入库，即 17:35 运行时 `top_list` 取不到当日数据。回放直接查表，看得到当日龙虎榜，陈小群（集中 +8、分散 -6）和涨停回封（集中 +8）的龙虎榜规则在回放里生效、在实盘里从不生效。量化：6 策略面板 567 张入选卡里只有 2 张用到龙虎榜；把「龙虎榜分散」扣分加回去模拟实盘口径，4 天入选变化，累计 +582.2 → +574.7，PF 1.651 → 1.639，不改变 Stage 3/4 任何结论。
+- 永久规则：**（一）新接入或依赖一份辅助数据前，先查它在正式推荐时刻是否已入库**（按 `created_at` 统计首条入库时刻，不看接口文档）。**（二）回放可见性要和实盘时刻一致**；做不到时至少量化差异。**（三）龙虎榜规则二选一：把正式推荐挪到龙虎榜可得之后，或改用 T-1 及更早的上榜记录。** 在发布时点探针（每交易日 16:05-21:50 每 15 分钟调一次 `top_list`）有结果前不动。
+- 回归验证：`backend/.cache/stage5/lhb_livelike.py`；探针日志 `backend/.cache/stage5/lhb_probe.log`。
+- 吸收位置：证据档案 `output/stage5-scoring-layer-2026-10-13.md`。
+- 相关：L-160（公告日可见性）。
+
+## L-164 校准器在 10 笔样本上就会从 5000 组随机权重里挑「最优」；最低样本门槛 200
+
+- 状态：encoded（`MIN_CALIBRATION_SAMPLES = 200`）
+- 适用：`app/services/calibrator.py` 的聚合权重、DSA 子分权重与走步校准；任何基于实盘已结算样本的自动调参
+- 证据：原门槛是 10 笔；实盘截至 2026-10-10 只有 9 笔成交。库里 `calibration_config` 有 2026-07-02 写入的 DSA 子分权重（bias 0.53、support 0.45，其余 0），与同文件注释里「时间分割后矛盾、保持等权」的结论相反。目前这些权重都不生效：聚合层在 rule_only 和 risk_overlay 两条路径都整组覆盖五个权重，`dsa_signal_score` 只有已下线的 DSA 使用。
+- 永久规则：**样本不足 200 笔时校准只报告、不产出新权重。** 自动调参的样本门槛按「随机搜索的组合数会不会把噪声挑出来」定，不按「能跑起来」定。
+- 回归验证：`backend/tests/test_calibrator_min_samples.py`。
+- 吸收位置：`backend/app/services/calibrator.py`。
