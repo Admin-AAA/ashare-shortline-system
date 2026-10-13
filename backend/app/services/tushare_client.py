@@ -471,6 +471,15 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
         raise RuntimeError(
             "Tushare 上游未配置：请至少设置一个 Provider 凭据。"
         )
+    if not official_token:
+        from app.core.alerts import emit_alert
+
+        emit_alert(
+            "datasource_no_official_fallback",
+            "tushare_official",
+            "未配置 ASHARE_TUSHARE_OFFICIAL_TOKEN：第三方代理全部失效时没有官方兜底",
+            cooldown=86400.0,
+        )
     return (
         TushareProviderRouter(
             providers,

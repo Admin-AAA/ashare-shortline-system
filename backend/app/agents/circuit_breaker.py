@@ -89,8 +89,10 @@ class CircuitBreaker:
             # 永久性错误首次即熔断（确定性失败，重试无益）
             if error_type in PERMANENT_ERROR_TYPES:
                 state.blocked_until = time.monotonic() + PERMANENT_COOLDOWN_SECONDS
+                _alert_circuit_open(model_id, error_type, PERMANENT_COOLDOWN_SECONDS)
             elif state.consecutive_failures >= self.failure_threshold:
                 state.blocked_until = time.monotonic() + self.cooldown_seconds
+                _alert_circuit_open(model_id, error_type, self.cooldown_seconds)
 
     def status(self, model_id: str) -> dict:
         """返回当前 circuit 状态（供观测/调试）。"""
@@ -102,6 +104,17 @@ class CircuitBreaker:
             "blocked": blocked,
             "blocked_until": state.blocked_until if blocked else None,
         }
+
+
+def _alert_circuit_open(model_id: str, error_type: str | None, cooldown: float) -> None:
+    from app.core.alerts import emit_alert
+
+    hint = "（余额/鉴权/模型配置问题，需人工处理：充值或换 key）" if error_type in PERMANENT_ERROR_TYPES else ""
+    emit_alert(
+        "llm_circuit_open",
+        model_id,
+        f"LLM 断路器熔断 model={model_id} error_type={error_type or '-'} cooldown={cooldown:.0f}s{hint}",
+    )
 
 
 # 全局单例

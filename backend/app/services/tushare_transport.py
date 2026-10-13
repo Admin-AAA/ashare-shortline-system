@@ -766,6 +766,17 @@ class TushareHttpProvider:
         )
 
 
+def _alert_all_providers_failed(api_name: str, failures: Sequence[Any]) -> None:
+    from app.core.alerts import emit_alert
+
+    detail = ", ".join(
+        f"{getattr(f, 'provider', None) or (f.get('provider') if isinstance(f, dict) else '?')}:"
+        f"{getattr(getattr(f, 'category', None), 'value', None) or (f.get('category') if isinstance(f, dict) else '?')}"
+        for f in failures
+    ) or "无可用 provider"
+    emit_alert("datasource_all_failed", api_name, f"Tushare 全部上游失败 api={api_name} [{detail}]")
+
+
 class TushareProviderRouter:
     """API-aware routing over independently protected providers."""
 
@@ -934,6 +945,7 @@ class TushareProviderRouter:
                         failure.upstream_detail or "-",
                     )
         self._persist_trace(api_name, params, attempts, selected_provider, final_outcome)
+        _alert_all_providers_failed(api_name, failures)
         raise TushareProviderError(api_name, failures)
 
     def _persist_trace(
