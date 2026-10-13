@@ -53,6 +53,10 @@ DSA_SCORE_KEYS = [
 ]
 
 RANDOM_SAMPLE_COUNT = 5000
+# 校准的最低已结算样本数。随机搜索 5000 组权重时，样本少会把噪声当成规律
+# （10 笔样本就能挑出「训练 AUC 很高」的权重）；生产实盘只有个位数到几十笔成交，
+# 达不到时一律只报告、不产出新权重（Stage 5，2026-10-13）。
+MIN_CALIBRATION_SAMPLES = 200
 WEIGHT_MIN = 0.02
 WEIGHT_MAX = 0.50
 TOP_PERCENTILE = 0.2
@@ -247,7 +251,7 @@ def calibrate_aggregation_weights(db: Session, steps: int = 5, run_mode: str | N
     samples = _load_labeled_samples(db, run_mode=run_mode)
     n_total = len(samples)
 
-    if n_total < 10:
+    if n_total < MIN_CALIBRATION_SAMPLES:
         return {
             "optimal_weights": dict(DEFAULT_AGG_WEIGHTS),
             "composite_score": 0.0,
@@ -255,7 +259,7 @@ def calibrate_aggregation_weights(db: Session, steps: int = 5, run_mode: str | N
             "train_sample_count": 0,
             "test_sample_count": 0,
             "total_sample_count": n_total,
-            "error": "Insufficient labeled samples (need >= 10)",
+            "error": f"Insufficient labeled samples (need >= {MIN_CALIBRATION_SAMPLES})",
             "default_weights": dict(DEFAULT_AGG_WEIGHTS),
         }
 
@@ -417,12 +421,12 @@ def calibrate_dsa_weights(db: Session, bucket: str | None = None) -> dict[str, A
             for key in DSA_SCORE_KEYS:
                 if dsa_data[key]:
                     dsa_data[key].pop()
-    if len(labels) < 10:
+    if len(labels) < MIN_CALIBRATION_SAMPLES:
         return {
             "optimal_weights": dict(DEFAULT_DSA_WEIGHTS),
             "correlations": {},
             "sample_count": len(labels),
-            "error": "Insufficient labeled samples (need >= 10)",
+            "error": f"Insufficient labeled samples (need >= {MIN_CALIBRATION_SAMPLES})",
             "default_weights": dict(DEFAULT_DSA_WEIGHTS),
         }
 
@@ -469,13 +473,14 @@ def walk_forward_calibrate(db: Session, n_windows: int = 3, run_mode: str | None
     samples = _load_labeled_samples(db, run_mode=run_mode)
     sorted_samples = sorted(samples, key=lambda s: s.get("trade_date", ""))
 
-    if len(sorted_samples) < 10 * n_windows:
+    need = max(MIN_CALIBRATION_SAMPLES, 10 * n_windows)
+    if len(sorted_samples) < need:
         return {
             "n_windows": n_windows,
             "windows": [],
             "avg_test_composite_score": 0.0,
             "avg_test_roc_auc": 0.0,
-            "error": f"Insufficient samples for {n_windows} windows (need >= {10 * n_windows})",
+            "error": f"Insufficient samples for {n_windows} windows (need >= {need})",
         }
 
     window_size = len(sorted_samples) // n_windows
