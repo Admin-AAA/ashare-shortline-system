@@ -938,14 +938,29 @@ class LocalResearchSnapshotBuilder:
                 "limit_up_fd_amount_yi": float(row.fd_amount_yi or 0),
                 "limit_up_seal_time": row.first_time,
             }
+        # 龙虎榜约 21:00 入库，17:35 决策时不可见（L-163/L-165）：T 日上榜记录只在下一个
+        # 回放交易日可见，与实盘 state_adapters._decision_visible_date 同口径。
+        sorted_dates = sorted(str(d) for d in dates)
         try:
+            from datetime import date as _date, timedelta as _td
+
+            _lo = _date.fromisoformat(sorted_dates[0]) - _td(days=15)
             dragon_tiger_rows = self._session.scalars(
-                select(DragonTiger).where(DragonTiger.trade_date.in_(tuple(dates)))
+                select(DragonTiger).where(
+                    DragonTiger.trade_date >= _lo,
+                    DragonTiger.trade_date < sorted_dates[-1],
+                )
             ).all()
         except Exception:
             dragon_tiger_rows = ()
+        import bisect as _bisect
+
         for row in dragon_tiger_rows:
-            rows_by_date.setdefault(str(row.trade_date), {}).setdefault(str(row.code), {}).update(
+            _i = _bisect.bisect_right(sorted_dates, str(row.trade_date))
+            if _i >= len(sorted_dates):
+                continue
+            visible_date = sorted_dates[_i]
+            rows_by_date.setdefault(visible_date, {}).setdefault(str(row.code), {}).update(
                 {
                     "dragon_tiger_is_on_list": True,
                     "dragon_tiger_recent_count": 1,

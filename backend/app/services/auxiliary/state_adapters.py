@@ -688,6 +688,19 @@ class _StateViews:
     def _target(request: AuxiliaryDatasetRequest) -> str:
         return request.trade_date.isoformat()
 
+    def _decision_visible_date(self, model: Any, request: AuxiliaryDatasetRequest) -> str | None:
+        """盘后 17:35 决策时刻可见的最近交易日（L-163/L-165）。
+
+        龙虎榜约 21:00 入库、两融明细次日披露，17:35 正式推荐时拿不到当日数据。实盘与回放
+        统一只读取严格早于信号日的最近一个有数据交易日，避免回放看到实盘看不到的信息。
+        """
+        latest = self._session.scalar(
+            select(func.max(model.trade_date)).where(model.trade_date < self._target(request))
+        )
+        if latest is None:
+            return None
+        return latest.isoformat() if hasattr(latest, "isoformat") else str(latest)
+
     def limit_up_board(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
         rows = self._session.scalars(select(LimitUpBoard).where(LimitUpBoard.trade_date == self._target(request))).all()
         return {
@@ -727,10 +740,12 @@ class _StateViews:
         return {"capital_flows": {item.code: _row(item) for item in rows}}
 
     def dragon_tiger(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
-        target = self._target(request)
-        rows = self._session.scalars(
-            select(DragonTiger).where(DragonTiger.trade_date == target)
-        ).all()
+        target = self._decision_visible_date(DragonTiger, request)
+        rows = (
+            self._session.scalars(select(DragonTiger).where(DragonTiger.trade_date == target)).all()
+            if target
+            else []
+        )
         wanted = set(request.requested_codes)
         return {
             "dragon_tigers": {
@@ -745,7 +760,12 @@ class _StateViews:
         }
 
     def margin_detail(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
-        rows = self._session.scalars(select(MarginDetail).where(MarginDetail.code.in_(request.requested_codes), MarginDetail.trade_date == self._target(request))).all()
+        target = self._decision_visible_date(MarginDetail, request)
+        rows = (
+            self._session.scalars(select(MarginDetail).where(MarginDetail.code.in_(request.requested_codes), MarginDetail.trade_date == target)).all()
+            if target
+            else []
+        )
         return {"margin_details": {item.code: _row(item) for item in rows}}
 
     def hsgt_flow(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
