@@ -59,6 +59,9 @@ def apply_drawdown_control(
         return [], "drawdown_breaker_paused"
     if breaker_tripped(state, day_index, cfg):
         state.paused_until_index = day_index + cfg.pause_days - 1
+        # 熔断后清空已计入的窗口：暂停期间没有新成交，若不清空，同一段亏损会在恢复日再次触发，
+        # 造成永久停摆。
+        state.history.clear()
         return [], "drawdown_breaker_tripped"
     if cfg.weak_max_tickets is not None and regime in cfg.weak_regimes:
         kept = list(picks)[: cfg.weak_max_tickets]
