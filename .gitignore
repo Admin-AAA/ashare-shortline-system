@@ -56,3 +56,6 @@ backend/scripts/.failure_attr_baseline.json
 backup_replay_20260801/
 .golutra/
 .reasonix/
+
+# 根目录临时连通性脚本（key 一律从环境变量 ASHARE_TUSHARE_AI_TOOL_API_KEY 读取）
+test2.py
