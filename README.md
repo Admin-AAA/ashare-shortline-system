@@ -93,22 +93,21 @@ ashare-shortline-system/
 │   │       ├── backtest_service.py       # 回测服务
 │   │       ├── capital_flow_factor_evidence.py  # 资金流因子
 │   │       └── ...
-│   ├── skills/                 # 技能仓库（14 个）
-│   │   ├── chen-xiaoqun-skill/       # 陈小群龙头战法
-│   │   ├── chao-gu-yang-jia-skill/   # 炒股养家大局观
-│   │   ├── daily-stock-analysis-skill/  # 技术评分
-│   │   ├── dragon-tiger-smart-money/ # 龙虎榜聪明钱
-│   │   ├── high-range-breakout-momentum/ # 阶段新高放量突破
-│   │   ├── limit-up-reseal-relay/    # 涨停回封接力
-│   │   ├── overnight-holding-method/ # 隔夜持股法
-│   │   ├── sector-relative-strength-leader/ # 主线相对强度
-│   │   ├── trend-pullback-continuation/ # 强趋势缩量回踩
-│   │   ├── chip-single-peak-breakout/  # 芯片单峰突破
-│   │   ├── high-position-volume-stall-warning/ # 高位放量滞涨
-│   │   ├── small-cap-thematic-momentum/ # 小盘题材动量
-│   │   └── weak-market-strong-stock-reversal/ # 弱市强股反转
+│   ├── skills/                 # 技能仓库（11 个目录 + 2 个研究原型，2026-10-13）
+│   │   ├── chao-gu-yang-jia-skill/       # 炒股养家大局观（正式，默认策略）
+│   │   ├── chen-xiaoqun-skill/           # 陈小群龙头战法（正式）
+│   │   ├── sector-relative-strength-leader/ # 主线相对强度龙头（正式）
+│   │   ├── high-range-breakout-momentum/ # 阶段新高放量突破（正式）
+│   │   ├── chip-single-peak-breakout/    # 筹码单峰突破（正式）
+│   │   ├── limit-up-reseal-relay/        # 涨停回封接力（正式）
+│   │   ├── high-position-volume-stall-warning/ # 高位放量滞涨（风险提示，非选股）
+│   │   ├── dragon-tiger-reaccumulation/  # 龙虎榜整理再启动（研究，未启用）
+│   │   ├── oversold-capital-reversal/    # 超跌资金反包（研究原型，未启用）
+│   │   ├── low-position-first-board/     # 低位首板启动（研究原型，未启用）
+│   │   └── daily-stock-analysis-skill/ trend-pullback-continuation/ overnight-holding-method/
+│   │                                     # 2026-10-13 串行消融后已下线（enabled=false，保留定义供复现）
 │   ├── tests/
-│   ├── scripts/
+│   ├── scripts/                # 运维/研究脚本；一次性脚本已归档到 scripts/archive/
 │   │   ├── ashare_cli.py        # CLI 底层入口
 │   │   ├── run_prefect_server.py
 │   │   └── run_prefect_worker.py
@@ -493,3 +492,13 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/refresh_strategy_bac
 - TradingAgents-CN：多角色研究 Agent
 - fin-agent：Tushare 数据接入
 - FinRobot：金融任务 Agent
+
+
+---
+
+## 研究纪律与运维告警（2026-10-13）
+
+- **Hold-out 协议**：2026-07-01 之后为样本外，调参只用之前的数据，样本外只评估一次，两段都通过 `evaluate_challenger` 才发布。见 `docs/holdout-protocol.md`。
+- **决策时刻可见性**：龙虎榜、两融明细在 17:35 正式推荐时还没入库，实盘和回放统一读取信号日之前最近一个交易日的数据（L-163 / L-166）。
+- **告警**：LLM 熔断、Tushare 全部上游失败、未配置官方 Tushare 兜底时，`backend/logs/app.log` 会记录 `[ALERT:<kind>]`，可用 `grep '\[ALERT:' backend/logs/app.log` 查看。官方兜底需在 `.env` 设置 `ASHARE_TUSHARE_OFFICIAL_TOKEN`。
+- **组合回撤控制**：`app/engine/drawdown_control.py`（弱市限额 + 已结算亏损熔断），默认关闭：训练段过判、hold-out 段证伪，见 `docs/lessons/LESSONS.md` L-166。
