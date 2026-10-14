@@ -20,6 +20,10 @@ class UnsafeExpression(ValueError):
 # 将由注入机制提供，可清理与之重复的硬编码项；在迁移前删除会打断策略对这些字段
 # 名的引用（变成谁都不提供的空窗），故清理留到 2.3 之后再做。
 ALLOWED_NAMES = {
+    # L-187：策略 yaml 已引用但此前不在白名单 → UnsafeExpression 被吞掉、条件恒为 False（静默失效）。
+    "pledge_ratio",
+    "price",
+    "current_price",
     "dtr_data_ready",
     "dtr_event_count",
     "dtr_limit_count",

@@ -65,6 +65,7 @@ def test_twenty_cm_gate_requires_injection():
             "is_main_theme": True,
             "sector_ladder_completeness_score": 60,
             "shortline_leader_score": 70,
+            "pct": 2.0,  # L-172 起板块龙头 prefilter 要求 pct<=5
             # 其余字段省略=缺失，验证 strict_missing 仅在 twenty_cm 这一处被注入修复
         }
         ok_missing, reason = evaluate_skill_prefilter(skill, stock, stage="market")

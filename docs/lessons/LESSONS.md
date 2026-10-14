@@ -1955,3 +1955,8 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 ## L-186 策略页指标去掉面板模拟过滤
 - 5 个现役策略的真单策略面板都按当前 yaml 重放完毕（chen/chao-gu 于 L-182/L-183 后重跑，保真度 241/245、242/245）。去掉 compute_standalone_metrics 的 `_extra` 模拟（chao-gu upper_shadow≤4、chen bias_ma5≤5、板块龙头 换手≤8&pct≤5）后 5 个策略指标逐位不变。
 - chao-gu 按新 yaml 真重放：近12月 281 张 +1.04% 64.4%、近期 119 张 +0.61% 64.7%（面板模拟曾给 264 / +1.39%——模拟只能删票，不能补进被上影线挡掉后递补的票）。
+
+## L-187 evaluator 白名单缺字段 → 条件静默恒 False
+- 现象：`app/engine/evaluator.py` 对不在 ALLOWED_NAMES 的名字抛 UnsafeExpression 并被 evaluate() 吞掉返回 False，不告警。研究策略 `price >= ma20` 整年 0 触发；现役超跌资金反包的风险规则 `pledge_ratio >= 40`（-10 分）从未生效（solo 面板 488 张卡里 pledge≥40 的 4 张、其中 1 张入选）。
+- 处理：白名单补 pledge_ratio / price / current_price；新增 tests/test_evaluator_allowlist_live.py 扫描所有非退役策略 yaml 的表达式名字必须在白名单内。顺带修 test_diagnose_prefilter_injectors 夹具缺 pct（L-172 后预先存在的失败）。
+- 影响：仅超跌一年约 1 张票的打分 -10。
