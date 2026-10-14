@@ -8,6 +8,9 @@ import argparse, json, sys
 from datetime import datetime
 from pathlib import Path
 B = Path(__file__).resolve().parents[1]
+import os
+# 研究回放会导出 ASHARE_RESEARCH_EXTRA_SKILLS；它会改变聚合/政策口径，落盘给策略页的指标必须按生产口径算（L-180）。
+os.environ.pop("ASHARE_RESEARCH_EXTRA_SKILLS", None)
 sys.path.insert(0, str(B))
 from app.engine.production_policy import load_production_selection_policy
 import scripts.research_entry_rule_panel as mod
