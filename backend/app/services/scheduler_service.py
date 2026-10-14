@@ -985,10 +985,22 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
 
     sync_scope = str(payload.get("sync_scope") or _default_sync_scope(task_type))
     result: dict[str, object] = {"sync_scope": sync_scope, "steps": []}
+    step_timings: dict[str, float] = {}
     summary_parts: list[str] = []
+    # 纯观测：每阶段耗时（秒），不影响任何写库逻辑，用于盘后流水线 profile。
+    import time as _time
+
+    _t0 = _time.perf_counter()
+
+    def _lap() -> float:
+        nonlocal _t0
+        now = _time.perf_counter()
+        elapsed, _t0 = round(now - _t0, 1), now
+        return elapsed
 
     # 1. 刷新行情池
     if sync_scope in ("quotes", "all"):
+        _lap()
         quotes, meta = refresh_quote_pool(db)
         invalidate_pool_status_cache()
         clear_data_health_cache()
@@ -999,9 +1011,11 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
             result["trade_date"] = max(quote_trade_dates)
         summary_parts.append(f"行情池 {len(quotes)} 条")
         result["steps"].append({"name": "quotes", "status": "completed", "row_count": len(quotes)})
+        step_timings["quotes"] = _lap()
 
     # 2. 按交易日批量回填日K，避免逐股票脚本在全市场 force 模式下长时间超时。
     if sync_scope in ("daily_bars", "all"):
+        _lap()
         daily_payload = dict(payload)
         if sync_scope == "all":
             daily_payload["health_post_diagnosis"] = False
@@ -1011,9 +1025,11 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
         result["daily_kbar_batch"] = daily_kbar_batch
         summary_parts.append(_sync_step_summary("日K按日批量补数", daily_kbar_batch))
         result["steps"].append({"name": "daily_kbar_batch", "status": daily_kbar_batch.get("status")})
+        step_timings["daily_kbar_batch"] = _lap()
 
     # 3. 回填辅助数据。all 模式必须先完成辅助数据，再做最终健康诊断。
     if sync_scope in ("auxiliary", "all"):
+        _lap()
         auxiliary_payload = dict(payload)
         auxiliary_payload["trade_date"] = _bounded_auxiliary_trade_date(
             auxiliary_payload.get("trade_date"),
@@ -1025,18 +1041,23 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
         result["auxiliary"] = auxiliary
         summary_parts.append(_sync_step_summary("辅助数据补数完成", auxiliary))
         result["steps"].append({"name": "auxiliary", "status": auxiliary.get("status")})
+        step_timings["auxiliary"] = _lap()
 
     # 4. 最终健康补数与诊断，确保后续推荐读取的是所有同步阶段之后的快照。
     if sync_scope in ("health_remediation", "all") and not bool(payload.get("skip_health_remediation")):
+        _lap()
         health_remediation = _run_data_health_remediation(payload)
         invalidate_pool_status_cache()
         clear_data_health_cache()
         result["health_remediation"] = health_remediation
         summary_parts.append(_sync_step_summary("健康补数完成", health_remediation))
         result["steps"].append({"name": "health_remediation", "status": health_remediation.get("status")})
+        step_timings["health_remediation"] = _lap()
 
     result["status"] = _task_result_status(result)
     result["summary_text"] = "；".join(summary_parts) if summary_parts else "自动任务执行完成"
+    if step_timings:
+        result["step_timings_seconds"] = step_timings
     return result
 
 
