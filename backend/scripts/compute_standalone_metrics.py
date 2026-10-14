@@ -29,9 +29,14 @@ def _extra(sid):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--panel", default=str(B / "output/research/round3/panel/entry_panel_WX.json"))
+    ap.add_argument("--panel", default="", help="默认取 output/research/round*/panel 下最新的面板")
     ap.add_argument("--split", default="2026-05-01")
     a = ap.parse_args()
+    if not a.panel:
+        cands = sorted(B.glob("output/research/round*/panel/entry_panel_WX.json"), key=lambda x: x.stat().st_mtime)
+        if not cands:
+            print("no panel"); return
+        a.panel = str(cands[-1])
     from app.db.session import SessionLocal
     from app.services.workbench_service import sync_skills
     from app.services.standalone_strategies import standalone_strategy_ids

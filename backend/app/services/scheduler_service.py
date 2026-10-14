@@ -1779,6 +1779,25 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             pass
 
+    # 策略页单策略指标：盘后后台重算（独立子进程，不阻塞推荐；读最新研究面板，失败只记日志）。
+    try:
+        import os as _os
+        import subprocess
+        import sys as _sys
+
+        if _os.environ.get("PYTEST_CURRENT_TEST"):
+            raise RuntimeError("skip in tests")
+        from pathlib import Path as _Path
+
+        _b = _Path(__file__).resolve().parents[2]
+        _log = open(_b / "data" / "strategy_metrics_refresh.log", "ab")
+        subprocess.Popen(
+            [_sys.executable, str(_b / "scripts" / "compute_standalone_metrics.py")],
+            cwd=str(_b), stdout=_log, stderr=_log, start_new_session=True,
+        )
+    except Exception:  # noqa: BLE001
+        logger.info("standalone metrics refresh not spawned", exc_info=True)
+
     # 推荐阶段失败（入队失败 / 等待超时 / Run 异常）不抛错——此前 raise 会丢掉
     # 已完成的 sync/auxiliary/readiness/outcome 中间结果，failed run 的 result_json
     # 只剩一句 error，无法诊断数据同步是否成功。这里捕获并把中间结果一并返回。
