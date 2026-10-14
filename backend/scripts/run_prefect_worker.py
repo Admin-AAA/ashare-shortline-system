@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 
 from app.core.deployment_identity import resolve_application_revision
 from app.orchestration import schedule_all_enabled_tasks
+from app.orchestration.deployments import RECOMMENDATION_WORK_QUEUE, WORK_POOL_CONCURRENCY_LIMIT
 
 logger = logging.getLogger("run_prefect_worker")
 
@@ -125,6 +126,15 @@ def main() -> None:
     _pin_application_revision()
     subprocess.run(
         [sys.executable, "-m", "prefect", "work-pool", "create", "--type", "process", "ashare-local"],
+        check=False,
+    )
+    # 防死锁：推荐子 run 走独立队列 + pool 上限放宽（见 deployments.RECOMMENDATION_WORK_QUEUE）
+    subprocess.run(
+        [sys.executable, "-m", "prefect", "work-queue", "create", RECOMMENDATION_WORK_QUEUE, "--pool", "ashare-local"],
+        check=False,
+    )
+    subprocess.run(
+        [sys.executable, "-m", "prefect", "work-pool", "set-concurrency-limit", "ashare-local", str(WORK_POOL_CONCURRENCY_LIMIT)],
         check=False,
     )
     _reap_orphan_running_flow_runs()

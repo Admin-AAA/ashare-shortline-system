@@ -85,6 +85,7 @@ def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
     scheduled: list[str] = []
     calls: list[str] = []
     job_vars_list: list[dict] = []
+    queues: list = []
 
     class _FakeFlow:
         """to_deployment must bind as a real method (SimpleNamespace instance
@@ -93,7 +94,9 @@ def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
         def __init__(self, flow_name: str) -> None:
             self._flow_name = flow_name
 
-        def to_deployment(self, *, name, work_pool_name=None, schedules=None, tags=None, job_variables=None):
+        def to_deployment(self, *, name, work_pool_name=None, work_queue_name=None, schedules=None, tags=None, job_variables=None):
+            if self._flow_name == "recommendation_flow":
+                queues.append(work_queue_name)
             scheduled.append(name)
             calls.append(self._flow_name)
             job_vars_list.append(job_variables)
@@ -122,6 +125,8 @@ def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
     # Every infrastructure flow must be registered, not just DB-backed tasks.
     assert "intraday_lock_poll_flow" in calls
     assert "stale_run_recovery_flow" in calls
+    # 推荐子 run 必须走独立队列，否则父 flow 占满 default 槽会死锁
+    assert queues == ["recommendation"]
     assert result.scheduled_task_count == 0
     # 6 non-DB flows: recommendation + 3 manual + 2 periodic (no enabled DB tasks).
     assert len(applied) == 6
