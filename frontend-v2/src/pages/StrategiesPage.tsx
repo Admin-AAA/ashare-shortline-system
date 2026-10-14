@@ -19,7 +19,7 @@ type StrategyWindowDays = 30 | 180;
 /**
  * 策略清单页 —— 系统全部策略的"驾驶舱视图"。
  *
- * 一个页面看全 8 个策略：中文名 + 简介 + 启用状态 + 调用覆盖 + 胜率。
+ * 只展示每日独立运行的现役策略（后端 /api/strategies 默认按 standalone 名单过滤，退役策略自动隐藏）。
  * 直接填补北极星"策略清单页"缺口（8 策略 + 简介 + 正式实盘胜率），
  * 并把"覆盖 3/8 → 8/8"的差距显式呈现：已调用的按胜率排序在前，从未调用的沉底并标注"未覆盖"。
  *
@@ -89,8 +89,9 @@ function SkillsView({
 }) {
   if (skills.loading) return <PageSkeleton title="策略清单" hint="加载策略与胜率" rowCount={8} />;
   if (skills.error) return <ErrorPage title="策略加载失败" message={skills.error} />;
-  const data = skills.data;
-  if (!data || data.length === 0) {
+  // 后端已按现役名单过滤；前端再兜底去掉停用项，避免旧缓存/旧后端把退役卡片带回来。
+  const data = (skills.data ?? []).filter((s) => s.enabled);
+  if (data.length === 0) {
     return <EmptyState icon={<Layers size={32} />} title="暂无策略" reason="系统尚未注册任何策略" />;
   }
 

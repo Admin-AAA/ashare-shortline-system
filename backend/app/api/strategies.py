@@ -176,6 +176,7 @@ def _last_exp_gate_for(db: Session, skill_id: str) -> dict | None:
 
 @router.get("")
 def list_strategies(
+    include_retired: bool = Query(default=False, description="true 时返回全部注册策略（含已退役/停用）"),
     db: Session = Depends(get_db),
 ):
     """全部策略清单（当前版本半年 canonical 回测，缺失时明确 pending）。
@@ -184,6 +185,13 @@ def list_strategies(
     performance=None 表示当前版本、参数与窗口尚无正式画像；不会读取历史推荐补位。
     """
     skills = list_skills(db)
+    if not include_retired:
+        # 策略页只展示每日独立运行的现役策略；退役/停用/风险提示技能自动隐藏（名单以 standalone_strategies 为准）。
+        from app.services.standalone_strategies import standalone_strategy_ids
+        from app.services.workbench_service import sync_skills
+
+        active = set(standalone_strategy_ids(sync_skills(db)))
+        skills = [s for s in skills if s.get("skill_id") in active]
     profiles = StrategyBacktestProfiles(db)
     try:
         targets = profiles.current_targets()
