@@ -377,8 +377,17 @@ def strategy_inactive_from_recent_zero_days(classifications: list[str]) -> bool:
 
 def _zero_rec_day_is_protective(stage_summaries_list: list[list[dict]]) -> bool:
     """Backward-compatible helper: only plain threshold abstention is protective."""
-    audits = [{"stage_summary": stages} for stages in stage_summaries_list]
-    return classify_zero_output_health(audits) == "reasonable_abstain"
+    # 仅有 stage_summary（无卡片级证据）时保留旧口径：score_line input>0 且 pass=0 即保护性。
+    for stages in stage_summaries_list or []:
+        for stage in stages or []:
+            if (
+                isinstance(stage, dict)
+                and stage.get("stage") == "score_line"
+                and int(stage.get("input_count") or 0) > 0
+                and int(stage.get("pass_count") or 0) == 0
+            ):
+                return True
+    return False
 
 
 def check_a_item(db) -> None:

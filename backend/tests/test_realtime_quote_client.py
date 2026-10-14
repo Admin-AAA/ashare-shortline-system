@@ -29,6 +29,13 @@ def _fake_df() -> pd.DataFrame:
 
 
 @pytest.fixture(autouse=True)
+def _force_enabled(monkeypatch):
+    # 单测与本机管理面开关（DB override）解耦
+    monkeypatch.setattr(rq, "_enabled_override", lambda: True)
+    monkeypatch.setattr(rq.get_settings(), "tushare_fastapic_token", "test-token")
+
+
+@pytest.fixture(autouse=True)
 def _reset_cache():
     rq._cache["fetched_at"] = 0.0
     rq._cache["rows"] = {}

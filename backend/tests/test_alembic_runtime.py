@@ -6,6 +6,9 @@ import pytest
 from app.db.alembic_runtime import get_alembic_health, upgrade_database
 
 
+HEAD_REVISION = "0020_holder_number_ann_date"
+
+
 def test_upgrade_database_creates_schema_and_is_idempotent() -> None:
     engine = create_engine("sqlite:///:memory:")
 
@@ -19,7 +22,7 @@ def test_upgrade_database_creates_schema_and_is_idempotent() -> None:
     assert "recommendation_collection_seals" in tables
     assert "alembic_version" in tables
     assert first.current_revision == second.current_revision
-    assert first.current_revision == "0013_recommendation_collection_seals"
+    assert first.current_revision == HEAD_REVISION
     assert "schema_migrations" not in tables
     minute_indexes = {
         index["name"]: index for index in inspect(engine).get_indexes("minute_kbars")
@@ -51,8 +54,8 @@ def test_upgrade_database_creates_schema_and_is_idempotent() -> None:
     assert bool(seal_key_index["unique"])
     assert get_alembic_health().as_dict() == {
         "status": "ok",
-        "current_revision": "0013_recommendation_collection_seals",
-        "head_revision": "0013_recommendation_collection_seals",
+        "current_revision": HEAD_REVISION,
+        "head_revision": HEAD_REVISION,
         "error_code": None,
     }
 
@@ -71,10 +74,10 @@ def test_upgrade_database_adopts_an_existing_demo_schema() -> None:
 
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT version_num FROM alembic_version")) == (
-            "0013_recommendation_collection_seals"
+            HEAD_REVISION
         )
         assert connection.scalar(text("SELECT COUNT(*) FROM demo_owned_table")) == 0
-    assert result.current_revision == "0013_recommendation_collection_seals"
+    assert result.current_revision == HEAD_REVISION
 
 
 def test_upgrade_restores_missing_minute_composite_index_from_0011() -> None:
@@ -93,7 +96,7 @@ def test_upgrade_restores_missing_minute_composite_index_from_0011() -> None:
         "code",
     )
     assert not bool(indexes["idx_mk_td_code"]["unique"])
-    assert result.current_revision == "0013_recommendation_collection_seals"
+    assert result.current_revision == HEAD_REVISION
 
 
 def test_upgrade_blocks_incompatible_minute_composite_index() -> None:
@@ -127,7 +130,7 @@ def test_upgrade_to_0013_widens_version_num_for_long_revision_id() -> None:
         assert before[0]["name"] == "version_num"
         assert getattr(before[0]["type"], "length", None) == 32
 
-    result = upgrade_database(engine)
+    result = upgrade_database(engine, target_revision="0013_recommendation_collection_seals")
 
     assert result.current_revision == "0013_recommendation_collection_seals"
     assert len(result.current_revision) > 32
