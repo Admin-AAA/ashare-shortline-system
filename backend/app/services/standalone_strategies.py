@@ -33,6 +33,8 @@ RETIRED_STRATEGY_IDS: frozenset[str] = frozenset(
         "institutional-survey-attention",
         # 2026-10-14 删除：单策略口径近12月均值 -0.32%，早窗选参后全窗仍 -0.01%（L-177）
         "chip-single-peak-breakout",
+        # 2026-10-14 删除：近期窗口 -0.67%，早窗调参后近期仍 ≤+0.21% 或为负（L-179）
+        "sector-laggard-catchup",
     }
 )
 
@@ -40,7 +42,7 @@ RETIRED_STRATEGY_IDS: frozenset[str] = frozenset(
 NON_PICKING_SKILL_IDS: frozenset[str] = frozenset({"high-position-volume-stall-warning"})
 
 DEFAULT_SCORE_LINE = 72.0
-# 组合口径一天最多 6 张；单策略各自 3 张，7 个策略合计上限 21 张，单策略票数不至于太少。
+# 组合口径一天最多 6 张；单策略各自 3 张，6 个策略合计上限 18 张，单策略票数不至于太少。
 DEFAULT_OUTPUT_COUNT = 3
 
 # 按策略覆盖分数线 / 出票上限（空 = 用默认）。分数线不得低于 formal 地板 72。

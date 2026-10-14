@@ -23,7 +23,6 @@ RESEARCH = [
     "oversold-capital-reversal",
     "low-position-first-board",
     "second-board-leader",
-    "sector-laggard-catchup",
     "within-industry-reversal",
     "low-max-steady-trend",
     "dragon-tiger-net-buy-followup",

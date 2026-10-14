@@ -25,8 +25,8 @@ def _skill(sid, enabled=True, executable=True, name=None):
 def test_strategy_ids_exclude_retired_disabled_and_warning():
     skills = [
         _skill("chen-xiaoqun-skill"),
-        _skill("sector-laggard-catchup"),
-        _skill("within-industry-reversal"),  # deleted 2026-10-14, stays excluded
+        _skill("low-max-steady-trend"),
+                _skill("within-industry-reversal"),  # deleted 2026-10-14, stays excluded
         _skill("trend-pullback-continuation"),  # retired even if enabled
         _skill("overnight-holding-method"),
         _skill("daily-stock-analysis-skill"),
@@ -34,7 +34,7 @@ def test_strategy_ids_exclude_retired_disabled_and_warning():
         _skill("low-max-steady-trend", enabled=False),
         _skill("no-contract", executable=False),
     ]
-    assert ss.standalone_strategy_ids(skills) == ["chen-xiaoqun-skill", "sector-laggard-catchup"]
+    assert ss.standalone_strategy_ids(skills) == ["chen-xiaoqun-skill", "low-max-steady-trend"]
 
 
 def test_run_settings_respect_formal_floor(monkeypatch):

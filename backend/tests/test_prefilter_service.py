@@ -56,8 +56,6 @@ def _positive_stock_for_skill(skill_id: str):
     """每个 skill 的正向 stock（满足其 universe.include 的最小字段集）。"""
     if skill_id == "oversold-capital-reversal":
         return _tradeable_stock(chg20=-15.0, pct=4.0, vol5_20=1.3, main_net_inflow_yi=0.5)
-    if skill_id == "sector-laggard-catchup":
-        return _tradeable_stock(primary_excess20=1.0, pos60=50.0, pct=3.5, vol5_20=1.3, max_dd20=-8.0)
     if skill_id == "low-max-steady-trend":
         return _tradeable_stock(
             limit_up_days20=0, upper_shadow_count20=1, ma5=10.5, ma10=10.2, ma20=9.8, chg20=10.0, pct=2.0, rsi_6=60.0
