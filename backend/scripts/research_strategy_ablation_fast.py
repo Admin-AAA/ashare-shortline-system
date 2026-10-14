@@ -727,7 +727,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
         md, lo, hi = boot_ci(dlt.values)
         monthly = dlt.groupby(dlt.index.str[:7]).mean() if len(dlt) else pd.Series(dtype=float)
         pos, neg = int((monthly > 0).sum()), int((monthly < 0).sum())
-        ka = set(zip(df_a.dt, df_a.code))
+        ka = set(zip(df_a.dt, df_a.code)) if not df_a.empty else set()  # 0 张票时 df_a 无列
         kb = set(zip(df_b.dt, df_b.code)) if not df_b.empty else set()
         oa = df_a[[(d, c) in ka - kb for d, c in zip(df_a.dt, df_a.code)]] if not df_a.empty else pd.DataFrame()
         ob = df_b[[(d, c) in kb - ka for d, c in zip(df_b.dt, df_b.code)]] if not df_b.empty else pd.DataFrame()
