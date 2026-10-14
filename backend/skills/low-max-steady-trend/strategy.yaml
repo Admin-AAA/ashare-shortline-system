@@ -44,8 +44,11 @@ prefilter:
         reason: "no_trend"
       - when: "chg20 >= 5 and chg20 <= 20"
         reason: "trend_strength"
-      - when: "pct >= 0 and pct <= 4"
+      # 2026-10-14 调参（L-172）：pct 上限 4→3 + rsi_6<=70；26Q2~Q3 检验 n53→39、胜率 66.0%→69.2%、均值 +0.72%→+0.89%
+      - when: "pct >= 0 and pct <= 3"
         reason: "day_move"
+      - when: "rsi_6 <= 70"
+        reason: "overbought"
       - when: "max_dd20 >= -8"
         reason: "drawdown"
     exclude:

@@ -50,6 +50,11 @@ prefilter:
         reason: "sector_capacity_too_low"
       - when: "industry_positive_excess20_count >= 2"
         reason: "sector_not_diffused"
+      # 2026-10-14 调参（L-172）：25Q4~26Q1 选参，26Q2~Q3 检验 n147→130、胜率 62.6%→66.2%、均值 +1.39%→+1.52%
+      - when: "turnover_rate <= 8"
+        reason: "turnover_too_high"
+      - when: "pct <= 5"
+        reason: "day_move_too_large"
     include_any:
       - when: "is_main_theme == true and sector_ladder_completeness_score >= 50"
         reason: "requires_main_sector_ladder"

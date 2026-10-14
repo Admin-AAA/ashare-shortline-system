@@ -1,7 +1,22 @@
 import logging
 
+import pytest
+
 from app.agents.circuit_breaker import CircuitBreaker
 from app.core import alerts
+
+
+@pytest.fixture()
+def caplog(caplog):
+    # 其它测试可能把 ashare.alerts 的 propagate/disabled 改掉；这里直接把 caplog handler 挂到该 logger。
+    lg = logging.getLogger("ashare.alerts")
+    old = (lg.disabled, lg.propagate)
+    lg.disabled = False
+    lg.propagate = False
+    lg.addHandler(caplog.handler)
+    yield caplog
+    lg.removeHandler(caplog.handler)
+    lg.disabled, lg.propagate = old
 
 
 def test_emit_alert_dedup(caplog):

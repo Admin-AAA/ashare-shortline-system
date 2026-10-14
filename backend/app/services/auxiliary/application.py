@@ -168,7 +168,7 @@ def _feature_views(result: AuxiliaryOrchestratorResult, *, as_of_trade_date: dat
         "pledges": {}, "broker_recs": {}, "share_floats_upcoming": {},
         "margin_details": {}, "block_trades": {}, "hsgt_top10": {},
         "hsgt_flow": None, "finas": {}, "holder_numbers": {},
-        "holder_trades": {}, "surveys": {}, "coverage": {},
+        "holder_trades": {}, "coverage": {},
     }
     coverage: dict[str, Any] = {}
     for item in result.results:
@@ -393,18 +393,13 @@ def load_auxiliary_feature_views(
     trade_date: date | str,
 ) -> Mapping[str, Any]:
     """Current-state/active-pointer read used by feature and prefilter consumers."""
-    base = dict(
-        run_auxiliary_application(
-            db,
-            instruments=tuple(codes),
-            trade_date=trade_date,
-            refresh=False,
-        ).feature_views
-    )
-    # 调研表不在 S4 publishable 视图里；补一张本地 PIT 聚合供 prefilter/feature 使用。
-    if not base.get("surveys"):
-        base["surveys"] = _load_survey_feature_map(db, codes, trade_date=trade_date)
-    return MappingProxyType(base)
+    # 机构调研策略已删除（L-170），调研保持 S4 audit-only，不再注入 feature views。
+    return run_auxiliary_application(
+        db,
+        instruments=tuple(codes),
+        trade_date=trade_date,
+        refresh=False,
+    ).feature_views
 
 
 def inject_auxiliary_prefilter_flags(
