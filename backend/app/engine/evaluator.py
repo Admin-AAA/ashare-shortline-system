@@ -24,6 +24,8 @@ ALLOWED_NAMES = {
     "pledge_ratio",
     "price",
     "current_price",
+    "yesterday_high",
+    "yesterday_low",
     "dtr_data_ready",
     "dtr_event_count",
     "dtr_limit_count",

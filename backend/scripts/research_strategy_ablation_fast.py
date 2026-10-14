@@ -763,6 +763,9 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
         from app.services.standalone_strategies import standalone_skill_id
 
         _assert_panel_fidelity(panel_path, window, standalone_sid=standalone_skill_id(selected_all))
+    if not res.get("A"):
+        print(f"[{window}] A臂 n=0（无出票）", flush=True)
+        return res
     print(f"[{window}] A臂 n={res['A']['n']} WR={res['A']['wr']*100:.1f}% avg={res['A']['avg']:+.4f} "
           f"PF={res['A']['pf']:.3f} sum={res['A']['sum']:+.2f} MDD={res['A']['mdd']:+.2f}", flush=True)
     return res
