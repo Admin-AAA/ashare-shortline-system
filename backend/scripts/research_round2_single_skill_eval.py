@@ -115,9 +115,17 @@ def _daily(rs, days):
 
 
 def main() -> None:
-    out_path = Path("output/research/round2/single_skill.json")
-    research_panel = json.loads(Path("output/research/round2/panel/entry_panel_WX.json").read_text())
-    prod_panel = json.loads(Path("output/research/stage5/panel6/entry_panel_WX.json").read_text())
+    import argparse
+
+    ap = argparse.ArgumentParser(description="单策略 only:<sid> 近12月评估（研究面板）")
+    ap.add_argument("--panel-dir", default="output/research/round2/panel")
+    ap.add_argument("--out", default="output/research/round2/single_skill.json")
+    ap.add_argument("--prod-panel", default="output/research/stage5/panel6/entry_panel_WX.json")
+    args = ap.parse_args()
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    research_panel = json.loads(Path(args.panel_dir, "entry_panel_WX.json").read_text())
+    prod_panel = json.loads(Path(args.prod_panel).read_text())
     rp = _slice_panel(research_panel, EVAL0, EVAL1)
     pp = _slice_panel(prod_panel, EVAL0, EVAL1)
     pol = load_production_selection_policy()
@@ -140,7 +148,7 @@ def main() -> None:
     print("quarters avg", {k: (v["avg"] if v else None) for k, v in base_m["quarters"].items()})
 
     poll_m, _ = _eval_rule(RULES["identity"], rp, pol, oc, sl)
-    results["round2_identity_polluted"] = poll_m
+    results["research_identity_polluted"] = poll_m
     print("=== round2 identity polluted ===",
           {k: poll_m[k] for k in ("n", "wr", "avg", "pf", "sum", "mdd")} if poll_m else None)
 
@@ -190,7 +198,7 @@ def main() -> None:
     results["skills"] = per
     results["qualifies"] = [s for s in RESEARCH if per.get(s, {}).get("qualify")]
     results["baseline_note"] = (
-        "生产组合基线 = stage5/panel6 切片；round2 A/identity 因研究技能进池被污染，不作基线。"
+        "生产组合基线 = stage5/panel6 切片；研究面板 A/identity 因研究技能进池被污染，不作基线。"
     )
     out_path.write_text(json.dumps(results, ensure_ascii=False, indent=1, default=str))
     print("[saved]", out_path)
