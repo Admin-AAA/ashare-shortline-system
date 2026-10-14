@@ -151,7 +151,9 @@ def _panel_scalar(value) -> bool:
     return False
 
 
-def _assert_panel_fidelity(panel_path: Path, window: str, tolerance: float = 0.03) -> dict:
+def _assert_panel_fidelity(
+    panel_path: Path, window: str, tolerance: float = 0.03, standalone_sid: str | None = None
+) -> dict:
     """前置断言（L-112a）：面板 + 真实 policy 必须复现 harness 的选中集合。
 
     允许极小比例的**边界日**不一致（离线重跑与 harness 在同一进程/同一天内对"第 10 张卡"
@@ -169,6 +171,12 @@ def _assert_panel_fidelity(panel_path: Path, window: str, tolerance: float = 0.0
         if POLICY_VERSION.get("n") is not None
         else load_production_selection_policy()
     )
+    if standalone_sid:
+        # L-181：只剩一个技能（--exclude-skills 真单策略回放）时，harness 的 aggregate 走
+        # standalone_selection_policy（无共识闸门、上限=output_count）；断言必须用同一口径。
+        from app.services.standalone_strategies import standalone_selection_policy
+
+        pol = standalone_selection_policy(pol, standalone_sid, int(PARAMS["output_count"] or 0) or 3)
     data = json.loads(panel_path.read_text())
     mismatch: list[str] = []
     for day in data["days"]:
@@ -752,7 +760,9 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
         )
         print(f"[panel] {window}: {len(panel_days)} 天 → {panel_path} "
               f"({panel_path.stat().st_size / 1e6:.1f}MB)", flush=True)
-        _assert_panel_fidelity(panel_path, window)
+        from app.services.standalone_strategies import standalone_skill_id
+
+        _assert_panel_fidelity(panel_path, window, standalone_sid=standalone_skill_id(selected_all))
     print(f"[{window}] A臂 n={res['A']['n']} WR={res['A']['wr']*100:.1f}% avg={res['A']['avg']:+.4f} "
           f"PF={res['A']['pf']:.3f} sum={res['A']['sum']:+.2f} MDD={res['A']['mdd']:+.2f}", flush=True)
     return res
