@@ -24,6 +24,8 @@ def main() -> None:
     ap.add_argument("--trade-date", required=True)
     ap.add_argument("--skills", default="")
     ap.add_argument("--out", default="")
+    ap.add_argument("--no-share-universe", action="store_true",
+                    help="不在策略间共享同日 universe（对照/排查用；默认共享，L-185）")
     ap.add_argument("--include-disabled", action="store_true",
                     help="把 --skills 中尚未 enabled 的策略在本事务内临时打开（随回滚撤销）")
     args = ap.parse_args()
@@ -78,6 +80,11 @@ def main() -> None:
             db.flush()
             ss.standalone_strategy_ids = lambda _skills, _w=wanted: sorted(_w)
         payloads = sched._standalone_run_payloads(db, base)
+        import contextlib as _cl
+        from app.services.backtest.historical_universe import shared_universe_scope
+
+        _scope = _cl.nullcontext() if args.no_share_universe else shared_universe_scope()
+        _scope.__enter__()
         for p in payloads:
             p.pop("standalone_skill_ids", None)
             sid = p["single_skill_id"]
@@ -106,6 +113,8 @@ def main() -> None:
             report.append(row)
             print(json.dumps(row, ensure_ascii=False), flush=True)
     finally:
+        if "_scope" in locals():
+            _scope.__exit__(None, None, None)
         db.close()
         outer.rollback()
         conn.close()

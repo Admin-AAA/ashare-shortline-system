@@ -1944,3 +1944,10 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 处理：删除 skills/low-max-steady-trend，ID 进 RETIRED_STRATEGY_IDS，preset_formal_opening 同步为 5 个；self_check 的 prefilter.include 覆盖测试改用超跌的 no_reversal_candle（pct<3）。
 - 教训：混合面板会把「靠别的策略共振加分才入选」的票算到单策略头上；删除/保留只看真单策略回放。
 
+
+## L-185 单策略批次内共享同日 universe（pickle 往返拷贝）
+- 现象：dry-run/历史回放里 5 个策略各自 `load_historical_universe` 同一 as_of_date（每次 ~26-30s，4947 只）。
+- 处理：`shared_universe_scope()`（进程级、显式 scope、退出即清空）内同日只构建一次；读写经 pickle 往返深拷贝。scope 外行为不变；`standalone_dry_run.py` 默认开启（`--no-share-universe` 关闭）。
+- 等价性：10-12（6 票）/09-29（9 票）/10-13（0 票）三日 dry-run 共享 vs 不共享，输出 JSON（票、候选数、universe、空仓原因）逐字段相同。
+- 教训：copy.deepcopy 拷 universe 要 18.6s，比重建省不了多少（deepcopy 版 10-12 219s vs 150s、09-29 227s vs 171s，满载下反而更慢）；pickle 往返 3.6s，10-13 112s vs 192s。
+- 生产 LIVE 路径不经 historical_universe，不受影响。

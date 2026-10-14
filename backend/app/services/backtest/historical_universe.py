@@ -13,6 +13,10 @@
 """
 from __future__ import annotations
 
+import contextlib
+import pickle
+import threading
+
 from typing import Any, Sequence
 
 from sqlalchemy import select
@@ -128,6 +132,28 @@ def build_historical_quotes(
     return quotes
 
 
+# 批次内共享 universe（L-185）：一个单策略批次（同一交易日 N 个策略各跑一个 run）会对同一 as_of_date
+# 重复构建完全相同的 universe（每次 ~26s）。只在显式的 shared_universe_scope() 内缓存，退出即清空，
+# 读写都经 pickle 往返深拷贝（下游 stage 会就地改写 stock dict；纯 dict/list/标量，pickle 往返与
+# deepcopy 等价且快 ~5 倍：4947 只 3.6s vs 18.6s）。scope 之外行为逐位不变。
+_SHARED_LOCK = threading.Lock()
+_SHARED: dict[str, Any] = {"depth": 0, "cache": {}}
+
+
+@contextlib.contextmanager
+def shared_universe_scope():
+    with _SHARED_LOCK:
+        _SHARED["depth"] += 1
+    try:
+        yield
+    finally:
+        with _SHARED_LOCK:
+            _SHARED["depth"] -= 1
+            if _SHARED["depth"] <= 0:
+                _SHARED["depth"] = 0
+                _SHARED["cache"].clear()
+
+
 def load_historical_universe(
     db: Session,
     as_of_date: str,
@@ -137,12 +163,23 @@ def load_historical_universe(
     """构建历史回放 universe（stocks + snapshot），与生产口径一致。"""
     from app.services.market_pool.core import get_market_universe_from_pool
 
+    key = str(as_of_date)
+    with _SHARED_LOCK:
+        active = _SHARED["depth"] > 0
+        hit = _SHARED["cache"].get(key) if active else None
+    if hit is not None:
+        return pickle.loads(hit)
     quotes = build_historical_quotes(
         db, as_of_date, stock_metadata_provider=stock_metadata_provider
     )
-    return get_market_universe_from_pool(
+    result = get_market_universe_from_pool(
         db, refresh=False, as_of_date=as_of_date, quotes_override=quotes
     )
+    if active:
+        with _SHARED_LOCK:
+            if _SHARED["depth"] > 0:
+                _SHARED["cache"][key] = pickle.dumps(result, protocol=pickle.HIGHEST_PROTOCOL)
+    return result
 
 
-__all__ = ["build_historical_quotes", "load_historical_universe"]
+__all__ = ["build_historical_quotes", "load_historical_universe", "shared_universe_scope"]
