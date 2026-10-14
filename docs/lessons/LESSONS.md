@@ -1904,3 +1904,8 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - 全 12 月能转正且 n≥20 的组合（如 rsi_6≤70 且 chg20≤15：24 张 +0.14%）早窗全为负，正收益只来自晚窗 5 张，属于事后挑选，不采用。
 - 处理：删除 skills/chip-single-peak-breakout 目录和专属契约测试，ID 进 RETIRED_STRATEGY_IDS；筹码数据（chip_concentration 等）和其它技能对它的引用保留。每日独立运行 8 → 7 个策略。
 - 脚本：backend/scripts/research_tune_chip_single_peak.py（网格结果 output/research/round3/chip_tune_grid.json）。
+
+## L-178 策略条件引用的字段必须在候选股票的顶层字段里；低MAX 调参后真实回放整年 0 信号
+- 现象：9a142b0 给低MAX 加了 `rsi_6 <= 70`。候选股票的顶层字段只有 rsi_12，rsi_6 只在嵌套的 profile 里，条件恒不成立。round4 真实回放（2025-10~2026-10，245 天）低MAX 0 张卡片。之前面板上模拟的 78 张 / +1.28% 不成立。
+- 修复：_build_stock_from_bars 顶层补 rsi_6、rsi_24（超跌反转的 `rsi_6 >= 50` 条件同样受影响）。
+- 教训：调参在面板 feature_snapshot 上验证后，必须用真实回放确认生产管线能读到同名字段。
