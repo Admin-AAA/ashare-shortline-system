@@ -2908,3 +2908,27 @@ export type SingleStockAnalysis = {
   llm_analysis?: SingleStockLlmAnalysis;
   message?: string;
 };
+
+export interface StandaloneWindowMetrics {
+  n: number;
+  win_rate?: number;
+  avg_return_pct?: number;
+  pf?: number | null;
+  max_drawdown_pct?: number;
+}
+
+export interface StandaloneStrategyMetrics {
+  strategy_id: string;
+  name: string;
+  status: "positive" | "watch" | "pending" | "no_data" | string;
+  last_12m?: StandaloneWindowMetrics;
+  recent?: StandaloneWindowMetrics;
+  tuned_filter_emulated?: boolean;
+}
+
+export interface StandaloneMetricsResponse {
+  generated_at: string | null;
+  window: { start: string; end: string; recent_start: string } | null;
+  method: string | null;
+  strategies: StandaloneStrategyMetrics[];
+}

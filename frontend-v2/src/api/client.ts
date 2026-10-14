@@ -1,3 +1,4 @@
+import type { StandaloneMetricsResponse } from "../types";
 import type {
   FilterEffectiveness,
   HomeBootstrap,
@@ -335,6 +336,8 @@ export const api = {
     request<{ ok: boolean }>(`/api/admin/tasks/${taskId}/run`, json("POST")),
 
   skills: () => request<SkillSummary[]>("/api/skills", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
+  standaloneMetrics: () =>
+    request<StandaloneMetricsResponse>("/api/strategies/standalone-metrics", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   strategies: () =>
     request<StrategyListItem[]>("/api/strategies", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   strategyDetail: (strategyId: string, versionId?: string) => {

@@ -1,7 +1,9 @@
-import { useState, type ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileText, History, Layers, Target } from "lucide-react";
 import { api } from "../api/client";
 import type {
+  StandaloneMetricsResponse,
+  StandaloneWindowMetrics,
   PresetStatsRow,
   StrategyBacktestReturns,
   StrategyListItem,
@@ -44,6 +46,7 @@ export function StrategiesPage() {
         </div>
       }
     >
+      <StandaloneMetricsSection />
       {tab === "skills" ? (
         <SkillsView skills={skills} windowDays={windowDays} onWindowDaysChange={setWindowDays} />
       ) : (
@@ -426,7 +429,7 @@ function BacktestReturnsBlock({ item }: { item: StrategyListItem }) {
   const bt = item.backtest_returns as StrategyBacktestReturns | null | undefined;
   if (!bt) return null;
   const windows = ["W1", "W2", "W3"];
-  const cellLabel: React.CSSProperties = {
+  const cellLabel: CSSProperties = {
     fontSize: "var(--text-xs)",
     color: "var(--muted)",
     fontFamily: "var(--font-mono)",
@@ -565,7 +568,7 @@ function StatusPill({ enabled }: { enabled: boolean }) {
   );
 }
 
-const cardStyle: React.CSSProperties = {
+const cardStyle: CSSProperties = {
   background: "var(--surface-soft)",
   border: "1px solid var(--border)",
   borderRadius: 12,
@@ -575,7 +578,7 @@ const cardStyle: React.CSSProperties = {
   transition: "border-color 160ms ease, transform 160ms ease",
 };
 
-const selectStyle: React.CSSProperties = {
+const selectStyle: CSSProperties = {
   background: "var(--surface-soft)",
   color: "var(--text)",
   border: "1px solid var(--border)",
@@ -584,7 +587,7 @@ const selectStyle: React.CSSProperties = {
   fontSize: "var(--text-base)",
 };
 
-const tagStyle: React.CSSProperties = {
+const tagStyle: CSSProperties = {
   fontSize: "var(--text-xs)",
   color: "var(--muted)",
   border: "1px solid var(--border)",
@@ -593,7 +596,7 @@ const tagStyle: React.CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-function pillStyle(color: string, bg: string): React.CSSProperties {
+function pillStyle(color: string, bg: string): CSSProperties {
   return {
     fontSize: "var(--text-xs)",
     fontWeight: 600,
@@ -603,4 +606,71 @@ function pillStyle(color: string, bg: string): React.CSSProperties {
     padding: "2px 10px",
     whiteSpace: "nowrap",
   };
+}
+
+const STATUS_LABEL: Record<string, string> = { positive: "运行中·正收益", watch: "运行中·观察", pending: "待回测", no_data: "无数据" };
+
+function fmtPct(v?: number) {
+  if (v === undefined || v === null) return "—";
+  return `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
+}
+
+function MetricCells({ m }: { m?: StandaloneWindowMetrics }) {
+  if (!m || !m.n) return <><td>0</td><td>—</td><td>—</td><td>—</td><td>—</td></>;
+  const color = (m.avg_return_pct ?? 0) >= 0 ? "var(--color-up, #c0392b)" : "var(--color-down, #27884f)";
+  return (
+    <>
+      <td>{m.n}</td>
+      <td>{m.win_rate?.toFixed(1)}%</td>
+      <td style={{ color, fontWeight: 600 }}>{fmtPct(m.avg_return_pct)}</td>
+      <td>{m.pf ?? "—"}</td>
+      <td>{m.max_drawdown_pct?.toFixed(1)}</td>
+    </>
+  );
+}
+
+/** 每日独立运行策略的单策略口径表现（后端落盘指标，随重算自动更新）。 */
+function StandaloneMetricsSection() {
+  const res = useApi<StandaloneMetricsResponse>(() => api.standaloneMetrics());
+  if (res.loading && !res.data) return <PageSkeleton title="单策略指标" />;
+  if (res.error && !res.data) return <EmptyState title="单策略指标暂不可用" reason={String(res.error)} />;
+  const d = res.data;
+  if (!d) return null;
+  const th: CSSProperties = { textAlign: "right", padding: "4px 8px", fontWeight: 500 };
+  return (
+    <section data-testid="standalone-metrics" style={{ marginBottom: "var(--space-4)" }}>
+      <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+        <strong>每日独立运行策略（{d.strategies.length}）</strong>
+        <span style={{ opacity: 0.7, fontSize: 12 }}>
+          近12月 {d.window?.start} ~ {d.window?.end}；近期自 {d.window?.recent_start}；更新于 {d.generated_at ?? "—"}
+        </span>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, fontVariantNumeric: "tabular-nums" }}>
+          <thead>
+            <tr>
+              <th style={{ ...th, textAlign: "left" }} rowSpan={2}>策略</th>
+              <th style={{ ...th, textAlign: "left" }} rowSpan={2}>状态</th>
+              <th style={th} colSpan={5}>近 12 个月</th>
+              <th style={th} colSpan={5}>近期窗口</th>
+            </tr>
+            <tr>
+              {["票数", "胜率", "均值", "PF", "最大回撤", "票数", "胜率", "均值", "PF", "最大回撤"].map((h, i) => <th key={i} style={th}>{h}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {d.strategies.map((s) => (
+              <tr key={s.strategy_id} style={{ borderTop: "1px solid var(--color-border, #eee)", textAlign: "right" }}>
+                <td style={{ textAlign: "left", padding: "4px 8px" }}>{s.name}</td>
+                <td style={{ textAlign: "left", padding: "4px 8px" }}>{STATUS_LABEL[s.status] ?? s.status}</td>
+                <MetricCells m={s.last_12m} />
+                <MetricCells m={s.recent} />
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ opacity: 0.6, fontSize: 11, marginTop: 4 }}>口径：{d.method}</div>
+    </section>
+  );
 }

@@ -1,0 +1,71 @@
+"""单策略口径指标落盘：run_rule(only:<sid>) + 生产选股政策（含 hard_veto/风控/高潮闸门），每日前 3、线 72。
+输出 data/strategy_metrics/standalone_metrics.json，供 /api/strategies/standalone-metrics 读取。
+用法：python scripts/compute_standalone_metrics.py [--panel output/research/round3/panel/entry_panel_WX.json] [--split 2026-05-01]
+调参后的过滤（L-172）在面板上按 feature_snapshot 套用，待新面板生成后会自然包含。
+"""
+from __future__ import annotations
+import argparse, json, sys
+from datetime import datetime
+from pathlib import Path
+B = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(B))
+from app.engine.production_policy import load_production_selection_policy
+import scripts.research_entry_rule_panel as mod
+from scripts.research_entry_rule_panel import RULES, _metrics, run_rule
+from scripts.research_round2_single_skill_eval import _register_only
+
+OUT = B / "data" / "strategy_metrics" / "standalone_metrics.json"
+
+def _fs(c, k):
+    v = (c.get("feature_snapshot") or {}).get(k)
+    return v if v is not None else c.get(k)
+
+def _extra(sid):
+    if sid == "low-max-steady-trend":
+        return lambda c: (_fs(c, "pct") is None or 0 <= _fs(c, "pct") <= 3) and (_fs(c, "rsi_6") is None or _fs(c, "rsi_6") <= 70)
+    if sid == "sector-relative-strength-leader":
+        return lambda c: (_fs(c, "turnover_rate") is None or _fs(c, "turnover_rate") <= 8) and (_fs(c, "pct") is None or _fs(c, "pct") <= 5)
+    return None
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--panel", default=str(B / "output/research/round3/panel/entry_panel_WX.json"))
+    ap.add_argument("--split", default="2026-05-01")
+    a = ap.parse_args()
+    from app.db.session import SessionLocal
+    from app.services.workbench_service import sync_skills
+    from app.services.standalone_strategies import standalone_strategy_ids
+    with SessionLocal() as db:
+        skills = sync_skills(db)
+        ids = standalone_strategy_ids(skills)
+        names = {s.skill_id: s.name for s in skills}
+    p = json.loads(Path(a.panel).read_text())
+    pol = load_production_selection_policy(); _register_only(p)
+    mod.OUTPUT_COUNT, mod.SCORE_LINE = 3, 72.0
+    days = [d["signal_date"] for d in p["days"]]
+    out = []
+    for sid in ids:
+        base = RULES.get(f"only:{sid}")
+        if base is None:
+            out.append({"strategy_id": sid, "name": names.get(sid, sid), "status": "no_data"}); continue
+        ex = _extra(sid)
+        rule = base if ex is None else (lambda cards, d, _b=base, _e=ex: [c for c in _b(cards, d) if _e(c)])
+        _, rows = run_rule(rule, p, pol, apply_global_weights=False)
+        def m(lo, hi):
+            r = _metrics([x for x in rows if lo <= x["dt"] < hi], [x for x in days if lo <= x < hi])
+            if r is None: return {"n": 0}
+            return {"n": int(r["n"]), "win_rate": round(r["wr"] * 100, 1), "avg_return_pct": round(r["avg"], 2),
+                    "pf": round(r["pf"], 2) if r["pf"] is not None else None, "max_drawdown_pct": round(r["mdd"], 1)}
+        w12, wr = m("0", "9"), m(a.split, "9")
+        status = "positive" if (w12.get("avg_return_pct") or 0) > 0 and (wr.get("avg_return_pct") or 0) > 0 else "watch"
+        out.append({"strategy_id": sid, "name": names.get(sid, sid), "status": status, "last_12m": w12, "recent": wr,
+                    "tuned_filter_emulated": ex is not None})
+    OUT.parent.mkdir(parents=True, exist_ok=True)
+    OUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"),
+        "window": {"start": p["days"][0]["signal_date"], "end": p["days"][-1]["signal_date"], "recent_start": a.split},
+        "method": f"only:<sid> + production_selection.v{pol.version}，每日前 3，分数线 72，面板 {Path(a.panel).parent.parent.name}",
+        "strategies": out}, ensure_ascii=False, indent=1))
+    print(OUT.read_text())
+
+if __name__ == "__main__":
+    main()

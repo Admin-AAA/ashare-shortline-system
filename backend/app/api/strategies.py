@@ -269,6 +269,43 @@ def list_strategies(
     return result
 
 
+STANDALONE_METRICS_PATH = Path(__file__).resolve().parents[2] / "data" / "strategy_metrics" / "standalone_metrics.json"
+
+
+@router.get("/standalone-metrics")
+def standalone_metrics(db: Session = Depends(get_db)):
+    """每日独立运行策略的单策略口径指标（scripts/compute_standalone_metrics.py 落盘）。
+
+    清单以当前 standalone_strategy_ids 为准；落盘里没有的策略标 pending，已退役的不返回。
+    """
+    import json
+
+    from app.services.standalone_strategies import standalone_strategy_ids
+    from app.services.workbench_service import sync_skills
+
+    skills = sync_skills(db)
+    ids = standalone_strategy_ids(skills)
+    names = {s.skill_id: s.name for s in skills}
+    stored: dict = {}
+    if STANDALONE_METRICS_PATH.exists():
+        try:
+            stored = json.loads(STANDALONE_METRICS_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            logger.warning("standalone_metrics.json unreadable", exc_info=True)
+    by_id = {str(r.get("strategy_id")): r for r in stored.get("strategies") or []}
+    rows = []
+    for sid in ids:
+        row = dict(by_id.get(sid) or {"strategy_id": sid, "status": "pending"})
+        row["name"] = names.get(sid, row.get("name") or sid)
+        rows.append(row)
+    return {
+        "generated_at": stored.get("generated_at"),
+        "window": stored.get("window"),
+        "method": stored.get("method"),
+        "strategies": rows,
+    }
+
+
 @router.get("/{strategy_id}")
 def strategy_detail(
     strategy_id: str,
