@@ -39,7 +39,9 @@ prefilter:
         reason: "turnover_too_high"
       - when: "max_dd20 >= -18"
         reason: "drawdown_too_large"
-      - when: "upper_shadow_count20 <= 5"
+      # 2026-10-15 调参（L-183）：上影线次数上限 5→4。solo 面板 4 个季度均值全部提升（≤2/≤3/≤4 同向，参数平滑）；
+      # 近 12 月 303 张 64.7% +0.78% → 264 张 67.4% +1.39%。
+      - when: "upper_shadow_count20 <= 4"
         reason: "upper_shadow_too_many"
       - when: "pos60 <= 96"
         reason: "position_too_high"

@@ -1097,6 +1097,9 @@ def _build_stock_from_bars(
         # 顶层也要有 rsi_6/rsi_24：策略 when 条件只读顶层字段，缺失时条件恒不成立（L-178：低MAX rsi_6<=70 整年 0 信号）。
         "rsi_6": round(rsi6, 3),
         "rsi_24": round(rsi24, 3),
+        # prefilter 在 build_features 之前执行，只看顶层字段；陈小群 prefilter 用到 bias_ma5（L-182）。
+        # 取值与 feature_builder._apply_dsa_context 写回的 round(_bias(price, ma5), 2) 相同，之后会被同值覆盖。
+        "bias_ma5": round(bias_ma5_val, 2),
         "volume_shrink_pullback": vol5_20 <= 0.85 and (support_ma5 or support_ma10) and quote.get("pct", 0) <= 1,
         "volume_breakout_signal": vol5_20 >= 1.15 and price >= previous_high20 * 0.995 and quote.get("pct", 0) > 0,
         "upper_shadow_count20": upper_shadow_count20,

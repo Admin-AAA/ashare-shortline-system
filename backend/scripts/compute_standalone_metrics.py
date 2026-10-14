@@ -26,6 +26,9 @@ def _fs(c, k):
 def _extra(sid):
     if sid == "low-max-steady-trend":
         return lambda c: (_fs(c, "pct") is None or 0 <= _fs(c, "pct") <= 3) and (_fs(c, "rsi_6") is None or _fs(c, "rsi_6") <= 70)
+    if sid == "chao-gu-yang-jia-skill":
+        # L-183：upper_shadow_count20 上限 5→4（solo 面板生成于改参之前，这里模拟）
+        return lambda c: _fs(c, "upper_shadow_count20") is None or _fs(c, "upper_shadow_count20") <= 4
     if sid == "chen-xiaoqun-skill":
         # L-182：bias_ma5<=5（solo 面板生成于加条件之前，这里按面板 feature_snapshot 模拟；重跑 solo 后结果不变）
         return lambda c: _fs(c, "bias_ma5") is None or _fs(c, "bias_ma5") <= 5

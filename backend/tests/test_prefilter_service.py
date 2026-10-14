@@ -30,6 +30,7 @@ def _tradeable_stock(**overrides):
         "off_high_pct": -4.0,
         "breakout60": True,
         "upper_shadow_count20": 2,
+        "bias_ma5": 2.0,
         "max_dd20": -8.0,
         "breakout20": 1,
         "support_ma5": True,

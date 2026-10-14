@@ -1928,5 +1928,11 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 真单策略面板（solo，245 天）上做过滤网格。按「早窗均值最高、n≥60%」选出的 bias_ma5≤3 / 组合 (5,6,100) 在晚窗反而变差（+0.57→+0.15/+0.40），是过拟合。
 - 改用 4 个季度窗口（25Q4 / 26Q1 / 26Q2 / 26Q3）逐窗对比：bias_ma5≤4、≤5 四个窗口均值全部高于基线，邻近值 ≤6 也是 3/4，参数平滑。chg20≤10 是 3/4（25Q4 变差）。
 - 采用 bias_ma5≤5：近 12 月 282 张 57.8% +0.43% → 261 张 63.6% +0.95%；分季度均值 +0.73/+0.30/+0.15/+0.47 → +1.56/+0.94/+0.32/+0.94。
-- 字段核对（L-178）：bias_ma5 由 feature_builder._apply_dsa_context 写到候选顶层，when 条件读得到（加了测试）。策略页指标在 solo 面板上按 feature_snapshot 模拟，下次重跑 chen solo 回放确认。
+- 字段核对（L-178 同型，差点再犯）：bias_ma5 由 feature_builder._apply_dsa_context 写到顶层，但 **apply_prefilters 在 build_features 之前执行**（runs/stages/adapters.py、backtest_service.py），prefilter 阶段的候选只有 market_data._build_stock_from_bars 的顶层字段，bias_ma5 只在 dsa_profile 里 → 条件恒不成立，陈小群会整天 0 张。test_prefilter_service 的正向样本因此失败才发现。修复：_build_stock_from_bars 顶层补 bias_ma5=round(_bias(price, ma5), 2)（与 feature_builder 写回值相同，其它现役策略不引用该字段）。
+- 教训：给 prefilter 加条件前，先确认字段在 _build_stock_from_bars 顶层；跑 test_prefilter_service。策略页指标在 solo 面板上按 feature_snapshot 模拟，重跑 chen solo 回放确认。
 - 脚本：backend/output/research/tune_chen/folds.py
+
+## L-183 炒股养家上影线次数上限 5→4
+- solo 面板 4 季度窗口：upper_shadow_count20 ≤2/≤3/≤4 三档都是 4/4 窗口提升，同向平滑。≤4：近 12 月 303 张 64.7% +0.78% → 264 张 67.4% +1.39%；分季度 +1.30/-0.42/+0.75/+0.75 → +1.80/+1.20/+1.20/+1.21。≤3 票数降到 205，不取。
+- 其它 4/4 候选（rsi_6≤75 +1.04%、bias_ma5≤5 +1.01%）提升更小，不叠加，避免多重比较过拟合。
+- 字段 upper_shadow_count20 已在 _build_stock_from_bars 顶层，原条件 ≤5 一直在生效。脚本：backend/output/research/tune_folds/grid.py
