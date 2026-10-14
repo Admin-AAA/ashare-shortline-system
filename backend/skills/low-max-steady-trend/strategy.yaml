@@ -4,7 +4,7 @@
 # 状态：enabled=false；回放用 ASHARE_RESEARCH_EXTRA_SKILLS 临时纳入，按最近 12 个月单策略口径评估。
 id: low-max-steady-trend
 name: 低MAX稳健趋势
-enabled: false
+enabled: true
 weight: 1.0
 default_entry_mode: next_open
 meta:
@@ -14,9 +14,9 @@ meta:
   holding_days: [1, 3, 5]
   strategy_independence: 0.85
   default_preset_groups:
-    experiment_low_max_steady_trend:
-      weight: 1.0
-      sort_order: 10
+    formal_opening:
+      weight: 0.80
+      sort_order: 72
 contract:
   type: strategy
   executable: true

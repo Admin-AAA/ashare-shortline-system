@@ -75,21 +75,4 @@ def test_dsa_high_volume_but_strong_rsi_not_vetoed():
 # --------------------------------------------------------------------------- #
 # limit-up-reseal：下行趋势中秒板毒区
 # --------------------------------------------------------------------------- #
-def test_limit_up_reseal_downtrend_board_is_hard_vetoed():
-    sk = load_skill(SKILLS_DIR / _LR)
-    ctx = _ctx(chg20=-12.0, pct=10.0, market_sentiment_phase="活跃",
-               limit_up_overheat_score=0, limit_up_consecutive_days=1,
-               is_limit_up=True, limit_up_days20=1, amount_yi=5.0, turnover_rate=5.0)
-    out = run_strategy(sk, ctx, main_industries=["半导体"], skip_universe_check=True)
-    assert out["hard_veto"] is True, f"下行趋势中秒板应硬否决, got phase={out['phase']}"
-    assert out["phase"] == "下行趋势中秒板毒区", f"应命中下行趋势中秒板毒区, got {out['phase']}"
 
-
-def test_limit_up_reseal_uptrend_board_not_vetoed():
-    sk = load_skill(SKILLS_DIR / _LR)
-    ctx = _ctx(chg20=15.0, pct=10.0, market_sentiment_phase="活跃",
-               limit_up_overheat_score=0, limit_up_consecutive_days=1,
-               is_limit_up=True, limit_up_days20=1, amount_yi=5.0, turnover_rate=5.0)
-    out = run_strategy(sk, ctx, main_industries=["半导体"], skip_universe_check=True)
-    assert out["hard_veto"] is False, f"上升趋势中秒板不应 veto, got {out['phase']}"
-    assert out["phase"] != "下行趋势中秒板毒区"

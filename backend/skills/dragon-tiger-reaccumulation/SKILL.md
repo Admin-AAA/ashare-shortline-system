@@ -26,3 +26,7 @@
 
 - [龙虎榜每日明细](https://tushare.pro/document/2?doc_id=106)
 - [龙虎榜机构明细](https://tushare.pro/document/2?doc_id=107)
+
+## Agent 审查输出约束
+
+按 SkillReviewOutput schema 输出：`stance`（support / neutral / oppose）与 `action`（buy / watch / avoid），并给出依据；不得输出 schema 以外的字段。

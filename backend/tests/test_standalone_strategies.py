@@ -18,15 +18,16 @@ def _skill(sid, enabled=True, executable=True, name=None):
 def test_strategy_ids_exclude_retired_disabled_and_warning():
     skills = [
         _skill("chen-xiaoqun-skill"),
-        _skill("within-industry-reversal"),
+        _skill("sector-laggard-catchup"),
+        _skill("within-industry-reversal"),  # deleted 2026-10-14, stays excluded
         _skill("trend-pullback-continuation"),  # retired even if enabled
         _skill("overnight-holding-method"),
         _skill("daily-stock-analysis-skill"),
         _skill("high-position-volume-stall-warning"),
-        _skill("sector-laggard-catchup", enabled=False),
+        _skill("low-max-steady-trend", enabled=False),
         _skill("no-contract", executable=False),
     ]
-    assert ss.standalone_strategy_ids(skills) == ["chen-xiaoqun-skill", "within-industry-reversal"]
+    assert ss.standalone_strategy_ids(skills) == ["chen-xiaoqun-skill", "sector-laggard-catchup"]
 
 
 def test_run_settings_respect_formal_floor(monkeypatch):
@@ -43,14 +44,15 @@ def test_standalone_skill_id_and_run_matching():
     assert not ss.is_run_of_strategy("not json", "a")
 
 
-def test_standalone_policy_drops_portfolio_gates():
+def test_standalone_policy_drops_portfolio_gates(monkeypatch):
     base = load_production_selection_policy()
     assert base.consensus_min_signals == 2
     pol = ss.standalone_selection_policy(base, "chen-xiaoqun-skill", 3)
     assert pol.consensus_min_signals == 0
     assert pol.daily_output_limit == 3
     assert pol.high_turnover_veto_pct == base.high_turnover_veto_pct  # 风险否决保留
-    sb = ss.standalone_selection_policy(base, "second-board-leader", 4)
+    monkeypatch.setitem(ss.STRATEGY_POLICY_OVERRIDES, "x", {"high_turnover_veto_pct": None, "high_chg20_veto": None, "max_dd60_veto": None, "weak_low_ivoldn20_veto_enabled": False})
+    sb = ss.standalone_selection_policy(base, "x", 4)
     assert sb.high_turnover_veto_pct is None and sb.high_chg20_veto is None
     assert sb.max_dd60_veto is None and sb.weak_low_ivoldn20_veto_enabled is False
 

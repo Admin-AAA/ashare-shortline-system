@@ -22,6 +22,12 @@ RETIRED_STRATEGY_IDS: frozenset[str] = frozenset(
         "trend-pullback-continuation",  # 强趋势回踩
         "overnight-holding-method",  # 隔夜法
         "dragon-tiger-reaccumulation",
+        # 2026-10-14 删除：单策略近12月均值为负且轻量调参无法转正（L-170）
+        "limit-up-reseal-relay",
+        "low-position-first-board",
+        "second-board-leader",
+        "within-industry-reversal",
+        "dragon-tiger-net-buy-followup",
     }
 )
 
@@ -29,23 +35,14 @@ RETIRED_STRATEGY_IDS: frozenset[str] = frozenset(
 NON_PICKING_SKILL_IDS: frozenset[str] = frozenset({"high-position-volume-stall-warning"})
 
 DEFAULT_SCORE_LINE = 72.0
-# 组合口径一天最多 6 张；单策略各自 3 张，15 个策略合计上限 45 张，单策略票数不至于太少。
+# 组合口径一天最多 6 张；单策略各自 3 张，10 个策略合计上限 30 张，单策略票数不至于太少。
 DEFAULT_OUTPUT_COUNT = 3
 
 # 按策略覆盖分数线 / 出票上限（空 = 用默认）。分数线不得低于 formal 地板 72。
 STRATEGY_RUN_OVERRIDES: dict[str, dict[str, float | int]] = {}
 
-# 单策略政策覆盖：组合层闸门里对某些策略结构性不可达的项。
-# second-board-leader：二连板天然高换手/高 20 日涨幅，v27 的换手/涨幅/回撤/低下行波动闸门会把它剔光
-# （f70fc20 研究模式同样豁免）。
-STRATEGY_POLICY_OVERRIDES: dict[str, dict[str, Any]] = {
-    "second-board-leader": {
-        "high_turnover_veto_pct": None,
-        "high_chg20_veto": None,
-        "max_dd60_veto": None,
-        "weak_low_ivoldn20_veto_enabled": False,
-    },
-}
+# 单策略政策覆盖：组合层闸门里对某些策略结构性不可达的项（当前无）。
+STRATEGY_POLICY_OVERRIDES: dict[str, dict[str, Any]] = {}
 
 
 def standalone_strategy_ids(skills: Iterable[Any]) -> list[str]:

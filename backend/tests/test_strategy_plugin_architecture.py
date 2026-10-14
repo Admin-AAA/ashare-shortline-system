@@ -11,7 +11,6 @@ SHORTLINE_SKILL_IDS = {
     "chen-xiaoqun-skill",
     "chao-gu-yang-jia-skill",
     "high-range-breakout-momentum",
-    "limit-up-reseal-relay",
     "overnight-holding-method",
     "sector-relative-strength-leader",
     "trend-pullback-continuation",
@@ -155,7 +154,6 @@ def test_shared_shortline_factors_enter_real_strategy_inputs():
             "sector-relative-strength-leader",
         }
     }
-    signals["limit-up-reseal-relay"] = run_strategy(skills["limit-up-reseal-relay"], limit_up_stock, ["机器人"])
     signals["trend-pullback-continuation"] = run_strategy(skills["trend-pullback-continuation"], pullback_stock, ["机器人"])
 
     assert "buy_signal" not in stock
@@ -168,7 +166,6 @@ def test_shared_shortline_factors_enter_real_strategy_inputs():
     yangjia_evidence = "；".join(signals["chao-gu-yang-jia-skill"]["evidence"])
     overnight_evidence = "；".join(signals["overnight-holding-method"]["evidence"])
     breakout_evidence = "；".join(signals["high-range-breakout-momentum"]["evidence"])
-    limit_up_evidence = "；".join(signals["limit-up-reseal-relay"]["evidence"])
     pullback_evidence = "；".join(signals["trend-pullback-continuation"]["evidence"])
     sector_evidence = "；".join(signals["sector-relative-strength-leader"]["evidence"])
 
@@ -180,8 +177,6 @@ def test_shared_shortline_factors_enter_real_strategy_inputs():
     assert "隔夜尾盘确认" in overnight_evidence
     assert "60日新高突破" in breakout_evidence
     assert "阶段新高确认" in breakout_evidence
-    assert "分歧回封质量较好" in limit_up_evidence
-    assert "分歧回封接力" in limit_up_evidence
     assert "资金承接未弱化" in pullback_evidence
     assert "强趋势轻分歧" in pullback_evidence
     assert "个股20日超额收益占优" in sector_evidence
@@ -193,13 +188,11 @@ def test_shared_shortline_factors_enter_real_strategy_inputs():
         "平台突破",
         "隔夜尾盘确认",
         "60日新高放量突破",
-        "分歧回封接力",
         "强趋势轻分歧",
         "主线龙头突破",
     }
     assert len({signal["score"] for signal in signals.values()}) > 1
     assert signals["overnight-holding-method"]["strategy_independence"] == 0.9
-    assert signals["limit-up-reseal-relay"]["strategy_independence"] == 0.88
     assert signals["trend-pullback-continuation"]["strategy_independence"] == 0.78
     assert signals["sector-relative-strength-leader"]["strategy_independence"] == 0.8
     assert signals["high-range-breakout-momentum"]["strategy_independence"] == 0.82
@@ -211,7 +204,6 @@ def test_strategies_use_shared_factors_with_different_contract_boundaries():
     chen = str(skills["chen-xiaoqun-skill"].contract)
     yangjia = str(skills["chao-gu-yang-jia-skill"].contract)
     breakout = str(skills["high-range-breakout-momentum"].contract)
-    limit_up = str(skills["limit-up-reseal-relay"].contract)
     overnight = str(skills["overnight-holding-method"].contract)
     pullback = str(skills["trend-pullback-continuation"].contract)
     sector = str(skills["sector-relative-strength-leader"].contract)
@@ -224,8 +216,6 @@ def test_strategies_use_shared_factors_with_different_contract_boundaries():
     assert "capital_resonance_score >= 45" in overnight
     assert "experiment_high_range_breakout" in breakout
     assert "off_high60_pct" in breakout
-    assert "experiment_limit_up_reseal_relay" in limit_up
-    assert "limit_up_fd_amount_yi" in limit_up
     # trend-pullback 已下线（L-161），不再声明 experiment_trend_pullback 预设组；契约字段仍要求独立。
     assert "volume_shrink_pullback" in pullback
     assert "experiment_sector_relative_strength" in sector

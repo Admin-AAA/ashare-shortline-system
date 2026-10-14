@@ -54,13 +54,13 @@ def _tradeable_stock(**overrides):
 
 def _positive_stock_for_skill(skill_id: str):
     """每个 skill 的正向 stock（满足其 universe.include 的最小字段集）。"""
-    if skill_id == "limit-up-reseal-relay":
+    if skill_id == "oversold-capital-reversal":
+        return _tradeable_stock(chg20=-15.0, pct=4.0, vol5_20=1.3, main_net_inflow_yi=0.5)
+    if skill_id == "sector-laggard-catchup":
+        return _tradeable_stock(primary_excess20=1.0, pos60=50.0, pct=3.5, vol5_20=1.3, max_dd20=-8.0)
+    if skill_id == "low-max-steady-trend":
         return _tradeable_stock(
-            is_limit_up=True,
-            limit_up_consecutive_days=1,
-            limit_up_fd_amount_yi=0.5,
-            limit_up_open_times=1,
-            pct=9.8,
+            limit_up_days20=0, upper_shadow_count20=1, ma5=10.5, ma10=10.2, ma20=9.8, chg20=10.0, pct=2.0
         )
     if skill_id == "high-range-breakout-momentum":
         return _tradeable_stock(pos120=82.0, off_high60_pct=-1.0, vol5_20=1.25, breakout60=True)
@@ -132,36 +132,10 @@ def test_apply_prefilters_keeps_union_and_fills_if_needed():
     assert audit["fallback_used"] is False
 
 
-def _limit_up_skill():
-    for s in _selected_skills():
-        if s["skill_id"] == "limit-up-reseal-relay":
-            return s
-    raise AssertionError("limit-up-reseal-relay skill not found")
 
 
-def test_limit_up_reseal_rejects_non_limit_up_stock():
-    """非涨停股（is_limit_up=False）应被 universe 拒绝。"""
-    stock = _positive_stock_for_skill("limit-up-reseal-relay")
-    stock["is_limit_up"] = False
-    passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
-    assert passed is False
-    assert reason == "universe_include"
 
 
-def test_prefilter_explanation_contains_failed_expression_and_observed_value():
-    stock = _positive_stock_for_skill("limit-up-reseal-relay")
-    stock["is_limit_up"] = False
-
-    detail = explain_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
-
-    assert detail == {
-        "passed": False,
-        "scope": "universe_include",
-        "code": "universe_include",
-        "label": "涨停状态需为 是（当前 否）",
-        "expression": "is_limit_up == true",
-        "observed": {"is_limit_up": False},
-    }
 
 
 def test_prefilter_machine_reason_is_replaced_by_readable_condition():
@@ -180,37 +154,8 @@ def test_prefilter_machine_reason_is_replaced_by_readable_condition():
     assert detail["observed"] == {"turnover_rate": 11.58}
 
 
-def test_limit_up_reseal_rejects_low_amount():
-    """amount_yi < 3 应被 universe 拒绝（流动性门槛，第 87-94 轮修复的根因）。"""
-    stock = _positive_stock_for_skill("limit-up-reseal-relay")
-    stock["amount_yi"] = 2.5  # < 3
-    passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
-    assert passed is False
-    assert reason == "universe_include"
 
 
-def test_limit_up_reseal_rejects_high_board():
-    """limit_up_consecutive_days > 3 应被 prefilter 拒绝（板高过高）。"""
-    stock = _positive_stock_for_skill("limit-up-reseal-relay")
-    stock["limit_up_consecutive_days"] = 5  # > 3
-    passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
-    assert passed is False
-    assert reason == "board_height_too_high"
 
 
-def test_limit_up_reseal_rejects_weak_seal_no_reseal():
-    """一字板（open_times=0）且封单弱（fd<0.5）应被 prefilter exclude 拒绝。"""
-    stock = _positive_stock_for_skill("limit-up-reseal-relay")
-    stock["limit_up_open_times"] = 0
-    stock["limit_up_fd_amount_yi"] = 0.3  # < 0.5
-    passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
-    assert passed is False
-    assert reason == "one_word_or_weak_seal"
 
-
-def test_limit_up_reseal_accepts_strong_first_board():
-    """首板强封（consecutive_days=1, fd>=0.5, open_times=1-8）应通过 prefilter。"""
-    stock = _positive_stock_for_skill("limit-up-reseal-relay")
-    # 已是正向场景：is_limit_up=True, consecutive=1, fd=0.5, open_times=1, pct=9.8
-    passed, reason = evaluate_skill_prefilter(_limit_up_skill()["skill"], stock, stage="market")
-    assert passed is True, reason

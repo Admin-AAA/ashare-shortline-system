@@ -1017,16 +1017,6 @@ def _card_has_research_signal(card: dict[str, Any], skill_id: str | None = None)
     )
 
 
-def _research_second_board_exempt(card: dict[str, Any]) -> bool:
-    """研究模式豁免：second-board-leader 在生产闸门下结构不可达。
-
-    生产 v27 的 high_turnover_veto=8 / high_chg20_veto=22 / max_dd60_veto /
-    weak_low_ivoldn20_veto / 弱势·震荡 consensus≥2 会把二连板几乎剔光。
-    仅当 ASHARE_RESEARCH_EXTRA_SKILLS 含 second-board-leader 时，对该技能非否决
-    信号卡跳过这些闸门；生产路径（未设 EXTRA_SKILLS）行为不变。
-    """
-    return _card_has_research_signal(card, "second-board-leader")
-
 
 def _research_consensus_exempt(card: dict[str, Any]) -> bool:
     """研究技能 only:<sid> 评估时，单技能背书过不了 consensus≥2。
@@ -1193,9 +1183,6 @@ def apply_pool_rules(
         _turn_thr = float(selection_policy.high_turnover_veto_pct)
         kept_after_turnover: list[dict[str, Any]] = []
         for card in deduped:
-            if _research_second_board_exempt(card):
-                kept_after_turnover.append(card)
-                continue
             _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
             _turn = card.get("turnover_rate", _snap.get("turnover_rate"))
             if _turn is None or float(_turn) < _turn_thr:
@@ -1278,9 +1265,6 @@ def apply_pool_rules(
         _chg_thr = float(_hcv)
         kept_after_chg: list[dict[str, Any]] = []
         for card in deduped:
-            if _research_second_board_exempt(card):
-                kept_after_chg.append(card)
-                continue
             _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
             _chg = card.get("chg20", _snap.get("chg20"))
             if _chg is None or float(_chg) < _chg_thr:
@@ -1338,9 +1322,6 @@ def apply_pool_rules(
         _dd_thr = float(_ddv)
         kept_after_dd: list[dict[str, Any]] = []
         for card in deduped:
-            if _research_second_board_exempt(card):
-                kept_after_dd.append(card)
-                continue
             _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
             _dd = card.get("max_dd60", _snap.get("max_dd60"))
             if _dd is None or float(_dd) < _dd_thr:
@@ -1486,9 +1467,6 @@ def apply_pool_rules(
         _dn_thr = float(selection_policy.weak_low_ivoldn20_pct_threshold)
         kept_after_dn: list[dict[str, Any]] = []
         for card in deduped:
-            if _research_second_board_exempt(card):
-                kept_after_dn.append(card)
-                continue
             _dn_pct = card.get("ivol_dn20_pct")
             if _dn_pct is None:
                 kept_after_dn.append(card)

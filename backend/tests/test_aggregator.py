@@ -1416,28 +1416,6 @@ def test_aggregate_still_honors_real_hard_veto():
     assert card["final_score"] == 0.0
 
 
-def test_research_second_board_exempt_requires_env(monkeypatch):
-    from app.engine.aggregator import _research_second_board_exempt
-
-    card = {
-        "strategy_signals": [
-            {"strategy_id": "second-board-leader", "hard_veto": False, "score": 76},
-        ]
-    }
-    monkeypatch.delenv("ASHARE_RESEARCH_EXTRA_SKILLS", raising=False)
-    assert _research_second_board_exempt(card) is False
-    monkeypatch.setenv(
-        "ASHARE_RESEARCH_EXTRA_SKILLS",
-        "second-board-leader,within-industry-reversal",
-    )
-    assert _research_second_board_exempt(card) is True
-    card_vetoed = {
-        "strategy_signals": [
-            {"strategy_id": "second-board-leader", "hard_veto": True, "score": 0},
-        ]
-    }
-    assert _research_second_board_exempt(card_vetoed) is False
-
 
 def test_research_consensus_exempt_for_extra_skills(monkeypatch):
     from app.engine.aggregator import _research_consensus_exempt

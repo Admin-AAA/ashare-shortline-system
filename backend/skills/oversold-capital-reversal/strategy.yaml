@@ -4,7 +4,7 @@
 # 状态：enabled=false，仅通过 ASHARE_RESEARCH_EXTRA_SKILLS 进入研究回放；按 hold-out 协议评估后再决定。
 id: oversold-capital-reversal
 name: 超跌资金反包
-enabled: false
+enabled: true
 weight: 1.0
 default_entry_mode: next_open
 meta:
@@ -14,9 +14,9 @@ meta:
   holding_days: [1, 3, 5]
   strategy_independence: 0.9
   default_preset_groups:
-    experiment_oversold_capital_reversal:
-      weight: 1.0
-      sort_order: 10
+    formal_opening:
+      weight: 0.80
+      sort_order: 70
 contract:
   type: strategy
   executable: true

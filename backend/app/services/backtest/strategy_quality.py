@@ -146,14 +146,8 @@ class QualityGateResult:
 
 
 # trend-pullback-continuation 已于 2026-10-13 下线（L-161），其质量闸门配置一并移除。
-QUALITY_CONFIGS: Mapping[str, StrategyQualityConfig] = {
-    "limit-up-reseal-relay": StrategyQualityConfig(
-        strategy_id="limit-up-reseal-relay",
-        min_score=85.0,
-        allowed_regimes=("震荡",),
-        required_setup_keywords=("回封", "涨停"),
-    ),
-}
+# limit-up-reseal-relay 已于 2026-10-14 删除（单策略近12月 n=1、均值为负，L-170），其质量闸门一并移除。
+QUALITY_CONFIGS: Mapping[str, StrategyQualityConfig] = {}
 
 
 def quality_config_for(strategy_id: str) -> StrategyQualityConfig:

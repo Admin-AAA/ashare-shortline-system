@@ -99,11 +99,9 @@ ashare-shortline-system/
 │   │   ├── sector-relative-strength-leader/ # 主线相对强度龙头（正式）
 │   │   ├── high-range-breakout-momentum/ # 阶段新高放量突破（正式）
 │   │   ├── chip-single-peak-breakout/    # 筹码单峰突破（正式）
-│   │   ├── limit-up-reseal-relay/        # 涨停回封接力（正式）
 │   │   ├── high-position-volume-stall-warning/ # 高位放量滞涨（风险提示，非选股）
 │   │   ├── dragon-tiger-reaccumulation/  # 龙虎榜整理再启动（研究，未启用）
 │   │   ├── oversold-capital-reversal/    # 超跌资金反包（研究原型，未启用）
-│   │   ├── low-position-first-board/     # 低位首板启动（研究原型，未启用）
 │   │   └── daily-stock-analysis-skill/ trend-pullback-continuation/ overnight-holding-method/
 │   │                                     # 2026-10-13 串行消融后已下线（enabled=false，保留定义供复现）
 │   ├── tests/
@@ -288,7 +286,6 @@ skill-name/
 | `daily-stock-analysis-skill` | 技术指标综合评分 |
 | `dragon-tiger-smart-money` | 龙虎榜聪明钱接力 |
 | `high-range-breakout-momentum` | 阶段新高放量突破 |
-| `limit-up-reseal-relay` | 涨停回封接力 |
 | `overnight-holding-method` | 隔夜持股法 |
 | `sector-relative-strength-leader` | 主线相对强度龙头 |
 | `trend-pullback-continuation` | 强趋势缩量回踩 |
@@ -509,10 +506,13 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/refresh_strategy_bac
   对每个有效策略各自派发一个 formal run（`single_skill_id`），每个策略有自己的推荐、T+1 结算和统计。
   分批并发 4 个，单个策略失败不影响其它策略；结果明细在任务 `result.strategy_runs`。
 - **参与策略**：`app/services/standalone_strategies.py` 是唯一定义——enabled、可执行、非退役（基础短线 / 强趋势回踩 / 隔夜法 /
-  龙虎榜再吸筹保持退役）、非风险提示技能。不再用组合启用/禁用闸门筛选新策略；研究技能在 round3 回放结束后统一打开 enabled。
+  龙虎榜再吸筹保持退役）、非风险提示技能。不再用组合启用/禁用闸门筛选新策略。
+- **当前每日独立运行的 8 个策略（2026-10-14，L-170）**：炒股养家、陈小群、筹码单峰突破、高位区间突破、板块相对强势龙头、
+  超跌资金反转、主线板块补涨、低MAX稳健趋势。已删除（近12月单策略均值为负、轻量调参无法转正）：涨停回封接力、低位首板、
+  龙头二板接力、行业内短期反转、龙虎榜净买次日跟随。北向资金增持、机构调研关注近12月 0 张票，保持 disabled 待查数据。
 - **每个策略的阈值/上限**：默认分数线 72（formal 地板）、每天最多 3 张；按策略覆盖写在 `STRATEGY_RUN_OVERRIDES`。
 - **单策略政策**：在生产 v27 基础上关掉组合专属的共识闸门（弱势/震荡 ≥2 策略背书，对单策略恒不可达）和共享的 6 张上限；
-  其余风险否决保留。`second-board-leader` 额外豁免换手/20 日涨幅/60 日回撤/低下行波动闸门（结构不可达）。
+  其余风险否决保留。
 - **跨 run 去重只在同一策略内**：同日重复、近 7 日重复、行业集中只与同一策略的历史 run 比较，不同策略可以推同一只票。
 - **看板与统计**：驾驶舱「单策略」面板显示最近交易日每个策略的 run 状态与出票；绩效页 `GET /api/metrics/by-strategy`
   按策略统计（每条推荐只属于一个策略）。安全网补跑同样按单策略派发。
