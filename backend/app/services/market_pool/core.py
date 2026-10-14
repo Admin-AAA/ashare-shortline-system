@@ -1752,13 +1752,17 @@ def _load_cached_bars_batch(
     cached = kbar_cache.load_rows(codes, limit, str(latest_allowed_date))
     if cached is not None:
         result_cached: dict[str, list[dict[str, Any]]] = {}
-        for code in codes:
-            rows_c = cached.get(code, [])
-            result_cached[code] = (
-                [_bar_from_mapping(r) for r in rows_c]
-                if len(rows_c) >= limit
-                else _load_cached_bars(db, code, limit, as_of_date=latest_allowed_date)
-            )
+        short_codes: list[str] = []
+        with kbar_cache.gc_paused():
+            for code in codes:
+                rows_c = cached.get(code, [])
+                if len(rows_c) >= limit:
+                    result_cached[code] = [_bar_from_mapping(r) for r in rows_c]
+                else:
+                    result_cached[code] = []
+                    short_codes.append(code)
+        for code in short_codes:
+            result_cached[code] = _load_cached_bars(db, code, limit, as_of_date=latest_allowed_date)
         return result_cached
     bars_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
     # Rank only a narrow common-calendar window first. Suspended/new listings

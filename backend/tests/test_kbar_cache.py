@@ -74,3 +74,29 @@ def test_disabled_on_sqlite_by_default(monkeypatch):
     monkeypatch.delenv("ASHARE_KBAR_CACHE", raising=False)
     monkeypatch.setattr("app.core.config.get_settings", lambda: type("S", (), {"database_url": "sqlite://"})())
     assert kbar_cache.enabled() is False
+
+
+def test_col_to_py_matches_to_pylist_with_nulls_and_ints():
+    import gc
+
+    import pyarrow as pa
+
+    from app.services.market_pool import kbar_cache
+
+    cols = [
+        pa.chunked_array([[1.5, None, -0.0], [3.25, None]], type=pa.float64()),
+        pa.chunked_array([[1, 2, 3]], type=pa.int64()),
+        pa.chunked_array([[None, 7, None]], type=pa.int64()),
+        pa.chunked_array([[None, None]], type=pa.null()),
+        pa.chunked_array([["000001", "600000"]], type=pa.string()),
+        pa.chunked_array([[0.1, 0.2]], type=pa.float64()),
+    ]
+    for col in cols:
+        got = kbar_cache._col_to_py(col)
+        want = col.to_pylist()
+        assert got == want
+        assert [type(v) for v in got] == [type(v) for v in want]
+    was = gc.isenabled()
+    with kbar_cache.gc_paused():
+        assert not gc.isenabled()
+    assert gc.isenabled() == was

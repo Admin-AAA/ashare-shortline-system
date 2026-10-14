@@ -9,6 +9,8 @@
 """
 from __future__ import annotations
 
+import contextlib
+import gc
 import json
 import logging
 import os
@@ -132,6 +134,36 @@ def _load() -> bool:
     return True
 
 
+@contextlib.contextmanager
+def gc_paused():
+    """临时关闭循环 GC（只影响回收时机，不影响结果）；退出时恢复原状态。"""
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
+
+
+def _col_to_py(col: Any) -> list:
+    """Arrow 列 → Python 列表，取值/类型与 to_pylist() 完全一致（float64→float，int64→int，null→None）。"""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    if isinstance(col, pa.ChunkedArray):
+        col = col.combine_chunks()
+    typ = col.type
+    if pa.types.is_floating(typ) or pa.types.is_integer(typ):
+        if col.null_count == 0:
+            return col.to_numpy(zero_copy_only=False).tolist()
+        vals = col.fill_null(0).to_numpy(zero_copy_only=False).tolist()
+        for i in pc.indices_nonzero(col.is_null()).to_pylist():
+            vals[i] = None
+        return vals
+    return col.to_pylist()
+
+
 def covers(as_of: str) -> bool:
     if not enabled() or not _load():
         return False
@@ -164,8 +196,11 @@ def load_rows(codes: list[str], limit: int, as_of: str) -> dict[str, list[dict[s
     taken = table.take(pa.array(takes, type=pa.int64()))
     names = taken.column_names
     # 列式转 Python 再逐行 zip：比 Table.to_pylist() 快数倍，值完全相同。
-    columns = [taken.column(n).to_pylist() for n in names]
-    rows = [dict(zip(names, vals)) for vals in zip(*columns)]
+    # 数值列走 numpy.tolist()（再按 validity 位图把空值还原成 None），比 to_pylist 快；
+    # 构造期间暂停循环 GC（几十万个新 dict 会反复触发全代扫描），不改变任何取值。
+    with gc_paused():
+        columns = [_col_to_py(taken.column(n)) for n in names]
+        rows = [dict(zip(names, vals)) for vals in zip(*columns)]
     for code, off, cnt in spans:
         out[code] = rows[off:off + cnt]
     return out
