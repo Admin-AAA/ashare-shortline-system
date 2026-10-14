@@ -35,6 +35,8 @@ RETIRED_STRATEGY_IDS: frozenset[str] = frozenset(
         "chip-single-peak-breakout",
         # 2026-10-14 删除：近期窗口 -0.67%，早窗调参后近期仍 ≤+0.21% 或为负（L-179）
         "sector-laggard-catchup",
+        # 2026-10-15 删除：真单策略回放近12月 117 张 -0.59%（近期 59 张 -1.37%），4 季度网格唯一 4/4 组合仍 -0.52%（L-184）
+        "low-max-steady-trend",
     }
 )
 

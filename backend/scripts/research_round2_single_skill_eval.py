@@ -24,7 +24,6 @@ RESEARCH = [
     "low-position-first-board",
     "second-board-leader",
     "within-industry-reversal",
-    "low-max-steady-trend",
     "dragon-tiger-net-buy-followup",
 ]
 PRODUCTION = [

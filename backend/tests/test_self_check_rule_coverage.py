@@ -170,22 +170,22 @@ def test_soft_floor_ban_only_oscillation_not_weak():
     assert self_check._covered_by_soft_floor_ban({"score_line_meta": {}}) is False
 
 
-def _lowmax_ctx(rsi_6: float) -> dict:
-    """low-max-steady-trend universe 全过、无 hard_veto/排除 phase 的 context。
+def _oversold_ctx(pct: float) -> dict:
+    """oversold-capital-reversal universe 全过、无 hard_veto/排除 phase 的 context。
 
-    rsi_6 > 70 → 生产 prefilter.market.include(overbought) 拦截；但 run_strategy 的
+    pct < 3 → 生产 prefilter.market.include(no_reversal_candle) 拦截；但 run_strategy 的
     _passes_universe 只查 universe + prefilter.market.exclude，漏 prefilter.market.include
     → 反事实若不复刻生产 prefilter 会把这笔判为「未覆盖」（漏判）。
-    （原用 chip-single-peak-breakout 的 chip_not_dense，该策略 2026-10-14 已删除，L-177。）
+    （原用 chip-single-peak-breakout（L-177）、low-max-steady-trend（L-184），两者均已删除。）
     """
     return {
         "code": "003016", "name": "测试股", "industry": "多元金融",
         "amount_yi": 9.02, "free_mv_yi": 80.0, "turnover_rate": 3.1,
         "twenty_cm_risk_gate": "not_applicable",
         "is_st": False, "announcement_negative_count": 0, "news_risk_count": 0,
-        "limit_up_days20": 0, "upper_shadow_count20": 1,
-        "ma5": 10.5, "ma10": 10.2, "ma20": 9.8, "chg20": 10.0, "pct": 2.0,
-        "rsi_6": rsi_6, "max_dd20": -5.0, "vol5_20": 1.2,
+        "limit_up_days20": 0, "upper_shadow_count20": 1, "is_limit_up": False,
+        "chg20": -15.0, "pct": pct, "vol5_20": 1.3, "main_net_inflow_yi": 0.5,
+        "capital_resonance_score": 60.0, "max_dd20": -10.0, "max_dd60": -25.0,
         "market_regime": "震荡", "market_sentiment_phase": "活跃", "market_sample_count": 4951,
     }
 
@@ -196,16 +196,16 @@ def test_prefilter_include_coverage_counted():
 
     复刻生产管线（evaluate_skill_prefilter 查 prefilter.market.include/include_any），
     不能只靠 run_strategy._passes_universe（漏 prefilter.market.include/include_any）。
-    rsi_6=75 > 70 → overbought 拦截（生产 prefilter），反事实须判 blocked。
+    pct=2 < 3 → no_reversal_candle 拦截（生产 prefilter），反事实须判 blocked。
     """
     rows = [
-        _row("rec_lm_001", "failed", -3.0, _lowmax_ctx(75.0), "low-max-steady-trend"),
-        _row("rec_lm_002", "success", 5.0, _lowmax_ctx(60.0), "low-max-steady-trend"),
+        _row("rec_os_001", "failed", -3.0, _oversold_ctx(2.0), "oversold-capital-reversal"),
+        _row("rec_os_002", "success", 5.0, _oversold_ctx(4.0), "oversold-capital-reversal"),
     ]
     blocked, new_total, wins, total = self_check._classify_failed_coverage(rows, _skills())
     assert total == 2
     assert wins == 1
-    assert blocked == 1  # rsi_6=75 的失败笔被 prefilter.include 覆盖
+    assert blocked == 1  # pct=2 的失败笔被 prefilter.include 覆盖
     assert new_total == 1  # 剔除被覆盖的 1 笔失败后剩 1 笔（成功笔不计入剔除）
     assert round(wins * 100 / new_total, 1) == 100.0  # 反事实胜率 = 1/1 = 100%
 
