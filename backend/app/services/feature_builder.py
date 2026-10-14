@@ -1185,6 +1185,10 @@ def _dragon_tiger_trade_date_covered(
         covered_trade_date = str(dataset_coverage.get("covered_trade_date") or "")
         if bool(dataset_coverage.get("trade_date_covered")) and covered_trade_date == trade_date:
             return True
+        # 决策时刻可见性（d16f5a9）读的是前一交易日的榜单；视图声明它服务于本信号日即算覆盖，
+        # 否则每只股票都会被打上 dragon_tiger 缺失、完整度/证据分各扣 10（L-170）。
+        if bool(dataset_coverage.get("trade_date_covered")) and dataset_coverage.get("decision_visible_for") == trade_date:
+            return True
     if not isinstance(audit_row, dict):
         return False
     status = str(audit_row.get("status") or "")
