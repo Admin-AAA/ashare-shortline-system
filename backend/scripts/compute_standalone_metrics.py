@@ -47,12 +47,22 @@ def main():
         skills = sync_skills(db)
         ids = standalone_strategy_ids(skills)
         names = {s.skill_id: s.name for s in skills}
-    p = json.loads(Path(a.panel).read_text())
-    pol = load_production_selection_policy(); _register_only(p)
+    from app.services.standalone_strategies import standalone_selection_policy
+    shared = json.loads(Path(a.panel).read_text())
+    base_pol = load_production_selection_policy(); _register_only(shared)
     mod.OUTPUT_COUNT, mod.SCORE_LINE = 3, 72.0
-    days = [d["signal_date"] for d in p["days"]]
     out = []
+    sources = {}
     for sid in ids:
+        # 优先用真单策略面板（其它策略全部 exclude，无跨策略共振/共识加分，L-181）；没有时退回共享面板。
+        solo = B / "output" / "research" / "solo" / sid / "panel" / "entry_panel_WX.json"
+        solo_ok = solo.exists() and (solo.parent.parent / "replay.exit").exists() and (solo.parent.parent / "replay.exit").read_text().strip() == "0"
+        p = json.loads(solo.read_text()) if solo_ok else shared
+        if solo_ok:
+            _register_only(p)
+        sources[sid] = "solo" if solo_ok else Path(a.panel).parent.parent.name
+        pol = standalone_selection_policy(base_pol, sid, 3)
+        days = [d["signal_date"] for d in p["days"]]
         base = RULES.get(f"only:{sid}")
         if base is None:
             out.append({"strategy_id": sid, "name": names.get(sid, sid), "status": "no_data"}); continue
@@ -67,11 +77,11 @@ def main():
         w12, wr = m("0", "9"), m(a.split, "9")
         status = "positive" if (w12.get("avg_return_pct") or 0) > 0 and (wr.get("avg_return_pct") or 0) > 0 else "watch"
         out.append({"strategy_id": sid, "name": names.get(sid, sid), "status": status, "last_12m": w12, "recent": wr,
-                    "tuned_filter_emulated": ex is not None})
+                    "tuned_filter_emulated": ex is not None, "panel": sources[sid]})
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"),
-        "window": {"start": p["days"][0]["signal_date"], "end": p["days"][-1]["signal_date"], "recent_start": a.split},
-        "method": f"only:<sid> + production_selection.v{pol.version}，每日前 3，分数线 72，面板 {Path(a.panel).parent.parent.name}",
+        "window": {"start": shared["days"][0]["signal_date"], "end": shared["days"][-1]["signal_date"], "recent_start": a.split},
+        "method": f"单策略政策（production_selection.v{base_pol.version} 去组合共识闸门），每日前 3，分数线 72；面板 solo=真单策略回放，否则 {Path(a.panel).parent.parent.name}",
         "strategies": out}, ensure_ascii=False, indent=1))
     print(OUT.read_text())
 
