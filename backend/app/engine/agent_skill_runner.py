@@ -149,14 +149,19 @@ def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, An
     enriched["runtime"] = "strategy_yaml+agent_skill"
     # score_delta 只留在 agent_skill_review 里供审计/消融，绝不回写规则分。
     enriched["llm_influence_mode"] = "risk_overlay"
-    # LLM 复核不参与分数：review 的 summary/risks 只保留在 agent_skill_review
-    # 供审计与展示，不再并入 risk_flags / evidence —— 这两个字段会进入聚合器
-    # 的 risk、evidence 分量。LLM 生效时只保留硬否决。
+    # LLM 只做风险备注：不改规则分、不出票否决。备注写入 llm_risk_notes（不进 risk_flags，
+    # 避免进入聚合器 risk 分量改分）。
     enriched.setdefault("evidence", [])
     enriched.setdefault("risk_flags", [])
-    if review.get("stance") == "veto":
-        enriched["hard_veto"] = True
-        enriched["veto_reason"] = str(review.get("summary") or "Agent Skill 风险否决")
+    notes = list(enriched.get("llm_risk_notes") or [])
+    stance = str(review.get("stance") or "")
+    if stance in {"veto", "oppose"}:
+        note = str(review.get("summary") or f"LLM {stance}")
+        notes.append(f"LLM风险备注:{stance}:{note}"[:120])
+        enriched["llm_advisory_stance"] = stance
+    for risk in (review.get("risks") or [])[:5]:
+        notes.append(f"LLM风险:{risk}"[:120])
+    enriched["llm_risk_notes"] = list(dict.fromkeys(notes))
     if float(enriched.get("score_cap") or 100.0) < 100:
         enriched["risk_flags"] = list(dict.fromkeys(list(enriched["risk_flags"]) + ["样本或证据覆盖不足，规则评分受限"]))
     return enriched
@@ -165,9 +170,15 @@ def enrich_signal_with_agent_review(signal: dict[str, Any], review: dict[str, An
 def agent_only_signal(skill: StrategySkill, stock: dict[str, Any], review: dict[str, Any]) -> dict[str, Any]:
     # 没有规则信号时，LLM 只能提供风险信息，不能凭审查结果创造 alpha。
     # 同时为满足「LLM 不影响分数」：weight=0 使其不参与 strategy_rule 加权，
-    # LLM 的 risks/summary 只留在 agent_skill_review 供展示，不写入 risk_flags /
-    # evidence（这两个字段会进入聚合器的 risk、evidence 分量）。硬否决保留。
+    # LLM 的 risks/summary 只留在 agent_skill_review / 风险备注，不写入会改分的 evidence。
     score = 50.0
+    stance = str(review.get("stance") or "")
+    notes = []
+    if stance in {"veto", "oppose"}:
+        note = str(review.get("summary") or f"LLM {stance}")
+        notes.append(f"LLM风险备注:{stance}:{note}"[:120])
+    for risk in (review.get("risks") or [])[:5]:
+        notes.append(f"LLM风险:{risk}"[:120])
     return {
         "strategy_id": skill.skill_id,
         "strategy_name": skill.name,
@@ -179,9 +190,11 @@ def agent_only_signal(skill: StrategySkill, stock: dict[str, Any], review: dict[
         "entry_rule": _agent_entry_rule(stock, review),
         "invalid_rule": _agent_invalid_rule(review),
         "setup_quality": 50.0,
-        "hard_veto": review.get("stance") == "veto",
-        "veto_reason": "Agent Skill 风险否决" if review.get("stance") == "veto" else "",
+        "hard_veto": False,
+        "veto_reason": "",
         "risk_flags": [],
+        "llm_risk_notes": list(dict.fromkeys(notes)),
+        "llm_advisory_stance": stance if stance in {"veto", "oppose"} else "",
         "evidence": [],
         "weight": 0.0,
         "runtime": "agent_skill_only",

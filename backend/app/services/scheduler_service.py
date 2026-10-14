@@ -1967,6 +1967,8 @@ def _standalone_run_payloads(db, payload: dict) -> list[dict[str, Any]]:
             "score_line": score_line,
             "output_count": output_count,
             "run_mode": "formal",
+            # 正式出票不等 LLM：管线内关闭审查，出票后再异步挂风险备注（L-171）
+            "disable_agent_review": True,
             "run_name": f"单策略 {name_by_sid.get(sid, sid)} {label}",
         })
     return out
@@ -2006,12 +2008,20 @@ async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
             except Exception as exc:  # noqa: BLE001
                 strategy_runs.append({"skill_id": sid, "run_id": run_id, "status": "failed", "error": str(exc)[:300]})
                 continue
+            status = str(final.get("status") or "failed")
+            if status == "completed" and run_id:
+                try:
+                    from app.services.async_llm_risk_notes import schedule_attach_llm_risk_notes
+                    schedule_attach_llm_risk_notes(run_id)
+                except Exception:  # noqa: BLE001
+                    logger.exception("调度异步 LLM 风险备注失败: %s", run_id)
             strategy_runs.append({
                 "skill_id": sid,
                 "run_id": run_id,
-                "status": str(final.get("status") or "failed"),
+                "status": status,
                 "recommended_count": int(final.get("recommended_count") or 0),
                 "error": final.get("error"),
+                "llm_risk_notes": "async_scheduled" if status == "completed" else None,
             })
     completed = [r for r in strategy_runs if r.get("status") == "completed"]
     total_recs = sum(int(r.get("recommended_count") or 0) for r in completed)

@@ -2268,10 +2268,19 @@ def _build_recommendation_card(
         skill_reviews,
         agent_review_disabled=bool(entry.get("agent_review_disabled")),
     )
-    # LLM 复核只做标记与（生效时的）硬否决，不参与分数与出票集合。
+    # L-171：LLM 只做风险备注，不参与分数与出票集合（否决不挡票）。
     # llm_reviewed=True 表示本次确实拿到过真实复核结论（verified/partial）。
     card["llm_reviewed"] = card["review_status"] in ("verified", "partial")
     card["llm_review_timeout"] = bool(entry.get("agent_review_stage_timeout"))
+    notes = []
+    for signal in card.get("strategy_signals") or []:
+        if isinstance(signal, dict):
+            notes.extend(list(signal.get("llm_risk_notes") or []))
+    if notes:
+        card["llm_risk_notes"] = list(dict.fromkeys(notes))
+        tags = list(card.get("risk_flags") or [])
+        # 展示用：挂到 risk_flags 副本不影响已算好的 final_score
+        card["risk_flags"] = list(dict.fromkeys(tags + card["llm_risk_notes"]))
     feature_snapshot["review_status"] = card["review_status"]
     card["recent_repeat"] = stock["code"] in (recent_codes or set())
     card["same_day_repeat"] = stock["code"] in (same_day_codes or set())

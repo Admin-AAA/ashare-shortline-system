@@ -520,16 +520,16 @@ def skill_disagreement_metrics(signals: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 # ---------------------------------------------------------------------------
-# Stance 语义映射：从 Skill Agent 的 stance 映射到分数乘数
-# veto 映射为字符串 "hard_veto"，表示硬否决（直接返回空推荐卡）
+# Stance 语义映射：仅用于 skill_agent 分量审计（生产权重 skill_agent=0，不影响出票）。
+# veto/oppose 不再否决出票；仅作为风险备注（L-171）。
 # ---------------------------------------------------------------------------
 STANCE_MULTIPLIER = {
     "strong_support": 1.15,
-    "support": 1.08,       # 与 strong_support 拉开差距，更精确区分支持力度
+    "support": 1.08,
     "neutral_support": 1.0,
-    "neutral": 0.6,        # 实测 neutral 41 笔 WR 14.6% avg -3.18%，与 oppose 等同
+    "neutral": 0.6,
     "oppose": 0.6,
-    "veto": "hard_veto",  # 硬否决，不参与分数计算
+    "veto": 0.0,  # 审计分归零；出票由规则 hard_veto 决定，LLM 否决不挡票
 }
 
 
@@ -551,17 +551,11 @@ def _extract_skill_agent_score(signals: list[dict[str, Any]]) -> float:
         stance = review.get("stance", "neutral")
         weight = float(signal.get("weight", 1.0))
 
-        multiplier = STANCE_MULTIPLIER.get(stance)
-        if multiplier == "hard_veto":
-            skill_scores.append((0.0, weight))
-            continue
-
-        # 以 Agent 自身评分为主，stance 乘数做方向确认
+        multiplier = STANCE_MULTIPLIER.get(stance, 1.0)
         agent_score = float(review.get("score", 50))
         agent_confidence = float(review.get("confidence", 0.5))
-        # 低置信度时向中性 50 回归
         regressed = 50 + (agent_score - 50) * agent_confidence
-        adjusted = regressed * float(multiplier or 1.0)
+        adjusted = regressed * float(multiplier if multiplier is not None else 1.0)
         skill_scores.append((adjusted, weight * agent_confidence))
 
     if not skill_scores:
@@ -662,18 +656,18 @@ def aggregate(
     # 未过 prefilter 的兄弟策略打上该标记，若当成 hard_veto 会把整张卡 final_score
     # 置 0（研究技能永远出不了分）。与 skill_pass 路径（根本不挂这类 signal）对齐：忽略。
     _UNIVERSE_MISS = "不在策略股票池"
+    # 只有策略规则 hard_veto 能挡票；LLM stance=veto/oppose 只写风险备注，不进 hard_vetoes。
     hard_vetoes: list[dict[str, Any]] = []
     for signal in signals:
         if signal.get("hard_veto"):
             if str(signal.get("veto_reason") or "") == _UNIVERSE_MISS:
                 continue
+            # LLM 曾经把 stance=veto 写成 hard_veto；出票路径忽略（L-171）
+            if str(signal.get("llm_influence_mode") or "") == "risk_overlay" and not signal.get("veto_reason"):
+                continue
+            if str(signal.get("veto_reason") or "").startswith("Agent Skill"):
+                continue
             hard_vetoes.append(signal)
-            continue
-        review = signal.get("agent_skill_review")
-        if isinstance(review, dict):
-            stance = review.get("stance", "")
-            if STANCE_MULTIPLIER.get(stance) == "hard_veto":
-                hard_vetoes.append(signal)
     # 评分只用"适用"信号，避免 universe-miss 的 score=0 拉低 strategy_rule
     signals_for_score = [
         s for s in signals

@@ -513,6 +513,7 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/refresh_strategy_bac
 - **每个策略的阈值/上限**：默认分数线 72（formal 地板）、每天最多 3 张；按策略覆盖写在 `STRATEGY_RUN_OVERRIDES`。
 - **单策略政策**：在生产 v27 基础上关掉组合专属的共识闸门（弱势/震荡 ≥2 策略背书，对单策略恒不可达）和共享的 6 张上限；
   其余风险否决保留。
+- **异步 LLM 风险备注（L-171）**：正式 run 管线内关闭 LLM，先出票；出票后对已推荐股票异步审查，结果写入 `agent_summary_json` / 风险标签，不改分数、不否决出票。
 - **跨 run 去重只在同一策略内**：同日重复、近 7 日重复、行业集中只与同一策略的历史 run 比较，不同策略可以推同一只票。
 - **看板与统计**：驾驶舱「单策略」面板显示最近交易日每个策略的 run 状态与出票；绩效页 `GET /api/metrics/by-strategy`
   按策略统计（每条推荐只属于一个策略）。安全网补跑同样按单策略派发。

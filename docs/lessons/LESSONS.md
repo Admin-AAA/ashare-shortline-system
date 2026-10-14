@@ -1846,3 +1846,10 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   ID 加进 `RETIRED_STRATEGY_IDS`，防止库里残留的 enabled 行再被调度。超跌资金反转、主线补涨、低MAX稳健趋势近 12 个月为正，已打开 enabled。
 - 规则：单策略 run 的去留看自身近 12 个月均值；一年 0 张票的策略不算有效。北向资金增持、机构调研关注近 12 月 0 张，用户决定一并删除（同日，目录 + RETIRED_STRATEGY_IDS）；北向/机构调研数据表与辅助聚合保留（其它技能仍可能用）。
 
+## L-171 正式出票不等 LLM；LLM 只异步挂风险备注，否决不挡票
+
+- 现象：每日 formal run 的 review 阶段经常跑满 `agent_review_stage_timeout_seconds=600`，占单次 run 约 97% 时间；LLM stance=veto 还会 hard_veto 挡掉规则已过线的票。
+- 处理：单策略正式 payload 设 `disable_agent_review=True`，管线按规则出票落库后，用 `async_llm_risk_notes.schedule_attach_llm_risk_notes` 对**已出票**股票异步审查，只写 `agent_summary_json` / `risk_tags_json`，不改 `final_score`、不删票。
+- `enrich_signal_with_agent_review` / `agent_only_signal` 不再因 stance=veto 设 hard_veto；备注进 `llm_risk_notes`，不进会改分的聚合 risk 分量。
+- 规则：LLM = 风控顾问 overlay；出票集合与排序只认策略规则 + 生产选股政策。
+

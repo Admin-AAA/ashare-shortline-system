@@ -92,7 +92,7 @@ def test_stance_multiplier_values():
     assert STANCE_MULTIPLIER["neutral_support"] == 1.0
     assert STANCE_MULTIPLIER["neutral"] == 0.6
     assert STANCE_MULTIPLIER["oppose"] == 0.6
-    assert STANCE_MULTIPLIER["veto"] == "hard_veto"
+    assert STANCE_MULTIPLIER["veto"] == 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -110,8 +110,8 @@ def test_extract_skill_agent_score_weighted_average():
 def test_extract_skill_agent_score_veto_zero():
     signals = [_signal("support", 80), _signal("veto", 30)]
     score = _extract_skill_agent_score(signals)
-    # veto 以 0 分参与平均，并保留其原始权重，确保否决能显著压低综合分
-    assert score == pytest.approx(35.52, abs=0.01)
+    # veto 乘数 0：审计分归零；生产路径 skill_agent 权重为 0，不影响出票
+    assert score == pytest.approx(39.96, abs=0.01)
 
 
 def test_extract_skill_agent_score_empty_signals():
@@ -190,10 +190,11 @@ def test_aggregate_hard_veto():
 
 
 def test_aggregate_veto_stance():
+    """L-171：LLM stance=veto 只做风险备注，不得把 final_score 置 0 / 挡票。"""
     stock = _stock()
-    signals = [_signal("veto", 10, review_score=10)]
+    signals = [_signal("veto", 72, review_score=10)]
     card = aggregate(stock, signals, market_score=70, agent_review_score=10)
-    assert card["final_score"] == 0.0
+    assert card["final_score"] > 0.0
 
 
 def test_aggregate_component_scores():

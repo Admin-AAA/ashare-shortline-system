@@ -89,3 +89,16 @@ def _skill():
         contract_hash=None,
         enabled=True,
     )
+
+
+def test_veto_is_advisory_not_hard_veto():
+    """L-171：LLM veto 不得 hard_veto 挡票，只写风险备注。"""
+    signal = {"score": 80.0, "score_cap": 100.0, "risk_flags": []}
+    out = enrich_signal_with_agent_review(signal, _review("veto", -10.0))
+    assert out.get("hard_veto") is not True
+    assert out["score"] == 80.0
+    assert any("LLM风险备注:veto" in str(x) for x in out.get("llm_risk_notes") or [])
+    only = agent_only_signal(_skill(), {"code": "000001"}, _review("veto", -10.0))
+    assert only["hard_veto"] is False
+    assert any("LLM风险备注:veto" in str(x) for x in only.get("llm_risk_notes") or [])
+
