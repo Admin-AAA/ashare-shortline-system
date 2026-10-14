@@ -24,14 +24,7 @@ def _fs(c, k):
     return v if v is not None else c.get(k)
 
 def _extra(sid):
-    if sid == "chao-gu-yang-jia-skill":
-        # L-183：upper_shadow_count20 上限 5→4（solo 面板生成于改参之前，这里模拟）
-        return lambda c: _fs(c, "upper_shadow_count20") is None or _fs(c, "upper_shadow_count20") <= 4
-    if sid == "chen-xiaoqun-skill":
-        # L-182：bias_ma5<=5（solo 面板生成于加条件之前，这里按面板 feature_snapshot 模拟；重跑 solo 后结果不变）
-        return lambda c: _fs(c, "bias_ma5") is None or _fs(c, "bias_ma5") <= 5
-    if sid == "sector-relative-strength-leader":
-        return lambda c: (_fs(c, "turnover_rate") is None or _fs(c, "turnover_rate") <= 8) and (_fs(c, "pct") is None or _fs(c, "pct") <= 5)
+    # 所有调参后的过滤都已写进 strategy.yaml，真单策略面板按新 yaml 重放，无需再模拟（L-186）。
     return None
 
 def main():
