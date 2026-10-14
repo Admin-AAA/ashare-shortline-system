@@ -1390,3 +1390,64 @@ def test_apply_pool_rules_zero_base_lets_single_run_industry_through():
     codes = [c["code"] for c in result]
     # 基数 0 → 3 只 count 1/2/3 < 5 全保留（元器件+半导体同属科技硬件组）
     assert set(codes) == {"300136", "301308", "600460"}
+
+
+def test_aggregate_ignores_universe_miss_hard_veto_from_sibling_skill():
+    """兄弟策略的「不在策略股票池」不得把整卡 final_score 清零。"""
+    stock = _stock(evidence_quality_score=80.0)
+    keep = _signal("support", score=72.0, hard_veto=False)
+    keep["strategy_id"] = "within-industry-reversal"
+    keep["setup_match"] = "行业内短期反转"
+    miss = _signal("veto", score=0.0, hard_veto=True)
+    miss["strategy_id"] = "limit-up-reseal-relay"
+    miss["veto_reason"] = "不在策略股票池"
+    miss["setup_match"] = ""
+    card = aggregate(stock, [keep, miss], market_score=65, agent_review_score=50)
+    assert card["final_score"] > 0
+    assert any(s.get("strategy_id") == "limit-up-reseal-relay" for s in card["strategy_signals"])
+
+
+def test_aggregate_still_honors_real_hard_veto():
+    stock = _stock()
+    keep = _signal("support", score=72.0, hard_veto=False)
+    real = _signal("veto", score=40.0, hard_veto=True)
+    real["veto_reason"] = "硬风控阶段命中"
+    card = aggregate(stock, [keep, real], market_score=65, agent_review_score=50)
+    assert card["final_score"] == 0.0
+
+
+def test_research_second_board_exempt_requires_env(monkeypatch):
+    from app.engine.aggregator import _research_second_board_exempt
+
+    card = {
+        "strategy_signals": [
+            {"strategy_id": "second-board-leader", "hard_veto": False, "score": 76},
+        ]
+    }
+    monkeypatch.delenv("ASHARE_RESEARCH_EXTRA_SKILLS", raising=False)
+    assert _research_second_board_exempt(card) is False
+    monkeypatch.setenv(
+        "ASHARE_RESEARCH_EXTRA_SKILLS",
+        "second-board-leader,within-industry-reversal",
+    )
+    assert _research_second_board_exempt(card) is True
+    card_vetoed = {
+        "strategy_signals": [
+            {"strategy_id": "second-board-leader", "hard_veto": True, "score": 0},
+        ]
+    }
+    assert _research_second_board_exempt(card_vetoed) is False
+
+
+def test_research_consensus_exempt_for_extra_skills(monkeypatch):
+    from app.engine.aggregator import _research_consensus_exempt
+
+    card = {
+        "strategy_signals": [
+            {"strategy_id": "within-industry-reversal", "hard_veto": False, "score": 76},
+        ]
+    }
+    monkeypatch.delenv("ASHARE_RESEARCH_EXTRA_SKILLS", raising=False)
+    assert _research_consensus_exempt(card) is False
+    monkeypatch.setenv("ASHARE_RESEARCH_EXTRA_SKILLS", "within-industry-reversal")
+    assert _research_consensus_exempt(card) is True

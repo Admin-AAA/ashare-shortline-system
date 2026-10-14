@@ -382,6 +382,25 @@ class ProductionStrategyEvaluation(StrategyEvaluationPort):
                 prefilter_skill_ids = {str(sid) for sid in (stock.get("prefilter_skill_ids") or []) if sid}
                 if prefilter_source == "skill_pass" and prefilter_skill_ids and skill_obj.skill_id not in prefilter_skill_ids:
                     signal = None
+                elif prefilter_source in ("fill", "fallback"):
+                    # fill/fallback 股票未挂 pass 技能列表；若对全部技能 evaluate，
+                    # universe 失败会变成 hard_veto="不在策略股票池" 并在聚合层把整卡
+                    # final_score 置 0。与 skill_pass 对齐：只跑通过自身 prefilter 的技能。
+                    from app.engine.strategy_runner import evaluate_skill_prefilter
+
+                    passed, _reason = evaluate_skill_prefilter(skill_obj, stock, stage="market")
+                    if not passed:
+                        signal = None
+                    else:
+                        ctx = StrategyContext(
+                            main_industries=snapshot.get("main_industries"),
+                            skip_universe_check=True,
+                        )
+                        signal = (
+                            strategy_registry.get(skill_obj.skill_id).evaluate(stock, ctx)
+                            if skill_obj.executable
+                            else None
+                        )
                 else:
                     skip_universe = prefilter_source == "skill_pass" and skill_obj.skill_id in prefilter_skill_ids
                     ctx = StrategyContext(main_industries=snapshot.get("main_industries"), skip_universe_check=skip_universe)

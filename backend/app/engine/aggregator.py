@@ -658,9 +658,15 @@ def aggregate(
         return _empty(stock, "无策略信号")
 
     # --- 硬否决：检查 hard_veto 标记（含 stance=veto 的 signal） ---
+    # "不在策略股票池" 只表示该策略不适用，不是风险否决；fill/fallback 路径会给
+    # 未过 prefilter 的兄弟策略打上该标记，若当成 hard_veto 会把整张卡 final_score
+    # 置 0（研究技能永远出不了分）。与 skill_pass 路径（根本不挂这类 signal）对齐：忽略。
+    _UNIVERSE_MISS = "不在策略股票池"
     hard_vetoes: list[dict[str, Any]] = []
     for signal in signals:
         if signal.get("hard_veto"):
+            if str(signal.get("veto_reason") or "") == _UNIVERSE_MISS:
+                continue
             hard_vetoes.append(signal)
             continue
         review = signal.get("agent_skill_review")
@@ -668,6 +674,19 @@ def aggregate(
             stance = review.get("stance", "")
             if STANCE_MULTIPLIER.get(stance) == "hard_veto":
                 hard_vetoes.append(signal)
+    # 评分只用"适用"信号，避免 universe-miss 的 score=0 拉低 strategy_rule
+    signals_for_score = [
+        s for s in signals
+        if not (s.get("hard_veto") and str(s.get("veto_reason") or "") == _UNIVERSE_MISS)
+    ]
+    if not signals_for_score:
+        return {
+            **_empty(stock, "无适用策略信号"),
+            "strategy_signals": signals,
+            "risk_flags": _collect_risks(signals),
+            "info_tags": [],
+            "consensus_score": 0.0,
+        }
     if hard_vetoes:
         signal = hard_vetoes[0]
         review = signal.get("agent_skill_review")
@@ -684,18 +703,18 @@ def aggregate(
 
     # --- 各维度评分 ---
     # Skill Agent 核心评分：从 agent_skill_review.stance 提取信号进行加权
-    skill_agent_score = _extract_skill_agent_score(signals)
+    skill_agent_score = _extract_skill_agent_score(signals_for_score)
     # Strategy.yaml 规则辅助评分
-    strategy_rule_score = _compute_strategy_rule_score(signals)
+    strategy_rule_score = _compute_strategy_rule_score(signals_for_score)
     # 风险调整分：按严重级别分级扣分，info 级不扣分
     shortline_factor_risks = _shortline_factor_risks(stock)
-    all_risks = _collect_risks(signals) + shortline_factor_risks
+    all_risks = _collect_risks(signals_for_score) + shortline_factor_risks
     risk_penalty = sum(
         RISK_SEVERITY_PENALTY.get(_risk_severity(r), 5.0) for r in all_risks
     ) * RISK_TEMPLATE_PENALTY.get(risk_template, 1.0)
     risk_adjustment_score = max(0.0, 100.0 - min(45.0, risk_penalty))
     # 共识分（保留旧机制用于信息展示，但不再单独加权）
-    consensus_score = _consensus_score(signals)
+    consensus_score = _consensus_score(signals_for_score)
     # 证据质量
     evidence_quality_score = float(stock.get("evidence_quality_score") or 60.0)
     # 券商金股共识加分
@@ -766,10 +785,10 @@ def aggregate(
     )
 
     # --- 提取 stance 摘要 ---
-    stance_summary = _stance_summary(signals)
+    stance_summary = _stance_summary(signals_for_score)
 
     # --- 共识加权：多 Skill 一致高分/联合否决/方向对齐 → 加成或惩罚 ---
-    consensus_boost, consensus_tags = _consensus_boost(signals, stance_summary)
+    consensus_boost, consensus_tags = _consensus_boost(signals_for_score, stance_summary)
     final_score = weighted_base_score * consensus_boost
 
     # --- 真实性折扣 ---
@@ -801,10 +820,10 @@ def aggregate(
     }
 
     quality_risks, quality_infos = _quality_risks(stock, quality_cap)
-    conflict_risks = _detect_skill_conflicts(signals)
+    conflict_risks = _detect_skill_conflicts(signals_for_score)
 
     # --- 最佳信号 ---
-    best_setup = max(signals, key=lambda signal: float(signal.get("score", 0)))
+    best_setup = max(signals_for_score, key=lambda signal: float(signal.get("score", 0)))
 
     market_discipline = _market_discipline(
         stock=stock,
@@ -851,7 +870,7 @@ def aggregate(
         "entry_rule": best_setup.get("entry_rule") or "",
         "invalid_rule": best_setup.get("invalid_rule") or "跌破关键支撑且收不回",
         "entry_mode": best_setup.get("entry_mode") or "target_touch",
-        "rationale": _rationale(signals),
+        "rationale": _rationale(signals_for_score),
         "risk_flags": final_risk_flags,
         "info_tags": info_tags,
         "shortline_factors": _shortline_factor_summary(stock),
@@ -881,7 +900,7 @@ def aggregate(
         "llm_influence_mode": "risk_overlay" if has_agent_reviews else "rule_only",
         "component_scale": round(component_scale, 4),
         "market_regime": _market_regime_label(market_snapshot),
-        "skill_disagreement": skill_disagreement_metrics(signals),
+        "skill_disagreement": skill_disagreement_metrics(signals_for_score),
         "market_discipline": market_discipline,
         "open": stock.get("open"),
         "high": stock.get("high"),
@@ -971,6 +990,50 @@ def _apply_slot_reserve(
             "before_score_line": before,
             "after_score_line": after,
         })
+
+
+
+def _research_extra_skill_ids() -> set[str]:
+    import os
+
+    return {
+        s.strip()
+        for s in str(os.environ.get("ASHARE_RESEARCH_EXTRA_SKILLS") or "").split(",")
+        if s.strip()
+    }
+
+
+def _card_has_research_signal(card: dict[str, Any], skill_id: str | None = None) -> bool:
+    extras = _research_extra_skill_ids()
+    if not extras:
+        return False
+    wanted = {skill_id} if skill_id else extras
+    return any(
+        isinstance(s, dict)
+        and str(s.get("strategy_id") or "") in wanted
+        and str(s.get("strategy_id") or "") in extras
+        and not s.get("hard_veto")
+        for s in (card.get("strategy_signals") or [])
+    )
+
+
+def _research_second_board_exempt(card: dict[str, Any]) -> bool:
+    """研究模式豁免：second-board-leader 在生产闸门下结构不可达。
+
+    生产 v27 的 high_turnover_veto=8 / high_chg20_veto=22 / max_dd60_veto /
+    weak_low_ivoldn20_veto / 弱势·震荡 consensus≥2 会把二连板几乎剔光。
+    仅当 ASHARE_RESEARCH_EXTRA_SKILLS 含 second-board-leader 时，对该技能非否决
+    信号卡跳过这些闸门；生产路径（未设 EXTRA_SKILLS）行为不变。
+    """
+    return _card_has_research_signal(card, "second-board-leader")
+
+
+def _research_consensus_exempt(card: dict[str, Any]) -> bool:
+    """研究技能 only:<sid> 评估时，单技能背书过不了 consensus≥2。
+
+    仅 EXTRA_SKILLS 中的研究技能非否决卡豁免共识闸门；生产组合评估不变。
+    """
+    return _card_has_research_signal(card)
 
 
 def apply_pool_rules(
@@ -1109,6 +1172,9 @@ def apply_pool_rules(
             if str(card.get("hard_veto")).lower() in ("true", "1") or len(signals) >= _min_signals:
                 kept_after_consensus.append(card)
                 continue
+            if _research_consensus_exempt(card):
+                kept_after_consensus.append(card)
+                continue
             card["policy_drop_owner"] = "consensus_gate"
             card.setdefault("policy_verdict_steps", []).append({
                 "rule_id": "consensus_gate",
@@ -1127,6 +1193,9 @@ def apply_pool_rules(
         _turn_thr = float(selection_policy.high_turnover_veto_pct)
         kept_after_turnover: list[dict[str, Any]] = []
         for card in deduped:
+            if _research_second_board_exempt(card):
+                kept_after_turnover.append(card)
+                continue
             _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
             _turn = card.get("turnover_rate", _snap.get("turnover_rate"))
             if _turn is None or float(_turn) < _turn_thr:
@@ -1209,6 +1278,9 @@ def apply_pool_rules(
         _chg_thr = float(_hcv)
         kept_after_chg: list[dict[str, Any]] = []
         for card in deduped:
+            if _research_second_board_exempt(card):
+                kept_after_chg.append(card)
+                continue
             _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
             _chg = card.get("chg20", _snap.get("chg20"))
             if _chg is None or float(_chg) < _chg_thr:
@@ -1266,6 +1338,9 @@ def apply_pool_rules(
         _dd_thr = float(_ddv)
         kept_after_dd: list[dict[str, Any]] = []
         for card in deduped:
+            if _research_second_board_exempt(card):
+                kept_after_dd.append(card)
+                continue
             _snap = card.get("feature_snapshot") if isinstance(card.get("feature_snapshot"), dict) else {}
             _dd = card.get("max_dd60", _snap.get("max_dd60"))
             if _dd is None or float(_dd) < _dd_thr:
@@ -1411,6 +1486,9 @@ def apply_pool_rules(
         _dn_thr = float(selection_policy.weak_low_ivoldn20_pct_threshold)
         kept_after_dn: list[dict[str, Any]] = []
         for card in deduped:
+            if _research_second_board_exempt(card):
+                kept_after_dn.append(card)
+                continue
             _dn_pct = card.get("ivol_dn20_pct")
             if _dn_pct is None:
                 kept_after_dn.append(card)

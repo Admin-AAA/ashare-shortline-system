@@ -20,6 +20,7 @@ contract:
   type: strategy
   executable: true
   schema_version: 1
+require_setup: true  # 未命中 setup 不得凭 base 分进池（防 fill 路径噪声分）
 universe:
   include:
     - "amount_yi >= 2"
@@ -43,8 +44,6 @@ prefilter:
         reason: "no_catchup_move"
       - when: "vol5_20 >= 1.2"
         reason: "no_volume"
-      - when: "sector_ladder_completeness_score >= 60"
-        reason: "sector_not_strong"
     exclude:
       - when: "max_dd20 < -20"
         reason: "trend_broken"

@@ -21,6 +21,7 @@ contract:
   type: strategy
   executable: true
   schema_version: 1
+require_setup: true  # 未命中 setup 不得凭 base 分进池（防 fill 路径噪声分）
 universe:
   include:
     - "amount_yi >= 2"
@@ -41,7 +42,7 @@ prefilter:
         reason: "not_pullback"
       - when: "pct >= 0 and pct <= 4"
         reason: "not_stabilizing"
-      - when: "volume_ratio_vs_20d <= 1.5"
+      - when: "vol5_20 <= 1.5"
         reason: "abnormal_turnover"
       - when: "industry_positive_excess20_count >= 2"
         reason: "industry_weak"
@@ -56,7 +57,7 @@ phases:
     risk_flags: ["冰点情绪"]
 setups:
   - name: 行业内短期反转
-    when: "primary_excess20 <= -8 and pct >= 0 and volume_ratio_vs_20d <= 1.5"
+    when: "primary_excess20 <= -8 and pct >= 0 and vol5_20 <= 1.5"
     score_delta: 10
     entry_rule: "次日开盘介入，高开超过 6% 不追（执行层 gap 闸门）"
     invalid_rule: "跌破信号日低点"

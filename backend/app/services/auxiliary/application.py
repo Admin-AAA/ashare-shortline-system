@@ -168,7 +168,7 @@ def _feature_views(result: AuxiliaryOrchestratorResult, *, as_of_trade_date: dat
         "pledges": {}, "broker_recs": {}, "share_floats_upcoming": {},
         "margin_details": {}, "block_trades": {}, "hsgt_top10": {},
         "hsgt_flow": None, "finas": {}, "holder_numbers": {},
-        "holder_trades": {}, "coverage": {},
+        "holder_trades": {}, "surveys": {}, "coverage": {},
     }
     coverage: dict[str, Any] = {}
     for item in result.results:
@@ -334,6 +334,58 @@ def capture_institutional_survey_audit(
     return InstitutionalSurveyAuditCapture(request=request, captures=tuple(captures))
 
 
+def _load_survey_feature_map(
+    db: Session,
+    codes: Sequence[str],
+    *,
+    trade_date: date | str,
+    lookback_days: int = 30,
+) -> dict[str, dict[str, Any]]:
+    """从 institutional_surveys 表做时点可见聚合（surv_date ≤ trade_date）。
+
+    institutional_survey 在 S4 里是 audit-only，不会进 feature_views；研究技能
+    institutional-survey-attention 需要 survey_count / survey_fund_visitors。
+    这里只读本地表、按公告日裁剪，不走 audit 事件快照，也不引入前视。
+    """
+    if not codes:
+        return {}
+    try:
+        from datetime import timedelta
+
+        from sqlalchemy import select, func
+        from app.models.tables import InstitutionalSurvey
+    except Exception:
+        return {}
+    as_of = _date(trade_date)
+    start = (as_of - timedelta(days=max(1, int(lookback_days)))).isoformat()
+    end = as_of.isoformat()
+    code_list = [str(c) for c in codes if c]
+    if not code_list:
+        return {}
+    rows = db.execute(
+        select(
+            InstitutionalSurvey.code,
+            func.count(InstitutionalSurvey.id),
+            func.coalesce(func.sum(InstitutionalSurvey.fund_visitors), 0),
+            func.max(InstitutionalSurvey.surv_date),
+        )
+        .where(
+            InstitutionalSurvey.code.in_(code_list),
+            InstitutionalSurvey.surv_date >= start,
+            InstitutionalSurvey.surv_date <= end,
+        )
+        .group_by(InstitutionalSurvey.code)
+    ).all()
+    out: dict[str, dict[str, Any]] = {}
+    for code, cnt, visitors, latest in rows:
+        out[str(code)] = {
+            "survey_count": int(cnt or 0),
+            "survey_fund_visitors": int(visitors or 0),
+            "survey_latest_date": str(latest or ""),
+        }
+    return out
+
+
 def load_auxiliary_feature_views(
     db: Session,
     codes: Sequence[str],
@@ -341,23 +393,39 @@ def load_auxiliary_feature_views(
     trade_date: date | str,
 ) -> Mapping[str, Any]:
     """Current-state/active-pointer read used by feature and prefilter consumers."""
-    return run_auxiliary_application(
-        db,
-        instruments=tuple(codes),
-        trade_date=trade_date,
-        refresh=False,
-    ).feature_views
+    base = dict(
+        run_auxiliary_application(
+            db,
+            instruments=tuple(codes),
+            trade_date=trade_date,
+            refresh=False,
+        ).feature_views
+    )
+    # 调研表不在 S4 publishable 视图里；补一张本地 PIT 聚合供 prefilter/feature 使用。
+    if not base.get("surveys"):
+        base["surveys"] = _load_survey_feature_map(db, codes, trade_date=trade_date)
+    return MappingProxyType(base)
 
 
 def inject_auxiliary_prefilter_flags(
     stocks: Sequence[dict[str, Any]],
     views: Mapping[str, Any],
 ) -> int:
-    """Inject already-loaded state facts before prefiltering without provider I/O."""
+    """Inject already-loaded state facts before prefiltering without provider I/O.
+
+    除涨停/龙虎榜外，同步注入北向 TOP10、主力净流入、机构调研聚合——这些字段在
+    feature_builder 阶段才写入，但研究技能的 prefilter 也依赖它们；缺省时
+    strict_missing 会让技能永远无法 skill_pass（只能走 fill，再被兄弟 hard_veto 清零）。
+    """
     limit_up = views.get("limit_up") if isinstance(views.get("limit_up"), Mapping) else {}
     dragon_tiger = views.get("dragon_tigers") if isinstance(views.get("dragon_tigers"), Mapping) else {}
+    hsgt_top10 = views.get("hsgt_top10") if isinstance(views.get("hsgt_top10"), Mapping) else {}
+    capital_flows = views.get("capital_flows") if isinstance(views.get("capital_flows"), Mapping) else {}
+    surveys = views.get("surveys") if isinstance(views.get("surveys"), Mapping) else {}
     limit_up_hits = 0
     dragon_tiger_hits = 0
+    hsgt_hits = 0
+    survey_hits = 0
     for stock in stocks:
         code = str(stock.get("code") or "")
         if row := limit_up.get(code):
@@ -388,7 +456,28 @@ def inject_auxiliary_prefilter_flags(
             stock["dragon_tiger_net_buy_ratio"] = round(min(1.0, max(-1.0, net_amount_yi / amount_yi)), 4) if amount_yi else 0.0
         else:
             stock.setdefault("dragon_tiger_is_on_list", False)
-    return limit_up_hits + dragon_tiger_hits
+        if row := hsgt_top10.get(code):
+            hsgt_hits += 1
+            stock["hsgt_rank"] = int(row.get("rank") or 0)
+            stock["hsgt_net_buy"] = float(row.get("buy") or row.get("net_amount") or 0)
+        else:
+            stock.setdefault("hsgt_rank", 0)
+            stock.setdefault("hsgt_net_buy", 0)
+        if row := capital_flows.get(code):
+            if stock.get("main_net_inflow_yi") is None:
+                stock["main_net_inflow_yi"] = float(row.get("main_net_inflow_yi") or 0)
+        # vol5_20 别名：部分技能 yaml 写 volume_ratio_vs_20d，该字段要等 feature_builder
+        if "volume_ratio_vs_20d" not in stock and stock.get("vol5_20") is not None:
+            stock["volume_ratio_vs_20d"] = stock.get("vol5_20")
+        if row := surveys.get(code):
+            survey_hits += 1
+            stock["survey_count"] = int(row.get("survey_count") or 0)
+            stock["survey_fund_visitors"] = int(row.get("survey_fund_visitors") or 0)
+            stock["survey_latest_date"] = str(row.get("survey_latest_date") or "")
+        else:
+            stock.setdefault("survey_count", 0)
+            stock.setdefault("survey_fund_visitors", 0)
+    return limit_up_hits + dragon_tiger_hits + hsgt_hits + survey_hits
 
 
 __all__ = [

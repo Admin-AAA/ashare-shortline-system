@@ -21,6 +21,7 @@ contract:
   type: strategy
   executable: true
   schema_version: 1
+require_setup: true  # 未命中 setup 不得凭 base 分进池（防 fill 路径噪声分）
 universe:
   include:
     - "amount_yi >= 5"
