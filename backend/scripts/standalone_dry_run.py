@@ -24,6 +24,8 @@ def main() -> None:
     ap.add_argument("--trade-date", required=True)
     ap.add_argument("--skills", default="")
     ap.add_argument("--out", default="")
+    ap.add_argument("--include-disabled", action="store_true",
+                    help="把 --skills 中尚未 enabled 的策略在本事务内临时打开（随回滚撤销）")
     args = ap.parse_args()
 
     from app.services import scheduler_service as sched
@@ -44,6 +46,37 @@ def main() -> None:
         }
         if args.skills:
             base["standalone_skill_ids"] = [s for s in args.skills.split(",") if s]
+        if args.include_disabled and args.skills:
+            from app.models.tables import SkillRegistry
+            from app.services import standalone_strategies as ss
+
+            wanted = list(base["standalone_skill_ids"])
+            # enabled 以 skills/ 文件为准且 sync_skills 会回写注册表；只在本进程内把加载结果打开，
+            # 不改文件（避免影响并行的研究回放）。
+            import dataclasses
+            from app.services.registry import skills as reg_skills
+
+            _orig_load = reg_skills.load_skills
+
+            def _load(path, _w=set(wanted)):
+                out = []
+                for sk in _orig_load(path):
+                    if sk.skill_id in _w and not sk.enabled:
+                        changes = {"enabled": True, "manifest": {**sk.manifest, "enabled": True, "status": "active"}}
+                        if sk.contract is not None:
+                            changes["contract"] = {**sk.contract, "enabled": True}
+                        sk = dataclasses.replace(sk, **changes)
+                    out.append(sk)
+                return out
+
+            reg_skills.load_skills = _load
+            reg_skills._last_skill_sync_time = 0.0
+            for sid in wanted:
+                row = db.get(SkillRegistry, sid)
+                if row is not None:
+                    row.enabled = True
+            db.flush()
+            ss.standalone_strategy_ids = lambda _skills, _w=wanted: sorted(_w)
         payloads = sched._standalone_run_payloads(db, base)
         for p in payloads:
             p.pop("standalone_skill_ids", None)
