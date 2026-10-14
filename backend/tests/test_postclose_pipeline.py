@@ -17,6 +17,18 @@ from app.services.data_gap_remediation_service import _refresh_auxiliary_dataset
 from app.services.registry import data_source as data_source_registry
 
 
+@pytest.fixture(autouse=True)
+def _single_standalone_strategy(monkeypatch):
+    """单策略独立运行后，盘后/安全网对每个策略各派发一个 run；这里固定为 1 个策略，
+    保持原有「派发 → 等待」时序断言。"""
+    monkeypatch.setattr(
+        scheduler_service,
+        "_standalone_run_payloads",
+        lambda _db, payload: [{**payload, "single_skill_id": "s1", "run_mode": "formal"}],
+    )
+
+
+
 def test_concept_sector_nan_member_count_is_normalized(db):
     client = SimpleNamespace(
         ths_index=lambda: pd.DataFrame(

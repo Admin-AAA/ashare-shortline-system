@@ -502,3 +502,18 @@ PYTHONPATH=backend backend/.venv/bin/python backend/scripts/refresh_strategy_bac
 - **决策时刻可见性**：龙虎榜、两融明细在 17:35 正式推荐时还没入库，实盘和回放统一读取信号日之前最近一个交易日的数据（L-163 / L-167）。
 - **告警**：LLM 熔断、Tushare 全部上游失败、未配置官方 Tushare 兜底时，`backend/logs/app.log` 会记录 `[ALERT:<kind>]`，可用 `grep '\[ALERT:' backend/logs/app.log` 查看。官方兜底需在 `.env` 设置 `ASHARE_TUSHARE_OFFICIAL_TOKEN`。
 - **组合回撤控制**：`app/engine/drawdown_control.py`（弱市限额 + 已结算亏损熔断），默认关闭：训练段过判、hold-out 段证伪，见 `docs/lessons/LESSONS.md` L-167。
+
+## 单策略独立运行（2026-10-14 起，取代全策略组合）
+
+- **不再有组合推荐**：盘后 17:35 Prefect 任务（`post_sync_formal_recommendation`）同步数据、过健康闸门、结算 outcome 之后，
+  对每个有效策略各自派发一个 formal run（`single_skill_id`），每个策略有自己的推荐、T+1 结算和统计。
+  分批并发 4 个，单个策略失败不影响其它策略；结果明细在任务 `result.strategy_runs`。
+- **参与策略**：`app/services/standalone_strategies.py` 是唯一定义——enabled、可执行、非退役（基础短线 / 强趋势回踩 / 隔夜法 /
+  龙虎榜再吸筹保持退役）、非风险提示技能。不再用组合启用/禁用闸门筛选新策略；研究技能在 round3 回放结束后统一打开 enabled。
+- **每个策略的阈值/上限**：默认分数线 72（formal 地板）、每天最多 3 张；按策略覆盖写在 `STRATEGY_RUN_OVERRIDES`。
+- **单策略政策**：在生产 v27 基础上关掉组合专属的共识闸门（弱势/震荡 ≥2 策略背书，对单策略恒不可达）和共享的 6 张上限；
+  其余风险否决保留。`second-board-leader` 额外豁免换手/20 日涨幅/60 日回撤/低下行波动闸门（结构不可达）。
+- **跨 run 去重只在同一策略内**：同日重复、近 7 日重复、行业集中只与同一策略的历史 run 比较，不同策略可以推同一只票。
+- **看板与统计**：驾驶舱「单策略」面板显示最近交易日每个策略的 run 状态与出票；绩效页 `GET /api/metrics/by-strategy`
+  按策略统计（每条推荐只属于一个策略）。安全网补跑同样按单策略派发。
+- 多技能 run 仍可在工作台手动发起（研究/对照用），但不再由调度产生。

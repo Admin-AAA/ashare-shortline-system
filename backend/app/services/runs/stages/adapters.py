@@ -584,10 +584,20 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
         )
         from app.services.feature_builder import market_regime_score
 
+        from app.services.standalone_strategies import (
+            standalone_selection_policy,
+            standalone_skill_id,
+        )
+
         skill_map = {s["skill_id"]: s["skill"] for s in selected_skills}
-        recent_codes = _recent_recommended_codes(self._db, str(snapshot.get("trade_date") or ""))
+        # 单策略独立运行（每日每个策略一个 formal run）：去重/行业集中/出票上限只在同策略内生效，
+        # 关闭组合专属的共识闸门。多策略 run（旧组合口径/研究回放）行为不变。
+        standalone_sid = standalone_skill_id(selected_skills)
+        recent_codes = _recent_recommended_codes(
+            self._db, str(snapshot.get("trade_date") or ""), skill_scope=standalone_sid,
+        )
         same_day_codes = _same_day_recommended_codes(
-            self._db, str(snapshot.get("trade_date") or ""), self._run_id,
+            self._db, str(snapshot.get("trade_date") or ""), self._run_id, skill_scope=standalone_sid,
         )
         market_score = market_regime_score(dict(snapshot)) or 50.0  # 防御：市场分未就绪时回退中性值
         calibrated_weights = _load_calibrated_agg_weights(self._db)
@@ -618,7 +628,7 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
 
         scored_cards = list(cards)
         same_day_industry_counts = _same_day_industry_counts(
-            self._db, str(snapshot.get("trade_date") or ""), self._run_id,
+            self._db, str(snapshot.get("trade_date") or ""), self._run_id, skill_scope=standalone_sid,
         )
         _sel_date = str(snapshot.get("trade_date") or "")
         if _sel_date:
@@ -649,6 +659,12 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
         _selection_policy = resolve_adaptive_selection_policy(
             self._db, str(snapshot.get("trade_date") or ""), DEFAULT_PRODUCTION_SELECTION_POLICY
         )
+        if standalone_sid:
+            _selection_policy = standalone_selection_policy(
+                DEFAULT_PRODUCTION_SELECTION_POLICY,
+                standalone_sid,
+                int(params.get("output_count") or 0) or 3,
+            )
         policy_result = evaluate_selection_policy(
             scored_cards,
             SelectionPolicyContext(

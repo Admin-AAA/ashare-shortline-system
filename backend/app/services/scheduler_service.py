@@ -1770,20 +1770,17 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         # readiness 已确认最新已收盘数据完整；即使旧调度记录或手工调用
         # 携带了 local_pool_preferred/auto，也必须在正式推荐阶段强制纯本地。
         # 同步阶段已覆盖辅助数据；这里同时禁止 workbench 再次刷新辅助源。
+        # 2026-10-14 起不再跑「全策略组合」：每个有效策略各自一个 formal run（单策略独立运行）。
         recommendation_payload = {
             **payload,
             "data_source": DATA_SOURCE_LOCAL_POOL,
             "skip_aux_refresh": True,
         }
-        recommendation = await _run_recommendation(db, recommendation_payload)
+        recommendation = await _run_standalone_recommendations(db, recommendation_payload)
         run_id = str(recommendation.get("related_run_id") or "")
         if not run_id:
-            raise RuntimeError("盘后正式推荐未返回关联 Run ID")
-        final_run = await _wait_for_recommendation_run(
-            db,
-            run_id,
-            timeout_seconds=int(payload.get("recommendation_wait_timeout_seconds") or 3600),
-        )
+            raise RuntimeError("盘后单策略正式推荐未返回任何 Run ID")
+        final_run = recommendation["final_run"]
     except Exception as exc:
         logger.exception("盘后推荐阶段失败，保留已完成的数据同步结果: %s", exc)
         return {
@@ -1826,7 +1823,12 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         "final_run": final_run,
         "related_run_id": run_id,
         "recommended_count": recommended_count,
-        "summary_text": f"盘后数据已同步并通过健康检查，正式推荐完成 {recommended_count} 条",
+        "strategy_runs": recommendation.get("strategy_runs") or [],
+        "summary_text": (
+            f"盘后数据已同步并通过健康检查，单策略正式推荐 "
+            f"{recommendation.get('completed_count', 0)}/{recommendation.get('strategy_count', 0)} 个策略完成，"
+            f"共 {recommended_count} 条"
+        ),
     }
 
 
@@ -1859,6 +1861,7 @@ async def _run_recommendation(db, payload: dict) -> dict:
         "output_count",
         "selected_skill_ids",
         "skills",
+        "single_skill_id",
         "skip_aux_refresh",
         "disable_agent_review",
         "trade_date_override",
@@ -1931,6 +1934,109 @@ async def _run_recommendation(db, payload: dict) -> dict:
             if related_run_id
             else "已触发推荐（独立子进程）"
         ),
+    }
+
+
+# 单策略独立运行：同时最多并发几个全市场扫描子进程（避免 CPU 争用/心跳超时）。
+STANDALONE_BATCH_SIZE = 4
+STANDALONE_ENQUEUE_STAGGER_SECONDS = 5
+
+
+def _standalone_run_payloads(db, payload: dict) -> list[dict[str, Any]]:
+    """为每个有效策略生成一份单策略 formal run 请求（不含组合 skills 列表）。"""
+    from app.services.standalone_strategies import standalone_run_settings, standalone_strategy_ids
+    from app.services.workbench_service import sync_skills
+
+    skills = sync_skills(db)
+    name_by_sid = {s.skill_id: s.name for s in skills}
+    only = {str(x) for x in (payload.get("standalone_skill_ids") or []) if str(x).strip()}
+    base = {
+        k: v
+        for k, v in payload.items()
+        if k not in {"selected_skill_ids", "skills", "single_skill_id", "score_line", "output_count", "run_name"}
+    }
+    label = str(payload.get("trade_date_override") or datetime.now().strftime("%Y%m%d"))
+    out: list[dict[str, Any]] = []
+    for sid in standalone_strategy_ids(skills):
+        if only and sid not in only:
+            continue
+        score_line, output_count = standalone_run_settings(sid)
+        out.append({
+            **base,
+            "single_skill_id": sid,
+            "score_line": score_line,
+            "output_count": output_count,
+            "run_mode": "formal",
+            "run_name": f"单策略 {name_by_sid.get(sid, sid)} {label}",
+        })
+    return out
+
+
+async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
+    """每个策略各跑一个 formal run（自己的分数线/出票上限/推荐/T+1 结算），分批并发。
+
+    返回 strategy_runs 明细；final_run 汇总状态：至少一个策略 completed 即 completed
+    （单个策略失败不拖垮其它策略，失败明细保留在 strategy_runs）。
+    """
+    payloads = _standalone_run_payloads(db, payload)
+    if not payloads:
+        raise ValueError(_NO_RUNNABLE_SKILL_MSG)
+    timeout = int(payload.get("recommendation_wait_timeout_seconds") or 3600)
+    strategy_runs: list[dict[str, Any]] = []
+    for start in range(0, len(payloads), STANDALONE_BATCH_SIZE):
+        batch = payloads[start:start + STANDALONE_BATCH_SIZE]
+        queued: list[tuple[str, str]] = []
+        for index, item in enumerate(batch):
+            sid = item["single_skill_id"]
+            try:
+                res = await _run_recommendation(db, item)
+                queued.append((sid, str(res.get("related_run_id") or "")))
+            except Exception as exc:  # noqa: BLE001 - one strategy must not block others
+                logger.exception("单策略正式推荐入队失败: %s", sid)
+                db.rollback()
+                strategy_runs.append({"skill_id": sid, "status": "failed", "error": str(exc)[:300]})
+            if index < len(batch) - 1:
+                await asyncio.sleep(STANDALONE_ENQUEUE_STAGGER_SECONDS)
+        for sid, run_id in queued:
+            if not run_id:
+                strategy_runs.append({"skill_id": sid, "status": "failed", "error": "未返回 Run ID"})
+                continue
+            try:
+                final = await _wait_for_recommendation_run(db, run_id, timeout_seconds=timeout)
+            except Exception as exc:  # noqa: BLE001
+                strategy_runs.append({"skill_id": sid, "run_id": run_id, "status": "failed", "error": str(exc)[:300]})
+                continue
+            strategy_runs.append({
+                "skill_id": sid,
+                "run_id": run_id,
+                "status": str(final.get("status") or "failed"),
+                "recommended_count": int(final.get("recommended_count") or 0),
+                "error": final.get("error"),
+            })
+    completed = [r for r in strategy_runs if r.get("status") == "completed"]
+    total_recs = sum(int(r.get("recommended_count") or 0) for r in completed)
+    first_run_id = next((r["run_id"] for r in completed if r.get("run_id")), None) or next(
+        (r["run_id"] for r in strategy_runs if r.get("run_id")), ""
+    )
+    final_run = {
+        "status": "completed" if completed else "failed",
+        "recommended_count": total_recs,
+        "error": None if completed else (
+            "；".join(
+                (f"{r['skill_id']}: {r['error']}" if len(strategy_runs) > 1 else str(r["error"]))
+                for r in strategy_runs if r.get("error")
+            ) or "全部单策略 Run 失败"
+        ),
+    }
+    return {
+        "related_run_id": first_run_id,
+        "related_run_ids": [r["run_id"] for r in strategy_runs if r.get("run_id")],
+        "strategy_runs": strategy_runs,
+        "strategy_count": len(payloads),
+        "completed_count": len(completed),
+        "recommended_count": total_recs,
+        "final_run": final_run,
+        "summary_text": f"单策略正式推荐 {len(completed)}/{len(payloads)} 个策略完成，共 {total_recs} 条",
     }
 
 
@@ -2101,7 +2207,10 @@ async def _safety_net_run(db, payload: dict) -> dict:
     run_payload["skip_aux_refresh"] = True
     run_payload["run_mode"] = "formal"
 
-    result = await _run_recommendation(db, run_payload)
+    try:
+        result = await _run_standalone_recommendations(db, run_payload)
+    except Exception as exc:
+        result = {"error": str(exc)}
     run_id = str(result.get("related_run_id") or "")
     if not run_id:
         return {
@@ -2113,11 +2222,7 @@ async def _safety_net_run(db, payload: dict) -> dict:
             "summary_text": "formal 安全网补跑派发失败：未返回关联 Run ID",
         }
     try:
-        final_run = await _wait_for_recommendation_run(
-            db,
-            run_id,
-            timeout_seconds=int(run_payload.get("recommendation_wait_timeout_seconds") or 3600),
-        )
+        final_run = result["final_run"]
     except Exception as exc:
         return {
             "status": "failed",

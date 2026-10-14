@@ -15,6 +15,18 @@ from app.services import scheduler_service
 from app.services.scheduler_service import check_formal_recommendation_gap
 
 
+@pytest.fixture(autouse=True)
+def _single_standalone_strategy(monkeypatch):
+    """单策略独立运行后，盘后/安全网对每个策略各派发一个 run；这里固定为 1 个策略，
+    保持原有「派发 → 等待」时序断言。"""
+    monkeypatch.setattr(
+        scheduler_service,
+        "_standalone_run_payloads",
+        lambda _db, payload: [{**payload, "single_skill_id": "s1", "run_mode": "formal"}],
+    )
+
+
+
 def test_check_gap_no_runs(db):
     """最近 5 天无 formal run → needs_retry=True。"""
     # 清空最近 formal run（用 mock 或直接检查逻辑）

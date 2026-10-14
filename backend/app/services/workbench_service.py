@@ -517,6 +517,11 @@ def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
             "disabled_count": sum(1 for skill in skills if not skill["enabled"]),
         },
     }
+    try:
+        state["standalone_board"] = standalone_strategy_board(db)
+    except Exception:  # noqa: BLE001 - 看板非关键，失败不阻塞驾驶舱
+        logger.exception("单策略看板构建失败")
+        state["standalone_board"] = {"trade_date": None, "strategies": []}
     set_bootstrap_cache(cache_key, state)
     return state
 
@@ -829,9 +834,9 @@ def list_dashboard_recommendations(
     db: Session,
     trade_date: str,
     *,
-    limit: int = 12,
+    limit: int = 30,
 ) -> list[dict[str, Any]]:
-    """聚合同交易日全部已验证 LIVE 正式运行，并按最高分全局排序。"""
+    """聚合同交易日全部已验证 LIVE 正式运行（各单策略 run），并按最高分全局排序。"""
     live_run_ids = canonical_live_forward_run_ids(db, trade_date=trade_date)
     recs = db.scalars(
         select(Recommendation)
@@ -848,17 +853,94 @@ def list_dashboard_recommendations(
         )
     ).all()
 
-    # 同一股票被多个预设或重复运行命中时，排序后的第一条就是最高分版本。
+    # 单策略独立运行后，同一股票可能被多个策略各自推荐：按 (策略, 股票) 去重，
+    # 让每个策略自己的票都可见；同一策略内重复运行命中时保留最高分版本。
+    from app.services.standalone_strategies import run_skill_ids
+
+    skills_by_run = {
+        run_id: run_skill_ids(skills_json)
+        for run_id, skills_json in db.execute(
+            select(RecommendationRun.run_id, RecommendationRun.selected_skills_json).where(
+                RecommendationRun.run_id.in_({rec.run_id for rec in recs})
+            )
+        ).all()
+    } if recs else {}
     unique_recs: list[Recommendation] = []
-    seen_codes: set[str] = set()
+    seen_keys: set[tuple[str, str]] = set()
     for rec in recs:
-        if rec.code in seen_codes:
+        sids = skills_by_run.get(rec.run_id) or ()
+        key = (sids[0] if len(sids) == 1 else "*", rec.code)
+        if key in seen_keys:
             continue
-        seen_codes.add(rec.code)
+        seen_keys.add(key)
         unique_recs.append(rec)
         if len(unique_recs) >= limit:
             break
     return _serialize_recommendations_batched(db, unique_recs)
+
+
+def standalone_strategy_board(db: Session, trade_date: str | None = None) -> dict[str, Any]:
+    """驾驶舱「单策略看板」：最近交易日每个策略自己的 formal run 状态与出票。"""
+    from app.services.standalone_strategies import run_skill_ids, standalone_strategy_ids
+
+    skills = sync_skills(db)
+    name_by_sid = {s.skill_id: s.name for s in skills}
+    if trade_date is None:
+        trade_date = db.scalar(
+            select(func.max(RecommendationRun.trade_date)).where(
+                RecommendationRun.run_mode == "formal",
+                RecommendationRun.status == "completed",
+                *live_forward_run_conditions(),
+            )
+        )
+    board: dict[str, dict[str, Any]] = {
+        sid: {
+            "skill_id": sid,
+            "name": name_by_sid.get(sid, sid),
+            "run_id": None,
+            "status": "missing",
+            "recommended_count": 0,
+            "picks": [],
+        }
+        for sid in standalone_strategy_ids(skills)
+    }
+    if trade_date:
+        runs = db.scalars(
+            select(RecommendationRun)
+            .where(
+                RecommendationRun.run_mode == "formal",
+                RecommendationRun.trade_date == trade_date,
+                *live_forward_run_conditions(),
+            )
+            .order_by(RecommendationRun.started_at.desc())
+        ).all()
+        for run in runs:
+            sids = run_skill_ids(run.selected_skills_json)
+            if len(sids) != 1:
+                continue
+            sid = sids[0]
+            item = board.setdefault(
+                sid,
+                {"skill_id": sid, "name": name_by_sid.get(sid, sid), "run_id": None,
+                 "status": "missing", "recommended_count": 0, "picks": []},
+            )
+            if item["run_id"] is not None and item["status"] == "completed":
+                continue  # 已有更新的 completed run
+            item.update({
+                "run_id": run.run_id,
+                "status": run.status,
+                "recommended_count": int(run.recommended_count or 0),
+            })
+            if run.status == "completed":
+                item["picks"] = [
+                    {"code": r.code, "name": r.name, "final_score": round(float(r.final_score or 0), 1)}
+                    for r in db.scalars(
+                        select(Recommendation)
+                        .where(Recommendation.run_id == run.run_id)
+                        .order_by(Recommendation.final_score.desc())
+                    ).all()
+                ]
+    return {"trade_date": trade_date, "strategies": sorted(board.values(), key=lambda x: x["skill_id"])}
 
 
 # 推荐历史短时缓存：历史数据不频繁变化（新 run 后才变），30s TTL 足够
@@ -2617,7 +2699,9 @@ def _select_skills_for_run(
     return sorted(selected, key=lambda row: row["skill_id"])
 
 
-def _recent_recommended_codes(db: Session, trade_date: str) -> set[str]:
+def _recent_recommended_codes(
+    db: Session, trade_date: str, skill_scope: str | None = None
+) -> set[str]:
     # 近 7 天已推荐过的 code（含当天 trade_date）。
     # 含当天是为了兜底 dedup_same_day 的竞态：多个 formal run 在同一天 trade_date 上先后跑时，
     # 后一个 run 在 start 时算一次 same_day_codes，但前一个 run 的推荐可能尚未 commit 落库
@@ -2629,6 +2713,20 @@ def _recent_recommended_codes(db: Session, trade_date: str) -> set[str]:
     # 仅统计 live_forward 实盘 run：历史重建/实验 run 的回放结果不是实盘证据，
     # 不应进入实盘跨 run 去重基数（否则回放会互相剔除，且会污染实盘基数）。
     recent_date = (datetime.fromisoformat(trade_date) - timedelta(days=7)).date().isoformat()
+    # skill_scope：单策略独立运行时只与同一策略的 run 去重（standalone_strategies）。
+    if skill_scope:
+        from app.services.standalone_strategies import is_run_of_strategy
+
+        scoped = db.execute(
+            select(Recommendation.code, RecommendationRun.selected_skills_json)
+            .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+            .where(
+                Recommendation.trade_date >= recent_date,
+                Recommendation.trade_date <= trade_date,
+                *live_forward_run_conditions(),
+            )
+        ).all()
+        return {code for code, skills_json in scoped if is_run_of_strategy(skills_json, skill_scope)}
     rows = db.scalars(
         select(Recommendation)
         .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
@@ -2642,7 +2740,7 @@ def _recent_recommended_codes(db: Session, trade_date: str) -> set[str]:
 
 
 def _same_day_recommended_codes(
-    db: Session, trade_date: str, exclude_run_id: str | None = None
+    db: Session, trade_date: str, exclude_run_id: str | None = None, skill_scope: str | None = None
 ) -> set[str]:
     """同一交易日、已由其他 formal run 推荐过的 code 集合（跨 run 同日去重）。
 
@@ -2667,12 +2765,20 @@ def _same_day_recommended_codes(
     )
     if exclude_run_id is not None:
         stmt = stmt.where(Recommendation.run_id != exclude_run_id)
+    if skill_scope:
+        from app.services.standalone_strategies import is_run_of_strategy
+
+        stmt = stmt.add_columns(RecommendationRun.selected_skills_json)
+        return {
+            code for code, skills_json in db.execute(stmt).all()
+            if is_run_of_strategy(skills_json, skill_scope)
+        }
     rows = db.scalars(stmt).all()
     return {row for row in rows}
 
 
 def _same_day_industry_counts(
-    db: Session, trade_date: str, exclude_run_id: str | None = None
+    db: Session, trade_date: str, exclude_run_id: str | None = None, skill_scope: str | None = None
 ) -> dict[str, int]:
     """同一交易日、已由其他 formal run 推荐过的行业组计数（跨 run 行业集中控制）。
 
@@ -2694,7 +2800,16 @@ def _same_day_industry_counts(
     )
     if exclude_run_id is not None:
         stmt = stmt.where(Recommendation.run_id != exclude_run_id)
-    rows = db.scalars(stmt).all()
+    if skill_scope:
+        from app.services.standalone_strategies import is_run_of_strategy
+
+        stmt = stmt.add_columns(RecommendationRun.selected_skills_json)
+        rows = [
+            industry for industry, skills_json in db.execute(stmt).all()
+            if is_run_of_strategy(skills_json, skill_scope)
+        ]
+    else:
+        rows = db.scalars(stmt).all()
     counts: dict[str, int] = {}
     for industry in rows:
         ind = str(industry or "")

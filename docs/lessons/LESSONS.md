@@ -1824,3 +1824,13 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 回归验证：`backend/scripts/research_round2_single_skill_eval.py`；产物 `output/research/round2/single_skill.json`、`forward_exit_check.json`。
 - 吸收位置：本条；`backend/scripts/research_entry_rule_panel.py`（`--windows` / `--output-count`）；`backend/scripts/research_round2_single_skill_eval.py`。
 - 相关：L-010、L-161、L-167。
+
+## L-169 取消全策略组合，改为每个策略每天独立出票；组合专属闸门不能原样套在单策略 run 上
+
+- 背景（2026-10-14 用户决策）：组合口径下新策略只能靠「边际贡献」进组合，单策略好但与组合重叠的策略永远上不了线；
+  用户要求每个策略每天自己跑、自己出票、自己结算统计。
+- 坑 1：生产 v27 的共识闸门要求弱势/震荡日 ≥2 个策略背书，单策略 run 恒不满足 → 弱势/震荡日全部 0 票。单策略 run 必须关闭。
+- 坑 2：`daily_output_limit=6` 与同日跨 run 去重/行业计数原本按「全部 formal run」累计，15 个策略串行跑时后跑的策略名额会被前面的吃光、
+  同一只票被别的策略推过就被剔除。现在三者都按同一策略的 run 计。
+- 坑 3：`second-board-leader` 被组合层的换手/涨幅闸门结构性剔光（f70fc20 已在研究模式豁免），生产单策略 run 需要同样豁免。
+- 规则：新增策略不再走组合启用闸门；判断一个策略好坏看它自己的近 12 个月 n / 胜率 / 平均 / PF / 回撤（L-167 口径）。

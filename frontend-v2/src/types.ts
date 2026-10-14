@@ -889,7 +889,22 @@ export type HomeBootstrap = {
     enabled_count: number;
     disabled_count: number;
   };
+  /** 单策略独立运行看板：最近交易日每个策略自己的 formal run 与出票 */
+  standalone_board?: StandaloneBoard;
 };
+
+export type StandaloneStrategyPick = { code: string; name: string; final_score: number };
+
+export type StandaloneStrategyRow = {
+  skill_id: string;
+  name: string;
+  run_id: string | null;
+  status: string;
+  recommended_count: number;
+  picks: StandaloneStrategyPick[];
+};
+
+export type StandaloneBoard = { trade_date: string | null; strategies: StandaloneStrategyRow[] };
 
 export type MarketSnapshot = {
   snapshot_id: string;

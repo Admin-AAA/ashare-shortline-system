@@ -19,6 +19,7 @@ import type {
   LlmReviewHealth,
   OutcomeSummary,
   RunProgress,
+  StandaloneBoard,
   WinRateSummary,
 } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "../components/StateViews";
@@ -171,6 +172,18 @@ export function HomePage() {
               />
             </Panel>
           )}
+
+          {boot?.standalone_board && boot.standalone_board.strategies.length > 0 && (
+            <Panel
+              kicker="单策略"
+              title={`各策略独立出票${boot.standalone_board.trade_date ? ` · ${boot.standalone_board.trade_date}` : ""}`}
+            >
+              <StandaloneBoardList
+                board={boot.standalone_board}
+                onOpenRun={(runId) => navigate(`/records?tab=run&run_id=${runId}`)}
+              />
+            </Panel>
+          )}
         </div>
 
         {/* 右列：龙头候选（视觉重心） */}
@@ -183,6 +196,40 @@ export function HomePage() {
           onViewHistory={() => navigateSection("history")}
         />
       </div>
+    </div>
+  );
+}
+
+// ─── 单策略看板：每个策略自己的 run 状态与当日出票 ─────────────────
+function StandaloneBoardList({
+  board,
+  onOpenRun,
+}: {
+  board: StandaloneBoard;
+  onOpenRun: (runId: string) => void;
+}) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+      {board.strategies.map((row) => (
+        <div
+          key={row.skill_id}
+          style={{ display: "flex", flexDirection: "column", gap: 2, cursor: row.run_id ? "pointer" : "default" }}
+          onClick={() => row.run_id && onOpenRun(row.run_id)}
+          title={row.skill_id}
+        >
+          <div style={{ display: "flex", justifyContent: "space-between", gap: "var(--space-2)" }}>
+            <span style={{ fontWeight: 600 }}>{row.name}</span>
+            <span style={{ color: "var(--text-muted)" }}>
+              {row.status === "completed" ? `${row.recommended_count} 张` : row.status === "missing" ? "未运行" : row.status}
+            </span>
+          </div>
+          {row.picks.length > 0 && (
+            <div style={{ color: "var(--text-muted)", fontSize: "0.85em" }}>
+              {row.picks.map((p) => `${p.name}(${p.code}) ${p.final_score}`).join(" · ")}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

@@ -41,7 +41,7 @@ def _scheduled_start_iso() -> str:
     return runtime_flow_run.scheduled_start_time.isoformat()
 
 
-@flow(name="scheduled-task", timeout_seconds=7200)
+@flow(name="scheduled-task", timeout_seconds=14400)  # 单策略独立运行：15 个策略分批串行
 def scheduled_task_flow(
     task_id: str,
     trigger_source: str = "schedule",
