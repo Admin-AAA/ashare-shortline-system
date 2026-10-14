@@ -856,6 +856,23 @@ def main() -> None:
         default=None,
         help="覆盖面板目录（默认 output/research/entry_panel）。用于在不同消费政策口径下重导出的面板上做筛查。",
     )
+    ap.add_argument(
+        "--windows",
+        default=None,
+        help="逗号分隔窗口名（默认 W1,W2,W3）。例：WX 用于 round2 单窗面板 entry_panel_WX.json。",
+    )
+    ap.add_argument(
+        "--output-count",
+        type=int,
+        default=None,
+        help="覆盖 SelectionPolicyContext.output_count（默认模块常量，当前生产日限 6）。",
+    )
+    ap.add_argument(
+        "--score-line",
+        type=float,
+        default=None,
+        help="覆盖 SelectionPolicyContext.score_line（默认模块常量 72）。",
+    )
     args = ap.parse_args()
     names = list(RULES) if args.rules == "all" else [r.strip() for r in args.rules.split(",") if r.strip()]
     if args.rules == "policy":
@@ -888,9 +905,17 @@ def main() -> None:
         GLOBAL_SIGNAL_WEIGHTS = json.loads(_sw)
     if GLOBAL_SIGNAL_WEIGHTS:
         print(f"[weights] 规则臂使用逐技能权重：{GLOBAL_SIGNAL_WEIGHTS}")
-    global PANEL_DIR
+    global PANEL_DIR, WINDOWS, OUTPUT_COUNT, SCORE_LINE
     if args.panel_dir:
         PANEL_DIR = Path(args.panel_dir)
+    if args.windows:
+        WINDOWS = tuple(w.strip() for w in str(args.windows).split(",") if w.strip())
+        if not WINDOWS:
+            raise SystemExit("--windows 不能为空")
+    if args.output_count is not None:
+        OUTPUT_COUNT = int(args.output_count)
+    if args.score_line is not None:
+        SCORE_LINE = float(args.score_line)
     panels = {w: json.loads((PANEL_DIR / f"entry_panel_{w}.json").read_text()) for w in WINDOWS}
     def harness_baseline(w: str) -> dict:
         """harness A 臂基线：优先读 ablation JSON；缺失时用面板自带的 selected+net 复原
@@ -1146,7 +1171,7 @@ def main() -> None:
             f"{sorted(POLICY_VARIANTS)[:6]}…"
         )
 
-    print(f"\n=== 规则筛查（{len(names)} 个；PASS = 三窗全过 evaluate_challenger） ===")
+    print(f"\n=== 规则筛查（{len(names)} 个；PASS = {len(WINDOWS)} 窗全过 evaluate_challenger） ===")
     results: dict[str, dict] = {}
     for name in names:
         spec = POLICY_VARIANTS.get(name)
@@ -1202,7 +1227,7 @@ def main() -> None:
             cells.append(f"{w} Δ{v['d_cohort']:+.4f} CI[{v['ci'][0]:+.3f},{v['ci'][1]:+.3f}] "
                          f"WR{v['wr']*100:.1f}% PF{v['pf']:.3f} sum{v['sum']:+.1f} "
                          f"月{v['month_same_pos']:.2f} {v['decision']}")
-        print(f"\n[{name}] passes={passes}/3")
+        print(f"\n[{name}] passes={passes}/{len(WINDOWS)}")
         for c in cells:
             print("   ", c)
 

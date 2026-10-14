@@ -1811,3 +1811,16 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 回归验证：`backend/scripts/research_holdout_protocol.py drawdown|only|baseline`；`backend/tests/test_drawdown_control.py`、`test_decision_time_visibility.py`。
 - 吸收位置：`docs/holdout-protocol.md`、`app/engine/drawdown_control.py`、`app/services/auxiliary/state_adapters.py`、`app/services/backtest/research_runner.py`。
 - 相关：L-010、L-161、L-162、L-163、L-166。
+
+## L-168 研究技能进池会污染组合 A 臂；单策略启用必须以干净基线 + only:<sid> 近12月为准
+
+- 状态：active（FINDING；round2 九个研究原型全部保持 enabled=false）
+- 适用：任何用 `ASHARE_RESEARCH_EXTRA_SKILLS` 临时纳入的新策略评估；任何把 harness A 臂当「生产基线」的报告
+- 证据（2026-10-14，`backend/output/research/round2/`）：
+  1. round2 回放窗 2025-10-01~2026-10-13 把 9 个研究技能推进候选池后，A 臂 n=399、胜率 59.6%、平均 +0.804%、PF 1.508；同窗 stage5 六策略干净面板 identity/selected 基线 n=391~392、胜率 61.0%、平均 +1.14%、PF 1.73。差的不是结算日（10-12/13 零入选），而是研究技能信号改了打分与入选集。
+  2. `only:<sid>` + 生产 selection v27（日限 6、线 72）近 12 月（~2026-10-09）：7 个技能 0 张入选（其中 oversold / northbound / institutional / dragon-tiger / within-industry / sector-laggard 的卡 `final_score` 中位数为 0，过不了分数线；second-board 有分但被换手/涨幅闸门剔光）；low-position-first-board n=21、平均 −1.81%、PF 0.27（延续 L-167）；low-max-steady-trend n=106、胜率 64.2%（高于基线）但平均 +0.52%（远低于 +1.14%）、PF 1.46，配对 bootstrap 日均 Δ 相对组合基线 CI 含 0。按「平均与胜率均 ≥ 组合基线、PF>1.3、n≥~40」无一启用。
+  3. 2026-10-10 之后已结算交易日目前只有 10-12、10-13 两天；生产入选里能在这两天出场的只有 2 笔，round1 出场候选（持有 7 / 激活 2.0）在其中一笔上比基线更差（688275 −4.51 vs −0.83）。样本不够，不改生产出场。
+- 永久规则：**（一）报告生产基线只用未混入研究技能的面板（或把研究信号从卡上剥掉后再跑 identity）。** **（二）启用新策略看 `only:<sid>` 近 12 月平均/胜率是否同时不低于干净组合基线，并要求 PF>1.3 与足够票数；不要用「进池后的 A 臂」或「触发次数」代替。** **（三）`final_score≡0` 的研究技能先修打分/特征接入，再谈回测。** **（四）`research_entry_rule_panel.py` 评估非 W1/W2/W3 面板时必须显式传 `--windows`。**
+- 回归验证：`backend/scripts/research_round2_single_skill_eval.py`；产物 `output/research/round2/single_skill.json`、`forward_exit_check.json`。
+- 吸收位置：本条；`backend/scripts/research_entry_rule_panel.py`（`--windows` / `--output-count`）；`backend/scripts/research_round2_single_skill_eval.py`。
+- 相关：L-010、L-161、L-167。
