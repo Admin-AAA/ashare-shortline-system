@@ -18,6 +18,12 @@ from app.services.registry import data_source as data_source_registry
 
 
 @pytest.fixture(autouse=True)
+def _no_kbar_cache_refresh(monkeypatch):
+    """盘后流程会增量刷新日K Parquet 缓存（6f8ac43）；这里用的是桩 db，关掉缓存刷新免得调到真实查询。"""
+    monkeypatch.setenv("ASHARE_KBAR_CACHE", "0")
+
+
+@pytest.fixture(autouse=True)
 def _single_standalone_strategy(monkeypatch):
     """单策略独立运行后，盘后/安全网对每个策略各派发一个 run；这里固定为 1 个策略，
     保持原有「派发 → 等待」时序断言。"""
