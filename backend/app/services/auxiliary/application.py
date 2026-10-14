@@ -344,7 +344,7 @@ def _load_survey_feature_map(
     """从 institutional_surveys 表做时点可见聚合（surv_date ≤ trade_date）。
 
     institutional_survey 在 S4 里是 audit-only，不会进 feature_views；研究技能
-    institutional-survey-attention 需要 survey_count / survey_fund_visitors。
+    daily-stock-analysis 等技能仍用 survey_count / survey_fund_visitors。
     这里只读本地表、按公告日裁剪，不走 audit 事件快照，也不引入前视。
     """
     if not codes:

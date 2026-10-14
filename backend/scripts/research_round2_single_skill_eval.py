@@ -26,8 +26,6 @@ RESEARCH = [
     "sector-laggard-catchup",
     "within-industry-reversal",
     "low-max-steady-trend",
-    "northbound-accumulation",
-    "institutional-survey-attention",
     "dragon-tiger-net-buy-followup",
 ]
 PRODUCTION = [
