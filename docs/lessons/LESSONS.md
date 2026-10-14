@@ -1960,3 +1960,7 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 现象：`app/engine/evaluator.py` 对不在 ALLOWED_NAMES 的名字抛 UnsafeExpression 并被 evaluate() 吞掉返回 False，不告警。研究策略 `price >= ma20` 整年 0 触发；现役超跌资金反包的风险规则 `pledge_ratio >= 40`（-10 分）从未生效（solo 面板 488 张卡里 pledge≥40 的 4 张、其中 1 张入选）。
 - 处理：白名单补 pledge_ratio / price / current_price；新增 tests/test_evaluator_allowlist_live.py 扫描所有非退役策略 yaml 的表达式名字必须在白名单内。顺带修 test_diagnose_prefilter_injectors 夹具缺 pct（L-172 后预先存在的失败）。
 - 影响：仅超跌一年约 1 张票的打分 -10。
+
+## L-188 特征新增跳空字段 gap_pct / gap_unfilled
+- `_build_stock_from_bars` 顶层新增 gap_pct（今开/昨收−1，%）与 gap_unfilled（今低>昨高），evaluator 白名单同步；纯新增键，现役策略不引用。
+- 等价性：10-12（6 票）、09-29（9 票）standalone dry-run 输出与改动前逐字段相同；相关 160 个测试通过。03-02 全市场 4895 只：gap_pct≥2% 256 只，gap_unfilled 132 只。

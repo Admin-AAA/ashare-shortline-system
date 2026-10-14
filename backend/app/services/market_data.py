@@ -1103,6 +1103,12 @@ def _build_stock_from_bars(
         "volume_shrink_pullback": vol5_20 <= 0.85 and (support_ma5 or support_ma10) and quote.get("pct", 0) <= 1,
         "volume_breakout_signal": vol5_20 >= 1.15 and price >= previous_high20 * 0.995 and quote.get("pct", 0) > 0,
         "upper_shadow_count20": upper_shadow_count20,
+        # L-188：跳空字段（日线：今开 vs 昨收、今低 vs 昨高）；纯新增键，现役策略不引用。
+        "gap_pct": (
+            round((_num(latest.get("open")) / closes[-2] - 1) * 100, 3)
+            if len(closes) >= 2 and closes[-2] > 0 and _num(latest.get("open")) > 0 else None
+        ),
+        "gap_unfilled": (lows[-1] > yesterday_high) if len(highs) >= 2 else None,
         "max_dd20": round(max_dd20, 3),
         "max_dd60": round(max_dd60, 3),
         "breakout20": breakout20,
