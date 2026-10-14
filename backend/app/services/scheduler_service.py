@@ -1974,6 +1974,39 @@ def _standalone_run_payloads(db, payload: dict) -> list[dict[str, Any]]:
     return out
 
 
+
+def _completed_standalone_runs(db, payload: dict) -> dict[str, dict[str, Any]]:
+    """目标交易日已 completed 的单策略 formal run：{skill_id: {run_id, recommended_count}}。"""
+    try:
+        from sqlalchemy import func, select
+        from app.models.tables import DailyKbar, RecommendationRun
+        from app.services.standalone_strategies import run_skill_ids
+
+        target = str(payload.get("trade_date_override") or "") or str(
+            db.scalar(select(func.max(DailyKbar.trade_date))) or ""
+        )
+        if len(target) == 8 and target.isdigit():
+            target = f"{target[:4]}-{target[4:6]}-{target[6:]}"
+        if not target:
+            return {}
+        rows = db.execute(
+            select(RecommendationRun.run_id, RecommendationRun.selected_skills_json, RecommendationRun.recommended_count)
+            .where(
+                RecommendationRun.trade_date == target,
+                RecommendationRun.run_mode == "formal",
+                RecommendationRun.status == "completed",
+            )
+        ).all()
+    except Exception:  # noqa: BLE001 - 幂等检查失败时按原逻辑全跑
+        logger.exception("单策略幂等检查失败，按全量运行")
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for run_id, sel, cnt in rows:
+        ids = run_skill_ids(sel)
+        if len(ids) == 1:
+            out[ids[0]] = {"run_id": run_id, "recommended_count": int(cnt or 0)}
+    return out
+
 async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
     """每个策略各跑一个 formal run（自己的分数线/出票上限/推荐/T+1 结算），分批并发。
 
@@ -1985,8 +2018,21 @@ async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
         raise ValueError(_NO_RUNNABLE_SKILL_MSG)
     timeout = int(payload.get("recommendation_wait_timeout_seconds") or 3600)
     strategy_runs: list[dict[str, Any]] = []
-    for start in range(0, len(payloads), STANDALONE_BATCH_SIZE):
-        batch = payloads[start:start + STANDALONE_BATCH_SIZE]
+    # 幂等：同一交易日该策略已有 completed formal run 时跳过（重跑/安全网补跑不重复出票）。
+    if not payload.get("force_rerun"):
+        done = _completed_standalone_runs(db, payload)
+        kept = []
+        for item in payloads:
+            prev = done.get(item["single_skill_id"])
+            if prev:
+                strategy_runs.append({**prev, "skill_id": item["single_skill_id"], "status": "completed", "skipped": "already_completed"})
+            else:
+                kept.append(item)
+        payloads_to_run = kept
+    else:
+        payloads_to_run = payloads
+    for start in range(0, len(payloads_to_run), STANDALONE_BATCH_SIZE):
+        batch = payloads_to_run[start:start + STANDALONE_BATCH_SIZE]
         queued: list[tuple[str, str]] = []
         for index, item in enumerate(batch):
             sid = item["single_skill_id"]
@@ -2023,6 +2069,17 @@ async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
                 "error": final.get("error"),
                 "llm_risk_notes": "async_scheduled" if status == "completed" else None,
             })
+    failed = [r for r in strategy_runs if r.get("status") != "completed"]
+    if failed:
+        try:
+            from app.core.alerts import emit_alert
+            emit_alert(
+                "standalone_run_failed",
+                ",".join(sorted(str(r.get("skill_id")) for r in failed)),
+                "单策略正式推荐失败: " + "；".join(f"{r.get('skill_id')}: {str(r.get('error'))[:120]}" for r in failed),
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("单策略失败告警写入失败")
     completed = [r for r in strategy_runs if r.get("status") == "completed"]
     total_recs = sum(int(r.get("recommended_count") or 0) for r in completed)
     first_run_id = next((r["run_id"] for r in completed if r.get("run_id")), None) or next(

@@ -11,6 +11,13 @@ from app.engine.production_policy import load_production_selection_policy
 from app.services import standalone_strategies as ss
 
 
+
+@pytest.fixture(autouse=True)
+def _no_async_llm_notes(monkeypatch):
+    import app.services.async_llm_risk_notes as notes
+    monkeypatch.setattr(notes, "schedule_attach_llm_risk_notes", lambda run_id: None)
+
+
 def _skill(sid, enabled=True, executable=True, name=None):
     return SimpleNamespace(skill_id=sid, enabled=enabled, executable=executable, name=name or sid)
 
@@ -136,3 +143,32 @@ def test_run_standalone_recommendations_one_run_per_strategy(monkeypatch):
     assert out["strategy_count"] == 2 and out["completed_count"] == 1
     assert out["final_run"]["status"] == "completed" and out["recommended_count"] == 2
     assert {r["skill_id"]: r["status"] for r in out["strategy_runs"]} == {"a": "completed", "b": "failed"}
+
+
+def test_run_standalone_recommendations_skips_already_completed(monkeypatch):
+    from app.services import scheduler_service as sched
+    from app.services import workbench_service as ws
+    import app.services.async_llm_risk_notes as notes
+
+    monkeypatch.setattr(ws, "sync_skills", lambda db: [_skill("a"), _skill("b")])
+    monkeypatch.setattr(sched, "STANDALONE_ENQUEUE_STAGGER_SECONDS", 0)
+    monkeypatch.setattr(sched, "_completed_standalone_runs", lambda db, p: {"a": {"run_id": "old-a", "recommended_count": 3}})
+    monkeypatch.setattr(notes, "schedule_attach_llm_risk_notes", lambda run_id: None)
+    sent = []
+
+    async def fake_run(db, payload):
+        sent.append(payload["single_skill_id"])
+        return {"related_run_id": f"run-{payload['single_skill_id']}"}
+
+    async def fake_wait(db, run_id, timeout_seconds=0):
+        return {"status": "completed", "recommended_count": 1}
+
+    monkeypatch.setattr(sched, "_run_recommendation", fake_run)
+    monkeypatch.setattr(sched, "_wait_for_recommendation_run", fake_wait)
+    out = asyncio.run(sched._run_standalone_recommendations(object(), {"preset_id": "x"}))
+    assert sent == ["b"]
+    assert out["completed_count"] == 2 and out["recommended_count"] == 4
+    assert any(r.get("skipped") == "already_completed" for r in out["strategy_runs"])
+    sent.clear()
+    asyncio.run(sched._run_standalone_recommendations(object(), {"preset_id": "x", "force_rerun": True}))
+    assert sent == ["a", "b"]
