@@ -66,10 +66,6 @@ def _positive_stock_for_skill(skill_id: str):
         return _tradeable_stock(pos120=82.0, off_high60_pct=-1.0, vol5_20=1.25, breakout60=True)
     if skill_id == "sector-relative-strength-leader":
         return _tradeable_stock(primary_excess20=10.0, industry_positive_excess20_count=3)
-    if skill_id == "chip-single-peak-breakout":
-        # 2026-09-13 语义修复（深审 A3-1）：单峰密集 = 90%成本带宽窄 (4,10]
-        # （原 >=20 实为带宽≥20% 的分散股，方向反了）。取 8.0 命中 prefilter 与 setups。
-        return _tradeable_stock(chip_concentration=8.0, breakout20=True, vol5_20=1.2, ma5=10.0, ma10=9.9)
     if skill_id == "trend-pullback-continuation":
         # prefilter include_any: vol5_20<=0.8 and pct<=0 and pct>=-5 (原始字段, 第N+15轮修复死锁)
         return _tradeable_stock(dsa_trend_score=22.0, vol5_20=0.7, pct=-1.0)

@@ -31,7 +31,6 @@ RESEARCH = [
 PRODUCTION = [
     "chao-gu-yang-jia-skill",
     "chen-xiaoqun-skill",
-    "chip-single-peak-breakout",
     "high-range-breakout-momentum",
     "limit-up-reseal-relay",
     "sector-relative-strength-leader",

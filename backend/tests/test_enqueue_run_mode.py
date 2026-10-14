@@ -33,7 +33,7 @@ def test_enqueue_persists_each_explicit_run_mode_in_all_projections(monkeypatch,
 
     monkeypatch.setattr(workbench_service, "_trigger_recommendation", capture_handoff)
     payload = {
-        "single_skill_id": "chip-single-peak-breakout",
+        "single_skill_id": "high-range-breakout-momentum",
         "run_mode": run_mode,
         "run_name": f"{run_mode} 入队测试",
         "skip_aux_refresh": True,
@@ -63,7 +63,7 @@ def test_enqueue_defaults_to_formal_only_in_run_request_parser(monkeypatch, db):
     response = enqueue_workbench_run(
         db,
         {
-            "single_skill_id": "chip-single-peak-breakout",
+            "single_skill_id": "high-range-breakout-momentum",
             "run_name": "默认 formal 测试",
             "skip_aux_refresh": True,
             "disable_agent_review": True,
