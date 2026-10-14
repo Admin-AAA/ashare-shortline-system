@@ -66,6 +66,17 @@ def build_historical_quotes(
         ).all()
     }
 
+    # daily_basic 当日未入库（Tushare 盘后晚到）时，退回同日 stock_quotes 的市值/换手：
+    # 否则 free_mv_yi 全为 None→0，所有带流通市值门槛的策略整日 0 票（L-173）。
+    quote_mv_by_code: dict[str, Any] = {}
+    if not basic_by_code:
+        from app.models.tables import StockQuote
+
+        quote_mv_by_code = {
+            str(row.code): row
+            for row in db.scalars(select(StockQuote).where(StockQuote.trade_date == as_of_date)).all()
+        }
+
     # 前收（用于 preclose；当日 daily_kbars 已有 open/high/low/close）
     quotes: list[dict[str, Any]] = []
     for bar in bar_rows:
@@ -74,6 +85,10 @@ def build_historical_quotes(
         basic = basic_by_code.get(code)
         total_mv = float(basic.total_mv) if basic and basic.total_mv is not None else None
         circ_mv = float(basic.circ_mv) if basic and basic.circ_mv is not None else None
+        sq = quote_mv_by_code.get(code)
+        if basic is None and sq is not None:
+            total_mv = float(sq.total_mv_yi) * 1e4 if sq.total_mv_yi else None
+            circ_mv = float(sq.free_mv_yi) * 1e4 if sq.free_mv_yi else None
         close = float(bar.close or 0)
         preclose = close / (1 + float(bar.pct_chg or 0) / 100) if bar.pct_chg else None
         name = str(meta.get("name") or code)
