@@ -1763,6 +1763,22 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         {"horizon_days": int(payload.get("horizon_days") or 5)},
     )
 
+    # 日K Parquet 缓存增量刷新（按交易日指纹，只重拉新增/变化日）；失败只告警，读取端会回退 SQL。
+    kbar_cache_refresh: dict[str, Any] | None = None
+    try:
+        from app.services.market_pool import kbar_cache
+
+        if kbar_cache.enabled():
+            kbar_cache_refresh = kbar_cache.refresh_kbar_cache(db)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        kbar_cache_refresh = {"error": str(exc)[:200]}
+        try:
+            from app.core.alerts import emit_alert
+            emit_alert("kbar_cache_refresh_failed", "postclose", f"日K缓存刷新失败: {str(exc)[:200]}")
+        except Exception:  # noqa: BLE001
+            pass
+
     # 推荐阶段失败（入队失败 / 等待超时 / Run 异常）不抛错——此前 raise 会丢掉
     # 已完成的 sync/auxiliary/readiness/outcome 中间结果，failed run 的 result_json
     # 只剩一句 error，无法诊断数据同步是否成功。这里捕获并把中间结果一并返回。

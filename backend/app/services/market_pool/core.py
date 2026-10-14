@@ -1684,6 +1684,50 @@ def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
             ))
 
 
+_TRADE_DATE_NORM_CACHE: dict[Any, str] = {}
+
+
+def _norm_td_cached(value: Any) -> str:
+    """normalize_trade_date 的记忆化（纯函数，交易日取值只有一千多个）。"""
+    hit = _TRADE_DATE_NORM_CACHE.get(value)
+    if hit is None:
+        hit = _normalize_trade_date(value)
+        if len(_TRADE_DATE_NORM_CACHE) < 100_000:
+            _TRADE_DATE_NORM_CACHE[value] = hit
+    return hit
+
+
+def _bar_from_mapping(row: Any) -> dict[str, Any]:
+    chip_cost_15 = row["chip_cost_15"]
+    chip_cost_85 = row["chip_cost_85"]
+    return {
+        "code": row["code"],
+        "trade_date": _norm_td_cached(row["trade_date"]),
+        "open": float(row["open"] or 0),
+        "high": float(row["high"] or 0),
+        "low": float(row["low"] or 0),
+        "close": float(row["close"] or 0),
+        "volume": float(row["volume"] or 0),
+        "amount": float(row["amount"] or 0),
+        "pct_chg": float(row["pct_chg"] or 0),
+        "turnover_rate": float(row["turnover_rate"] or 0),
+        "ma5": row["ma5"], "ma10": row["ma10"], "ma20": row["ma20"], "ma60": row["ma60"],
+        "volume_ratio_5d": row["vol_ratio_5"],
+        "chip_winner_rate": row["chip_winner_rate"], "chip_weight_avg": row["chip_weight_avg"],
+        "chip_cost_15": chip_cost_15, "chip_cost_50": row["chip_cost_50"], "chip_cost_85": chip_cost_85,
+        "holder_pct": row["holder_pct"], "profit_efficiency": row["profit_efficiency"],
+        "chip_concentration": round((float(chip_cost_85) - float(chip_cost_15)) / float(chip_cost_15) * 100, 2) if chip_cost_15 and float(chip_cost_15) > 0 and chip_cost_85 else None,
+        "_indicator": {
+            "rsi_6": row["rsi_6"], "rsi_12": row["rsi_12"], "rsi_24": row["rsi_24"],
+            "macd_dif": row["macd_dif"], "macd_dea": row["macd_dea"], "macd_bar": row["macd_bar"],
+            "bias_ma5": row["bias_5"], "bias_ma10": row["bias_10"], "bias_ma20": row["bias_20"],
+            "breakout20": row["breakout20"], "breakout60": row["breakout60"],
+            "upper_shadow_count20": row["upper_shadow_count20"],
+            "max_dd20": row["max_dd20"], "max_dd60": row["max_dd60"],
+        },
+    }
+
+
 def _load_cached_bars_batch(
     db: Session, codes: list[str], limit: int, as_of_date: str | None = None
 ) -> dict[str, list[dict[str, Any]]]:
@@ -1703,6 +1747,19 @@ def _load_cached_bars_batch(
             "breakout60", "upper_shadow_count20", "max_dd20", "max_dd60",
         )
     )
+    from app.services.market_pool import kbar_cache
+
+    cached = kbar_cache.load_rows(codes, limit, str(latest_allowed_date))
+    if cached is not None:
+        result_cached: dict[str, list[dict[str, Any]]] = {}
+        for code in codes:
+            rows_c = cached.get(code, [])
+            result_cached[code] = (
+                [_bar_from_mapping(r) for r in rows_c]
+                if len(rows_c) >= limit
+                else _load_cached_bars(db, code, limit, as_of_date=latest_allowed_date)
+            )
+        return result_cached
     bars_by_code: dict[str, list[dict[str, Any]]] = defaultdict(list)
     # Rank only a narrow common-calendar window first. Suspended/new listings
     # that produce fewer than ``limit`` rows are repaired below with an exact
@@ -1743,34 +1800,7 @@ def _load_cached_bars_batch(
             .order_by(ranked.c.code, ranked.c.trade_date.asc())
         ).mappings()
         for row in rows:
-            chip_cost_15 = row["chip_cost_15"]
-            chip_cost_85 = row["chip_cost_85"]
-            bars_by_code[str(row["code"])].append({
-                "code": row["code"],
-                "trade_date": _normalize_trade_date(row["trade_date"]),
-                "open": float(row["open"] or 0),
-                "high": float(row["high"] or 0),
-                "low": float(row["low"] or 0),
-                "close": float(row["close"] or 0),
-                "volume": float(row["volume"] or 0),
-                "amount": float(row["amount"] or 0),
-                "pct_chg": float(row["pct_chg"] or 0),
-                "turnover_rate": float(row["turnover_rate"] or 0),
-                "ma5": row["ma5"], "ma10": row["ma10"], "ma20": row["ma20"], "ma60": row["ma60"],
-                "volume_ratio_5d": row["vol_ratio_5"],
-                "chip_winner_rate": row["chip_winner_rate"], "chip_weight_avg": row["chip_weight_avg"],
-                "chip_cost_15": chip_cost_15, "chip_cost_50": row["chip_cost_50"], "chip_cost_85": chip_cost_85,
-                "holder_pct": row["holder_pct"], "profit_efficiency": row["profit_efficiency"],
-                "chip_concentration": round((float(chip_cost_85) - float(chip_cost_15)) / float(chip_cost_15) * 100, 2) if chip_cost_15 and float(chip_cost_15) > 0 and chip_cost_85 else None,
-                "_indicator": {
-                    "rsi_6": row["rsi_6"], "rsi_12": row["rsi_12"], "rsi_24": row["rsi_24"],
-                    "macd_dif": row["macd_dif"], "macd_dea": row["macd_dea"], "macd_bar": row["macd_bar"],
-                    "bias_ma5": row["bias_5"], "bias_ma10": row["bias_10"], "bias_ma20": row["bias_20"],
-                    "breakout20": row["breakout20"], "breakout60": row["breakout60"],
-                    "upper_shadow_count20": row["upper_shadow_count20"],
-                    "max_dd20": row["max_dd20"], "max_dd60": row["max_dd60"],
-                },
-            })
+            bars_by_code[str(row["code"])].append(_bar_from_mapping(row))
 
     result: dict[str, list[dict[str, Any]]] = {}
     for code in codes:
