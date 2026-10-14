@@ -56,3 +56,19 @@ def test_chen_xiaoqun_skill_loads_and_enabled():
     skills = {s.skill_id: s for s in load_skills(SKILLS_DIR)}
     assert SKILL_ID in skills
     assert skills[SKILL_ID].enabled is True
+
+
+def test_chen_xiaoqun_bias_ma5_cap_and_field_is_top_level():
+    """L-182：prefilter 加 bias_ma5<=5；该字段必须由 _apply_dsa_context 写到候选顶层（L-178 教训）。"""
+    from app.services.feature_builder import _apply_dsa_context
+
+    spec = _cxq_yaml()
+    inc = (spec.get("prefilter") or {}).get("market", {}).get("include") or []
+    assert any(r.get("when") == "bias_ma5 <= 5" for r in inc)
+    item = {"price": 10.6, "close": 10.6, "dist20": 8.0, "dist60": 12.0, "pct": 3.0}
+    _apply_dsa_context(item, {"ma5": 10.0, "ma10": 9.8, "ma20": 9.6, "ma60": 9.0})
+    assert item["bias_ma5"] == 6.0
+    assert evaluate("bias_ma5 <= 5", item) is False
+    item2 = {**item, "price": 10.3, "close": 10.3}
+    _apply_dsa_context(item2, {"ma5": 10.0, "ma10": 9.8, "ma20": 9.6, "ma60": 9.0})
+    assert evaluate("bias_ma5 <= 5", item2) is True

@@ -26,6 +26,9 @@ def _fs(c, k):
 def _extra(sid):
     if sid == "low-max-steady-trend":
         return lambda c: (_fs(c, "pct") is None or 0 <= _fs(c, "pct") <= 3) and (_fs(c, "rsi_6") is None or _fs(c, "rsi_6") <= 70)
+    if sid == "chen-xiaoqun-skill":
+        # L-182：bias_ma5<=5（solo 面板生成于加条件之前，这里按面板 feature_snapshot 模拟；重跑 solo 后结果不变）
+        return lambda c: _fs(c, "bias_ma5") is None or _fs(c, "bias_ma5") <= 5
     if sid == "sector-relative-strength-leader":
         return lambda c: (_fs(c, "turnover_rate") is None or _fs(c, "turnover_rate") <= 8) and (_fs(c, "pct") is None or _fs(c, "pct") <= 5)
     return None

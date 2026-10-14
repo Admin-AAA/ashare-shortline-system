@@ -41,6 +41,10 @@ prefilter:
         reason: "drawdown_too_large"
       - when: "upper_shadow_count20 <= 5"
         reason: "upper_shadow_too_many"
+      # 2026-10-15 调参（L-182）：真单策略面板（solo，2025-10~2026-10，245 天）上 bias_ma5<=5（离 5 日线不超过 5%）
+      # 4 个季度窗口均值全部提升；近 12 月 282 张 57.8% +0.43% → 261 张 63.6% +0.95%；早窗(<05-01) +0.34→+1.04、晚窗 +0.57→+0.82。
+      - when: "bias_ma5 <= 5"
+        reason: "overextended_ma5"
     include_any:
       - when: "is_main_theme == true and breakout20 == 1"
         reason: "requires_main_breakout"

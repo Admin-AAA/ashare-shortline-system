@@ -1923,3 +1923,10 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 
 ## L-181 真单策略回放的面板保真度断言须用 standalone 口径
 `--exclude-skills` 只剩一个技能时，aggregate 通过 `standalone_skill_id` 走 `standalone_selection_policy`（无共识闸门、上限=output_count），而 `_assert_panel_fidelity` 仍用组合 policy → chao-gu 90/245 天"不一致"（弱势单背书被共识闸门砍）。改为同口径后 242/245 一致（1.2%≤3%）。多技能回放行为不变。
+
+## L-182 陈小群加 bias_ma5<=5：按季度一致性选参，不按早窗最优
+- 真单策略面板（solo，245 天）上做过滤网格。按「早窗均值最高、n≥60%」选出的 bias_ma5≤3 / 组合 (5,6,100) 在晚窗反而变差（+0.57→+0.15/+0.40），是过拟合。
+- 改用 4 个季度窗口（25Q4 / 26Q1 / 26Q2 / 26Q3）逐窗对比：bias_ma5≤4、≤5 四个窗口均值全部高于基线，邻近值 ≤6 也是 3/4，参数平滑。chg20≤10 是 3/4（25Q4 变差）。
+- 采用 bias_ma5≤5：近 12 月 282 张 57.8% +0.43% → 261 张 63.6% +0.95%；分季度均值 +0.73/+0.30/+0.15/+0.47 → +1.56/+0.94/+0.32/+0.94。
+- 字段核对（L-178）：bias_ma5 由 feature_builder._apply_dsa_context 写到候选顶层，when 条件读得到（加了测试）。策略页指标在 solo 面板上按 feature_snapshot 模拟，下次重跑 chen solo 回放确认。
+- 脚本：backend/output/research/tune_chen/folds.py
