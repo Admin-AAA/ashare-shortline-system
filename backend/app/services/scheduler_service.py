@@ -1061,6 +1061,8 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
         summary_parts.append(_sync_step_summary("健康补数完成", health_remediation))
         result["steps"].append({"name": "health_remediation", "status": health_remediation.get("status")})
         step_timings["health_remediation"] = _lap()
+        if isinstance(health_remediation.get("timings_seconds"), dict):
+            result["health_remediation_timings_seconds"] = health_remediation["timings_seconds"]
 
     result["status"] = _task_result_status(result)
     result["summary_text"] = "；".join(summary_parts) if summary_parts else "自动任务执行完成"

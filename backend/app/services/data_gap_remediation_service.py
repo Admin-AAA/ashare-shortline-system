@@ -480,6 +480,9 @@ def remediate_data_health_gaps(
     post_diagnosis: bool = True,
 ) -> dict[str, Any]:
     requested_tables = _normalize_target_tables(target_tables)
+    # 子步计时（仅观测，不改行为）：供 17:35 profile 判断 health_remediation 内部哪步最慢。
+    _t0 = time.perf_counter()
+    timings: dict[str, Any] = {}
     try:
         before = diagnose_all(db)
     except Exception as exc:
@@ -498,11 +501,21 @@ def remediate_data_health_gaps(
         daily_kbar_code_limit=daily_kbar_code_limit,
         minute_kbar_code_limit=minute_kbar_code_limit,
     )
+    timings["pre_diagnosis_and_plan"] = round(time.perf_counter() - _t0, 2)
 
     provider_before = _provider_health_snapshot()
     actions = [_with_rollback_hint(_mark_planned(item)) for item in plan]
     if not dry_run:
-        actions = [_with_rollback_hint(_execute_plan_item_safely(db, item)) for item in plan]
+        by_table: dict[str, float] = {}
+        actions = []
+        for item in plan:
+            _ta = time.perf_counter()
+            actions.append(_with_rollback_hint(_execute_plan_item_safely(db, item)))
+            key = str(item.get("table") or "?")
+            by_table[key] = round(by_table.get(key, 0.0) + time.perf_counter() - _ta, 2)
+        timings["actions_by_table"] = by_table
+    timings["actions_total"] = round(time.perf_counter() - _t0 - timings["pre_diagnosis_and_plan"], 2)
+    _tp = time.perf_counter()
     provider_activity = _provider_activity_delta(
         provider_before,
         _provider_health_snapshot(),
@@ -540,6 +553,8 @@ def remediate_data_health_gaps(
 
     if after_diagnosis_skipped:
         after_snapshot["diagnosis_skipped"] = True
+    timings["post_diagnosis"] = round(time.perf_counter() - _tp, 2)
+    timings["total"] = round(time.perf_counter() - _t0, 2)
     failed_count = sum(1 for item in actions if item.get("status") == "failed")
     status = _remediation_status(dry_run=dry_run, actions=actions, failed_count=failed_count)
     if post_diagnosis_failed:
@@ -561,6 +576,7 @@ def remediate_data_health_gaps(
         "comparison": comparison,
         "rollback_guidance": _rollback_guidance(dry_run=dry_run, actions=actions),
         "remaining_issues": remaining_issues,
+        "timings_seconds": timings,
     }
 
 
