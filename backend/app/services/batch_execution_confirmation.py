@@ -31,7 +31,10 @@ from sqlalchemy.orm import Session
 from app.engine.skill_loader import load_skills
 from app.engine.trading_calendar import latest_allowed_quote_date, normalize_trade_date
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
-from app.services.evidence.validation import canonical_live_forward_run_ids
+from app.services.evidence.validation import (
+    canonical_live_forward_run_ids,
+    catchup_formal_run_ids,
+)
 from app.services.execution_confirmation import (
     _build_signal_for_strategy,
     _entry_window_closed,
@@ -73,7 +76,8 @@ def _load_eligible_recs(
     """
     if not recommendation_ids:
         return [], 0
-    canonical_run_ids = canonical_live_forward_run_ids(db)
+    # 补跑正式运行也纳入实时执行确认（复盘页展示用，不影响 KPI）。
+    canonical_run_ids = tuple(canonical_live_forward_run_ids(db)) + tuple(catchup_formal_run_ids(db))
     if not canonical_run_ids:
         return [], len(set(recommendation_ids))
     rows = list(

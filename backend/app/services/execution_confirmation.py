@@ -20,7 +20,10 @@ from app.engine.skill_loader import load_skills, StrategySkill
 from app.engine.strategy_runner import explain_skill_prefilter, run_strategy
 from app.engine.trading_calendar import latest_allowed_quote_date
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome
-from app.services.evidence.validation import canonical_live_forward_run_ids
+from app.services.evidence.validation import (
+    canonical_live_forward_run_ids,
+    catchup_formal_run_ids,
+)
 from app.services.intraday_cumulative_policy import intraday_cumulative_inconclusive
 from app.services.outcome_simulation import _is_intraday_recommendation
 
@@ -363,10 +366,15 @@ def confirm_recommendation_execution(
     rec = db.get(Recommendation, recommendation_id)
     if rec is None:
         return None
-    canonical_run_ids = canonical_live_forward_run_ids(
+    canonical_run_ids = set(canonical_live_forward_run_ids(
         db,
         trade_date=str(rec.trade_date),
-    )
+    ))
+    # 凌晨补跑的正式运行（unverified 但时点有效）同样需要买入确认/执行状态，
+    # 否则复盘页这些票没有实时状态。KPI 口径仍只用 canonical LIVE。
+    canonical_run_ids.update(catchup_formal_run_ids(
+        db, date_from=str(rec.trade_date), date_to=str(rec.trade_date),
+    ))
     if str(rec.run_id) not in canonical_run_ids:
         return None
     outcome = db.get(RecommendationOutcome, recommendation_id)

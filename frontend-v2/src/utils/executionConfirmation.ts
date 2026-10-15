@@ -67,7 +67,7 @@ export function collectUnsettledIds(
   const ids = items
     .filter(
       (it) =>
-        it.evidence_class === "live_forward" &&
+        (it.evidence_class === "live_forward" || it.evidence_class === "unverified") &&
         !isOutcomeSettled(it.outcome?.outcome_label),
     )
     .map((it) => it.recommendation_id);
