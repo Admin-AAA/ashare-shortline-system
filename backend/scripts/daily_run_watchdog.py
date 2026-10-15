@@ -3,7 +3,8 @@
 Runs from its own launchd agent (not Prefect), so it still fires when the
 Prefect server/worker are down (2026-10-13~15 silent outage). Mon-Fri: if no
 ScheduledTaskRun for the task started since 17:00 today (Asia/Shanghai), or Prefect is
-unreachable, emit ``[ALERT:DAILY_RUN_MISSING]`` / ``[ALERT:PREFECT_DOWN]`` to
+unreachable, or every run today failed, emit ``[ALERT:DAILY_RUN_MISSING]`` /
+``[ALERT:DAILY_RUN_FAILED]`` / ``[ALERT:PREFECT_DOWN]`` to
 backend/logs/app.log. Exit code 2 when an alert fired.
 """
 from __future__ import annotations
@@ -49,13 +50,40 @@ def started_today_count(db, now_cst: dt.datetime) -> int:
     )
 
 
-def evaluate(now_cst: dt.datetime, run_count: int, prefect_up: bool) -> list[tuple[str, str]]:
+def status_counts_today(db, now_cst: dt.datetime) -> dict[str, int]:
+    """Per-status count of today's (since 17:00 CST) runs of TASK_ID."""
+    day_start_cst = now_cst.replace(hour=17, minute=0, second=0, microsecond=0)
+    day_start_utc = day_start_cst.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    rows = db.execute(
+        text(
+            "SELECT status, COUNT(*) FROM scheduled_task_runs "
+            "WHERE task_id=:t AND started_at >= :s GROUP BY status"
+        ),
+        {"t": TASK_ID, "s": day_start_utc},
+    ).fetchall()
+    return {str(r[0]): int(r[1]) for r in rows}
+
+
+def evaluate(
+    now_cst: dt.datetime,
+    run_count: int,
+    prefect_up: bool,
+    status_counts: dict[str, int] | None = None,
+) -> list[tuple[str, str]]:
     alerts: list[tuple[str, str]] = []
     if now_cst.weekday() >= 5:
         return alerts
     day = now_cst.date().isoformat()
     if run_count == 0:
         alerts.append(("DAILY_RUN_MISSING", f"{TASK_ID} 今日({day}) 截至 {now_cst:%H:%M} CST 未启动（17:35 cron），调度可能静默中断"))
+    elif status_counts is not None:
+        # 2026-10-15：17:35 run 以 KeyError 失败，但 runs_today=1 → 旧 watchdog alerts=0 漏报。
+        ok = status_counts.get("completed", 0) + status_counts.get("running", 0)
+        if ok == 0:
+            alerts.append((
+                "DAILY_RUN_FAILED",
+                f"{TASK_ID} 今日({day}) 已启动 {run_count} 次但无 completed/running：{status_counts}，正式推荐未出票",
+            ))
     if not prefect_up:
         alerts.append(("PREFECT_DOWN", f"Prefect API 不可达 {PREFECT_HEALTH_URL}（{day} {now_cst:%H:%M} CST）"))
     return alerts
@@ -72,11 +100,12 @@ def main(argv: list[str] | None = None) -> int:
     db = SessionLocal()
     try:
         count = started_today_count(db, now_cst)
+        statuses = status_counts_today(db, now_cst)
     finally:
         db.close()
     up = _prefect_up()
-    alerts = evaluate(now_cst, count, up)
-    print(f"watchdog {now_cst:%Y-%m-%d %H:%M} CST runs_today={count} prefect_up={up} alerts={len(alerts)}")
+    alerts = evaluate(now_cst, count, up, statuses)
+    print(f"watchdog {now_cst:%Y-%m-%d %H:%M} CST runs_today={count} statuses={statuses} prefect_up={up} alerts={len(alerts)}")
     for kind, msg in alerts:
         print(f"[ALERT:{kind}] {msg}")
         if not args.dry_run:
