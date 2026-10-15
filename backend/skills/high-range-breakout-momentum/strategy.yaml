@@ -108,6 +108,16 @@ phases:
     hard_veto: true
     risk_flags: ["弱市追高突破确定性亏损，硬否决"]
 
+  # 震荡日停出（Sprint2 §57，2026-10-15）：与卡片 market_regime 基底(_market_base)同口径——
+  # 上涨比 up_count/market_sample_count ∈ [0.35, 0.50) 即「震荡」（含 震荡·活跃/震荡·高潮）。
+  # 四窗单策略面板（现行离场）：W1+W2 选 n53 −0.47%→n39 −0.29%（PF .75→.86），W3 留出 n11 −0.15%→n5 −0.14%（不差），
+  # W0(2022-04~2023-03) n51 −0.73%→n37 −0.23%；近 12 月 n38 +0.72%→n20 +1.89%。震荡日自身 4 窗 n34 avg −1.27% WR 44%。
+  - name: 震荡日停出
+    when: "market_sample_count > 0 and up_count >= market_sample_count * 0.35 and up_count < market_sample_count * 0.5"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["震荡市（上涨比35%-50%）突破接力四窗均值为负，停出"]
+
   - name: 破位回避
     when: "max_dd20 < -18 or (off_high60_pct < -8 and breakout60 == false)"
     score_cap: 30

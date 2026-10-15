@@ -102,6 +102,8 @@ ALLOWED_NAMES = {
     "market_sentiment_phase",
     "market_regime",
     "market_sample_count",
+    # S2 §57：high-range 震荡停出需用与卡片 _market_base 同口径的上涨比（up_count/market_sample_count）。
+    "up_count",
     "is_st",
     "ma5",
     "ma10",

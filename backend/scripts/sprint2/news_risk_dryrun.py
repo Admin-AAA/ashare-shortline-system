@@ -6,7 +6,7 @@ from __future__ import annotations
 import json, sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from app.services import workbench_service as wb
+from app.services import feature_builder as wb  # 生产路径 runs/stages/adapters 在函数内 from feature_builder import
 
 LOG: list[dict] = []
 _orig = wb.build_features
