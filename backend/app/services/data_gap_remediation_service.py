@@ -167,12 +167,17 @@ def _backfill_news_announcements(
     end_date: str | None = None,
     row_limit: int = 1000,
 ) -> dict[str, Any]:
-    """Fetch a provably bounded announcement range per target symbol and upsert it.
+    """补新闻公告：东方财富为主，Tushare anns_d 仅作可选回退。
 
-    The current ai-tool gateway caps global ``anns_d`` responses at 1,000 rows and
-    ignores ``offset``. Per-symbol month ranges stay below that cap and therefore avoid
-    treating a repeated full page as complete.
+    背景（2026-10）：本账号 anns_d 返回 40203 无权限，日常 news 补数一直 empty。
+    东方财富接口可用，但 HTTP 567 表示反爬封禁——必须退避并中止，不能继续刷。
+    仍保留 L-044 的连续失败上限，避免把盘后流水线卡死数小时。
     """
+    from app.services.eastmoney_news import (
+        EastmoneyBlockedError,
+        fetch_announcements_for_code,
+    )
+
     target_start = _normalize_trade_date(start_date or trade_date)
     target_end = _normalize_trade_date(end_date or trade_date)
     target_codes = list(OrderedDict.fromkeys(
@@ -185,6 +190,9 @@ def _backfill_news_announcements(
             "provider_row_count": 0,
             "failed_code_count": 0,
             "failed_codes": [],
+            "primary_source": "eastmoney",
+            "tushare_fallback_used": False,
+            "eastmoney_blocked": False,
         }
 
     effective_limit = max(1, min(1000, int(row_limit or 1000)))
@@ -193,69 +201,125 @@ def _backfill_news_announcements(
     payload_by_id: dict[str, dict[str, Any]] = {}
     provider_row_count = 0
     failed_codes: list[str] = []
-    pro = get_pro()
+    eastmoney_ok_codes = 0
+    tushare_fallback_used = False
+    eastmoney_blocked = False
 
-    # 逐股票 Tushare 调用必须限速（L-044：盘后流水线曾因逐股票 anns_d 无界
-    # 调用卡死数小时，阻塞 outcome 结算 → 前瞻样本 → D 项闭环）。
-    # 每笔间隔 0.35s（约 3 req/s，低于 Tushare 公开限速），累计失败超过
-    # NEWS_BACKFILL_MAX_FAILURES 中止，避免全市场网络异常时无限空转。
+    # 逐股票必须限速（L-044）。东方财富自身还有进程级间隔；这里再保留
+    # 循环顶 sleep，并在连续失败 / 封禁时中止。
     NEWS_BACKFILL_SLEEP = 0.35
     NEWS_BACKFILL_MAX_FAILURES = 200
     consecutive_failures = 0
+    remaining_for_tushare: list[str] = []
+
     for code in target_codes:
         if consecutive_failures >= NEWS_BACKFILL_MAX_FAILURES:
-            break
-        # 循环顶部 sleep：无论成功/失败/空返回，每笔调用后都限速，
-        # 避免 provider 快速失败时以无限循环速率打爆上游限流。
-        time.sleep(NEWS_BACKFILL_SLEEP)
-        suffix = "BJ" if code.startswith(("4", "8")) else "SH" if code.startswith(("5", "6", "9")) else "SZ"
-        try:
-            frame = pro.anns_d(
-                ts_code=f"{code}.{suffix}",
-                start_date=compact_start,
-                end_date=compact_end,
-                limit=effective_limit,
+            remaining_for_tushare.extend(
+                c for c in target_codes[target_codes.index(code):] if c not in remaining_for_tushare
             )
+            break
+        time.sleep(NEWS_BACKFILL_SLEEP)
+        try:
+            rows = fetch_announcements_for_code(
+                code,
+                start_date=target_start,
+                end_date=target_end,
+                page_size=min(50, effective_limit),
+                max_pages=2,
+            )
+        except EastmoneyBlockedError:
+            eastmoney_blocked = True
+            remaining_for_tushare.extend(
+                c for c in target_codes[target_codes.index(code):] if c not in remaining_for_tushare
+            )
+            logger.warning(
+                "eastmoney news blocked; aborting eastmoney path, trying tushare fallback for %d codes",
+                len(remaining_for_tushare),
+            )
+            break
         except Exception:
             failed_codes.append(code)
             consecutive_failures += 1
+            remaining_for_tushare.append(code)
             continue
-        if frame is None or frame.empty:
-            consecutive_failures += 1
+        if not rows:
+            # 当日无公告是正常空结果，不算失败，也不再打 Tushare（无权限时只会白费）。
+            consecutive_failures = 0
             continue
         consecutive_failures = 0
-        if len(frame) >= effective_limit:
-            failed_codes.append(code)
-            continue
-        provider_row_count += len(frame)
-        for _, row in frame.iterrows():
-            announce_date = _normalize_trade_date(row.get("ann_date"))
-            if not announce_date or not (target_start <= announce_date <= target_end):
-                continue
-            raw_code = str(row.get("ts_code") or row.get("symbol") or "").strip()
-            row_code = raw_code.split(".")[0]
-            title = str(row.get("title") or "").strip()
-            url = str(row.get("url") or "").strip()
-            if len(row_code) != 6 or not title:
-                continue
-            identity = f"{url}|{raw_code}|{announce_date}|{title}"
-            article_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
-            category = str(row.get("ann_type") or "announcement").strip()[:40]
-            risk_warning = any(
-                keyword in title
-                for keyword in ("风险", "退市", "处罚", "立案", "亏损", "减持", "质押", "诉讼")
-            )
-            payload_by_id[article_id] = {
-                "source": "tushare_anns_d",
-                "article_id": article_id,
-                "code": row_code,
-                "announce_date": announce_date,
-                "title": title,
-                "summary": None,
-                "category": category or "announcement",
-                "sentiment": "neutral",
-                "is_risk_warning": risk_warning,
-            }
+        eastmoney_ok_codes += 1
+        provider_row_count += len(rows)
+        for row in rows:
+            payload_by_id[row["article_id"]] = row
+
+    # Tushare anns_d 可选回退：仅当东方财富漏掉/封禁时尝试；无权限时静默跳过。
+    if remaining_for_tushare:
+        pro = None
+        try:
+            pro = get_pro()
+        except Exception:
+            pro = None
+        if pro is not None:
+            tushare_failures = 0
+            for code in remaining_for_tushare:
+                if tushare_failures >= NEWS_BACKFILL_MAX_FAILURES:
+                    break
+                time.sleep(NEWS_BACKFILL_SLEEP)
+                suffix = (
+                    "BJ" if code.startswith(("4", "8"))
+                    else "SH" if code.startswith(("5", "6", "9"))
+                    else "SZ"
+                )
+                try:
+                    frame = pro.anns_d(
+                        ts_code=f"{code}.{suffix}",
+                        start_date=compact_start,
+                        end_date=compact_end,
+                        limit=effective_limit,
+                    )
+                except Exception:
+                    tushare_failures += 1
+                    if code not in failed_codes:
+                        failed_codes.append(code)
+                    continue
+                if frame is None or getattr(frame, "empty", True):
+                    tushare_failures += 1
+                    continue
+                tushare_failures = 0
+                tushare_fallback_used = True
+                if len(frame) >= effective_limit:
+                    if code not in failed_codes:
+                        failed_codes.append(code)
+                    continue
+                provider_row_count += len(frame)
+                for _, row in frame.iterrows():
+                    announce_date = _normalize_trade_date(row.get("ann_date"))
+                    if not announce_date or not (target_start <= announce_date <= target_end):
+                        continue
+                    raw_code = str(row.get("ts_code") or row.get("symbol") or "").strip()
+                    row_code = raw_code.split(".")[0]
+                    title = str(row.get("title") or "").strip()
+                    url = str(row.get("url") or "").strip()
+                    if len(row_code) != 6 or not title:
+                        continue
+                    identity = f"{url}|{raw_code}|{announce_date}|{title}"
+                    article_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+                    category = str(row.get("ann_type") or "announcement").strip()[:40]
+                    risk_warning = any(
+                        keyword in title
+                        for keyword in ("风险", "退市", "处罚", "立案", "亏损", "减持", "质押", "诉讼")
+                    )
+                    payload_by_id[article_id] = {
+                        "source": "tushare_anns_d",
+                        "article_id": article_id,
+                        "code": row_code,
+                        "announce_date": announce_date,
+                        "title": title,
+                        "summary": None,
+                        "category": category or "announcement",
+                        "sentiment": "neutral",
+                        "is_risk_warning": risk_warning,
+                    }
 
     payload = list(payload_by_id.values())
     if payload:
@@ -277,6 +341,10 @@ def _backfill_news_announcements(
         "provider_row_count": provider_row_count,
         "failed_code_count": len(failed_codes),
         "failed_codes": failed_codes[:10],
+        "primary_source": "eastmoney",
+        "eastmoney_ok_codes": eastmoney_ok_codes,
+        "tushare_fallback_used": tushare_fallback_used,
+        "eastmoney_blocked": eastmoney_blocked,
     }
 
 
@@ -1797,7 +1865,7 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
             # to keep the operational NewsAnnouncement table fresh.
             db.rollback()
             logger.warning(
-                "news event snapshot unavailable; using paginated anns_d remediation: %s",
+                "news event snapshot unavailable; using eastmoney-primary remediation: %s",
                 contract_error,
             )
             fallback = _backfill_news_announcements(
@@ -1811,7 +1879,7 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
             "status": "completed" if row_count else "empty",
             "row_count": row_count,
             "requested_code_count": len(codes),
-            "fallback": "bounded_symbol_anns_d" if fallback is not None else None,
+            "fallback": ("eastmoney_primary" if fallback is not None else None),
             "provider_row_count": fallback.get("provider_row_count") if fallback else None,
             "query_count": fallback.get("query_count") if fallback else None,
             "failed_code_count": fallback.get("failed_code_count") if fallback else None,
