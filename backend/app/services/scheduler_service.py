@@ -1737,12 +1737,27 @@ def _refresh_recoverable_postclose_aux(
     刷新本身抛错代表数据库、程序或 provider 故障，必须保留原异常与 traceback，
     不能伪装成“数据尚未发布”。只有刷新正常返回但闸门仍只缺当天时才允许退避。
     """
-    from app.services.data_gap_remediation_service import _refresh_auxiliary_dataset
+    from app.services.data_gap_remediation_service import (
+        _backfill_index_daily_dates,
+        _index_ts_codes,
+        _refresh_auxiliary_dataset,
+    )
     from app.services.data_health_service import clear_data_health_cache
 
     results: dict[str, Any] = {}
     try:
         for table in tables:
+            if table == "index_daily":
+                # index_daily 不是 S4 辅助数据集（orchestrator 无此 descriptor，
+                # 走 _refresh_auxiliary_dataset 会 KeyError 并让整个盘后正式推荐失败，
+                # 2026-10-15 17:35 实测）。与健康补数同一实现：按指数代码拉当日日线 INSERT IGNORE。
+                backfill = _backfill_index_daily_dates(db, [trade_date], _index_ts_codes(db))
+                results[table] = {
+                    "status": "completed",
+                    "record_count": int(backfill.get("row_count") or 0),
+                    "audit": backfill,
+                }
+                continue
             count, audit = _refresh_auxiliary_dataset(
                 db,
                 dataset=table,

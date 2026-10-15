@@ -469,3 +469,31 @@ def test_postclose_stale_aux_table_without_single_day_gap_evidence_is_hard_block
 
     assert classification["recoverable_tables"] == []
     assert classification["hard_blockers"][0]["code"] == "table_not_current"
+
+
+def test_refresh_recoverable_aux_routes_index_daily_to_index_backfill(monkeypatch):
+    """index_daily 不是 S4 辅助数据集；不得进 orchestrator（2026-10-15 KeyError 回归）。"""
+    import app.services.data_gap_remediation_service as gap
+
+    aux_calls, index_calls = [], []
+    monkeypatch.setattr(
+        gap,
+        "_refresh_auxiliary_dataset",
+        lambda _db, *, dataset, trade_date, codes=None: aux_calls.append((dataset, trade_date)) or (7, {"ok": 1}),
+    )
+    monkeypatch.setattr(gap, "_index_ts_codes", lambda _db: ["000001.SH", "399001.SZ"])
+    monkeypatch.setattr(
+        gap,
+        "_backfill_index_daily_dates",
+        lambda _db, dates, codes: index_calls.append((dates, codes)) or {"row_count": 2},
+    )
+    monkeypatch.setattr("app.services.data_health_service.clear_data_health_cache", lambda: None)
+
+    result = scheduler_service._refresh_recoverable_postclose_aux(
+        object(), trade_date="2026-10-15", tables=["index_daily", "limit_up_board"]
+    )
+
+    assert index_calls == [(["2026-10-15"], ["000001.SH", "399001.SZ"])]
+    assert aux_calls == [("limit_up_board", "2026-10-15")]
+    assert result["index_daily"]["record_count"] == 2
+    assert result["limit_up_board"]["record_count"] == 7
