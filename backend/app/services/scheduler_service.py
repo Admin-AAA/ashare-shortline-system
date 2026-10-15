@@ -1095,6 +1095,24 @@ _KNOWN_AUX_SOURCE_GAPS: dict[str, str] = {
 }
 
 
+# 已知长期缺口中耗时显著的数据集（实测 2026-10-15：holder_trade 单独约 17.5s，结果恒为 0 行失败）。
+# 非周一跳过（DB 输出不变：失败时本就 0 行写入）；周一照常请求，用于发现上游恢复。
+_SLOW_KNOWN_GAPS: frozenset[str] = frozenset({"holder_trade"})
+
+
+def _skip_slow_known_gaps(datasets: tuple[str, ...], trade_date: str) -> tuple[tuple[str, ...], list[str]]:
+    from datetime import date as _date
+
+    try:
+        probe_day = _date.fromisoformat(str(trade_date)[:10]).weekday() == 0
+    except ValueError:
+        probe_day = True
+    if probe_day:
+        return datasets, []
+    skipped = [d for d in datasets if d in _SLOW_KNOWN_GAPS and d in _KNOWN_AUX_SOURCE_GAPS]
+    return tuple(d for d in datasets if d not in skipped), skipped
+
+
 def _batch_sync_item_status(dataset_key: str, errors) -> str:
     if not errors:
         return "success"
@@ -1276,6 +1294,10 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
             payload.get("auxiliary_batch_datasets")
             or [entry.key for entry in AUXILIARY_DATASET_INVENTORY]
         )
+        if not payload.get("auxiliary_batch_datasets"):
+            datasets, skipped_gaps = _skip_slow_known_gaps(datasets, trade_date)
+            if skipped_gaps:
+                result["skipped_known_gaps"] = skipped_gaps
         auxiliary = run_auxiliary_application(
             db,
             instruments=(),
