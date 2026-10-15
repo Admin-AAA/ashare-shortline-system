@@ -60,3 +60,37 @@ def test_xiaoshi_client_retry_semantics(monkeypatch):
         (xiaoshi_client.XiaoshiError, 429), 3, [5.0, 5.0])
     assert run(lambda i: httpx.Response(503) if i < 3 else httpx.Response(200, json={})) == (200, 3, [0.2, 0.4])
     assert run(lambda i: httpx.Response(404)) == ((xiaoshi_client.XiaoshiError, 404), 1, [])
+
+
+def test_tushare_transport_backoff_and_breaker(monkeypatch):
+    from app.services import tushare_transport as tt
+
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    monkeypatch.setattr(tt.random, "uniform", lambda a, b: 0.0)
+    cfg = tt.ProviderConfig(
+        name="p", base_url="http://x", credential="c", auth_mode=list(tt.AuthMode)[0],
+        rate_limit_per_minute=0, max_attempts=4,
+    )
+    prov = tt.TushareHttpProvider(cfg)
+    monkeypatch.setattr(prov, "_wait_for_capacity", lambda _a: None)
+    calls = []
+
+    def fail(api_name, **_):
+        calls.append(1)
+        raise tt.ProviderFailure(provider="p", api_name=api_name,
+                                 category=tt.FailureCategory.HTTP_SERVER,
+                                 retryable=True, fallback_allowed=True)
+
+    monkeypatch.setattr(prov, "_request_once", fail)
+    events = []
+
+    class B:
+        state = "closed"
+        def record_success(self): events.append("ok")
+        def record_failure(self, **kw): events.append(("fail", kw["force_open"]))
+
+    with pytest.raises(tt.ProviderFailure):
+        prov._request_with_retries("daily", params={}, fields="", breaker=B())
+    assert len(calls) == 4 and sleeps == [0.5, 1.0, 2.0]
+    assert events == [("fail", False)]
