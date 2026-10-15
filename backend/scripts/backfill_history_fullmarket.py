@@ -16,7 +16,6 @@ from sqlalchemy import text
 from app.db.session import SessionLocal
 from app.services.tushare_client import get_pro
 from app.services.data_gap_remediation_service import _daily_kbar_payload, _upsert_daily_kbar_payload
-from scripts.backfill_daily_basic import backfill as backfill_basic
 
 # 生产日更（17:35 post_sync，约 20 分钟；21:00 兜底补数）期间暂停，避免抢 Tushare 配额。
 QUIET = ((17, 0, 19, 45), (20, 50, 21, 45))
@@ -44,18 +43,24 @@ def _done(db, d):
 def day(db, pro, d):
     ds = d.replace("-", "")
     df = pro.daily(trade_date=ds)
-    basic = pro.daily_basic(trade_date=ds, fields="ts_code,turnover_rate")
+    basic = pro.daily_basic(trade_date=ds, fields="ts_code,turnover_rate,pe_ttm,total_mv,circ_mv")
     tr = {} if basic is None else {str(r.ts_code).split(".")[0]: _f(r.turnover_rate) for r in basic.itertuples()}
     rows = []
     for r in (df.itertuples() if df is not None else []):
         code = str(r.ts_code).split(".")[0]
         if len(code) != 6 or not code.isdigit():
             continue
-        rows.append(_daily_kbar_payload({"code": code, "trade_date": d, "open": r.open, "high": r.high, "low": r.low, "close": r.close,
-                                         "volume": r.vol, "amount": (_f(r.amount) or 0) * 1000, "pct_chg": r.pct_chg, "turnover_rate": tr.get(code)}))
+        rows.append(_daily_kbar_payload({"code": code, "trade_date": d, "open": _f(r.open), "high": _f(r.high), "low": _f(r.low), "close": _f(r.close),
+                                         "volume": _f(r.vol), "amount": (_f(r.amount) or 0) * 1000, "pct_chg": _f(r.pct_chg), "turnover_rate": tr.get(code)}))
     if rows:
         _upsert_daily_kbar_payload(db, rows); db.commit()
-    nb = backfill_basic(db, pro, d)
+    nb = 0
+    if basic is not None and len(basic):
+        db.execute(text("delete from daily_basic where trade_date=:d"), {"d": d})
+        bv = [{"code": str(r.ts_code).split(".")[0], "d": d, "t": _f(r.turnover_rate), "pe": _f(r.pe_ttm), "tm": _f(r.total_mv), "cm": _f(r.circ_mv)}
+              for r in basic.itertuples() if str(r.ts_code).split(".")[0].isdigit()]
+        db.execute(text("insert into daily_basic (code,trade_date,turnover_rate,pe_ttm,total_mv,circ_mv) values (:code,:d,:t,:pe,:tm,:cm)"), bv)
+        db.commit(); nb = len(bv)
     mf = pro.moneyflow(trade_date=ds)
     nm = 0
     if mf is not None and len(mf):
