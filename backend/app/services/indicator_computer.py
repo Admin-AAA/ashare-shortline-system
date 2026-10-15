@@ -78,18 +78,24 @@ def ema(values: list[float], span: int) -> float:
     return result
 
 
+def _tdx_sma_step(prev: float | None, value: float, n: int) -> float:
+    """通达信 SMA(X,N,1)：首值取 X，其后 (X + (N-1)*prev)/N。"""
+    return value if prev is None else (value + (n - 1) * prev) / n
+
+
 def rsi(values: list[float], window: int) -> float:
+    """通达信 / Tushare stk_factor 口径 RSI：SMA(MAX(d,0),N,1)/SMA(ABS(d),N,1)*100。"""
     if len(values) <= window:
         return 50.0
-    deltas = [values[index] - values[index - 1] for index in range(len(values) - window, len(values))]
-    gains = [delta for delta in deltas if delta > 0]
-    losses = [-delta for delta in deltas if delta < 0]
-    avg_gain = statistics.fmean(gains) if gains else 0.0
-    avg_loss = statistics.fmean(losses) if losses else 0.0
-    if avg_loss == 0:
-        return 100.0 if avg_gain else 50.0
-    rs = avg_gain / avg_loss
-    return round(100 - (100 / (1 + rs)), 2)
+    up: float | None = None
+    absd: float | None = None
+    for index in range(1, len(values)):
+        delta = values[index] - values[index - 1]
+        up = _tdx_sma_step(up, max(delta, 0.0), window)
+        absd = _tdx_sma_step(absd, abs(delta), window)
+    if not absd:
+        return 50.0
+    return round(100 * (up or 0.0) / absd, 2)
 
 
 def macd(values: list[float]) -> tuple[float, float]:
@@ -292,6 +298,8 @@ def compute_daily_indicators(code: str, bars: list[dict[str, Any]]) -> dict[str,
     ema26 = 0.0
     dea = 0.0
     macd_initialized = False
+    rsi_up: dict[int, float | None] = {6: None, 12: None, 24: None}
+    rsi_abs: dict[int, float | None] = {6: None, 12: None, 24: None}
 
     for index, bar in enumerate(bars):
         close = float(bar.get("close") or 0)
@@ -305,10 +313,16 @@ def compute_daily_indicators(code: str, bars: list[dict[str, Any]]) -> dict[str,
         ma10 = ma(closes, 10)
         ma20 = ma(closes, 20)
 
-        # RSI
-        rsi_6 = rsi(closes, 6)
-        rsi_12 = rsi(closes, 12)
-        rsi_24 = rsi(closes, 24)
+        # RSI（通达信口径，增量 O(1)/bar；与 rsi() 逐值一致）
+        if len(closes) >= 2:
+            delta = closes[-1] - closes[-2]
+            for n in (6, 12, 24):
+                rsi_up[n] = _tdx_sma_step(rsi_up[n], max(delta, 0.0), n)
+                rsi_abs[n] = _tdx_sma_step(rsi_abs[n], abs(delta), n)
+        rsi_6, rsi_12, rsi_24 = (
+            50.0 if len(closes) <= n or not rsi_abs[n] else round(100 * (rsi_up[n] or 0.0) / rsi_abs[n], 2)
+            for n in (6, 12, 24)
+        )
 
         # MACD — 增量计算（O(1) per bar，总计 O(n)）
         dif: float | None = None
