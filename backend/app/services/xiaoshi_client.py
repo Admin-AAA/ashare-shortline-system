@@ -18,6 +18,8 @@ from typing import Any
 import httpx
 import tenacity
 
+from app.services.tushare_transport import SlidingWindowLimiter
+
 
 class XiaoshiError(RuntimeError):
     """A sanitized Xiaoshi request or response failure."""
@@ -64,27 +66,13 @@ class XiaoshiSkillArtifact:
     content: str
 
 
-class _QPSLimiter:
-    """Thread-safe sliding-window limiter; every retry also consumes capacity."""
+class _QPSLimiter(SlidingWindowLimiter):
+    """Per-second sliding window; every retry also consumes capacity."""
 
     def __init__(self, max_qps: int) -> None:
         if int(max_qps) < 1:
             raise ValueError("max_qps must be positive")
-        self._limit = int(max_qps)
-        self._timestamps: deque[float] = deque()
-        self._lock = threading.Lock()
-
-    def acquire(self) -> None:
-        while True:
-            with self._lock:
-                now = time.monotonic()
-                while self._timestamps and self._timestamps[0] <= now - 1.0:
-                    self._timestamps.popleft()
-                if len(self._timestamps) < self._limit:
-                    self._timestamps.append(now)
-                    return
-                wait_seconds = max(0.001, self._timestamps[0] + 1.0 - now)
-            time.sleep(wait_seconds)
+        super().__init__(int(max_qps), window_seconds=1.0, pad_seconds=0.0, min_wait_seconds=0.001)
 
 
 class XiaoshiClient:

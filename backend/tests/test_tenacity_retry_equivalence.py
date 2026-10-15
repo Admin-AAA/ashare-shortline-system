@@ -124,3 +124,24 @@ def test_eastmoney_escalating_block_backoff(monkeypatch):
     out, n, sl = run([403, 403, 500])
     assert out[0] == "RuntimeError" and n == 3 and sl == [5.0, 15.0, 3.0]
     assert run([500, 200]) == ([], 2, [1.0])
+
+
+def test_unified_sliding_window_limiter(monkeypatch):
+    from app.services import tushare_transport as tt, xiaoshi_client as xc
+
+    clock = [100.0]
+    sleeps = []
+    monkeypatch.setattr(time, "monotonic", lambda: clock[0])
+
+    def fake_sleep(s):
+        sleeps.append(round(s, 6)); clock[0] += s
+
+    monkeypatch.setattr(time, "sleep", fake_sleep)
+    q = xc._QPSLimiter(2)
+    for _ in range(3):
+        q.acquire()
+    assert sleeps == [1.0]
+    sleeps.clear()
+    t = tt.SlidingWindowLimiter(1)
+    t.acquire(); t.acquire()
+    assert sleeps == [60.01]

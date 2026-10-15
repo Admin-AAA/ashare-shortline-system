@@ -270,10 +270,24 @@ class ProviderRuntimeHealth:
 
 
 class SlidingWindowLimiter:
-    """Thread-safe fixed-window limiter with no lock held while sleeping."""
+    """Thread-safe sliding-window limiter with no lock held while sleeping.
 
-    def __init__(self, requests_per_minute: int) -> None:
+    Shared by Tushare (60s window, +10ms pad, 10ms floor) and Xiaoshi
+    (1s window, no pad, 1ms floor); parameters reproduce both originals.
+    """
+
+    def __init__(
+        self,
+        requests_per_minute: int,
+        *,
+        window_seconds: float = 60.0,
+        pad_seconds: float = 0.01,
+        min_wait_seconds: float = 0.01,
+    ) -> None:
         self._limit = max(0, int(requests_per_minute))
+        self._window = float(window_seconds)
+        self._pad = float(pad_seconds)
+        self._min_wait = float(min_wait_seconds)
         self._timestamps: deque[float] = deque()
         self._lock = threading.Lock()
 
@@ -283,12 +297,12 @@ class SlidingWindowLimiter:
         while True:
             with self._lock:
                 now = time.monotonic()
-                while self._timestamps and self._timestamps[0] <= now - 60.0:
+                while self._timestamps and self._timestamps[0] <= now - self._window:
                     self._timestamps.popleft()
                 if len(self._timestamps) < self._limit:
                     self._timestamps.append(now)
                     return
-                wait_seconds = max(0.01, self._timestamps[0] + 60.0 - now + 0.01)
+                wait_seconds = max(self._min_wait, self._timestamps[0] + self._window - now + self._pad)
             time.sleep(wait_seconds)
 
 
