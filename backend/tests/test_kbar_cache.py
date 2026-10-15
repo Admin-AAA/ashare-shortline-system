@@ -76,26 +76,29 @@ def test_disabled_on_sqlite_by_default(monkeypatch):
     assert kbar_cache.enabled() is False
 
 
-def test_col_to_py_matches_to_pylist_with_nulls_and_ints():
+def test_polars_rows_match_to_pylist_with_nulls_and_ints():
     import gc
+    import math
 
+    import polars as pl
     import pyarrow as pa
 
     from app.services.market_pool import kbar_cache
 
-    cols = [
-        pa.chunked_array([[1.5, None, -0.0], [3.25, None]], type=pa.float64()),
-        pa.chunked_array([[1, 2, 3]], type=pa.int64()),
-        pa.chunked_array([[None, 7, None]], type=pa.int64()),
-        pa.chunked_array([[None, None]], type=pa.null()),
-        pa.chunked_array([["000001", "600000"]], type=pa.string()),
-        pa.chunked_array([[0.1, 0.2]], type=pa.float64()),
-    ]
-    for col in cols:
-        got = kbar_cache._col_to_py(col)
-        want = col.to_pylist()
-        assert got == want
-        assert [type(v) for v in got] == [type(v) for v in want]
+    table = pa.table({
+        "f": pa.chunked_array([[1.5, None, -0.0], [3.25, None]], type=pa.float64()),
+        "i": pa.chunked_array([[1, 2, 3, 4, 5]], type=pa.int64()),
+        "ni": pa.chunked_array([[None, 7, None, 8, None]], type=pa.int64()),
+        "n": pa.chunked_array([[None] * 5], type=pa.null()),
+        "s": pa.chunked_array([["000001", "600000", "a", "b", "c"]], type=pa.string()),
+    })
+    got = pl.from_arrow(table).rows(named=True)
+    want = table.to_pylist()
+    assert got == want
+    for g, w in zip(got, want):
+        assert [type(v) for v in g.values()] == [type(v) for v in w.values()]
+        assert list(g) == list(w)
+    assert math.copysign(1, got[2]["f"]) == -1
     was = gc.isenabled()
     with kbar_cache.gc_paused():
         assert not gc.isenabled()
