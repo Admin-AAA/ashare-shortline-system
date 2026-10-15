@@ -1042,6 +1042,14 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
         summary_parts.append(_sync_step_summary("辅助数据补数完成", auxiliary))
         result["steps"].append({"name": "auxiliary", "status": auxiliary.get("status")})
         step_timings["auxiliary"] = _lap()
+        # xiaoshi 另类数据回退（margin_detail 缺口 / 解禁日历）；按日各一次分页调用，失败不影响主流程。
+        try:
+            from app.services.xiaoshi_alt_data import sync_xiaoshi_alt_data
+
+            result["xiaoshi_alt"] = sync_xiaoshi_alt_data(db)
+        except Exception as exc:  # pragma: no cover - 防御
+            result["xiaoshi_alt"] = {"errors": [str(exc)[:160]]}
+        step_timings["xiaoshi_alt"] = _lap()
 
     # 4. 最终健康补数与诊断，确保后续推荐读取的是所有同步阶段之后的快照。
     if sync_scope in ("health_remediation", "all") and not bool(payload.get("skip_health_remediation")):
