@@ -1082,6 +1082,23 @@ def _bounded_auxiliary_trade_date(requested: object, latest_closed: object) -> s
     return min(normalize(requested), closed)
 
 
+# 已知的长期数据源缺口：上游永久无权限或接口长期不可用，且已有替代来源。
+# 这些数据集失败只告警（status=known_gap），不再把整次补数任务记为 partial_failed；
+# 其余数据集失败（含可重试的覆盖不足）仍按 failed 处理。
+_KNOWN_AUX_SOURCE_GAPS: dict[str, str] = {
+    "news_announcement": "Tushare anns_d 40203 无权限；公告改由东方财富/巨潮/xiaoshi 补数链覆盖",
+    "share_float": "promax share_float invalid_params、官方无权限；改由 xiaoshi restricted_unlock 兜底",
+    "holder_trade": "promax stk_holdertrade invalid_params / unknown_schema，长期不可用",
+    "broker_recommend": "promax broker_recommend invalid_params，长期不可用（未被任何策略使用）",
+}
+
+
+def _batch_sync_item_status(dataset_key: str, errors) -> str:
+    if not errors:
+        return "success"
+    return "known_gap" if dataset_key in _KNOWN_AUX_SOURCE_GAPS else "failed"
+
+
 def _task_result_status(result: dict | None) -> str:
     if not isinstance(result, dict):
         return "completed"
@@ -1267,12 +1284,18 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
         result["trade_date"] = trade_date
         result["batch_sync"] = {
             item.dataset_key: {
-                "status": "failed" if item.errors else "success",
+                "status": _batch_sync_item_status(item.dataset_key, item.errors),
                 "count": item.coverage.record_count,
                 "errors": [error.code.value for error in item.errors],
+                **({"known_gap": _KNOWN_AUX_SOURCE_GAPS[item.dataset_key]}
+                   if item.errors and item.dataset_key in _KNOWN_AUX_SOURCE_GAPS else {}),
             }
             for item in auxiliary.orchestrated.results
         }
+        known = sorted(k for k, v in result["batch_sync"].items() if v["status"] == "known_gap")
+        if known:
+            result["known_source_gaps"] = known
+            logger.warning("[WARN:AUX_KNOWN_GAP] 已知数据源长期缺口（不计失败）：%s", ", ".join(known))
         # S4 application boundary 明确把事务所有权交给调用方；调度入口必须提交，
         # 否则 Session close 会把已经拉取和 upsert 的批量数据全部回滚。
         db.commit()
