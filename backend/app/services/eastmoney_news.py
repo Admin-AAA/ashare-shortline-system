@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 import httpx
+import tenacity
 
 from app.services.market_auxiliary import _eastmoney_article_id
 
@@ -38,6 +39,10 @@ _rate_lock = threading.Lock()
 
 # 567 / 反爬连续触发后的退避；累计到上限就让调用方整体中止。
 BLOCKED_STATUS_CODES = frozenset({567, 403, 429})
+
+
+class _SoftBlock(Exception):
+    """Non-fatal block (below MAX_CONSECUTIVE_BLOCKS); retried, backoff already slept."""
 MAX_CONSECUTIVE_BLOCKS = 3
 BLOCK_BACKOFF_SECONDS = (5.0, 15.0, 30.0)
 
@@ -105,9 +110,12 @@ def fetch_announcements_for_code(
     try:
         for page_index in range(1, max_pages + 1):
             url = ANN_URL.format(page_size=page_size, page_index=page_index, code=code)
-            last_exc: Exception | None = None
-            data: dict[str, Any] | None = None
-            for attempt in range(3):
+            attempt_box = [0]
+
+            def _fetch_page() -> dict[str, Any]:
+                nonlocal consecutive_blocks
+                attempt = attempt_box[0]
+                attempt_box[0] += 1
                 _wait_rate_limit()
                 try:
                     response = client.get(url)
@@ -125,23 +133,31 @@ def fetch_announcements_for_code(
                             raise EastmoneyBlockedError(
                                 f"eastmoney HTTP {response.status_code} x{consecutive_blocks}"
                             )
-                        last_exc = EastmoneyBlockedError(
-                            f"eastmoney HTTP {response.status_code}"
-                        )
-                        continue
+                        raise _SoftBlock(f"eastmoney HTTP {response.status_code}")
                     response.raise_for_status()
-                    data = response.json()
+                    payload = response.json()
                     consecutive_blocks = 0
-                    break
-                except EastmoneyBlockedError:
+                    return payload
+                except (EastmoneyBlockedError, _SoftBlock):
                     raise
-                except Exception as exc:
-                    last_exc = exc
+                except Exception:
                     time.sleep(1.0 + attempt)
-            if data is None:
-                if isinstance(last_exc, EastmoneyBlockedError):
-                    raise last_exc
-                raise RuntimeError(str(last_exc) if last_exc else "eastmoney fetch failed")
+                    raise
+
+            try:
+                data = tenacity.Retrying(
+                    stop=tenacity.stop_after_attempt(3),
+                    retry=tenacity.retry_if_not_exception_type(EastmoneyBlockedError),
+                    wait=tenacity.wait_none(),
+                    sleep=lambda _seconds: None,  # backoff already slept inside _fetch_page
+                    reraise=True,
+                )(_fetch_page)
+            except EastmoneyBlockedError:
+                raise
+            except _SoftBlock as exc:
+                raise EastmoneyBlockedError(str(exc)) from None
+            except Exception as exc:
+                raise RuntimeError(str(exc)) from exc
             rows = (data.get("data") or {}).get("list") or []
             oldest: str | None = None
             for row in rows:

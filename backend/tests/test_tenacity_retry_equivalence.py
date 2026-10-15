@@ -94,3 +94,33 @@ def test_tushare_transport_backoff_and_breaker(monkeypatch):
         prov._request_with_retries("daily", params={}, fields="", breaker=B())
     assert len(calls) == 4 and sleeps == [0.5, 1.0, 2.0]
     assert events == [("fail", False)]
+
+
+def test_eastmoney_escalating_block_backoff(monkeypatch):
+    from app.services import eastmoney_news as em
+
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    monkeypatch.setattr(em, "_wait_rate_limit", lambda: None)
+
+    def run(statuses):
+        it = iter(statuses)
+        calls = []
+
+        def h(_req):
+            calls.append(1)
+            st = next(it)
+            return httpx.Response(st, json={"data": {"list": []}})
+
+        sleeps.clear()
+        try:
+            out = em.fetch_announcements_for_code(
+                "600000", max_pages=1, client=httpx.Client(transport=httpx.MockTransport(h)))
+        except Exception as e:  # noqa: BLE001
+            out = (type(e).__name__, str(e))
+        return out, len(calls), list(sleeps)
+
+    assert run([567, 567, 567]) == (("EastmoneyBlockedError", "eastmoney HTTP 567 x3"), 3, [5.0, 15.0, 30.0])
+    out, n, sl = run([403, 403, 500])
+    assert out[0] == "RuntimeError" and n == 3 and sl == [5.0, 15.0, 3.0]
+    assert run([500, 200]) == ([], 2, [1.0])
