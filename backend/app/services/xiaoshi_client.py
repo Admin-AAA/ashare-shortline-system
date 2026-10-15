@@ -16,6 +16,7 @@ from functools import lru_cache
 from typing import Any
 
 import httpx
+import tenacity
 
 
 class XiaoshiError(RuntimeError):
@@ -29,6 +30,29 @@ class XiaoshiError(RuntimeError):
 
 class XiaoshiConfigurationError(XiaoshiError):
     """The Xiaoshi client has no usable API key or endpoint configuration."""
+
+
+class _RetryableHTTPStatus(XiaoshiError):
+    """429/5xx response; retried with Retry-After (clamped) or linear backoff."""
+
+    def __init__(self, message: str, *, status_code: int, path: str, retry_after: str) -> None:
+        super().__init__(message, status_code=status_code, path=path)
+        self.retry_after = retry_after
+
+
+class _FinalXiaoshiError(XiaoshiError):
+    """Non-retryable 4xx response."""
+
+
+def _xiaoshi_wait(state: tenacity.RetryCallState) -> float:
+    linear = 0.2 * state.attempt_number
+    exc = state.outcome.exception() if state.outcome else None
+    if isinstance(exc, _RetryableHTTPStatus):
+        try:
+            return max(0.2, min(5.0, float(exc.retry_after)))
+        except (TypeError, ValueError):
+            return linear
+    return linear
 
 
 @dataclass(frozen=True)
@@ -118,61 +142,58 @@ class XiaoshiClient:
         if cache_control:
             headers["Cache-Control"] = cache_control
 
-        last_error: XiaoshiError | None = None
-        for attempt in range(self.max_attempts):
+        url = f"{self.base_url}{normalized_path}"
+
+        def _attempt() -> httpx.Response:
             self._limiter.acquire()
             try:
                 response = self._client.request(
                     method,
-                    f"{self.base_url}{normalized_path}",
+                    url,
                     params=dict(params or {}),
                     json=dict(json or {}) if json is not None else None,
                     headers=headers,
                     timeout=self._timeout,
                 )
             except httpx.TimeoutException as exc:
-                last_error = XiaoshiError(
+                raise XiaoshiError(
                     f"Xiaoshi 请求超时: {normalized_path}", path=normalized_path
-                )
-                if attempt + 1 < self.max_attempts:
-                    time.sleep(0.2 * (attempt + 1))
-                    continue
-                raise last_error from exc
+                ) from exc
             except httpx.HTTPError as exc:
-                last_error = XiaoshiError(
+                raise XiaoshiError(
                     f"Xiaoshi 网络请求失败: {normalized_path}", path=normalized_path
-                )
-                if attempt + 1 < self.max_attempts:
-                    time.sleep(0.2 * (attempt + 1))
-                    continue
-                raise last_error from exc
-
+                ) from exc
             status = int(response.status_code)
             if status == 429 or status >= 500:
-                last_error = XiaoshiError(
+                raise _RetryableHTTPStatus(
                     f"Xiaoshi HTTP {status}: {normalized_path}",
                     status_code=status,
                     path=normalized_path,
+                    retry_after=response.headers.get("Retry-After", ""),
                 )
-                if attempt + 1 < self.max_attempts:
-                    retry_after = response.headers.get("Retry-After", "")
-                    try:
-                        delay = max(0.2, min(5.0, float(retry_after)))
-                    except (TypeError, ValueError):
-                        delay = 0.2 * (attempt + 1)
-                    time.sleep(delay)
-                    continue
-                raise last_error
             if status >= 400:
-                raise XiaoshiError(
+                raise _FinalXiaoshiError(
                     f"Xiaoshi HTTP {status}: {normalized_path}",
                     status_code=status,
                     path=normalized_path,
                 )
             return response
 
-        assert last_error is not None
-        raise last_error
+        retrying = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(self.max_attempts),
+            retry=tenacity.retry_if_exception(
+                lambda exc: isinstance(exc, XiaoshiError) and not isinstance(exc, _FinalXiaoshiError)
+            ),
+            wait=_xiaoshi_wait,
+            sleep=lambda seconds: time.sleep(seconds),
+            reraise=True,
+        )
+        try:
+            return retrying(_attempt)
+        except _RetryableHTTPStatus as exc:
+            raise XiaoshiError(str(exc), status_code=exc.status_code, path=exc.path) from None
+        except _FinalXiaoshiError as exc:
+            raise XiaoshiError(str(exc), status_code=exc.status_code, path=exc.path) from None
 
     def request(
         self,
