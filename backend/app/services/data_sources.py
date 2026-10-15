@@ -804,11 +804,14 @@ def _xiaoshi_management_row(db: Session) -> dict[str, Any] | None:
         "enabled": enabled,
         "configured": configured,
         "priority": 1000,
-        "note": "小石 v3 独立数据源；全市场快照与前复权日线主源，分钟历史走 R2",
+        # 不参与「路由优先级」排序：那是 Tushare 协议 Router 链（_ROUTABLE_PROVIDERS）。
+        # xiaoshi 是独立协议，全市场报价/逐股日线已按平台契约声明不可用（L-149/L-155，
+        # 全市场枚举会被暂停 key 24h），只承担分钟历史 + 事件/另类数据。
+        "note": "小石 v3 独立协议源（不在 Tushare 路由排序内）：分钟历史(R2)、事件时间线公告、两融/大宗/解禁/资金等另类数据；全市场报价与逐股日线不提供",
         "apis": [
-            "全市场快照:主源",
-            "前复权日线:主源",
             "分钟历史:R2",
+            "事件时间线(公告/新闻):history",
+            "两融/大宗/解禁/券商一致预期:quant-data",
             "量化Skill:research",
         ],
         "success_count": success_count,

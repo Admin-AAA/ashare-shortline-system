@@ -369,7 +369,8 @@ def test_management_sources_include_xiaoshi_market_source(db_session, monkeypatc
     assert xiaoshi["success_count"] == 5
     assert xiaoshi["failure_count"] == 1
     assert xiaoshi["latency_ms"] == 900.0
-    assert "全市场快照:主源" in xiaoshi["apis"]
+    assert "分钟历史:R2" in xiaoshi["apis"]
+    assert not any("全市场快照" in api for api in xiaoshi["apis"])  # 能力已声明不可用（L-155）
 
 
 def test_set_provider_enabled_toggles_xiaoshi_quote_and_kline(db_session, monkeypatch):
