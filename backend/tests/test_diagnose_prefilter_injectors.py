@@ -70,12 +70,15 @@ def test_twenty_cm_gate_requires_injection():
         }
         ok_missing, reason = evaluate_skill_prefilter(skill, stock, stage="market")
         assert ok_missing is False, "缺字段时 strict_missing 应拒绝 gated 策略"
+        # 锁定拒绝原因在 universe.include（twenty_cm_risk_gate 所在处），防止其它 prefilter
+        # 规则（如 L-172 新增的 pct<=5 → day_move_too_large）先拒绝而让本断言空过/误报
+        assert reason == "universe_include", f"预期因缺 twenty_cm_risk_gate 被 universe_include 拒绝，实际 {reason}"
         assert stock.get("twenty_cm_risk_gate") is None
 
         inject_auxiliary_prefilter_flags([stock], {"limit_up": {}, "dragon_tigers": {}})
         assert stock.get("twenty_cm_risk_gate") is not None, "inject 必须填充 twenty_cm_risk_gate"
-        ok_after, _ = evaluate_skill_prefilter(skill, stock, stage="market")
-        assert ok_after is True, "注入 not_applicable 后 twenty_cm != 'block' 应通过"
+        ok_after, reason_after = evaluate_skill_prefilter(skill, stock, stage="market")
+        assert ok_after is True, f"注入 not_applicable 后 twenty_cm != 'block' 应通过，实际拒绝原因 {reason_after}"
     finally:
         db.close()
 
