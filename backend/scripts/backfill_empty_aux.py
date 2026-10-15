@@ -212,7 +212,7 @@ for i, code in enumerate(codes):
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())""",
                 (
                     "eastmoney",
-                    str(row.get("notice_id", "")),
+                    str(row.get("art_code") or row.get("notice_id") or ""),
                     code,
                     str(row.get("notice_date", ""))[:10],
                     title,
@@ -255,7 +255,7 @@ for i, code in enumerate(codes):
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())""",
                 (
                     "eastmoney",
-                    str(row.get("notice_id", "")),
+                    str(row.get("art_code") or row.get("notice_id") or ""),
                     code,
                     str(row.get("notice_date", ""))[:10],
                     title,

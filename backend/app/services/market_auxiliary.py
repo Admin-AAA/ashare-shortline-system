@@ -413,6 +413,15 @@ def _stable_article_id(source: str, code: str, announce_date: str, title: str, u
 # ── 东方财富新闻 ──────────────────────────────────────────────────────
 
 
+def _eastmoney_article_id(row: dict[str, Any]) -> str:
+    """东方财富公告 id：2026-09 起字段 notice_id 改名为 art_code，两者都兼容。"""
+    for key in ("art_code", "notice_id"):
+        value = row.get(key)
+        if value not in (None, ""):
+            return str(value)
+    return ""
+
+
 def _fetch_eastmoney_news(code: str, settings: Any) -> list[dict[str, Any]]:
     """东方财富个股公告+新闻。"""
     import httpx
@@ -453,7 +462,7 @@ def _fetch_eastmoney_news(code: str, settings: Any) -> list[dict[str, Any]]:
             )
             items.append({
                 "source": "eastmoney",
-                "article_id": str(row.get("notice_id", "")),
+                "article_id": _eastmoney_article_id(row),
                 "code": code,
                 "announce_date": str(row.get("notice_date", ""))[:10],
                 "title": title,
@@ -493,7 +502,7 @@ def _fetch_eastmoney_news(code: str, settings: Any) -> list[dict[str, Any]]:
                 sentiment = "neutral"
             items.append({
                 "source": "eastmoney",
-                "article_id": str(row.get("notice_id", "")),
+                "article_id": _eastmoney_article_id(row),
                 "code": code,
                 "announce_date": str(row.get("notice_date", ""))[:10],
                 "title": title,
