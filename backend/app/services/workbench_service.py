@@ -95,6 +95,7 @@ from app.services.evidence.selectors import (
     live_forward_run_conditions,
 )
 from app.services.evidence.validation import (
+    catchup_formal_run_ids,
     canonical_historical_reconstruction_run_ids,
     canonical_live_forward_run_ids,
 )
@@ -960,6 +961,7 @@ def _list_recommendation_setup_types(
     *,
     live_run_ids: tuple[str, ...],
     historical_run_ids: tuple[str, ...],
+    catchup_run_ids: tuple[str, ...] = (),
 ) -> list[str]:
     """返回 canonical winner 的非空买点值，供前端构建筛选下拉框。"""
     ranked = (
@@ -978,6 +980,7 @@ def _list_recommendation_setup_types(
             *recommendation_history_conditions(
                 live_run_ids=live_run_ids,
                 historical_run_ids=historical_run_ids,
+                catchup_run_ids=catchup_run_ids,
             )
         )
         .subquery()
@@ -1035,11 +1038,17 @@ def list_recommendation_history(
         date_from=date_from,
         date_to=date_to,
     )
+    catchup_run_ids = catchup_formal_run_ids(
+        db,
+        date_from=date_from,
+        date_to=date_to,
+    )
     facets = {
         "setup_types": _list_recommendation_setup_types(
             db,
             live_run_ids=live_run_ids,
             historical_run_ids=historical_run_ids,
+            catchup_run_ids=catchup_run_ids,
         ),
     }
 
@@ -1074,6 +1083,7 @@ def list_recommendation_history(
             *recommendation_history_conditions(
                 live_run_ids=live_run_ids,
                 historical_run_ids=historical_run_ids,
+                catchup_run_ids=catchup_run_ids,
             )
         )
     )

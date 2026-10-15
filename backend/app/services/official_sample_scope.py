@@ -65,8 +65,12 @@ def recommendation_history_conditions(
     *,
     live_run_ids: tuple[str, ...] | list[str] = (),
     historical_run_ids: tuple[str, ...] | list[str] = (),
+    catchup_run_ids: tuple[str, ...] | list[str] = (),
 ) -> tuple:
-    """Return only explicitly validated LIVE or reconstruction run rows."""
+    """Return only explicitly validated LIVE or reconstruction run rows.
+
+    ``catchup_run_ids`` (display-only) admits next-morning catch-up formal runs.
+    """
 
     live_branch = false()
     if live_run_ids:
@@ -80,7 +84,15 @@ def recommendation_history_conditions(
             *historical_reconstruction_run_conditions(),
             RecommendationRun.run_id.in_(tuple(historical_run_ids)),
         )
-    return (or_(live_branch, historical_branch),)
+    catchup_branch = false()
+    if catchup_run_ids:
+        catchup_branch = and_(
+            RecommendationRun.run_mode == "formal",
+            RecommendationRun.status == "completed",
+            Recommendation.recommendation_id.like(f"{OFFICIAL_RECOMMENDATION_PREFIX}%"),
+            RecommendationRun.run_id.in_(tuple(catchup_run_ids)),
+        )
+    return (or_(live_branch, historical_branch, catchup_branch),)
 
 
 __all__ = [

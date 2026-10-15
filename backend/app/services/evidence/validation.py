@@ -135,6 +135,51 @@ def canonical_live_forward_run_ids(
     )
 
 
+def catchup_formal_run_ids(
+    db: Session,
+    *,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> tuple[str, ...]:
+    """Formal runs generated after midnight but before the next session opens.
+
+    A post-close run that is caught up early the next morning (e.g. 06:42 CST)
+    fails the same-business-day LIVE_FORWARD check and is classified
+    UNVERIFIED.  Its picks are still point-in-time valid for the next session,
+    so the user-facing history page shows them; KPI/evidence selectors keep
+    using ``canonical_live_forward_run_ids`` and are unaffected.
+    """
+
+    from datetime import date as _date, timedelta, timezone
+
+    statement = select(RecommendationRun).where(
+        RecommendationRun.run_mode == "formal",
+        RecommendationRun.status == "completed",
+        RecommendationRun.evidence_class == "unverified",
+        RecommendationRun.data_as_of == RecommendationRun.trade_date,
+        RecommendationRun.source_snapshot_id.is_not(None),
+        RecommendationRun.actual_generated_at.is_not(None),
+    ).options(load_only(*_IDENTITY_COLUMNS))
+    if date_from is not None:
+        statement = statement.where(RecommendationRun.trade_date >= date_from)
+    if date_to is not None:
+        statement = statement.where(RecommendationRun.trade_date <= date_to)
+    cst = timezone(timedelta(hours=8))
+    matched: list[str] = []
+    for run in db.scalars(statement).all():
+        generated = run.actual_generated_at
+        if generated.tzinfo is None:
+            generated = generated.replace(tzinfo=timezone.utc)
+        local = generated.astimezone(cst)
+        try:
+            signal = _date.fromisoformat(str(run.trade_date))
+        except ValueError:
+            continue
+        if signal < local.date() <= signal + timedelta(days=4) and (local.hour, local.minute) < (9, 25):
+            matched.append(str(run.run_id))
+    return tuple(matched)
+
+
 def latest_canonical_live_forward_run(db: Session) -> RecommendationRun | None:
     """Return the newest completed formal LIVE run with an exact identity hash."""
 
