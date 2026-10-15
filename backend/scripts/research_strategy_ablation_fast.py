@@ -105,9 +105,24 @@ ONLY_SKILL: dict = {"sid": None}   # 单策略端到端：只选该技能的卡�
 SKILL_WEIGHTS: dict = {"mode": "equal", "map": None}  # equal | preset | json
 # 串行 champion（L-010）：已发布剔除的技能从基线里拿掉，再对剩余技能做剔除对比。
 # 经环境变量传递：spawn 子进程会重新 import 本模块，模块级变量不会自动带过去，环境变量会继承。
-EXCLUDED_SKILLS: set[str] = {
-    s.strip() for s in os.environ.get("ABLATION_EXCLUDE_SKILLS", "").split(",") if s.strip()
-}
+def _parse_exclude_skills(raw: str | None) -> set[str]:
+    """Parse --exclude-skills / ABLATION_EXCLUDE_SKILLS.
+
+    Accepts comma and/or whitespace separators. A single quoted
+    space-separated blob (common shell mistake) used to become one
+    non-matching id via split(","), silently excluding nothing.
+    """
+    if not raw:
+        return set()
+    parts: list[str] = []
+    for chunk in str(raw).replace(",", " ").split():
+        s = chunk.strip()
+        if s:
+            parts.append(s)
+    return set(parts)
+
+
+EXCLUDED_SKILLS: set[str] = _parse_exclude_skills(os.environ.get("ABLATION_EXCLUDE_SKILLS", ""))
 
 
 def _without_excluded(selected: list[dict]) -> list[dict]:
@@ -902,13 +917,34 @@ def main() -> None:
     ap.add_argument(
         "--exclude-skills",
         default=None,
-        help="逗号分隔：从基线（A 臂）里拿掉这些技能，用于串行 champion 复验（L-010）。",
+        help="逗号或空白分隔：从基线（A 臂）里拿掉这些技能，用于串行 champion 复验（L-010）/真单策略。",
     )
     args = ap.parse_args()
     if args.exclude_skills:
-        os.environ["ABLATION_EXCLUDE_SKILLS"] = args.exclude_skills
-        EXCLUDED_SKILLS.update(s.strip() for s in args.exclude_skills.split(",") if s.strip())
+        parsed = _parse_exclude_skills(args.exclude_skills)
+        # Normalize env to comma-separated so child workers re-import correctly.
+        os.environ["ABLATION_EXCLUDE_SKILLS"] = ",".join(sorted(parsed))
+        EXCLUDED_SKILLS.clear()
+        EXCLUDED_SKILLS.update(parsed)
         print(f"[exclude] 基线已剔除：{sorted(EXCLUDED_SKILLS)}", flush=True)
+        if args.exclude_skills.strip() and not parsed:
+            raise SystemExit("[exclude] --exclude-skills parsed to empty set; check quoting/separators")
+        # Soft guard: warn when an id looks like a space-joined blob (legacy bug).
+        for sid in sorted(EXCLUDED_SKILLS):
+            if " " in sid:
+                print(
+                    f"[exclude][WARN] skill id contains space (likely bad quoting): {sid!r}",
+                    flush=True,
+                )
+        # Solo-replay guard: --targets single sid must not itself be excluded.
+        if args.targets and args.targets.strip() not in ("all", "none"):
+            tlist = [t.strip() for t in args.targets.split(",") if t.strip()]
+            bad = [t for t in tlist if t in EXCLUDED_SKILLS]
+            if bad:
+                raise SystemExit(
+                    f"[exclude] --targets {bad} also listed in --exclude-skills; "
+                    "solo replay would run 0 skills (fix run.sh like solo_ext: exclude others only)"
+                )
     if args.policy_note is None:
         from app.engine.production_policy import DEFAULT_PRODUCTION_SELECTION_POLICY
         from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
