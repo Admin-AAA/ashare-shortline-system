@@ -1387,15 +1387,18 @@ def test_backfill_news_announcements_uses_eastmoney_primary(monkeypatch):
 def test_backfill_news_announcements_falls_back_to_tushare_when_eastmoney_blocked(monkeypatch):
     import app.services.data_gap_remediation_service as dgr
     import app.services.eastmoney_news as em
+    import app.services.cninfo_news as cn
     import pandas as pd
 
     monkeypatch.setattr(dgr.time, "sleep", lambda *_: None)
     monkeypatch.setattr(em.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(cn.time, "sleep", lambda *_: None)
 
     def blocked(*_a, **_k):
         raise em.EastmoneyBlockedError("HTTP 567")
 
     monkeypatch.setattr(em, "fetch_announcements_for_code", blocked)
+    monkeypatch.setattr(cn, "fetch_announcements_for_code", lambda *a, **k: [])  # cninfo 也空 → 落到 tushare
 
     frame = pd.DataFrame([{
         "ts_code": "000001.SZ",
@@ -1414,3 +1417,29 @@ def test_backfill_news_announcements_falls_back_to_tushare_when_eastmoney_blocke
     assert result["eastmoney_blocked"] is True
     assert result["tushare_fallback_used"] is True
     assert result["row_count"] >= 1
+
+
+def test_backfill_news_announcements_uses_cninfo_when_eastmoney_blocked(monkeypatch):
+    import app.services.data_gap_remediation_service as dgr
+    import app.services.eastmoney_news as em
+    import app.services.cninfo_news as cn
+
+    monkeypatch.setattr(dgr.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(em.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(cn.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(em, "fetch_announcements_for_code", lambda *a, **k: (_ for _ in ()).throw(em.EastmoneyBlockedError("567")))
+    monkeypatch.setattr(
+        cn,
+        "fetch_announcements_for_code",
+        lambda code, **kw: [{
+            "source": "cninfo", "article_id": f"C-{code}", "code": code,
+            "announce_date": "2026-10-14", "title": "巨潮公告", "summary": None,
+            "category": "announcement", "sentiment": "neutral", "is_risk_warning": False,
+        }],
+    )
+    monkeypatch.setattr(dgr, "get_pro", lambda: type("P", (), {"anns_d": lambda self, **kw: None})())
+    db = MagicMock()
+    result = _backfill_news_announcements(db, trade_date="2026-10-14", codes=["000001"])
+    assert result["eastmoney_blocked"] is True
+    assert result["cninfo_ok_codes"] == 1
+    assert result["row_count"] == 1

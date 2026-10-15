@@ -204,6 +204,7 @@ def _backfill_news_announcements(
     eastmoney_ok_codes = 0
     tushare_fallback_used = False
     eastmoney_blocked = False
+    cninfo_ok_codes = 0
 
     # 逐股票必须限速（L-044）。东方财富自身还有进程级间隔；这里再保留
     # 循环顶 sleep，并在连续失败 / 封禁时中止。
@@ -252,7 +253,35 @@ def _backfill_news_announcements(
         for row in rows:
             payload_by_id[row["article_id"]] = row
 
-    # Tushare anns_d 可选回退：仅当东方财富漏掉/封禁时尝试；无权限时静默跳过。
+    # 第二源：巨潮 cninfo（东方财富封禁/失败时）。AkShare 个股公告底层也是东方财富，封禁时不可用。
+    if remaining_for_tushare:
+        from app.services.cninfo_news import fetch_announcements_for_code as fetch_cninfo
+        still_need: list[str] = []
+        end_today = target_end
+        for code in list(remaining_for_tushare):
+            if consecutive_failures >= NEWS_BACKFILL_MAX_FAILURES and cninfo_ok_codes == 0:
+                still_need.append(code)
+                continue
+            time.sleep(NEWS_BACKFILL_SLEEP)
+            try:
+                rows = fetch_cninfo(
+                    code, start_date=target_start, end_date=end_today, page_size=30, max_pages=2,
+                )
+            except Exception:
+                still_need.append(code)
+                continue
+            if not rows:
+                still_need.append(code)
+                continue
+            cninfo_ok_codes += 1
+            if code in failed_codes:
+                failed_codes.remove(code)
+            provider_row_count += len(rows)
+            for row in rows:
+                payload_by_id[row["article_id"]] = row
+        remaining_for_tushare = still_need
+
+    # Tushare anns_d 可选回退：仅当东方财富/巨潮都漏掉时尝试；无权限时静默跳过。
     if remaining_for_tushare:
         pro = None
         try:
@@ -343,6 +372,7 @@ def _backfill_news_announcements(
         "failed_codes": failed_codes[:10],
         "primary_source": "eastmoney",
         "eastmoney_ok_codes": eastmoney_ok_codes,
+        "cninfo_ok_codes": cninfo_ok_codes,
         "tushare_fallback_used": tushare_fallback_used,
         "eastmoney_blocked": eastmoney_blocked,
     }
