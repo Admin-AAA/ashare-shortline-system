@@ -53,10 +53,12 @@ def main() -> None:
         if i + 1 < a.probe_retries:
             time.sleep(a.probe_sleep)
     else:
-        print("BLOCKED: eastmoney still returning non-200; leaving resume script ready", flush=True)
-        if a.probe_only or True:
-            # Always stop if probes fail — do not hammer a blocked IP.
-            raise SystemExit(3)
+        print(
+            "BLOCKED: eastmoney still returning non-200; resume later with:\n"
+            "  .venv/bin/python -m scripts.backfill_eastmoney_news --start 2026-09-21",
+            flush=True,
+        )
+        raise SystemExit(3)
 
     if a.probe_only:
         return
