@@ -17,6 +17,7 @@ from enum import StrEnum
 from typing import Any
 
 import requests
+import tenacity
 
 from app.services.observability import log_observation
 
@@ -498,25 +499,16 @@ class TushareHttpProvider:
         fields: str,
         breaker: CircuitBreaker,
     ) -> Mapping[str, Any]:
-        last_failure: ProviderFailure | None = None
-        for attempt in range(self.config.max_attempts):
+        attempt_box = [0]
+
+        def _once() -> Mapping[str, Any]:
+            attempt = attempt_box[0]
+            attempt_box[0] += 1
             started = time.perf_counter()
             try:
                 self._wait_for_capacity(api_name)
                 envelope = self._request_once(api_name, params=params, fields=fields)
-                breaker.record_success()
-                logger.info(
-                    "tushare provider success provider=%s api=%s attempt=%d duration_ms=%.1f breaker=%s",
-                    self.name,
-                    api_name,
-                    attempt + 1,
-                    (time.perf_counter() - started) * 1000,
-                    breaker.state,
-                )
-                return envelope
             except ProviderFailure as failure:
-                last_failure = failure
-                duration_ms = (time.perf_counter() - started) * 1000
                 logger.warning(
                     "tushare provider failure provider=%s api=%s attempt=%d category=%s "
                     "duration_ms=%.1f upstream=%s",
@@ -524,31 +516,49 @@ class TushareHttpProvider:
                     api_name,
                     attempt + 1,
                     failure.category.value,
-                    duration_ms,
+                    (time.perf_counter() - started) * 1000,
                     failure.upstream_detail or "-",
                 )
-                if failure.retryable and attempt < self.config.max_attempts - 1:
-                    delay = min(5.0, 0.5 * (2**attempt)) + random.uniform(0.0, 0.2)
-                    time.sleep(delay)
-                    continue
-                force_open = failure.category in {
-                    FailureCategory.BUSINESS_RATE_LIMIT,
-                    FailureCategory.HTTP_RATE_LIMIT,
-                    FailureCategory.PERMISSION,
-                }
-                if failure.fallback_allowed and failure.category not in {
-                    FailureCategory.INVALID_REQUEST,
-                    FailureCategory.HTTP_CLIENT,
-                    FailureCategory.DATA_PENDING,
-                }:
-                    breaker.record_failure(
-                        force_open=force_open,
-                        recovery_seconds=failure.retry_after_seconds,
-                    )
                 raise
+            breaker.record_success()
+            logger.info(
+                "tushare provider success provider=%s api=%s attempt=%d duration_ms=%.1f breaker=%s",
+                self.name,
+                api_name,
+                attempt + 1,
+                (time.perf_counter() - started) * 1000,
+                breaker.state,
+            )
+            return envelope
 
-        assert last_failure is not None
-        raise last_failure
+        retrying = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(self.config.max_attempts),
+            retry=tenacity.retry_if_exception(
+                lambda exc: isinstance(exc, ProviderFailure) and bool(exc.retryable)
+            ),
+            wait=lambda state: min(5.0, 0.5 * (2 ** (state.attempt_number - 1)))
+            + random.uniform(0.0, 0.2),
+            sleep=lambda seconds: time.sleep(seconds),
+            reraise=True,
+        )
+        try:
+            return retrying(_once)
+        except ProviderFailure as failure:
+            force_open = failure.category in {
+                FailureCategory.BUSINESS_RATE_LIMIT,
+                FailureCategory.HTTP_RATE_LIMIT,
+                FailureCategory.PERMISSION,
+            }
+            if failure.fallback_allowed and failure.category not in {
+                FailureCategory.INVALID_REQUEST,
+                FailureCategory.HTTP_CLIENT,
+                FailureCategory.DATA_PENDING,
+            }:
+                breaker.record_failure(
+                    force_open=force_open,
+                    recovery_seconds=failure.retry_after_seconds,
+                )
+            raise
 
     def _request_once(
         self,

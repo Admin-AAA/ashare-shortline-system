@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import tenacity
 import pandas as pd
 
 from app.services.xiaoshi_client import XiaoshiClient
@@ -305,29 +306,29 @@ class XiaoshiMinuteHistorySource:
         return resample_minute_rows(rows, normalized_freq)
 
     def _ensure_year_files(self, code: str, year: int) -> list[Path]:
-        last_error: Exception | None = None
-        for attempt in range(2):
-            try:
-                payload = self.client.get_history_download_session(
-                    dataset="min1",
-                    code=code,
-                    year=str(year),
-                )
-                files = [item for item in payload.get("files") or [] if isinstance(item, Mapping)]
-                if not files:
-                    raise XiaoshiMinuteSourceError("小石分钟历史没有返回文件分区")
-                files.sort(key=lambda item: 0 if _file_part(item) == "base" else 1)
-                paths = []
-                for file_info in files:
-                    paths.append(self._ensure_file(code, file_info))
-                return paths
-            except Exception as exc:
-                last_error = exc
-                if attempt == 0:
-                    continue
-        if isinstance(last_error, XiaoshiMinuteSourceError):
-            raise last_error
-        raise XiaoshiMinuteSourceError("小石分钟历史下载失败") from last_error
+        def _once() -> list[Path]:
+            payload = self.client.get_history_download_session(
+                dataset="min1",
+                code=code,
+                year=str(year),
+            )
+            files = [item for item in payload.get("files") or [] if isinstance(item, Mapping)]
+            if not files:
+                raise XiaoshiMinuteSourceError("小石分钟历史没有返回文件分区")
+            files.sort(key=lambda item: 0 if _file_part(item) == "base" else 1)
+            return [self._ensure_file(code, file_info) for file_info in files]
+
+        try:
+            return tenacity.Retrying(
+                stop=tenacity.stop_after_attempt(2),
+                retry=tenacity.retry_if_exception_type(Exception),
+                wait=tenacity.wait_none(),
+                reraise=True,
+            )(_once)
+        except XiaoshiMinuteSourceError:
+            raise
+        except Exception as exc:
+            raise XiaoshiMinuteSourceError("小石分钟历史下载失败") from exc
 
     def _ensure_file(self, code: str, file_info: Mapping[str, Any]) -> Path:
         path = _cache_path(self.cache_dir, code, file_info)

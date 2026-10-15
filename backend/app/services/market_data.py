@@ -3,6 +3,8 @@ from __future__ import annotations
 import math
 import threading
 import time
+
+import tenacity
 from collections import Counter
 from collections import deque
 from datetime import date, datetime, timedelta, timezone
@@ -793,20 +795,19 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
 
 
 def _call_tushare_with_retry(pro: Any, settings: Any, api_name: str, **params: Any):
-    last_exc: Exception | None = None
-    for attempt in range(3):
+    """最多 3 次；仅"请求速度过快"重试，等待 1.5s、3.0s。"""
+
+    def _once():
         _throttle_tushare(settings)
-        try:
-            return getattr(pro, api_name)(**params)
-        except Exception as exc:  # noqa: BLE001 - preserve provider message for caller
-            last_exc = exc
-            message = str(exc)
-            if "请求速度过快" not in message or attempt == 2:
-                break
-            time.sleep(1.5 * (attempt + 1))
-    if last_exc is not None:
-        raise last_exc
-    raise MarketDataError(f"Tushare {api_name} 调用失败")
+        return getattr(pro, api_name)(**params)
+
+    return tenacity.Retrying(
+        stop=tenacity.stop_after_attempt(3),
+        retry=tenacity.retry_if_exception(lambda exc: "请求速度过快" in str(exc)),
+        wait=tenacity.wait_incrementing(start=1.5, increment=1.5),
+        sleep=lambda seconds: time.sleep(seconds),
+        reraise=True,
+    )(_once)
 
 
 
