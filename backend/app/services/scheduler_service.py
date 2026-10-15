@@ -1800,12 +1800,27 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
     先以短事务立即刷新一次；仍未就绪则抛出可重试异常，由 Prefect 在新 Session 中
     有界退避。任何行情、诊断、历史覆盖或混合缺口均立即硬失败。
     """
+    # 纯观测：流水线各阶段耗时（秒），写入 result_json.pipeline_timings_seconds，
+    # 用于 17:35 准点 profile（同步之外的闸门/补刷/outcome/缓存/推荐）。不改任何逻辑。
+    _pt_start = time.perf_counter()
+    _pt_last = _pt_start
+    pipeline_timings: dict[str, float] = {}
+
+    def _plap(name: str) -> None:
+        nonlocal _pt_last
+        now = time.perf_counter()
+        pipeline_timings[name] = round(pipeline_timings.get(name, 0.0) + now - _pt_last, 2)
+        pipeline_timings["total"] = round(now - _pt_start, 2)
+        _pt_last = now
+
     trade_date = _latest_allowed_bar_date()
     sync_payload = dict(payload)
     sync_payload.update({"sync_scope": "all", "trade_date": trade_date})
     sync_result = _run_data_sync(db, sync_payload)
+    _plap("sync")
 
     readiness = _diagnose_postclose_readiness(db, trade_date)
+    _plap("readiness")
     aux_refresh: dict[str, Any] = {}
     if not readiness.get("can_run_local_recommendation"):
         classification = _classify_postclose_blockers(readiness, trade_date=trade_date)
@@ -1817,7 +1832,9 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
                 trade_date=trade_date,
                 tables=recoverable_tables,
             )
+            _plap("aux_refresh")
             readiness = _diagnose_postclose_readiness(db, trade_date)
+            _plap("readiness_recheck")
             if not readiness.get("can_run_local_recommendation"):
                 classification = _classify_postclose_blockers(readiness, trade_date=trade_date)
                 recoverable_tables = classification["recoverable_tables"]
@@ -1839,6 +1856,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
                 "readiness": readiness,
                 "blocker_classification": classification,
                 "aux_refresh": aux_refresh,
+                "pipeline_timings_seconds": pipeline_timings,
                 "summary_text": (
                     f"盘后辅助数据尚未就绪，等待有界重试：{blockers}"
                     if retryable
@@ -1853,6 +1871,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         db,
         {"horizon_days": int(payload.get("horizon_days") or 5)},
     )
+    _plap("outcome")
 
     # 日K Parquet 缓存增量刷新（按交易日指纹，只重拉新增/变化日）；失败只告警，读取端会回退 SQL。
     kbar_cache_refresh: dict[str, Any] | None = None
@@ -1869,6 +1888,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
             emit_alert("kbar_cache_refresh_failed", "postclose", f"日K缓存刷新失败: {str(exc)[:200]}")
         except Exception:  # noqa: BLE001
             pass
+    _plap("kbar_cache_refresh")
 
     # 策略页单策略指标：盘后后台重算（独立子进程，不阻塞推荐；读最新研究面板，失败只记日志）。
     try:
@@ -1907,7 +1927,9 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         if not run_id:
             raise RuntimeError("盘后单策略正式推荐未返回任何 Run ID")
         final_run = recommendation["final_run"]
+        _plap("recommendation")
     except Exception as exc:
+        _plap("recommendation")
         logger.exception("盘后推荐阶段失败，保留已完成的数据同步结果: %s", exc)
         return {
             "status": "failed",
@@ -1916,6 +1938,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
             "readiness": readiness,
             "aux_refresh": aux_refresh,
             "outcome": outcome,
+            "pipeline_timings_seconds": pipeline_timings,
             "recommendation": recommendation if "recommendation" in locals() else None,
             "related_run_id": run_id if "run_id" in locals() else "",
             "error": str(exc),
@@ -1931,6 +1954,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
             "readiness": readiness,
             "aux_refresh": aux_refresh,
             "outcome": outcome,
+            "pipeline_timings_seconds": pipeline_timings,
             "recommendation": recommendation,
             "final_run": final_run,
             "related_run_id": run_id,
@@ -1945,6 +1969,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         "readiness": readiness,
         "aux_refresh": aux_refresh,
         "outcome": outcome,
+        "pipeline_timings_seconds": pipeline_timings,
         "recommendation": recommendation,
         "final_run": final_run,
         "related_run_id": run_id,

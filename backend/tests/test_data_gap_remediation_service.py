@@ -183,6 +183,16 @@ def test_remediate_data_health_gaps_executes_targeted_plan(monkeypatch):
     assert actions["capital_flow"]["row_count"] == 5500
     assert actions["concept_sector"]["row_count"] == 1
 
+    # 纯观测计时：逐表 + 逐动作，覆盖每个计划动作，不影响动作结果。
+    timings = result["timings_seconds"]
+    assert set(timings["actions_by_table"]) == set(actions)
+    assert len(timings["actions"]) == len(result["actions"])
+    per_action = {item["table"]: item for item in timings["actions"]}
+    assert per_action["index_daily"]["target_date_count"] == 1
+    assert per_action["limit_up_board"]["trade_date"] == "2026-05-27"
+    assert all(item["seconds"] >= 0 and item["status"] for item in timings["actions"])
+    assert timings["total"] >= timings["pre_diagnosis_and_plan"]
+
 
 def test_remediate_data_health_gaps_targets_closed_reference_trade_date_when_lagged(monkeypatch):
     db = MagicMock()

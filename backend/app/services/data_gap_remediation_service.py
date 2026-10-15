@@ -469,6 +469,24 @@ def _provider_activity_delta(
     }
 
 
+def _action_timing_entry(item: dict[str, Any], executed: dict[str, Any], elapsed: float) -> dict[str, Any]:
+    """单个补数动作的计时摘要（纯观测，不进入任何写库/选股逻辑）。"""
+    entry: dict[str, Any] = {
+        "table": str(item.get("table") or "?"),
+        "status": str(executed.get("status") or ""),
+        "seconds": round(elapsed, 2),
+    }
+    if item.get("trade_date"):
+        entry["trade_date"] = str(item.get("trade_date"))
+    target_dates = item.get("target_dates")
+    if isinstance(target_dates, (list, tuple)):
+        entry["target_date_count"] = len(target_dates)
+    codes = item.get("codes")
+    if isinstance(codes, (list, tuple)):
+        entry["code_count"] = len(codes)
+    return entry
+
+
 def remediate_data_health_gaps(
     db: Session,
     *,
@@ -507,13 +525,19 @@ def remediate_data_health_gaps(
     actions = [_with_rollback_hint(_mark_planned(item)) for item in plan]
     if not dry_run:
         by_table: dict[str, float] = {}
+        per_action: list[dict[str, Any]] = []
         actions = []
         for item in plan:
             _ta = time.perf_counter()
-            actions.append(_with_rollback_hint(_execute_plan_item_safely(db, item)))
+            executed = _with_rollback_hint(_execute_plan_item_safely(db, item))
+            actions.append(executed)
+            elapsed = time.perf_counter() - _ta
             key = str(item.get("table") or "?")
-            by_table[key] = round(by_table.get(key, 0.0) + time.perf_counter() - _ta, 2)
+            by_table[key] = round(by_table.get(key, 0.0) + elapsed, 2)
+            per_action.append(_action_timing_entry(item, executed, elapsed))
         timings["actions_by_table"] = by_table
+        # 逐动作计时（minute_kbar 按交易日、limit_up_board 按日等）：定位 17:35 准点慢在哪一天/哪张表。
+        timings["actions"] = per_action
     timings["actions_total"] = round(time.perf_counter() - _t0 - timings["pre_diagnosis_and_plan"], 2)
     _tp = time.perf_counter()
     provider_activity = _provider_activity_delta(

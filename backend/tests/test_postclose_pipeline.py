@@ -398,6 +398,10 @@ def test_postclose_refreshes_recoverable_aux_gap_then_continues(monkeypatch):
     assert result["status"] == "completed"
     assert result["recommended_count"] == 2
     assert refreshes == [("2026-07-16", ["limit_up_board"])]
+    # 纯观测：流水线阶段计时写入结果，供 17:35 profile。
+    timings = result["pipeline_timings_seconds"]
+    for stage in ("sync", "readiness", "aux_refresh", "readiness_recheck", "outcome", "kbar_cache_refresh", "recommendation", "total"):
+        assert timings[stage] >= 0, stage
 
 
 def test_postclose_propagates_persistent_aux_gap_for_prefect_retry(monkeypatch):
@@ -414,6 +418,7 @@ def test_postclose_propagates_persistent_aux_gap_for_prefect_retry(monkeypatch):
 
     assert captured.value.result["retryable"] is True
     assert captured.value.result["retry_reason"] == "postclose_aux_upstream_lag"
+    assert "aux_refresh" in captured.value.result["pipeline_timings_seconds"]
     assert refreshes == [("2026-07-16", ["limit_up_board"])]
 
 
