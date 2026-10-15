@@ -662,6 +662,14 @@ export function HistoryPage() {
                               {renderExecutionDecision(it.recommendation_id, confirmationMap, confirmationErrors, confirmationLoadingIds)}
                             </span>
                           )}
+                          {settled && !savedExecution && (
+                            <span
+                              style={{ color: "var(--muted)" }}
+                              title="该推荐没有持久化的执行确认状态（例如次日补跑或早期记录），结算按策略入场规则回放计算"
+                            >
+                              无实时确认记录
+                            </span>
+                          )}
                           {holdingDecision && (
                             <span
                               style={executionDecisionTagStyle(holdingDecision.code)}
