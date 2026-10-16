@@ -24,6 +24,7 @@ from app.services.entry_policy import execution_policy_with_entry_mode
 from app.services.backtest.release_policy import DEFAULT_RELEASE_POLICY
 from app.services.backtest.vectorbt_validation import cross_validate_trades
 from app.services.strategy_exit_overrides import apply_exit_overrides, exit_strategy_id
+from app.services.ma_break_exit import apply_ma_break_backtest, ma_break_window_for
 
 
 POLICY_EVIDENCE_SCHEMA_VERSION = 2
@@ -726,17 +727,18 @@ def _simulate_card(
         legacy_strategy_id=card.get("bucket"),
     )
     # Sprint3 §67：逐策略出场微调（strategy.yaml exit_overrides），与实盘结算同口径。
-    card_policy = apply_exit_overrides(card_policy, exit_strategy_id(card))
-    result = simulate(
-        RecommendationInput(
-            code=code,
-            signal_date=day.signal_date,
-            signal_price=price,
-        ),
-        bars,
-        card_policy,
-    )
-    return {"status": "simulated", "trade": result.trade}
+    _sid = exit_strategy_id(card)
+    card_policy = apply_exit_overrides(card_policy, _sid)
+    _rec = RecommendationInput(code=code, signal_date=day.signal_date, signal_price=price)
+    result = simulate(_rec, bars, card_policy)
+    trade = result.trade
+    # Sprint3 §71：逐策略均线破位出场（strategy.yaml ma_break_exit），未声明的策略不受影响。
+    _ma_w = ma_break_window_for(_sid)
+    if _ma_w:
+        trade = apply_ma_break_backtest(
+            trade, bars, _ma_w, lambda cut: simulate(_rec, cut, card_policy).trade
+        )
+    return {"status": "simulated", "trade": trade}
 
 
 def _paired_opportunity_cost(

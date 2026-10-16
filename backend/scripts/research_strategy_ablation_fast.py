@@ -313,6 +313,9 @@ SOLO_PREFIX = "solo:"
 # 连续交易日分给同一 worker，让日K行缓存命中（结果按日回传、顺序不变）
 KBAR_CHUNK: dict = {"n": int(os.environ.get("ABLATION_DAY_CHUNK", "5"))}
 SOLO_ARMS: dict = {"on": False}
+# --solo-arms + --panel-dir：每个 solo 臂单独导出面板（<panel-dir>/<sid>/entry_panel_<W>.json），
+# 与单独 solo 回放的全臂面板同构，供 compute_standalone_metrics 使用。
+SOLO_PANEL_DAYS: dict = {}
 _PCT_CACHE: dict[str, tuple[dict, dict]] = {}
 WORKERS: dict = {"n": 1}
 
@@ -330,6 +333,8 @@ def _merge_day_result(
     prov_rows.extend(res.get("prov") or [])
     if res.get("panel_day") is not None:
         panel_days.append(res["panel_day"])
+    for arm, pd in (res.get("panel_days_solo") or {}).items():
+        SOLO_PANEL_DAYS.setdefault(arm, []).append(pd)
     for sid, codes in (res.get("triggered") or {}).items():
         triggered.setdefault(sid, set()).update(codes)
 
@@ -577,6 +582,7 @@ def _process_day(signal_date: str) -> dict:
     codes_union: set[str] = set()
     panel_pre_cards: list = []
     panel_pending: dict | None = None
+    solo_panels: dict = {}
     for arm in arms:
         if arm == "__all__":
             skill_ids = set(all_ids)
@@ -625,7 +631,7 @@ def _process_day(signal_date: str) -> dict:
         codes_union |= {str(c.get("code")) for c in cards_by_arm[arm]}
 
         # 面板只在全臂导出，且导出的是 policy 的**输入态**（见 _panel_pre_policy_cards）。
-        if arm == "__all__" and PANEL.get("dir"):
+        if (arm == "__all__" or arm in solo_entries) and PANEL.get("dir"):
             import copy as _copy
 
             _run_id = f"backtest-rule-replay-{signal_date}"
@@ -633,15 +639,14 @@ def _process_day(signal_date: str) -> dict:
                 db,
                 _copy.deepcopy(list(candidate_results)),
                 skills_arm,
-                snapshot,
+                arm_snapshot,
                 PARAMS,
                 signal_date,
                 _run_id,
             )
-            panel_pre_cards = pre_cards
-            panel_pending = {
+            _pending = {
                 "signal_date": signal_date,
-                "market_snapshot": dict(snapshot),
+                "market_snapshot": dict(arm_snapshot),
                 "same_day_industry_counts": same_day_industry,
                 "same_day_recommendation_count": same_day_count,
                 "cards": [_panel_card(dict(c)) for c in pre_cards],
@@ -651,6 +656,10 @@ def _process_day(signal_date: str) -> dict:
                 "net_by_code": {},
                 "exit_by_code": {},
             }
+            if arm == "__all__":
+                panel_pre_cards, panel_pending = pre_cards, _pending
+            elif pre_cards:  # 与全臂一致：无候选卡的日子不进面板
+                solo_panels[arm] = (pre_cards, _pending)
             # 候选卡全部需要 K 线：并入 codes_union（否则面板拿到的是空 bars）
             codes_union |= {str(c.get("code")) for c in pre_cards}
 
@@ -692,6 +701,14 @@ def _process_day(signal_date: str) -> dict:
                 panel_pending["net_by_code"][code] = None
                 panel_pending["exit_by_code"][code] = None
         result["panel_day"] = panel_pending
+    for arm, (pcs, pend) in solo_panels.items():
+        for card in pcs:
+            code = str(card.get("code"))
+            tr = (_simulate_card(day, card, ep) or {}).get("trade")
+            ok = bool(tr and tr.executed)
+            pend["net_by_code"][code] = float(tr.net_return_pct) if ok else None
+            pend["exit_by_code"][code] = str(getattr(tr, "exit_reason", "")) if ok else None
+        result.setdefault("panel_days_solo", {})[arm] = pend
     result["triggered"] = {sid: sorted(codes) for sid, codes in triggered.items()}
     if os.environ.get("ABLATION_RSS_LOG"):
         import psutil
@@ -852,6 +869,17 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
         from app.services.standalone_strategies import standalone_skill_id
 
         _assert_panel_fidelity(panel_path, window, standalone_sid=standalone_skill_id(selected_all))
+    if SOLO_PANEL_DAYS and PANEL.get("dir"):
+        for arm, pdays in SOLO_PANEL_DAYS.items():
+            sid = arm[len(SOLO_PREFIX):]
+            pdays = sorted(pdays, key=lambda d: d["signal_date"])
+            spath = Path(PANEL["dir"]) / sid / f"entry_panel_{window}.json"
+            spath.parent.mkdir(parents=True, exist_ok=True)
+            spath.write_text(json.dumps({"window": window, "start": start, "end": end,
+                                         "policy_note": policy_note, "days": pdays}, ensure_ascii=False))
+            print(f"[panel] {window} {sid}: {len(pdays)} 天 → {spath}", flush=True)
+            _assert_panel_fidelity(spath, window, standalone_sid=sid)
+        SOLO_PANEL_DAYS.clear()
     if not res.get("A"):
         print(f"[{window}] A臂 n=0（无出票）", flush=True)
         return res

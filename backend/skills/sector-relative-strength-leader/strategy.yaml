@@ -74,6 +74,10 @@ prefilter:
 # 单策略面板（含当日停出闸门，前3/线72）重算：近12月、2025-01~10、W0、W00 的 avg/PF 全部改善、MDD 不变差。
 exit_overrides:
   minimum_lock_gain_pct: 4.0
+# 均线破位出场（Sprint3 §71，2026-10-17）：持仓中收盘 < MA5 当日收盘离场（app/services/ma_break_exit.py）。
+# 精确重模拟（前3/线72）：12m +1.75→+1.77 PF2.61→2.66 MDD−11.6 不变；EXT +0.84→+0.88；W0 +0.22→+0.47（MDD −17→−14）；W00 −1.86→−1.80。
+ma_break_exit:
+  window: 5
 
 phases:
   # 涨跌停差不足停出（Sprint3 §67，2026-10-16）：limit_up_count − limit_down_count < 40 = 赚钱效应不足，主线强度不延续。

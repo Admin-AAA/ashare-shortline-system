@@ -8,12 +8,14 @@ implementation or historical execution compatibility path lives here.
 """
 from __future__ import annotations
 
+import dataclasses
 import json
 from bisect import bisect_left
 from datetime import time, timedelta
 from typing import Any, Mapping
 
 from app.services.strategy_exit_overrides import exit_overrides_for, exit_strategy_id
+from app.services.ma_break_exit import MA_BREAK_REASON, first_break_date, ma_break_window_for
 
 from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
 from app.engine.execution_core import (
@@ -283,6 +285,23 @@ def _simulate_outcome(
             # Sprint3 §67：逐策略出场微调（与回测 _simulate_card 同口径）
             exit_overrides=exit_overrides_for(exit_strategy_id(feature_snapshot)),
         )
+        # Sprint3 §71：逐策略均线破位出场（与回测 _simulate_card 同口径：截断持仓窗到破位日重算）
+        _ma_w = ma_break_window_for(exit_strategy_id(feature_snapshot))
+        if _ma_w and exit_result is not None:
+            _t = first_break_date(str(rec.code), holding_bars, _ma_w, entry_date, str(exit_result.trade_date))
+            if _t is not None:
+                _cut = [b for b in holding_bars if str(b.trade_date) <= _t]
+                _r2 = _resolve_exit_result(
+                    _cut, stop_loss_price, take_profit_price, code=str(rec.code),
+                    entry_price=executed_entry_price,
+                    exit_overrides=exit_overrides_for(exit_strategy_id(feature_snapshot)),
+                )
+                if _r2 is not None and str(_r2.trade_date) == _t:
+                    holding_bars = _cut
+                    exit_result = (
+                        dataclasses.replace(_r2, reason=MA_BREAK_REASON)
+                        if str(_r2.reason).startswith("horizon_close") else _r2
+                    )
         if exit_result is None:
             last = holding_bars[-1]
             exit_price = _as_float(last.close)

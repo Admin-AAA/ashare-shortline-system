@@ -84,8 +84,12 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--sids", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--gate", default="base", help="VARIANTS2 里的日级闸门名，先套闸门再算出场")
     ap.add_argument("--grid", default="")
+    ap.add_argument("--ma", type=int, default=-1, help="强制均线破位窗口（0=关，5/10）；-1=按 yaml")
     ap.add_argument("--no-ov", action="store_true", help="关闭 strategy.yaml exit_overrides，网格参数即完整出场口径（base=旧全局出场，可对面板校验）")
     a = ap.parse_args()
+    if a.ma >= 0:
+        import app.services.backtest.policy_experiment as _pe2
+        _pe2.ma_break_window_for = lambda sid, _w=a.ma: _w
     if a.no_ov:
         import app.services.backtest.policy_experiment as _pe
         _pe.apply_exit_overrides = lambda pol, sid: pol
