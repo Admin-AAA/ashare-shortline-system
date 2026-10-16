@@ -513,6 +513,11 @@ def _process_day(signal_date: str) -> dict:
         db, signal_date, stock_metadata_provider=builder._stock_metadata_provider  # noqa: SLF001
     )
     stocks = [dict(s) for s in stocks]
+    stocks_pristine = None
+    if any(a.startswith(SOLO_PREFIX) for a in arms):
+        # 与单独 solo 回放同口径：每臂拿到 [dict(s) for s in universe]（顶层浅拷贝）；
+        # 深拷贝 5000 只股票（含 90 根日K）每天每臂要数秒，实测是 solo 臂变慢的主因。
+        stocks_pristine = [dict(s) for s in stocks]
     snapshot = dict(snapshot)
     snapshot["trade_date"] = str(snapshot.get("trade_date") or signal_date)
     snapshot["strategy_versions"] = {
@@ -520,9 +525,13 @@ def _process_day(signal_date: str) -> dict:
     }
     prelim_entries: list = []
     scoped = builder._scope.apply_scope(stocks, PARAMS)  # noqa: SLF001
-    prefiltered, audit = builder._scope.apply_prefilter(  # noqa: SLF001
-        scoped, selected_all, PARAMS, snapshot
-    )
+    if any(a.startswith(SOLO_PREFIX) for a in arms):
+        # solo 模式只要各 solo 臂结果；跳过并集管线（__all__ 臂为空），省掉一次全技能 prefilter/特征/评估
+        prefiltered, audit = [], {}
+    else:
+        prefiltered, audit = builder._scope.apply_prefilter(  # noqa: SLF001
+            scoped, selected_all, PARAMS, snapshot
+        )
     if prefiltered:
         _features, contexts = builder._features.build(prefiltered, snapshot)  # noqa: SLF001
         prelim_entries, _cand, _g, _p = builder._strategy.evaluate(  # noqa: SLF001
@@ -538,6 +547,32 @@ def _process_day(signal_date: str) -> dict:
                 if sig:
                     triggered.setdefault(sid, set()).add(str(entry["stock"].get("code") or ""))
 
+    # --solo-arms：每个 solo 臂用「只含该策略」的技能集独立跑 scope/prefilter/features/evaluate
+    # （与单独 solo 回放同构：候选池、fill 补位、相对特征都只按该策略自己的池计算）；
+    # 只共享 universe 加载。2026-01-12 实测共享 prefilter 会让 fill 补位来自并集池 → 出票不同。
+    solo_entries: dict[str, list] = {}
+    if any(a.startswith(SOLO_PREFIX) for a in arms):
+        import copy as _copy_solo
+
+        for _arm in arms:
+            if not _arm.startswith(SOLO_PREFIX):
+                continue
+            _sid = _arm[len(SOLO_PREFIX):]
+            _skills = [x for x in selected_all if str(x["skill_id"]) == _sid]
+            _snap = _copy_solo.deepcopy(snapshot)
+            _snap["strategy_versions"] = {str(x["skill_id"]): str(x["version_id"]) for x in _skills}
+            _stocks = [dict(x) for x in stocks_pristine]
+            _scoped = builder._scope.apply_scope(_stocks, PARAMS)  # noqa: SLF001
+            _pref, _audit = builder._scope.apply_prefilter(_scoped, _skills, PARAMS, _snap)  # noqa: SLF001
+            _ents: list = []
+            if _pref:
+                _f, _ctx = builder._features.build(_pref, _snap)  # noqa: SLF001
+                _ents, *_rest = builder._strategy.evaluate(  # noqa: SLF001
+                    research_contexts=_ctx, selected_skills=_skills, snapshot=_snap,
+                    params=PARAMS, prefilter_audit=_audit,
+                )
+                _ents = list(_ents)
+            solo_entries[_arm] = (_ents, _snap)
     cards_by_arm: dict[str, list] = {}
     codes_union: set[str] = set()
     panel_pre_cards: list = []
@@ -551,7 +586,11 @@ def _process_day(signal_date: str) -> dict:
         else:
             skill_ids = set(all_ids) - {arm}
         skills_arm = [s for s in selected_all if str(s["skill_id"]) in skill_ids]
-        entries_arm = _filtered_entries(prelim_entries, skill_ids, snapshot) if prelim_entries else []
+        arm_snapshot = snapshot
+        _src_entries = prelim_entries
+        if arm in solo_entries:
+            _src_entries, arm_snapshot = solo_entries[arm]
+        entries_arm = _filtered_entries(_src_entries, skill_ids, arm_snapshot) if _src_entries else []
         gate = (
             build_skill_rule_gate(entries_arm, skills_arm, settings)
             if entries_arm
@@ -571,7 +610,7 @@ def _process_day(signal_date: str) -> dict:
         formal_cards, scored_cards, _updates = assembly.aggregate(
             candidate_results=candidate_results,
             selected_skills=skills_arm,
-            snapshot=snapshot,
+            snapshot=arm_snapshot,
             params=PARAMS,
             card_filter=(
                 (lambda c, _sid=_only: any(
