@@ -1749,6 +1749,17 @@ def _load_cached_bars_batch(
     )
     from app.services.market_pool import kbar_cache
 
+    if kbar_cache.memo_enabled():
+        bars_memo = kbar_cache.load_bars(codes, limit, str(latest_allowed_date), _bar_from_mapping)
+        if bars_memo is not None:
+            result_m: dict[str, list[dict[str, Any]]] = {}
+            for code in codes:
+                rows_m = bars_memo.get(code, [])
+                result_m[code] = (
+                    rows_m if len(rows_m) >= limit
+                    else _load_cached_bars(db, code, limit, as_of_date=latest_allowed_date)
+                )
+            return result_m
     cached = kbar_cache.load_rows(codes, limit, str(latest_allowed_date))
     if cached is not None:
         result_cached: dict[str, list[dict[str, Any]]] = {}

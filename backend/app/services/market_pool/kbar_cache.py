@@ -185,3 +185,65 @@ def load_rows(codes: list[str], limit: int, as_of: str) -> dict[str, list[dict[s
     for code, off, cnt in spans:
         out[code] = rows[off:off + cnt]
     return out
+
+
+# ---- 回放专用：跨交易日复用已转换的 bar 字典（默认关闭，长驻服务进程不启用） ----
+_ROW_MEMO: dict = {"on": False, "mtime": None, "bars": {}}
+
+
+def enable_row_memo() -> None:
+    """开启后 load_bars 会记住上一次调用转换过的行（按 parquet 行号），相邻交易日只转换新增行。
+    返回给调用方的永远是浅拷贝（含 _indicator 子字典），因此调用方修改不会污染缓存。"""
+    _ROW_MEMO["on"] = True
+
+
+def memo_enabled() -> bool:
+    return bool(_ROW_MEMO["on"])
+
+
+def load_bars(codes: list[str], limit: int, as_of: str, convert) -> dict[str, list[dict[str, Any]]] | None:
+    """同 load_rows，但直接返回 convert(row) 后的 bar（convert 须是纯函数）。"""
+    import bisect
+    import pyarrow as pa
+
+    if not covers(as_of):
+        return None
+    table, index = _mem["table"], _mem["index"]
+    if _ROW_MEMO["mtime"] != _mem["mtime"]:
+        _ROW_MEMO.update(mtime=_mem["mtime"], bars={})
+    old = _ROW_MEMO["bars"]
+    spans: list[tuple[str, int, int]] = []
+    for code in codes:
+        ent = index.get(code)
+        if not ent:
+            continue
+        start, dates = ent
+        hi = bisect.bisect_right(dates, as_of)
+        lo = max(0, hi - limit)
+        if hi > lo:
+            spans.append((code, start + lo, start + hi))
+    missing = [i for _c, a, b in spans for i in range(a, b) if i not in old]
+    new: dict[int, dict[str, Any]] = {}
+    if missing:
+        import polars as pl
+
+        with gc_paused():
+            rows = pl.from_arrow(table.take(pa.array(missing, type=pa.int64()))).rows(named=True)
+            for i, r in zip(missing, rows):
+                new[i] = convert(r)
+    out: dict[str, list[dict[str, Any]]] = {}
+    keep: dict[int, dict[str, Any]] = {}
+    with gc_paused():
+        for code, a, b in spans:
+            lst = []
+            for i in range(a, b):
+                bar = old.get(i)
+                if bar is None:
+                    bar = new[i]
+                keep[i] = bar
+                c = dict(bar)
+                c["_indicator"] = dict(bar["_indicator"])
+                lst.append(c)
+            out[code] = lst
+    _ROW_MEMO["bars"] = keep
+    return out
