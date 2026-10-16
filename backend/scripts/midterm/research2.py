@@ -1,3 +1,4 @@
+from pathlib import Path
 import sys, json, time
 import polars as pl
 from harness import load, run, metrics, PHASES
@@ -12,7 +13,7 @@ def ex_ma60_loose(a, e, i):
 
 def add2(df):
     c = pl.col
-    b = pl.read_parquet("/tmp/daily_basic.parquet")
+    b = pl.read_parquet(str(Path(__file__).resolve().parents[2] / "data/midterm/daily_basic.parquet"))
     df = df.join(b, on=["code", "trade_date"], how="left")
     d = c("trade_date").str.to_date()
     monthly = (d.dt.weekday() == 5) & (d.dt.day() <= 7)

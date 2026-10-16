@@ -1,3 +1,4 @@
+from pathlib import Path
 import sys
 import polars as pl
 from harness import load, run, metrics, PHASES
@@ -7,9 +8,9 @@ from research2 import ex_fixed
 def build():
     df = add_signals(load())
     c = pl.col
-    st = pl.read_parquet("/tmp/st_hist.parquet").rename({"effective_from": "trade_date"}).sort("trade_date")
+    st = pl.read_parquet(str(Path(__file__).resolve().parents[2] / "data/midterm/st_hist.parquet")).rename({"effective_from": "trade_date"}).sort("trade_date")
     df = df.sort("trade_date").join_asof(st, on="trade_date", by="code", strategy="backward").with_columns(c("st").fill_null(False))
-    b = pl.read_parquet("/tmp/daily_basic.parquet")
+    b = pl.read_parquet(str(Path(__file__).resolve().parents[2] / "data/midterm/daily_basic.parquet"))
     df = df.join(b, on=["code", "trade_date"], how="left").sort("code", "trade_date")
     d = c("trade_date").str.to_date()
     monthly = (d.dt.weekday() == 5) & (d.dt.day() <= 7)
