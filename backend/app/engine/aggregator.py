@@ -6,10 +6,10 @@ from app.engine.agent_skill_runner import enrich_signal_with_agent_review  # noq
 from app.engine.board_rules import (
     is_one_word_limit_up_card as _is_one_word_limit_up_card,
 )
-from app.services.analysis.return_improvement_shadow import (
+from app.engine.return_improvement_shadow import (
     annotate_return_improvement_shadow,
 )
-from app.services.execution_constraints import (
+from app.engine.execution_constraints import (
     entry_no_liquidity_reason_from_card as _entry_no_liquidity_reason,
 )
 

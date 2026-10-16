@@ -199,6 +199,11 @@ def invalidate_pool_status_cache() -> None:
     invalidate_bootstrap_cache()
 
 
+from app.services.cache_hooks import register as _register_cache_hook  # noqa: E402
+
+_register_cache_hook("pool_status", invalidate_pool_status_cache)
+
+
 @router.post("/pool/refresh")
 def refresh_pool(db: Session = Depends(get_db)):
     quotes, meta = refresh_quote_pool(db)

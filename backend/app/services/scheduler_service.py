@@ -979,7 +979,10 @@ def _run_intraday_lock_shadow(db, payload: dict) -> dict:
 
 def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
     """统一数据同步入口，按 sync_scope 执行可恢复的小阶段。"""
-    from app.api.data_sources import invalidate_pool_status_cache
+    from app.services.cache_hooks import invalidate as _invalidate_cache
+
+    def invalidate_pool_status_cache() -> None:
+        _invalidate_cache("pool_status")
     from app.services.data_health_service import clear_data_health_cache
     from app.services.market_pool import refresh_quote_pool
 

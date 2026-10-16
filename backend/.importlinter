@@ -1,0 +1,13 @@
+[importlinter]
+root_package = app
+
+[importlinter:contract:layers]
+name = api -> services -> engine
+type = layers
+layers =
+    app.api
+    app.services
+    app.engine
+ignore_imports =
+    app.engine.agent_skill_runner -> app.services.model_router_service
+    app.engine.strategy_backtest_adapter -> app.services.cost_service
