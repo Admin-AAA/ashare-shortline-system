@@ -192,6 +192,7 @@ def persist_recommendation_cards(
                     "stop_loss": card.get("stop_loss"),
                     "take_profit": card.get("take_profit"),
                     "entry_mode": card.get("entry_mode", "target_touch"),
+                    "exit_strategy_id": card.get("exit_strategy_id"),
                     "market_discipline": card.get("market_discipline", {}),
                     "aggregation_weights": card.get("aggregation_weights", {}),
                     "raw_component_scores": card.get("raw_component_scores", {}),

@@ -63,6 +63,15 @@ prefilter:
         reason: "distribution_risk"
 
 phases:
+  # 震荡日停出（Sprint3 §67，2026-10-16）：同 high-range §57 口径，上涨比 up_count/market_sample_count ∈ [0.35,0.50)。
+  # 单策略面板（前3/线72）：近12月 n285 +0.83% PF1.50 MDD−44.4 → n233 +0.86% PF1.52 MDD−30.5；
+  # 2025-01~10 +0.18→+0.26；W0(TDX) +0.00→+0.46（MDD −77→−36）；W00 −1.40→−1.51（MDD −112→−106）。
+  - name: 震荡日停出
+    when: "market_sample_count > 0 and up_count >= market_sample_count * 0.35 and up_count < market_sample_count * 0.5"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["震荡市（上涨比35%-50%）龙头接力多窗均值偏弱，停出"]
+
   # 强势多头发散毒区（2026-09-12 LIVE 去重241验证）：dsa_trend_score==30（=trend_status强势多头/均线发散上行）
   # n=17 WR17.6% avg-2.83，逐月全差、chg20<40子集反而0%——形态本身即末端反转。软cap58不hard_veto。
   # 置于phases最前但用 not(...) 让位所有 hard_veto（永不架空否决）。

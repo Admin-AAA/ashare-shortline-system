@@ -70,7 +70,21 @@ prefilter:
       - when: "primary_excess20 < 0"
         reason: "relative_strength_lost"
 
+# 逐策略出场微调（Sprint3 §67，2026-10-16）：利润地板最低锁利 2.5% → 4%（全局其余出场不变）。
+# 单策略面板（含当日停出闸门，前3/线72）重算：近12月、2025-01~10、W0、W00 的 avg/PF 全部改善、MDD 不变差。
+exit_overrides:
+  minimum_lock_gain_pct: 4.0
+
 phases:
+  # 涨跌停差不足停出（Sprint3 §67，2026-10-16）：limit_up_count − limit_down_count < 40 = 赚钱效应不足，主线强度不延续。
+  # 单策略面板（前3/线72）：近12月 n238 +1.12% PF1.67 MDD−58.5 → n115 +1.54% PF2.41 MDD−13.6；
+  # 2025-01~10 +0.62→+0.84（MDD −32→−12）；W0(TDX) −0.15→+0.09（MDD −83→−17）；W00 −1.66→−1.92（MDD −108→−27）。
+  - name: 赚钱效应不足停出
+    when: "limit_up_count - limit_down_count < 40"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["涨停家数−跌停家数<40，赚钱效应不足，主线强度难延续，停出"]
+
   # 强势多头发散毒区（2026-09-12 LIVE 去重241验证）：dsa_trend_score==30（=trend_status强势多头/均线发散上行）
   # n=17 WR17.6% avg-2.83，逐月全差、chg20<40子集反而0%——形态本身即末端反转。软cap58不hard_veto。
   # 置于phases最前但用 not(...) 让位所有 hard_veto（永不架空否决）。

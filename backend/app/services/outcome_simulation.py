@@ -11,7 +11,9 @@ from __future__ import annotations
 import json
 from bisect import bisect_left
 from datetime import time, timedelta
-from typing import Any
+from typing import Any, Mapping
+
+from app.services.strategy_exit_overrides import exit_overrides_for, exit_strategy_id
 
 from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
 from app.engine.execution_core import (
@@ -278,6 +280,8 @@ def _simulate_outcome(
             take_profit_price,
             code=str(rec.code),
             entry_price=executed_entry_price,
+            # Sprint3 §67：逐策略出场微调（与回测 _simulate_card 同口径）
+            exit_overrides=exit_overrides_for(exit_strategy_id(feature_snapshot)),
         )
         if exit_result is None:
             last = holding_bars[-1]
@@ -694,7 +698,9 @@ def _resolve_exit_result(
     *,
     code: str = "",
     entry_price: float = 0.0,
+    exit_overrides: Mapping[str, float] | None = None,
 ) -> CausalExitResult | None:
+    ov = exit_overrides or {}
     return _resolve_exit_causal_result(
         holding_bars,
         stop_loss_price,
@@ -703,7 +709,9 @@ def _resolve_exit_result(
         entry_price=entry_price,
         dynamic_trailing=TRAILING_ENABLED,
         trailing_policy="profit_floor",
-        profit_lock_ratio=TRAILING_STOP_PROFIT_LOCK_RATIO,
+        profit_lock_ratio=float(ov.get("profit_lock_ratio", TRAILING_STOP_PROFIT_LOCK_RATIO)),
+        activate_pct=ov.get("activation_gain_pct"),
+        min_lock_pct=ov.get("minimum_lock_gain_pct"),
     )
 
 

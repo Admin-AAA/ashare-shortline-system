@@ -864,6 +864,8 @@ def aggregate(
         "entry_rule": best_setup.get("entry_rule") or "",
         "invalid_rule": best_setup.get("invalid_rule") or "跌破关键支撑且收不回",
         "entry_mode": best_setup.get("entry_mode") or "target_touch",
+        # 出场归属策略（Sprint3 §67）：逐策略 exit_overrides 按它套用。
+        "exit_strategy_id": best_setup.get("strategy_id"),
         "rationale": _rationale(signals_for_score),
         "risk_flags": final_risk_flags,
         "info_tags": info_tags,

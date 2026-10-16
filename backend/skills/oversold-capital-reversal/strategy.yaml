@@ -52,6 +52,13 @@ prefilter:
         reason: "structural_collapse"
       - when: "is_limit_up == false and pct >= 9.5"
         reason: "intraday_spike_without_board"
+# 逐策略出场微调（Sprint3 §67，2026-10-16）：利润地板激活 0.8%→3%、锁利比例 0.5→0.3，让反包单多跑一段。
+# 单策略面板（前3/线72）重算：近12月 n60 +1.65% PF2.08 MDD−15.0 → +3.03% PF2.58 MDD−12.9；
+# 2025-01~10 +0.44→+0.92；W0 +0.07→+0.21；W00 +0.52→+0.83。
+exit_overrides:
+  activation_gain_pct: 3.0
+  profit_lock_ratio: 0.3
+
 phases:
   - name: 冰点情绪不抄底
     when: "market_sentiment_phase == '冰点'"

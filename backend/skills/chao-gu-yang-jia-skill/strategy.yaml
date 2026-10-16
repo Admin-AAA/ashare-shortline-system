@@ -66,7 +66,21 @@ prefilter:
       # avg_cost>200 prefilter 已删除：avg_cost 在 feature_builder 阶段才填充，prefilter 阶段不可用（永远 False）；
       # 且数据证明 avg_cost>200 的科创板高价龙头 WR 76.8%，过滤是误杀（第 100 轮 T5 修复）
 
+# 逐策略出场微调（Sprint3 §67，2026-10-16）：利润地板最低锁利 2.5% → 4%（全局其余出场不变）。
+# 单策略面板（含当日停出闸门，前3/线72）重算：近12月、2025-01~10、W0、W00 的 avg/PF 全部改善、MDD 不变差。
+exit_overrides:
+  minimum_lock_gain_pct: 4.0
+
 phases:
+  # 震荡/过热日停出（Sprint3 §67，2026-10-16）：上涨比 ∈ [0.35,0.50)（震荡）或 > 0.75（普涨过热次日易兑现）。
+  # 单策略面板（前3/线72）：近12月 n291 +1.29% PF1.85 MDD−25.0 → n216 +1.44% PF1.91 MDD−20.3；
+  # 2025-01~10 +0.16→+0.48；W0(TDX) −0.38→−0.33（MDD −75→−54）；W00 −0.85→−0.87（MDD −88→−77）。
+  - name: 震荡过热日停出
+    when: "market_sample_count > 0 and ((up_count >= market_sample_count * 0.35 and up_count < market_sample_count * 0.5) or up_count > market_sample_count * 0.75)"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["震荡市（上涨比35%-50%）或普涨过热（>75%）大局观多窗偏弱，停出"]
+
   # 强势多头发散毒区（2026-09-12 LIVE 去重241验证）：dsa_trend_score==30（=trend_status强势多头/均线发散上行）
   # n=17 WR17.6% avg-2.83，逐月全差、chg20<40子集反而0%——形态本身即末端反转。软cap58不hard_veto。
   # 置于phases最前但用 not(...) 让位所有 hard_veto（永不架空否决）。

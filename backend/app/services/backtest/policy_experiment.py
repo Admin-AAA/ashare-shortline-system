@@ -23,6 +23,7 @@ from app.engine.simulation import compute_metrics, simulate
 from app.services.entry_policy import execution_policy_with_entry_mode
 from app.services.backtest.release_policy import DEFAULT_RELEASE_POLICY
 from app.services.backtest.vectorbt_validation import cross_validate_trades
+from app.services.strategy_exit_overrides import apply_exit_overrides, exit_strategy_id
 
 
 POLICY_EVIDENCE_SCHEMA_VERSION = 2
@@ -724,6 +725,8 @@ def _simulate_card(
         card.get("entry_mode"),
         legacy_strategy_id=card.get("bucket"),
     )
+    # Sprint3 §67：逐策略出场微调（strategy.yaml exit_overrides），与实盘结算同口径。
+    card_policy = apply_exit_overrides(card_policy, exit_strategy_id(card))
     result = simulate(
         RecommendationInput(
             code=code,
