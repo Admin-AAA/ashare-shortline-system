@@ -370,6 +370,11 @@ def _worker_setup(
     only_skill: str | None = None,
 ) -> None:
     """每个进程（含主进程）各自准备 builder + session；worker 之间不共享任何对象。"""
+    if os.environ.get("ABLATION_ARROW_SYSTEM_POOL", "1") != "0":
+        # mimalloc 不把释放的页还给系统（实测 0.43GB 表 RSS 2.1GB）；system 池 RSS 明显更低，取值无关
+        import pyarrow as _pa
+
+        _pa.set_memory_pool(_pa.system_memory_pool())
     if os.environ.get("ABLATION_KBAR_MEMO", "1") != "0":
         # 相邻交易日的日K窗口大部分重叠：只转换新增行，返回拷贝（逐票一致，见 kbar_cache.load_bars）
         from app.services.market_pool import kbar_cache as _kc
@@ -649,11 +654,18 @@ def _process_day(signal_date: str) -> dict:
                 panel_pending["exit_by_code"][code] = None
         result["panel_day"] = panel_pending
     result["triggered"] = {sid: sorted(codes) for sid, codes in triggered.items()}
+    if os.environ.get("ABLATION_RSS_LOG"):
+        import psutil
+
+        print(f"[rss] {signal_date} pid={os.getpid()} {psutil.Process().memory_info().rss / 1e9:.2f}GB", flush=True)
     return result
 
 
 def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
     start, end = WINDOWS[window]
+    if os.environ.get("ABLATION_KBAR_TRIM", "1") != "0":
+        # 内存：日K缓存每只股票只保留窗口起点后的行 + 之前 120 行（见 kbar_cache._trim_spec，逐值无损）
+        os.environ["ASHARE_KBAR_CACHE_MIN_DATE"] = str(start)[:10]
     # 必须用注册表 current（= 已发布的出场策略 v4）。ExecutionPolicy() 是历史 v1 默认值
     # （止盈 6% 开、止损 4.5%、trailing 2.0%），与 published 出场策略不一致。
     ep = DEFAULT_EXECUTION_POLICY
@@ -839,8 +851,8 @@ def main() -> None:
     ap.add_argument(
         "--workers",
         type=int,
-        default=1,
-        help="逐日并行进程数（交易日互相独立）。推荐 6：W1 串行约 3h，6 进程约 25-35min；"
+        default=4,
+        help="逐日并行进程数（交易日互相独立）。默认 4（16GB 机器实测每进程峰值 ≤2.7GB；5 进程开始换页变慢）。旧注释：W1 串行约 3h，6 进程约 25-35min；"
              "1 = 串行（历史行为，结果与并行逐位一致）",
     )
     ap.add_argument(
