@@ -756,7 +756,25 @@ class _StateViews:
         }
 
     def concept_sector(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
-
+        if _REPLAY_PRELOAD["on"]:
+            # 回放：同一 SQL 走 Core 行（不建 ORM 对象/identity map），字典与 _row() 同键同值
+            target = self._target(request)
+            mt, st = ConceptSectorStock.__table__, ConceptSector.__table__
+            members = list(self._session.execute(
+                select(mt.c.code, mt.c.sector_code).where(mt.c.code.in_(request.requested_codes), mt.c.trade_date == target)
+            ))
+            sector_codes = {m[1] for m in members}
+            sectors_c = {
+                r["sector_code"]: dict(r)
+                for r in self._session.execute(
+                    select(st).where(st.c.sector_code.in_(sector_codes), st.c.trade_date == target)
+                ).mappings()
+            }
+            grouped_c: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for code_m, sc in members:
+                if sector := sectors_c.get(sc):
+                    grouped_c[code_m].append(sector)
+            return {"concept_sectors": dict(grouped_c)}
         member_rows = self._session.scalars(
             select(ConceptSectorStock).where(
                 ConceptSectorStock.code.in_(request.requested_codes),
@@ -784,7 +802,14 @@ class _StateViews:
         return {}
 
     def capital_flow(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
-
+        if _REPLAY_PRELOAD["on"]:
+            ct = CapitalFlow.__table__
+            return {"capital_flows": {
+                r["code"]: dict(r)
+                for r in self._session.execute(
+                    select(ct).where(ct.c.code.in_(request.requested_codes), ct.c.trade_date == self._target(request))
+                ).mappings()
+            }}
         rows = self._session.scalars(select(CapitalFlow).where(CapitalFlow.code.in_(request.requested_codes), CapitalFlow.trade_date == self._target(request))).all()
         return {"capital_flows": {item.code: _row(item) for item in rows}}
 
