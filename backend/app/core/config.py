@@ -1,3 +1,4 @@
+from dataclasses import dataclass, field
 from functools import lru_cache
 import os
 from pathlib import Path
@@ -10,6 +11,21 @@ from app.governance.scope_guard import assert_no_brokerage_access
 
 
 BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
+@dataclass(frozen=True)
+class ProviderSettings:
+    """Nested, read-only view of one upstream provider's flat ASHARE_TUSHARE_<NAME>_* settings."""
+
+    name: str
+    url: str
+    credential: str = field(repr=False)
+    rate_limit_per_minute: int
+    max_concurrency: int = 0
+    api_rate_limits: dict = field(default_factory=dict)
+
+
+_PROVIDER_PREFIXES = ("fastapic", "ai_tool", "promax", "xiaodefa", "official", "quantdata")
 
 
 class Settings(BaseSettings):
@@ -150,6 +166,29 @@ class Settings(BaseSettings):
     access_session_days: int = 7
 
     model_config = SettingsConfigDict(env_prefix="ASHARE_", env_file=str(BACKEND_ENV_FILE), extra="ignore")
+
+    @property
+    def providers(self) -> dict[str, ProviderSettings]:
+        """Grouped provider settings (env var names unchanged; flat fields remain authoritative)."""
+        out: dict[str, ProviderSettings] = {}
+        for name in _PROVIDER_PREFIXES:
+            pre = f"tushare_{name}_"
+            cred = getattr(self, pre + "token", None)
+            if cred is None:
+                cred = getattr(self, pre + "api_key", "")
+            api_limits = {}
+            if name == "ai_tool":
+                api_limits = {"rt_min": self.tushare_ai_tool_rt_min_rate_limit_per_minute,
+                              "stk_mins": self.tushare_ai_tool_stk_mins_rate_limit_per_minute}
+            out[name] = ProviderSettings(
+                name=name,
+                url=getattr(self, pre + "url"),
+                credential=cred,
+                rate_limit_per_minute=getattr(self, pre + "rate_limit_per_minute"),
+                max_concurrency=getattr(self, pre + "max_concurrency", 0),
+                api_rate_limits=api_limits,
+            )
+        return out
 
     @model_validator(mode="before")
     @classmethod
