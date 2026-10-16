@@ -977,6 +977,73 @@ def _run_intraday_lock_shadow(db, payload: dict) -> dict:
     raise RuntimeError(f"未知盘中锁利 action: {action!r}（支持 create/settle）")
 
 
+# Restored helpers (dropped by 9c308a6 while still referenced -> NameError at runtime).
+def _default_sync_scope(task_type: str) -> str:
+    if task_type == "data_backfill":
+        return "daily_bars"
+    if task_type == "pool_refresh":
+        return "quotes"
+    return "all"
+
+
+def _parse_backfill_stdout(stdout: str) -> dict:
+    lines = [line.strip() for line in stdout.splitlines() if line.strip()]
+    parsed_scope = _parse_stats_line(next((line for line in lines if line.startswith("scope=")), ""))
+    parsed_result = _parse_stats_line(next((line for line in reversed(lines) if line.startswith("processed=")), ""))
+    processed = _to_int(parsed_result.get("processed"))
+    persisted = _to_int(parsed_result.get("persisted"))
+    short_history = _to_int(parsed_result.get("short_history"))
+    failed = _to_int(parsed_result.get("failed"))
+    summary_text = (
+        f"处理 {processed}，入库 {persisted}，短历史 {short_history}，失败 {failed}"
+        if processed is not None
+        else (lines[-1] if lines else "日K回填完成")
+    )
+    return {
+        "scope": parsed_scope.get("scope"),
+        "universe": _to_int(parsed_scope.get("universe")),
+        "ready_or_progress": _to_int(parsed_scope.get("ready_or_progress")),
+        "pending": _to_int(parsed_scope.get("pending")),
+        "processed": processed,
+        "persisted": persisted,
+        "short_history": short_history,
+        "failed": failed,
+        "elapsed_seconds": _to_float(parsed_result.get("elapsed")),
+        "stdout_tail": "\n".join(lines[-10:]),
+        "summary_text": summary_text,
+    }
+
+
+def _parse_stats_line(line: str) -> dict[str, str]:
+    if not line:
+        return {}
+    parts: dict[str, str] = {}
+    for token in line.replace("|", " ").split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        parts[key.strip()] = value.strip()
+    return parts
+
+
+def _to_int(value: str | None) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(float(value))
+    except ValueError:
+        return None
+
+
+def _to_float(value: str | None) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value.rstrip("s"))
+    except ValueError:
+        return None
+
+
 def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
     """统一数据同步入口，按 sync_scope 执行可恢复的小阶段。"""
     from app.services.cache_hooks import invalidate as _invalidate_cache

@@ -18,7 +18,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,6 +34,9 @@ from app.models.tables import (
     StrategyVersionSnapshot,
 )
 from app.services.runs.bootstrap_cache import invalidate_bootstrap_cache
+
+if TYPE_CHECKING:
+    from app.engine.strategy import StrategyDescriptor
 
 
 class PathLike(str):
@@ -62,7 +65,7 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
-def _strategy_snapshot(skill: StrategySkill, descriptor: "StrategyDescriptor") -> tuple[str, str]:
+def _strategy_snapshot(skill: StrategySkill, descriptor: StrategyDescriptor) -> tuple[str, str]:
     """Return canonical immutable content and its hash for one runtime version."""
     payload = {
         "schema_version": 1,
@@ -107,7 +110,7 @@ def _is_skill_cache_fresh(now: float, cache_key: tuple[str, str]) -> bool:
 def _sync_registry_row(
     registry: SkillRegistry,
     skill: StrategySkill,
-    descriptor: "StrategyDescriptor",
+    descriptor: StrategyDescriptor,
     manifest_json: str,
 ) -> bool:
     """Refresh the database cache strictly as a descriptor projection."""
@@ -145,7 +148,7 @@ def _strategy_backtest_adapter_manifest(skill: StrategySkill) -> dict[str, Any] 
     }
 
 
-def _descriptor_map(skills: list[StrategySkill]) -> dict[str, "StrategyDescriptor"]:
+def _descriptor_map(skills: list[StrategySkill]) -> dict[str, StrategyDescriptor]:
     # This invokes the same official bootstrap used by execution; it also verifies
     # every impl_class before the registry cache can advertise a strategy version.
     from app.engine.strategy import build_registry_from_skills
@@ -261,7 +264,7 @@ def sync_skills(db: Session) -> list[StrategySkill]:
         return skills
 
 
-def skill_version_id(skill: StrategySkill, descriptor: "StrategyDescriptor" | None = None) -> str:
+def skill_version_id(skill: StrategySkill, descriptor: StrategyDescriptor | None = None) -> str:
     """Return a fixed-width version-row key derived from the effective descriptor."""
     if descriptor is None:
         from app.engine.strategy import build_strategy_descriptor

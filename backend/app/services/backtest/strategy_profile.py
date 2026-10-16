@@ -674,7 +674,6 @@ def _month_keys(date_from: str, date_to: str) -> tuple[str, ...]:
 
 __all__ = [
     "STRATEGY_PROFILE_EXPERIMENT_ID",
-    "STRATEGY_PROFILE_PORTFOLIO_MODEL",
     "STRATEGY_PROFILE_SCHEMA_VERSION",
     "STRATEGY_PROFILE_WINDOW_DAYS",
     "StrategyBacktestProfileTarget",
