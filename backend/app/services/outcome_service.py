@@ -115,21 +115,35 @@ from app.services.outcome_simulation import (  # noqa: F401
     _simulate_outcome,
     _static_window_metrics,
 )
+from app.services.outcome_settlement import (  # noqa: F401,E402  re-export (split)
+    INCOMPLETE_PROVENANCE_STATUS,
+    NON_VALID_OUTCOME_STATUS,
+    OFFICIAL_RUN_MODE,
+    OUTCOME_CALCULATION_VERSION,
+    SETTLE_LAG_DAYS,
+    _ALPHA_DECAY_FACTORS,
+    _METRICS_CACHE_TTL,
+    _group_metric_fields,
+    _is_20cm_code,
+    _label_outcome_lock,
+    _metrics_cache,
+    _metrics_cache_lock,
+    _metrics_compute_locks,
+    _metrics_compute_locks_lock,
+    _net_pl_ratio,
+    _pure_pollution_keys_from_rows,
+    _truthy_soft,
+    invalidate_outcome_metrics_cache,
+    is_outcome_labeled,
+    is_trade_executed,
+    normalized_outcome_label,
+    resolved_trade_return,
+)
 
 DEFAULT_OUTCOME_HORIZON_DAYS = DEFAULT_EXECUTION_POLICY.horizon_days
 BREAKDOWN_HORIZON_DAYS = (3, DEFAULT_OUTCOME_HORIZON_DAYS, 10)
 
-# outcome 结算滞后天数：每日推荐需等 K 线走完 horizon（盘后 cron 默认 horizon_days=5）才会被
-# label_pending_outcomes 标注为 success/failed/missed。滚动窗口模式下自动把
-# end_date 截到 today - SETTLE_LAG_DAYS，保证窗口内推荐均已结算，避免 pending
-# 污染样本（_metric_records_from_rows 虽会跳过 pending，但样本数会偏少且不可解释）。
-# 5 天 horizon + 2 天缓冲（应对偶发结算延迟），过大会导致近期覆盖度补跑样本被滚动窗口截掉
-# （曾出现 window_days=30 时有效区间被截到仅 10 天，最近补跑的策略样本全部消失）。
-SETTLE_LAG_DAYS = 7
 
-# 产品侧“正式表现”的唯一数据范围。实验补跑仍可由调用方显式传入
-# run_mode=("formal", "experiment")，但不得默认混入胜率/KPI。
-OFFICIAL_RUN_MODE = "formal"
 OFFICIAL_RECOMMENDATION_PREFIX = "rec_"
 
 
@@ -214,23 +228,6 @@ def _cohort_metadata(
     return cohort.as_metadata()
 
 
-# 短时缓存
-_metrics_cache: dict[str, tuple[float, Any]] = {}
-_metrics_cache_lock = threading.Lock()
-_metrics_compute_locks: dict[str, threading.Lock] = {}
-_metrics_compute_locks_lock = threading.Lock()
-_METRICS_CACHE_TTL = 30.0  # 指标缓存 30 秒（原 5 秒过短，冷启动 350ms 频繁触发）
-
-# outcome 结算进程内串行锁：三个入口（startup 补结算线程 / 首屏预热 _auto_backfill_outcomes
-# / cron 18:20 _run_outcome_label）都直接调 label_pending_outcomes，用各自 SessionLocal。
-# 若不串行，两个 session 在各自事务隔离下都把同一批 pending rec 当"未结算"捞出（看不到对方
-# 未提交的 INSERT），第二个 db.commit() 的 executemany 撞 PRIMARY KEY 1062 → 整批回滚、0 笔结算
-# （app.log 2026-06-23 样本已实证 rec_20260623_001_0fcd 重复 INSERT 致 startup 补结算静默失败，
-# 7/9 的 28 条前瞻样本因此长期 0 结算）。串行后第二个调用开始时第一个已 commit，db.get 能看到
-# 已存在的 outcome → update 而非 INSERT，根因消除。D 项前瞻验证前置基础设施可靠性修复。
-_label_outcome_lock = threading.Lock()
-
-
 def _cached(key: str, factory):
     """带 per-key 计算锁的缓存，防止缓存击穿（多请求同时计算同一 key）。
 
@@ -265,52 +262,6 @@ def _cached(key: str, factory):
         return result
 
 
-def invalidate_outcome_metrics_cache() -> None:
-    with _metrics_cache_lock:
-        _metrics_cache.clear()
-
-
-def normalized_outcome_label(outcome: RecommendationOutcome | Any | None) -> str:
-    if outcome is None:
-        return OUTCOME_PENDING
-    raw_label = str(getattr(outcome, "outcome_label", OUTCOME_PENDING) or OUTCOME_PENDING).lower()
-    if raw_label == OUTCOME_PENDING:
-        return OUTCOME_PENDING
-    if raw_label == OUTCOME_PROVISIONAL:
-        # 临时态（数据仅至入场日）保持自身，不 fall through 到 failed；
-        # rec.status 与所有走 normalized 口径的统计据此排除中间态
-        return OUTCOME_PROVISIONAL
-    if raw_label in {OUTCOME_MISSED, "not_triggered"}:
-        return OUTCOME_MISSED
-    if raw_label == "risk_hit":
-        return OUTCOME_FAILED
-    if str(getattr(outcome, "label_source", "") or "").lower() == "manual" and raw_label in {
-        OUTCOME_SUCCESS,
-        OUTCOME_FAILED,
-    }:
-        return raw_label
-    if not bool(getattr(outcome, "entry_triggered", False)):
-        return OUTCOME_MISSED
-    return OUTCOME_SUCCESS if raw_label == OUTCOME_SUCCESS else OUTCOME_FAILED
-
-
-def is_outcome_labeled(outcome: RecommendationOutcome | Any | None) -> bool:
-    return normalized_outcome_label(outcome) != OUTCOME_PENDING
-
-
-def is_trade_executed(outcome: RecommendationOutcome | Any | None) -> bool:
-    return bool(outcome is not None and getattr(outcome, "entry_triggered", False))
-
-
-def resolved_trade_return(outcome: RecommendationOutcome | Any | None) -> float:
-    if outcome is None:
-        return 0.0
-    executed = getattr(outcome, "executed_return", None)
-    if executed is not None:
-        return float(executed or 0.0)
-    return float(getattr(outcome, "close_return", 0.0) or 0.0)
-
-
 def is_accurate_recommendation(outcome: RecommendationOutcome | Any | None) -> bool:
     """严格准确推荐口径：信号未失效、真实成交，且扣费后净收益为正。
 
@@ -322,11 +273,6 @@ def is_accurate_recommendation(outcome: RecommendationOutcome | Any | None) -> b
         and not bool(getattr(outcome, "hit_invalid", False))
         and is_net_profitable(resolved_trade_return(outcome))
     )
-
-
-OUTCOME_CALCULATION_VERSION = "outcome_simulation_v2"
-NON_VALID_OUTCOME_STATUS = "NON_VALID"
-INCOMPLETE_PROVENANCE_STATUS = "INCOMPLETE_PROVENANCE"
 
 
 def _orm_outcome_version(row: RecommendationOutcomeVersion) -> OutcomeVersionRecord:
@@ -1363,57 +1309,6 @@ def recent_formal_win_rate(db: Session, window_trade_days: int = 5) -> dict[str,
     return _cached(cache_key, lambda: _recent_formal_win_rate(db, window_trade_days))
 
 
-def _truthy_soft(v: Any) -> bool:
-    return v is not None and str(v).lower() in ("1", "true", "yes")
-
-
-def _pure_pollution_keys_from_rows(
-    rows: list,
-    *,
-    score_floor: float = 72.0,
-    banned_soft_bases: frozenset[str] | set[str] = frozenset({"震荡"}),
-) -> set[tuple]:
-    """从 win-rate 行提取 pure 污染 (code, trade_date)。
-
-    行形：任一序列，至少含 code/td/sl/soft/mbase（见调用方映射）。
-    pure_low = 仅 sl<floor 产出且同日同股无 hard(sl>=floor) 孪生
-    pure_soft = 仅 soft@banned_base 产出且同日同股无 hard(非 soft) 孪生
-    """
-    hard_sl: set[tuple] = set()
-    low_sl: set[tuple] = set()
-    hard_soft: set[tuple] = set()
-    soft_ban: set[tuple] = set()
-    for code, td, sl, soft, base in rows:
-        key = (code, str(td))
-        try:
-            sl_f = float(sl or 0)
-        except (TypeError, ValueError):
-            sl_f = 0.0
-        if sl_f >= score_floor:
-            hard_sl.add(key)
-        else:
-            low_sl.add(key)
-        if not _truthy_soft(soft):
-            hard_soft.add(key)
-        elif str(base or "") in banned_soft_bases:
-            soft_ban.add(key)
-    pure_low = low_sl - hard_sl
-    pure_soft = soft_ban - hard_soft
-    return pure_low | pure_soft
-
-
-def _net_pl_ratio(rets: list[float]) -> float | None:
-    """扣 0.07%/笔后的盈亏比；无亏损侧时 None。"""
-    net = [x - _ADDITIONAL_COST_PCT for x in rets]
-    wins = [x for x in net if x > 0]
-    losses = [abs(x) for x in net if x < 0]
-    if not losses:
-        return None
-    win_avg = sum(wins) / len(wins) if wins else 0.0
-    loss_avg = sum(losses) / len(losses)
-    return round(win_avg / loss_avg, 2)
-
-
 def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, Any]:
     scoped_rows = _scoped_recommendation_rows(
         db,
@@ -1536,11 +1431,6 @@ def _recent_formal_win_rate(db: Session, window_trade_days: int) -> dict[str, An
         "pollution_n": pol_n,
         "pollution_pl_delta": pl_delta,
     }
-
-
-def _is_20cm_code(code: str) -> bool:
-    """20cm 板块判定（创业板 300/301、科创板 688/689），与 self_check._is_20cm_code 一致。"""
-    return str(code).startswith(("300", "301", "688", "689"))
 
 
 def board_and_net_breakdown(
@@ -1868,22 +1758,6 @@ def failure_attribution(db: Session) -> dict[str, Any]:
         },
         "industry_risk": industry_risk,
     }
-
-
-_ALPHA_DECAY_FACTORS = [
-    "is_main_theme",
-    "breakout60",
-    "capital_resonance_signal",
-    "volume_breakout_signal",
-    "breakout20",
-    "support_ma5",
-    "support_ma10",
-    "is_shortline_leader_candidate",
-    "is_20cm_stock",
-    # 非技术因子（负预测力：均值回归信号）
-    "chip_health_score_high",  # chip_health_score >= 72
-    "capital_flow_score_high",  # capital_flow_score >= 72
-]
 
 
 def alpha_decay_detection(
@@ -2606,7 +2480,6 @@ def _horizon_metric_records_by_recommendation(
     return _cached(cache_key, lambda: _compute_horizon_metric_records(db, rows))
 
 
-
 def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, dict[int, dict[str, Any]]]:
     labeled_rows = [
         row
@@ -2775,23 +2648,6 @@ def _benchmark_returns_by_recommendation(db: Session, rows: list[Any]) -> dict[s
     }
 
 
-def _group_metric_fields(metrics: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "trade_count": metrics["trade_count"],
-        "recommendation_accuracy": metrics["recommendation_accuracy"],
-        "average_net_return": metrics["average_net_return"],
-        "median_net_return": metrics["median_net_return"],
-        "profit_loss_ratio": metrics["profit_loss_ratio"],
-        "max_drawdown": metrics["max_drawdown"],
-        "positive_month_ratio": metrics["positive_month_ratio"],
-        "benchmark_excess_return": metrics["benchmark_excess_return"],
-        "sample_confidence": metrics["sample_confidence"],
-        "accuracy_numerator": metrics["accuracy_numerator"],
-        "accuracy_denominator": metrics["accuracy_denominator"],
-        "accuracy_basis": metrics["accuracy_basis"],
-    }
-
-
 def _scoped_recommendation_rows(
     db: Session,
     start_date: str | None = None,
@@ -2939,8 +2795,6 @@ def _scoped_recommendation_rows(
         seen.add(key)
         deduped.append(row)
     return deduped
-
-
 
 
 def regime_win_loss_breakdown(db: Session) -> dict[str, dict[str, float]]:
