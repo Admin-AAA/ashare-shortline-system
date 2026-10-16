@@ -1323,8 +1323,8 @@ def _mark_run_failed(db: Session, run_id: str, exc: Exception) -> None:
         # so lifecycle operations can succeed.
         try:
             db.rollback()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+            logger.debug("_mark_run_failed: ignored non-fatal error: %s", exc)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         repository = SQLAlchemyRunRepository(db)
         lifecycle = RunCoordinator(repository)

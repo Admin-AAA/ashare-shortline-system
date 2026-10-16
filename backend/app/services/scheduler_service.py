@@ -547,8 +547,8 @@ def _execute_task(
                     summary=str(e),
                     result={"summary_text": str(e)},
                 )
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+            logger.warning("_execute_task: ignored non-fatal error: %s", exc)
     finally:
         db.close()
         _mark_done(task_id)
@@ -906,8 +906,8 @@ def _execute_manual_strategy_exposure(task_run_id: str, payload: dict) -> None:
         db.rollback()
         try:
             finish_task_run(db, task_run_id, status="failed", error=str(exc), summary=str(exc))
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+            logger.debug("_execute_manual_strategy_exposure: ignored non-fatal error: %s", exc)
     finally:
         db.close()
         _mark_done_memory(MANUAL_STRATEGY_EXPOSURE_TASK_ID)
@@ -1431,8 +1431,8 @@ def _backfill_auxiliary_window_gaps(
             logger.warning("辅助数据窗口回填 %s 失败: %s", iso, str(exc)[:120])
             try:
                 db.rollback()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+                logger.debug("_backfill_auxiliary_window_gaps: ignored non-fatal error: %s", exc)
             backfilled.append({"trade_date": iso, "status": "failed", "error": str(exc)[:120]})
     return {"backfilled_dates": backfilled}
 
@@ -2698,8 +2698,8 @@ def _update_matrix_progress(db, task_run_id: str, summary: str) -> None:
         logger.exception("更新矩阵进度失败: %s", task_run_id)
         try:
             db.rollback()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+            logger.debug("_update_matrix_progress: ignored non-fatal error: %s", exc)
 
 
 async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) -> dict:

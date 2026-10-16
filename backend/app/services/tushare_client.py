@@ -850,8 +850,8 @@ def fetch_daily_kbars(
                 factor_map[str(r["trade_date"])] = dict(r)
     except MarketFrameContractError:
         raise
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
 
     # 3. daily_basic — turnover_rate, pe_ttm, total_mv
     basic_map: dict[str, dict] = {}
@@ -861,8 +861,8 @@ def fetch_daily_kbars(
             validate_market_frame("daily_basic", basic)
             for _, r in basic.iterrows():
                 basic_map[str(r["trade_date"])] = dict(r)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
 
     # 4. cyq_perf — 筹码分布
     chip_map: dict[str, dict] = {}
@@ -872,8 +872,8 @@ def fetch_daily_kbars(
             validate_market_frame("cyq_perf", chips)
             for _, r in chips.iterrows():
                 chip_map[str(r["trade_date"])] = dict(r)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
 
     # 5. stk_factor_pro — 扩展因子（ASI/ATR/BBI/DPO/OBV/PSY/VR/WR 等）
     factor_pro_map: dict[str, dict] = {}
@@ -883,8 +883,8 @@ def fetch_daily_kbars(
             validate_market_frame("stk_factor_pro", fp)
             for _, r in fp.iterrows():
                 factor_pro_map[str(r["trade_date"])] = dict(r)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
 
     bars: list[dict[str, Any]] = []
     for td, row in daily_rows.items():
@@ -1014,8 +1014,8 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
             validate_market_frame("daily_basic", basic)
             for _, row in basic.iterrows():
                 basic_map[str(row.get("ts_code") or "")] = dict(row)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
 
     factor_map: dict[str, dict[str, Any]] = {}
     try:
@@ -1026,8 +1026,8 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
                 factor_map[str(row.get("ts_code") or "")] = dict(row)
     except MarketFrameContractError:
         raise
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
 
     # 筹码分布（cyq_perf）——按 trade_date 批量一次拉全市场。此前批量补数只拉
     # daily/daily_basic/stk_factor，导致盘后写入的 DailyKbar 行 chip_cost_50/15/85
@@ -1043,8 +1043,8 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
             validate_market_frame("cyq_perf", chips)
             for _, row in chips.iterrows():
                 chip_map[str(row.get("ts_code") or "")] = dict(row)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
 
     bars: list[dict[str, Any]] = []
     for _, row in daily.iterrows():
@@ -1527,8 +1527,8 @@ def fetch_latest_trade_date() -> str:
         cal = pro.trade_cal(exchange="SSE", start_date=start, end_date=today, is_open="1")
         if cal is not None and not cal.empty:
             return str(cal.sort_values("cal_date").iloc[-1]["cal_date"])
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_latest_trade_date: ignored non-fatal error: %s", exc)
     return today
 
 
@@ -1551,8 +1551,8 @@ def fetch_recent_trade_dates(lookback_days: int = 30) -> list[str]:
         )
         if cal is not None and not cal.empty:
             return [str(value) for value in cal.sort_values("cal_date")["cal_date"].tolist()]
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_recent_trade_dates: ignored non-fatal error: %s", exc)
     return []
 
 
@@ -1909,8 +1909,8 @@ def _baostock_relogin() -> Any:
 
     try:
         bs.logout()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.debug("_baostock_relogin: ignored non-fatal error: %s", exc)
     _baostock_logged_in = False
     return _baostock_ensure_login()
 

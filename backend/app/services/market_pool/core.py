@@ -967,8 +967,8 @@ def _refresh_quote_pool(
                     "；".join(errors),
                 )
                 return cached, _quote_meta("stale_cache_fallback", cached, errors=errors)
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+            logger.warning("_refresh_quote_pool: ignored non-fatal error: %s", exc)
         raise MarketDataError("统一行情池刷新失败，所有报价源不可用。" + "；".join(errors))
 
     merged = [_merge_quote_rows(code, rows, sources, settings) for code, rows in grouped.items()]

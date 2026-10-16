@@ -182,8 +182,8 @@ def run_backtest(
             # 防止单日异常造成 transaction 脏状态阻断后续 date 的 label_pending_outcomes
             try:
                 db.rollback()
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+                logger.debug("run_backtest: ignored non-fatal error: %s", exc)
 
     labeled = label_pending_outcomes(db, horizon_days=horizon_days)
 

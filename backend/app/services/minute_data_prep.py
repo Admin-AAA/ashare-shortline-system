@@ -127,8 +127,8 @@ def local_minute_inventory(db: Session) -> dict[str, Any]:
         logger.warning("local minute inventory unavailable: %s", exc)
         try:
             db.rollback()
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+            logger.debug("local_minute_inventory: ignored non-fatal error: %s", exc)
         return {
             **empty_minute_inventory(),
             "inventory_status": "unavailable",

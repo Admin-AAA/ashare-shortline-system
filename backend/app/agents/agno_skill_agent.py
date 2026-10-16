@@ -42,6 +42,9 @@ from app.services.llm.prompt_context import (
     canonical_section_json,
     project_prompt_context,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ── 结构化输出模型 ────────────────────────────────────────────────────
@@ -278,8 +281,8 @@ def _persist_review_cache(
                 review=review,
                 model=model,
             )
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("_persist_review_cache: ignored non-fatal error: %s", exc)
 
 
 _ACTION_ALIASES = {
@@ -704,8 +707,8 @@ def _extract_json(text: str) -> dict:
                         except json.JSONDecodeError:
                             pass
                         break
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("_extract_json: ignored non-fatal error: %s", exc)
 
     # 最后 fallback：贪婪匹配
     match = re.search(r"\{[\s\S]*\}", text)

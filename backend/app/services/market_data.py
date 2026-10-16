@@ -57,6 +57,9 @@ from app.services.market_source.snapshot import (  # noqa: F401 - re-export for 
     _rank_industries,
     _top_industries_from_quotes,
 )
+import logging
+
+logger = logging.getLogger(__name__)
 
 # 实时行情代理地址（realtime_quote 是爬虫接口，不走 Pro API 代理）
 _REALTIME_PROXY_URL = "https://realtime.stockai888.top"
@@ -84,8 +87,8 @@ def _patch_tushare_verify_token() -> None:
 
         vt.verify_token = _mock_verify_token
         vt._patched = True
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("json: ignored non-fatal error: %s", exc)
 
 
 _patch_tushare_verify_token()
@@ -126,8 +129,8 @@ def get_market_universe() -> tuple[list[dict[str, Any]], dict[str, Any]]:
             cached_bars_map = _load_cached_bars_batch(db, candidate_codes, settings.market_kline_days)
         finally:
             db.close()
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("get_market_universe: ignored non-fatal error: %s", exc)
 
     for quote in candidates:
         if len(stocks) >= recall_plan["scan_target_count"]:
@@ -838,8 +841,8 @@ def _fetch_tushare_kline(
                 _daily_basic_cache[str(row["trade_date"]).strip()] = {
                     "turnover_rate": float(row.get("turnover_rate") or 0),
                 }
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("_fetch_tushare_kline: ignored non-fatal error: %s", exc)
 
     df = daily.sort_values("trade_date")
     if start_date is None:
@@ -889,8 +892,8 @@ def _load_industry_cache() -> dict[str, str]:
     if p.exists():
         try:
             return _json.loads(p.read_text(encoding="utf-8"))
-        except Exception:
-            pass
+        except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+            logger.warning("_load_industry_cache: ignored non-fatal error: %s", exc)
     return {}
 
 
