@@ -20,6 +20,8 @@ from typing import Any
 import requests
 import tenacity
 
+from app.core import metrics as _metrics
+
 from app.services.observability import log_observation
 
 logger = logging.getLogger(__name__)
@@ -457,10 +459,12 @@ class TushareHttpProvider:
         return api_name not in self.config.excluded_apis
 
     def _wait_for_capacity(self, api_name: str) -> None:
+        t0 = time.perf_counter()
         self._provider_limiter.acquire()
         api_limiter = self._api_limiters.get(api_name)
         if api_limiter is not None:
             api_limiter.acquire()
+        _metrics.observe("provider_ratelimit_wait", time.perf_counter() - t0, provider=self.name)
 
     def request(
         self,
@@ -503,6 +507,7 @@ class TushareHttpProvider:
                     category=failure.category,
                     latency_ms=(time.perf_counter() - started) * 1000,
                 )
+                _metrics.inc("provider_requests", provider=self.name, outcome=str(failure.category.value))
                 raise
             data = envelope.get("data")
             items = data.get("items") if isinstance(data, Mapping) else None
@@ -511,6 +516,8 @@ class TushareHttpProvider:
                 latency_ms=(time.perf_counter() - started) * 1000,
                 empty=not bool(items),
             )
+            _metrics.inc("provider_requests", provider=self.name, outcome="success")
+            _metrics.observe("provider_latency", time.perf_counter() - started, provider=self.name)
             return envelope
         finally:
             if semaphore is not None:
@@ -942,6 +949,8 @@ class TushareProviderRouter:
                 })
                 selected_provider = provider.name
                 final_outcome = "valid_empty" if empty else "success"
+                if index:
+                    _metrics.inc("provider_fallback", api=api_name, provider=provider.name, fallback_from=fallback_from)
                 if index:
                     logger.warning(
                         "tushare provider fallback success api=%s provider=%s",

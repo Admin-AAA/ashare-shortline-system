@@ -49,6 +49,14 @@ def _sample_scope_q() -> "Query":
     )
 
 
+@router.get("/runtime")
+def runtime_metrics():
+    """Process-local observability: provider success/fallback/ratelimit wait, LLM latency, stage durations."""
+    from app.core import metrics as runtime
+
+    return runtime.snapshot()
+
+
 @router.get("/overview")
 def overview(
     db: Session = Depends(get_db),

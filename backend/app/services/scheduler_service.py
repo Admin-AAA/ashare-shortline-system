@@ -1451,6 +1451,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         nonlocal _pt_last
         now = time.perf_counter()
         pipeline_timings[name] = round(pipeline_timings.get(name, 0.0) + now - _pt_last, 2)
+        _metrics.observe("postclose_stage_duration", now - _pt_last, stage=name)
         pipeline_timings["total"] = round(now - _pt_start, 2)
         _pt_last = now
 

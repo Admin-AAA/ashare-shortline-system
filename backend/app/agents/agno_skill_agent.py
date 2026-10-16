@@ -44,6 +44,8 @@ from app.services.llm.prompt_context import (
 )
 import logging
 
+from app.core import metrics as _metrics  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 
@@ -633,7 +635,8 @@ async def run_skill_agent(
     for attempt in range(max_retries + 1):
         try:
             # Agno Agent 调用
-            response = await agent.arun(input=user_prompt)
+            with _metrics.timed("llm_latency", client="agno"):
+                response = await agent.arun(input=user_prompt)
 
             # 尝试解析响应
             content = ""
@@ -1017,6 +1020,7 @@ async def run_skill_agent_direct(
                         extra_body={"prompt_cache_key": (skill.skill_hash or skill.skill_id)[:64]},
                     )
                     elapsed_ms = (asyncio.get_event_loop().time() - t0) * 1000
+                    _metrics.observe("llm_latency", elapsed_ms / 1000, client="openai", model=route.model)
                     content = resp.choices[0].message.content or ""
                     parsed = json.loads(content)
                     result = _parse_to_output(parsed)
