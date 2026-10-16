@@ -20,14 +20,15 @@ def test_quota_shared_across_processes(tmp_path):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     db = str(tmp_path / "rl.sqlite")
     code = _WORKER.format(root=root, db=db)
-    ps = [subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, text=True) for _ in range(2)]
+    ps = [subprocess.Popen(  # 4 processes to stress concurrent init
+        [sys.executable, "-c", code], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) for _ in range(4)]
     stamps = []
     for p in ps:
-        out, _ = p.communicate(timeout=60)
-        assert p.returncode == 0
+        out, err = p.communicate(timeout=60)
+        assert p.returncode == 0, err
         stamps += [float(x) for x in out.split()]
     stamps.sort()
-    assert len(stamps) == 8
+    assert len(stamps) == 16
     # 8 hits at 5/2s across two processes: the 6th must wait a full window
     for i in range(len(stamps) - 5):
         assert stamps[i + 5] - stamps[i] >= 2.0 - 0.05
@@ -52,7 +53,7 @@ def test_fallback_to_in_process_on_sqlite_error(tmp_path, monkeypatch):
     def boom(): raise sqlite3.OperationalError("locked")
     monkeypatch.setattr(lim, "_try_acquire", boom)
     lim.acquire(); lim.acquire()
-    assert calls == [1, 1]
+    assert calls == [1, 1]  # second call still within the 30s fallback window
 
 
 def test_make_limiter_env_switch(tmp_path, monkeypatch):

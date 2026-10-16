@@ -8,7 +8,7 @@ check-and-insert across processes. Wall clock (time.time) is used because
 monotonic clocks are not comparable across processes.
 
 Enabled by setting ``TUSHARE_SHARED_LIMITER_DB`` to a file path. Any SQLite
-error falls back to the in-process limiter (logged once).
+error falls back to the in-process limiter for 30s, then the shared backend is retried.
 """
 from __future__ import annotations
 
@@ -21,6 +21,7 @@ import time
 logger = logging.getLogger(__name__)
 
 ENV_VAR = "TUSHARE_SHARED_LIMITER_DB"
+RETRY_SHARED_AFTER_SECONDS = 30.0
 
 
 class SharedSlidingWindowLimiter:
@@ -34,7 +35,7 @@ class SharedSlidingWindowLimiter:
         self._min_wait = float(min_wait_seconds)
         self._db_path = db_path
         self._fallback = fallback
-        self._broken = False
+        self._broken_until = 0.0
         self._local = threading.local()
 
     def _conn(self) -> sqlite3.Connection:
@@ -44,9 +45,20 @@ class SharedSlidingWindowLimiter:
             if d:
                 os.makedirs(d, exist_ok=True)
             conn = sqlite3.connect(self._db_path, timeout=30, isolation_level=None)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("CREATE TABLE IF NOT EXISTS hits (k TEXT NOT NULL, ts REAL NOT NULL)")
-            conn.execute("CREATE INDEX IF NOT EXISTS hits_k_ts ON hits(k, ts)")
+            # Concurrent first-time init can hit SQLITE_BUSY outside the busy
+            # handler (journal_mode switch); retry briefly instead of failing over.
+            for attempt in range(50):
+                try:
+                    conn.execute("PRAGMA busy_timeout=30000")
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("CREATE TABLE IF NOT EXISTS hits (k TEXT NOT NULL, ts REAL NOT NULL)")
+                    conn.execute("CREATE INDEX IF NOT EXISTS hits_k_ts ON hits(k, ts)")
+                    break
+                except sqlite3.OperationalError:
+                    if attempt == 49:
+                        conn.close()
+                        raise
+                    time.sleep(0.05)
             self._local.conn = conn
         return conn
 
@@ -73,7 +85,7 @@ class SharedSlidingWindowLimiter:
         if self._limit <= 0:
             return
         while True:
-            if self._broken and self._fallback is not None:
+            if self._fallback is not None and time.monotonic() < self._broken_until:
                 self._fallback.acquire()
                 return
             try:
@@ -83,7 +95,8 @@ class SharedSlidingWindowLimiter:
                     raise
                 logger.warning("shared rate limiter %s unavailable (%s); falling back to in-process limiter",
                                self._db_path, exc)
-                self._broken = True
+                self._broken_until = time.monotonic() + RETRY_SHARED_AFTER_SECONDS
+                self._local.conn = None
                 continue
             if wait is None:
                 return
