@@ -153,6 +153,8 @@ alembic upgrade head
 uvicorn app.main:app --reload --port 8765
 ```
 
+> 日常运行：前端 5174 / 后端 8765 由 launchd（`deploy/launchd`）托管，用 `./dev.sh` 重启 / 查看状态 / 停止 / 看日志，无需手动起 uvicorn。
+
 Prefect 调度（另开终端）：
 
 ```bash
@@ -340,6 +342,7 @@ skill-name/
 | `ASHARE_MARKET_KLINE_CACHE_TTL_HOURS` | `20` | K线缓存 TTL |
 | `ASHARE_TUSHARE_PROMAX_API_KEY` | - | Promax 聚合源 API Key（仅放 `backend/.env`） |
 | `ASHARE_TUSHARE_PROMAX_RATE_LIMIT_PER_MINUTE` | `180` | Promax 客户端限速 |
+| `TUSHARE_SHARED_LIMITER_DB` | 未设置 | 设为 SQLite 文件路径（如 `backend/data/runtime/tushare_ratelimit.sqlite`）后，API 与 Prefect 进程共享 Tushare 限速配额；需在两边进程环境（launchd plist / Prefect worker）都设置。未设置或 SQLite 不可用时退回进程内限速 |
 | `ASHARE_AGENT_SKILL_API_KEY` | - | DeepSeek API Key |
 | `ASHARE_AGENT_SKILL_MODEL` | `deepseek-chat` | LLM 模型 |
 | `ASHARE_LOG_LEVEL` | `INFO` | 日志级别 |

@@ -13,8 +13,9 @@ BACKEND_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
 
 
 class Settings(BaseSettings):
-    # Production hardening paths are deliberately independent. Safe defaults
-    # compute/observe new behavior without making it authoritative.
+    # Production hardening paths are deliberately independent. All six default
+    # to ENFORCED (authoritative); set ASHARE_HARDENING_<X>_MODE=shadow/audit/legacy
+    # to roll a single path back without touching the others.
     hardening_evidence_projection_mode: RolloutMode = RolloutMode.ENFORCED
     hardening_canonical_execution_mode: RolloutMode = RolloutMode.ENFORCED
     hardening_release_gate_mode: RolloutMode = RolloutMode.ENFORCED
