@@ -90,6 +90,22 @@ def gateway():
                 for index in range(70)
             ]
         )
+        # 市场宽度陪衬股：单票样本的上涨比恒为 100%，会触发 chao-gu「普涨过热(>75%)停出」日闸门
+        # （Sprint3 §67）。加一只下跌、成交额极低（进不了候选池）的股票，使上涨比=50%（不在停出区间）。
+        session.add(
+            Stock(code="000002", name="宽度陪衬", industry="测试行业", area="测试地区",
+                  market="主板", list_date="2010-01-01", is_st=False)
+        )
+        session.add_all(
+            [
+                DailyKbar(
+                    code="000002", trade_date=(start + timedelta(days=index)).isoformat(),
+                    open=10, high=10.1, low=9.9, close=10, volume=1_000, amount=10_000,
+                    pct_chg=-1.0, turnover_rate=0.1, macd_dif=0.0, macd_dea=0.0, rsi_12=45.0,
+                )
+                for index in range(70)
+            ]
+        )
         session.commit()
     finally:
         session.close()
