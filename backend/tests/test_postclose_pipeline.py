@@ -35,6 +35,16 @@ def _single_standalone_strategy(monkeypatch):
 
 
 
+
+@pytest.fixture(autouse=True)
+def _stub_db_side_steps(monkeypatch):
+    """盘后流水线里的 RSI/MACD 补缺与中线选股直接查库；这些单测传入的是假 db，统一桩掉。"""
+    import app.services.midterm_service as midterm_service
+    import app.services.tdx_indicator_fill as tdx_indicator_fill
+
+    monkeypatch.setattr(tdx_indicator_fill, "fill_recent_indicator_gaps", lambda _db, _trade_date: {"filled": 0})
+    monkeypatch.setattr(midterm_service, "generate_picks", lambda _db, _trade_date: {})
+
 def test_concept_sector_nan_member_count_is_normalized(db):
     client = SimpleNamespace(
         ths_index=lambda: pd.DataFrame(
@@ -124,6 +134,19 @@ def test_postclose_pipeline_orders_sync_health_gate_and_recommendation(monkeypat
     calls = []
 
     monkeypatch.setattr(scheduler_service, "_latest_allowed_bar_date", lambda: "2026-07-16")
+    import app.services.midterm_service as midterm_service
+    import app.services.tdx_indicator_fill as tdx_indicator_fill
+
+    monkeypatch.setattr(
+        tdx_indicator_fill,
+        "fill_recent_indicator_gaps",
+        lambda _db, trade_date: calls.append(("indicator_fill", trade_date)) or {"filled": 0},
+    )
+    monkeypatch.setattr(
+        midterm_service,
+        "generate_picks",
+        lambda _db, trade_date: calls.append(("midterm_picks", trade_date)) or {},
+    )
     monkeypatch.setattr(
         scheduler_service,
         "_run_data_sync",
@@ -171,6 +194,8 @@ def test_postclose_pipeline_orders_sync_health_gate_and_recommendation(monkeypat
 
     assert calls == [
         ("sync", "all"),
+        ("indicator_fill", "2026-07-16"),
+        ("midterm_picks", "2026-07-16"),
         ("health", "2026-07-16"),
         ("outcome", 5),
         ("recommendation", "local_pool", True),
