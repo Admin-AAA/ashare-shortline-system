@@ -167,6 +167,17 @@ class _CallableLoader:
         return AuxiliaryLoadedView(self.view_key, self.load_view(request))
 
 
+def _parse_observed(observed: Any) -> date | datetime | None:
+    if isinstance(observed, (date, datetime)):
+        return observed
+    if observed:
+        try:
+            return date.fromisoformat(_iso_day(observed))
+        except ValueError:
+            return None
+    return None
+
+
 class SQLAlchemyStateRepository:
     """State repository whose write transaction is owned entirely by the caller.
 
@@ -198,6 +209,21 @@ class SQLAlchemyStateRepository:
             conditions.append(table.c.code.in_(request.requested_codes))
         if self._entry.freshness_field == "trade_date":
             conditions.append(freshness == request.trade_date.isoformat())
+        if "code" in table.c and request.requested_codes:
+            # 单条 GROUP BY code 同时得到 count / max(freshness) / 覆盖代码集（原 3 条查询）。
+            # sum(count)=count(*)，max(各组 max)=max（均忽略 NULL），组键集合=distinct code。
+            count = 0
+            observed = None
+            covered_set: set[str] = set()
+            for code_v, cnt_v, max_v in self._connection.execute(
+                select(table.c.code, func.count(), func.max(freshness)).where(*conditions).group_by(table.c.code)
+            ):
+                count += int(cnt_v or 0)
+                if max_v is not None and (observed is None or max_v > observed):
+                    observed = max_v
+                if str(code_v or "").strip():
+                    covered_set.add(str(code_v))
+            return AuxiliaryRepositorySnapshot(count, frozenset(covered_set), _parse_observed(observed))
         count_stmt = select(func.count()).select_from(table)
         freshness_stmt = select(func.max(freshness)).select_from(table)
         if conditions:
@@ -214,15 +240,7 @@ class SQLAlchemyStateRepository:
                 )
                 if str(value or "").strip()
             )
-        parsed: date | datetime | None = None
-        if isinstance(observed, (date, datetime)):
-            parsed = observed
-        elif observed:
-            try:
-                parsed = date.fromisoformat(_iso_day(observed))
-            except ValueError:
-                parsed = None
-        return AuxiliaryRepositorySnapshot(count, covered, parsed)
+        return AuxiliaryRepositorySnapshot(count, covered, _parse_observed(observed))
 
     def upsert(
         self,
@@ -738,6 +756,7 @@ class _StateViews:
         }
 
     def concept_sector(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
+
         member_rows = self._session.scalars(
             select(ConceptSectorStock).where(
                 ConceptSectorStock.code.in_(request.requested_codes),
@@ -765,6 +784,7 @@ class _StateViews:
         return {}
 
     def capital_flow(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
+
         rows = self._session.scalars(select(CapitalFlow).where(CapitalFlow.code.in_(request.requested_codes), CapitalFlow.trade_date == self._target(request))).all()
         return {"capital_flows": {item.code: _row(item) for item in rows}}
 
