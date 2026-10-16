@@ -1819,6 +1819,18 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
     sync_result = _run_data_sync(db, sync_payload)
     _plap("sync")
 
+    # 补齐 Tushare stk_factor 缺失的 RSI/MACD（通达信口径，只填 NULL/0）；失败只告警。
+    indicator_fill: dict[str, Any] = {}
+    try:
+        from app.services.tdx_indicator_fill import fill_recent_indicator_gaps
+
+        indicator_fill = fill_recent_indicator_gaps(db, trade_date)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        indicator_fill = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        logger.warning("tdx indicator gap fill failed: %s", exc)
+    _plap("indicator_fill")
+
     readiness = _diagnose_postclose_readiness(db, trade_date)
     _plap("readiness")
     aux_refresh: dict[str, Any] = {}
@@ -1856,6 +1868,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
                 "readiness": readiness,
                 "blocker_classification": classification,
                 "aux_refresh": aux_refresh,
+                "indicator_fill": indicator_fill,
                 "pipeline_timings_seconds": pipeline_timings,
                 "summary_text": (
                     f"盘后辅助数据尚未就绪，等待有界重试：{blockers}"
@@ -1937,6 +1950,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
             "sync": sync_result,
             "readiness": readiness,
             "aux_refresh": aux_refresh,
+            "indicator_fill": indicator_fill,
             "outcome": outcome,
             "pipeline_timings_seconds": pipeline_timings,
             "recommendation": recommendation if "recommendation" in locals() else None,
@@ -1953,6 +1967,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
             "sync": sync_result,
             "readiness": readiness,
             "aux_refresh": aux_refresh,
+            "indicator_fill": indicator_fill,
             "outcome": outcome,
             "pipeline_timings_seconds": pipeline_timings,
             "recommendation": recommendation,
@@ -1968,6 +1983,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         "sync": sync_result,
         "readiness": readiness,
         "aux_refresh": aux_refresh,
+        "indicator_fill": indicator_fill,
         "outcome": outcome,
         "pipeline_timings_seconds": pipeline_timings,
         "recommendation": recommendation,
