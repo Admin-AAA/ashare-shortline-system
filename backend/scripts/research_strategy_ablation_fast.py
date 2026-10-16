@@ -309,6 +309,8 @@ def _filtered_entries(entries, skill_ids: set[str], snapshot: dict):
 
 
 _WORKER: dict = {}
+SOLO_PREFIX = "solo:"
+SOLO_ARMS: dict = {"on": False}
 _PCT_CACHE: dict[str, tuple[dict, dict]] = {}
 WORKERS: dict = {"n": 1}
 
@@ -526,6 +528,9 @@ def _process_day(signal_date: str) -> dict:
     for arm in arms:
         if arm == "__all__":
             skill_ids = set(all_ids)
+        elif arm.startswith(SOLO_PREFIX):
+            # --solo-arms：同一遍共享 universe/prefilter/features/evaluate，只在聚合阶段收窄到单策略
+            skill_ids = {arm[len(SOLO_PREFIX):]}
         else:
             skill_ids = set(all_ids) - {arm}
         skills_arm = [s for s in selected_all if str(s["skill_id"]) in skill_ids]
@@ -648,7 +653,10 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
     )
     selected_all = _without_excluded(list(builder._selected_skills(None)))  # noqa: SLF001
     all_ids = sorted(str(s["skill_id"]) for s in selected_all)
-    arms = ["__all__"] + [t for t in targets if t in all_ids]
+    if SOLO_ARMS["on"]:
+        arms = ["__all__"] + [SOLO_PREFIX + t for t in targets if t in all_ids]
+    else:
+        arms = ["__all__"] + [t for t in targets if t in all_ids]
     trade_dates = [
         str(v)
         for v in db.scalars(
@@ -755,11 +763,14 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
             "only_A_cards": int(len(oa)), "only_A_avg": float(oa.net.mean()) if len(oa) else None,
             "repl_B_cards": int(len(ob)), "repl_B_avg": float(ob.net.mean()) if len(ob) else None,
         }
+        if t.startswith(SOLO_PREFIX):
+            rec["trades"] = trades[t]
         res["arms"][t] = rec
         print(f"  >> 剔除 {t:34s} Δ{md:+.4f} CI[{lo:+.4f},{hi:+.4f}] "
               f"日+{rec['days_pos']}/-{rec['days_neg']} 月同号{rec['monthly_pos_ratio']:.2f} "
               f"独持{rec['only_A_cards']}张均{rec['only_A_avg']} 递补{rec['repl_B_cards']}张均{rec['repl_B_avg']} "
               f"| B均{rec['B']['avg'] if rec['B'] else None}", flush=True)
+    res["trades_A"] = trades["__all__"]
     if prov_rows:
         res["provenance"] = prov_rows
     if panel_days and PANEL.get("dir"):
@@ -788,6 +799,9 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--solo-arms", action="store_true",
+                    help="把 --targets 里每个策略作为单独运行臂（solo:<sid>，与独立 solo 回放逐票一致）；"
+                         "N 个策略一遍跑完，省掉 N-1 次重复的 universe/辅助数据/特征计算")
     ap.add_argument("--windows", default="W1,W2,W3")
     ap.add_argument(
         "--window-range",
@@ -920,6 +934,9 @@ def main() -> None:
         help="逗号或空白分隔：从基线（A 臂）里拿掉这些技能，用于串行 champion 复验（L-010）/真单策略。",
     )
     args = ap.parse_args()
+    if getattr(args, "solo_arms", False):
+        SOLO_ARMS["on"] = True
+        print("[solo-arms] 每个 target 作为独立单策略臂（solo:<sid>），共享每日数据/特征计算", flush=True)
     if args.exclude_skills:
         parsed = _parse_exclude_skills(args.exclude_skills)
         # Normalize env to comma-separated so child workers re-import correctly.
