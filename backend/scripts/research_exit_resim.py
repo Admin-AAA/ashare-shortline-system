@@ -52,6 +52,14 @@ GRID = {
     "trail_off_tp8": {"trail_off": True, "tp": 8.0},
     "tp10": {"tp": 10.0},
     "sl4": {"sl": 4.0}, "sl7": {"sl": 7.0},
+    # Sprint3 §70 let-winners-run
+    "lock4_hz7": {"lock": 4.0, "hz": 7}, "lock4_hz10": {"lock": 4.0, "hz": 10},
+    "lock4_r03": {"lock": 4.0, "ratio": 0.3}, "lock4_act3": {"lock": 4.0, "act": 3.0},
+    "lock4_act3_r03": {"lock": 4.0, "act": 3.0, "ratio": 0.3},
+    "act3_r03_hz7": {"act": 3.0, "ratio": 0.3, "hz": 7}, "act3_r03_hz10": {"act": 3.0, "ratio": 0.3, "hz": 10},
+    "act3_r02": {"act": 3.0, "ratio": 0.2}, "act5_r03": {"act": 5.0, "ratio": 0.3},
+    "act4_r03_hz8": {"act": 4.0, "ratio": 0.3, "hz": 8}, "act3_r03_lock4": {"act": 3.0, "ratio": 0.3, "lock": 4.0},
+    "r03_hz7": {"ratio": 0.3, "hz": 7}, "act2_r03": {"act": 2.0, "ratio": 0.3},
 }
 
 def fetch_bars(db, by_day, hz_max=12):
@@ -76,7 +84,11 @@ def main():
     ap = argparse.ArgumentParser(); ap.add_argument("--sids", required=True); ap.add_argument("--out", required=True)
     ap.add_argument("--gate", default="base", help="VARIANTS2 里的日级闸门名，先套闸门再算出场")
     ap.add_argument("--grid", default="")
+    ap.add_argument("--no-ov", action="store_true", help="关闭 strategy.yaml exit_overrides，网格参数即完整出场口径（base=旧全局出场，可对面板校验）")
     a = ap.parse_args()
+    if a.no_ov:
+        import app.services.backtest.policy_experiment as _pe
+        _pe.apply_exit_overrides = lambda pol, sid: pol
     grid = GRID if not a.grid else {k: GRID[k] for k in a.grid.split(",")}
     base_pol = load_production_selection_policy(); res = {}
     with SessionLocal() as db:
