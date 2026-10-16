@@ -1831,6 +1831,16 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         logger.warning("tdx indicator gap fill failed: %s", exc)
     _plap("indicator_fill")
 
+    # [中长线] 中线策略选股（周五信号日落盘，独立于短线出票）；失败只告警。
+    try:
+        from app.services.midterm_service import generate_picks as _mid_generate_picks
+
+        logger.info("midterm picks: %s", _mid_generate_picks(db, trade_date))
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.warning("midterm picks failed: %s", exc)
+    _plap("midterm_picks")
+
     readiness = _diagnose_postclose_readiness(db, trade_date)
     _plap("readiness")
     aux_refresh: dict[str, Any] = {}

@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from app.api import midterm
 from app.api import admin, backtests, dashboard, data_sources, frontend_logs, home, llm, metrics, outcomes, presets, records, recommendations, runs, skills, stats, strategies
 from app.core.config import get_settings
 from app.core.logger import setup_logging
@@ -441,5 +442,6 @@ app.include_router(outcomes.router)
 app.include_router(admin.router)
 app.include_router(llm.router)
 app.include_router(frontend_logs.router)
+app.include_router(midterm.router)
 from app.api.stock_matrix import router as stock_matrix_router
 app.include_router(stock_matrix_router)
