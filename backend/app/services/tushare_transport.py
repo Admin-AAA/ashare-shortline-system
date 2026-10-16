@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import random
+import os
 import threading
 import time
 from collections import deque
@@ -306,6 +307,16 @@ class SlidingWindowLimiter:
             time.sleep(wait_seconds)
 
 
+def _make_limiter(key: str, requests_per_minute: int):
+    """In-process limiter, or a cross-process one when TUSHARE_SHARED_LIMITER_DB is set."""
+    local = SlidingWindowLimiter(requests_per_minute)
+    db_path = os.environ.get("TUSHARE_SHARED_LIMITER_DB", "").strip()
+    if not db_path:
+        return local
+    from app.services.shared_rate_limiter import SharedSlidingWindowLimiter
+    return SharedSlidingWindowLimiter(key, requests_per_minute, db_path, fallback=local)
+
+
 class CircuitBreaker:
     """Small per-API circuit breaker with a single half-open probe."""
 
@@ -365,9 +376,9 @@ class TushareHttpProvider:
         self._session.headers.update({"Accept-Encoding": "gzip"})
         if config.auth_mode is AuthMode.API_KEY_HEADER:
             self._session.headers.update({"X-API-Key": config.credential})
-        self._provider_limiter = SlidingWindowLimiter(config.rate_limit_per_minute)
+        self._provider_limiter = _make_limiter(config.name, config.rate_limit_per_minute)
         self._api_limiters = {
-            api_name: SlidingWindowLimiter(limit)
+            api_name: _make_limiter(f"{config.name}:{api_name}", limit)
             for api_name, limit in config.api_rate_limits.items()
             if int(limit) > 0
         }
