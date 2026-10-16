@@ -310,6 +310,8 @@ def _filtered_entries(entries, skill_ids: set[str], snapshot: dict):
 
 _WORKER: dict = {}
 SOLO_PREFIX = "solo:"
+# 连续交易日分给同一 worker，让日K行缓存命中（结果按日回传、顺序不变）
+KBAR_CHUNK: dict = {"n": int(os.environ.get("ABLATION_DAY_CHUNK", "5"))}
 SOLO_ARMS: dict = {"on": False}
 _PCT_CACHE: dict[str, tuple[dict, dict]] = {}
 WORKERS: dict = {"n": 1}
@@ -368,6 +370,16 @@ def _worker_setup(
     only_skill: str | None = None,
 ) -> None:
     """每个进程（含主进程）各自准备 builder + session；worker 之间不共享任何对象。"""
+    if os.environ.get("ABLATION_KBAR_MEMO", "1") != "0":
+        # 相邻交易日的日K窗口大部分重叠：只转换新增行，返回拷贝（逐票一致，见 kbar_cache.load_bars）
+        from app.services.market_pool import kbar_cache as _kc
+
+        _kc.enable_row_memo()
+    if os.environ.get("ABLATION_AUX_PRELOAD", "1") != "0":
+        # fina_indicator / holder_numbers 整表读一次，按日内存 as-of 过滤（与逐日 SQL 一致）
+        from app.services.auxiliary import state_adapters as _sa
+
+        _sa.enable_replay_preload()
     # spawn 模式子进程重新 import 模块 → PARAMS 的 CLI 覆盖必须显式传参（同 GATE 的坑）。
     if ctx_params:
         PARAMS.update({k: v for k, v in ctx_params.items() if v is not None})
@@ -689,7 +701,7 @@ def run_window(db, window: str, targets: list[str], policy_note: str) -> dict:
                       SKILL_WEIGHTS.get("mode"), SKILL_WEIGHTS.get("map"),
                       EP_OVERRIDE.get("policy"), dict(GATE["map"]), GATE["version"], CTX_OVERRIDE.get("params"), ONLY_SKILL.get("sid")),
         ) as pool:
-            for res in pool.map(_process_day, trade_dates, chunksize=1):
+            for res in pool.map(_process_day, trade_dates, chunksize=KBAR_CHUNK["n"]):
                 done += 1
                 _merge_day_result(res, trades, prov_rows, panel_days, triggered)
                 if done % 10 == 0 or done == len(trade_dates):

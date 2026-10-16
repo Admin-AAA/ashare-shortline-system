@@ -678,6 +678,34 @@ class TushareStateProvider:
         return rows
 
 
+
+# ---- 回放专用整表预加载（默认关闭）：fina_indicator / holder_numbers 每日都要全量按 code 取历史，
+# 回放期间这两张表不变，进程内读一次、按日在内存里做与 SQL 完全相同的 as-of 过滤。
+# (code, end_date) 均有唯一键，"取最新"不依赖返回顺序 → 结果与逐日 SQL 一致。
+_REPLAY_PRELOAD: dict[str, Any] = {"on": False}
+
+
+def enable_replay_preload() -> None:
+    _REPLAY_PRELOAD["on"] = True
+
+
+def _preloaded(session: Session, key: str):
+    hit = _REPLAY_PRELOAD.get(key)
+    if hit is not None:
+        return hit
+    by_code: dict[str, list[tuple]] = defaultdict(list)
+    if key == "fina":
+        t = FinaIndicator
+        stmt = select(t.code, t.end_date, t.ann_date, t.roe, t.grossprofit_margin, t.netprofit_yoy,
+                      t.or_yoy, t.netprofit_margin, t.eps, t.bps)
+    else:
+        t = HolderNumber
+        stmt = select(t.code, t.end_date, t.ann_date, t.holder_num)
+    for row in session.execute(stmt):
+        by_code[row[0]].append(tuple(row))
+    _REPLAY_PRELOAD[key] = dict(by_code)
+    return _REPLAY_PRELOAD[key]
+
 class _StateViews:
     """Current ORM loaders, kept typed and independent from legacy auxiliary tables."""
 
@@ -815,6 +843,21 @@ class _StateViews:
 
     def fina_indicator(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
         target = _compact_day(request.trade_date)
+        if _REPLAY_PRELOAD["on"]:
+            data = _preloaded(self._session, "fina")
+            out: dict[str, Any] = {}
+            for code in dict.fromkeys(request.requested_codes):
+                best = None
+                for r in data.get(code, ()):
+                    if r[2] is not None and r[2] <= target and (best is None or str(r[1]) > str(best[1])):
+                        best = r
+                if best is not None:
+                    out[code] = {
+                        "roe": best[3], "gross_margin": best[4], "net_profit_yoy": best[5],
+                        "revenue_yoy": best[6], "netprofit_margin": best[7], "eps": best[8],
+                        "bps": best[9], "end_date": best[1], "ann_date": best[2],
+                    }
+            return {"finas": out}
         rows = self._session.scalars(
             select(FinaIndicator).where(FinaIndicator.code.in_(request.requested_codes), FinaIndicator.ann_date <= target)
         ).all()
@@ -837,6 +880,29 @@ class _StateViews:
         return {"auctions": {item.code: _row(item) for item in rows}}
 
     def holder_number(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
+        if _REPLAY_PRELOAD["on"]:
+            data = _preloaded(self._session, "holder")
+            asof = self._as_of_date
+            res: dict[str, dict[str, Any]] = {}
+            for code in dict.fromkeys(request.requested_codes):
+                rows_c = [
+                    r for r in data.get(code, ())
+                    if asof is None or (r[1] <= asof and r[2] is not None and r[2] <= asof)
+                ]
+                if not rows_c:
+                    continue
+                rows_c.sort(key=lambda r: r[1], reverse=True)
+                latest = rows_c[0]
+                previous = rows_c[1][3] if len(rows_c) > 1 else 0
+                change = round((latest[3] - previous) / previous * 100, 2) if previous else 0.0
+                res[code] = {
+                    "holder_num": latest[3],
+                    "holder_num_end_date": latest[1],
+                    "holder_num_prev": previous,
+                    "holder_num_change_pct": change,
+                    "holder_num_decreasing": change < -3,
+                }
+            return {"holder_numbers": res}
         statement = select(HolderNumber).where(HolderNumber.code.in_(request.requested_codes))
         if self._as_of_date is not None:
             # 可见性按公告日判定；缺公告日的行无法证明当时已披露，一律不可见（L-160）。
