@@ -60,6 +60,13 @@ exit_overrides:
   profit_lock_ratio: 0.3
 
 phases:
+  # 涨停反包不做（Sprint3 §72，2026-10-17）：信号日已涨停的反包次日溢价被吃掉。
+  # 面板（前3/线72）：12m +3.03→+3.18 PF2.58→2.88 MDD−12.9→−11.3；EXT +0.44→+0.79；W0/W00 不变。
+  - name: 涨停反包不做
+    when: "is_limit_up == true"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["信号日已涨停，反包溢价已兑现"]
   - name: 冰点情绪不抄底
     when: "market_sentiment_phase == '冰点'"
     score_cap: 55
