@@ -80,7 +80,7 @@ function MetricsTable({ recent, phases }: { recent?: HorizonMetrics; phases?: Re
   );
 }
 
-const STATUS: Record<string, string> = { pending: "待买入", holding: "持有中", closed: "已平仓" };
+const STATUS: Record<string, string> = { pending: "待买入", holding: "持有中", closed: "已平仓", skipped: "涨停买不进" };
 
 function Batches({ batches }: { batches: HorizonBatch[] }) {
   const [open, setOpen] = useState<string | null>(batches[0] ? batches[0].signal_date + batches[0].strategy_id : null);
