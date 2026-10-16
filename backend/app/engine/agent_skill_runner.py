@@ -12,7 +12,12 @@ from typing import Any
 from app.agents.agno_skill_agent import SkillReviewOutput, create_skill_agent, run_skill_agent
 from app.core.config import get_settings
 from app.engine.skill_loader import StrategySkill
-from app.services.model_router_service import get_active_model_routes
+from app.engine import ports as _ports
+
+
+def get_active_model_routes(*args, **kwargs):
+    """Service-layer adapter via engine port (kept as module attr for callers/tests)."""
+    return _ports.call(_ports.ACTIVE_MODEL_ROUTES, *args, **kwargs)
 
 
 OUTPUT_SCHEMA = {

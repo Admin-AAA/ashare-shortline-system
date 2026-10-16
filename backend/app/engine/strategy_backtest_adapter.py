@@ -9,7 +9,12 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.engine.skill_loader import StrategySkill, load_skills
-from app.services.cost_service import record_task_run
+from app.engine import ports as _ports
+
+
+def record_task_run(*args, **kwargs):
+    """Service-layer adapter via engine port (kept as module attr for callers/tests)."""
+    return _ports.call(_ports.RECORD_TASK_RUN, *args, **kwargs)
 
 
 @dataclass(frozen=True)

@@ -12,10 +12,7 @@ FORBIDDEN = {
     "engine": ("app.services", "app.api"),
     "services": ("app.api",),
 }
-KNOWN_EXCEPTIONS = {
-    ("app/engine/agent_skill_runner.py", "app.services.model_router_service"),
-    ("app/engine/strategy_backtest_adapter.py", "app.services.cost_service"),
-}
+KNOWN_EXCEPTIONS: set = set()
 
 
 def _imports(path):
