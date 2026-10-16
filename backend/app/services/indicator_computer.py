@@ -98,6 +98,32 @@ def rsi(values: list[float], window: int) -> float:
     return round(100 * (up or 0.0) / absd, 2)
 
 
+def rsi_multi(values: list[float], windows: tuple[int, ...]) -> tuple[float, ...]:
+    """一次遍历算多个窗口的 rsi()，逐窗口运算顺序与 rsi() 完全相同（结果逐位一致）。"""
+    n = len(values)
+    act = [w for w in windows if n > w]
+    if not act:
+        return tuple(50.0 for _ in windows)
+    ups: dict[int, float | None] = {w: None for w in act}
+    abss: dict[int, float | None] = {w: None for w in act}
+    for index in range(1, n):
+        delta = values[index] - values[index - 1]
+        pos = max(delta, 0.0)
+        ad = abs(delta)
+        for w in act:
+            u = ups[w]
+            ups[w] = pos if u is None else (pos + (w - 1) * u) / w
+            a_ = abss[w]
+            abss[w] = ad if a_ is None else (ad + (w - 1) * a_) / w
+    out = []
+    for w in windows:
+        if n <= w or not abss[w]:
+            out.append(50.0)
+        else:
+            out.append(round(100 * (ups[w] or 0.0) / abss[w], 2))
+    return tuple(out)
+
+
 def macd(values: list[float]) -> tuple[float, float]:
     if len(values) < 26:
         ema12 = ema(values, 12)

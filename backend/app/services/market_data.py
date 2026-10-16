@@ -22,6 +22,7 @@ from app.services.indicator_computer import (
     macd as _macd,
     max_drawdown as _max_drawdown,
     rsi as _rsi,
+    rsi_multi as _rsi_multi,
     safe_div as _safe_div,
     upper_shadow_count as _upper_shadow_count,
 )
@@ -1025,9 +1026,7 @@ def _build_stock_from_bars(
     # 该回填列已证实失真：如 301047 在下跌日 rsi_12 从 22.3 跳到 55.4（违反 RSI
     # 物理意义）；失真列会污染策略 when 条件（rsi_12<55 / >70 等）与 LLM 提示，
     # 导致推荐过滤与 LLM 推理基于错误超买/超卖信号。收盘价才是唯一可信源。
-    rsi12 = _rsi(closes, 12)
-    rsi6 = _rsi(closes, 6)
-    rsi24 = _rsi(closes, 24)
+    rsi12, rsi6, rsi24 = _rsi_multi(closes, (12, 6, 24))
 
     # MACD — 始终从收盘价重算，不信任 daily_kbars.macd_* 缓存列（同 rsi / max_dd /
     # breakout / upper_shadow）。原实现是 `prefer cached` + `is not None` 判空，而
