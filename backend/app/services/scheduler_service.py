@@ -94,6 +94,8 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     _update_matrix_progress,
 )
 
+from app.core import metrics as _metrics  # noqa: E402
+
 logger = logging.getLogger("scheduler")
 
 
@@ -896,7 +898,7 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
             from app.services.xiaoshi_alt_data import sync_xiaoshi_alt_data
 
             result["xiaoshi_alt"] = sync_xiaoshi_alt_data(db)
-        except Exception as exc:  # pragma: no cover - 防御
+        except Exception as exc:  # pragma: no cover - 防御  # noqa: BLE001
             result["xiaoshi_alt"] = {"errors": [str(exc)[:160]]}
         step_timings["xiaoshi_alt"] = _lap()
 
@@ -956,7 +958,7 @@ def _run_daily_kbar_batch(payload: dict) -> dict:
             if indicator_fix.get("fixed_dates"):
                 result.setdefault("indicator_backfill", indicator_fix)
                 logger.info("daily_kbar_batch 后补本地指标: %s", indicator_fix)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             logger.warning("daily_kbar_batch 后补本地指标失败（不影响 K 线同步）: %s", exc)
         return result
     finally:
@@ -1153,7 +1155,7 @@ def _backfill_auxiliary_window_gaps(
                     for item in aux.orchestrated.results
                 },
             })
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             logger.warning("辅助数据窗口回填 %s 失败: %s", iso, str(exc)[:120])
             try:
                 db.rollback()
@@ -1195,7 +1197,7 @@ def _backfill_stk_limit_window(
         iso = f"{compact[:4]}-{compact[4:6]}-{compact[6:8]}"
         try:
             df = pro.stk_limit(trade_date=compact)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             logger.warning("stk_limit(%s) 拉取失败: %s", iso, str(exc)[:120])
             backfilled.append({"trade_date": iso, "status": "failed", "error": str(exc)[:120]})
             continue
@@ -1551,7 +1553,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         try:
             from app.core.alerts import emit_alert
             emit_alert("kbar_cache_refresh_failed", "postclose", f"日K缓存刷新失败: {str(exc)[:200]}")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass
     _plap("kbar_cache_refresh")
 
@@ -2043,13 +2045,14 @@ async def _safety_net_run(db, payload: dict) -> dict:
                     else:
                         age_hours = 999
                     needs_outcome = age_hours > 25
-                except Exception:
+                except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+                    logger.debug("_safety_net_run: best-effort fallback after %r", _ble_exc)
                     needs_outcome = False
             if needs_outcome:
                 from app.services.outcome_service import label_pending_outcomes
                 outcome_result = label_pending_outcomes(db, horizon_days=5)
                 logger.info("安全网补 outcome 结算: %s", outcome_result)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         logger.warning("安全网补 outcome 结算失败（非阻塞）: %s", exc)
 
     check = check_formal_recommendation_gap(db)
@@ -2092,7 +2095,7 @@ async def _safety_net_run(db, payload: dict) -> dict:
 
     try:
         result = await _run_standalone_recommendations(db, run_payload)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         result = {"error": str(exc)}
     run_id = str(result.get("related_run_id") or "")
     if not run_id:
@@ -2106,7 +2109,7 @@ async def _safety_net_run(db, payload: dict) -> dict:
         }
     try:
         final_run = result["final_run"]
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         return {
             "status": "failed",
             "skipped": False,
