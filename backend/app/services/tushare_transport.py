@@ -68,10 +68,12 @@ def _extract_upstream_detail(response: Any) -> str | None:
     """
     try:
         payload = response.json()
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_extract_upstream_detail: best-effort fallback after %r", _ble_exc)
         try:
             text = (getattr(response, "text", "") or "").strip()
-        except Exception:
+        except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("_extract_upstream_detail: best-effort fallback after %r", _ble_exc)
             return None
         return text[:_UPSTREAM_DETAIL_MAX_CHARS] or None
 

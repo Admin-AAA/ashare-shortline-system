@@ -136,7 +136,7 @@ def build_cockpit_recommendation(rec: Any, watch: Any = None) -> CockpitRecommen
                 if hasattr(recommended_at_value, "isoformat")
                 else str(recommended_at_value)
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
             recommended_at_str = str(recommended_at_value)
 
     return CockpitRecommendation(

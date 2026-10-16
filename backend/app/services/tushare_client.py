@@ -1120,7 +1120,8 @@ def fetch_moneyflow(code: str, days: int = 10, trade_date: str | None = None) ->
         start = (date.fromisoformat(_normalize_trade_date(target)) - timedelta(days=max(days * 3, 30))).strftime("%Y%m%d")
         try:
             df = pro.moneyflow(ts_code=tsc, start_date=start, end_date=target)
-        except Exception:
+        except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("fetch_moneyflow: best-effort fallback after %r", _ble_exc)
             df = pro.moneyflow(ts_code=tsc, trade_date=target)
     else:
         df = pro.moneyflow(ts_code=tsc, limit=days)
@@ -1216,7 +1217,7 @@ def fetch_limit_up_board(trade_date: str | None = None) -> list[dict[str, Any]]:
                     "fd_amount": _f(row.get("fd_amount")) / 1e8 if row.get("fd_amount") is not None else 0.0,
                     "industry": str(row.get("industry", "")),
                 })
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             errors.append(f"{limit_type}: {type(exc).__name__}: {exc}")
     if errors:
         raise RuntimeError(f"limit_list_d({td}) failed: {'; '.join(errors)}")
@@ -1234,7 +1235,8 @@ def fetch_dragon_tiger(trade_date: str | None = None) -> list[dict[str, Any]]:
     td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.top_list(trade_date=td)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_dragon_tiger: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1265,7 +1267,8 @@ def fetch_concept_sectors() -> list[dict[str, Any]]:
     pro = get_pro()
     try:
         df = pro.ths_index()
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_concept_sectors: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1287,7 +1290,8 @@ def fetch_concept_members(sector_code: str, trade_date: str = "") -> list[dict[s
     pro = get_pro()
     try:
         df = pro.ths_member(ts_code=sector_code)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_concept_members: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1329,7 +1333,8 @@ def fetch_margin(code: str, days: int = 5, trade_date: str | None = None) -> lis
             df = pro.margin(ts_code=tsc, start_date=start, end_date=target)
         else:
             df = pro.margin(ts_code=tsc, limit=days)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_margin: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1360,11 +1365,13 @@ def fetch_hk_hold(code: str, trade_date: str | None = None) -> dict[str, Any] | 
         if target:
             try:
                 df = pro.hk_hold(ts_code=tsc, trade_date=target)
-            except Exception:
+            except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+                logger.debug("fetch_hk_hold: best-effort fallback after %r", _ble_exc)
                 df = pro.hk_hold(ts_code=tsc, limit=1)
         else:
             df = pro.hk_hold(ts_code=tsc, limit=1)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_hk_hold: best-effort fallback after %r", _ble_exc)
         return None
     if df is None or df.empty:
         return None
@@ -1392,7 +1399,8 @@ def fetch_holder_number(code: str, limit: int = 5, trade_date: str | None = None
             df = pro.stk_holdernumber(ts_code=tsc, end_date=target, limit=limit)
         else:
             df = pro.stk_holdernumber(ts_code=tsc, limit=limit)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_holder_number: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1419,7 +1427,8 @@ def fetch_stk_limit(code: str, days: int = 5, trade_date: str | None = None) -> 
             df = pro.stk_limit(ts_code=tsc, start_date=start, end_date=target)
         else:
             df = pro.stk_limit(ts_code=tsc, limit=days)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_stk_limit: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1443,7 +1452,8 @@ def fetch_suspend(code: str) -> dict[str, Any] | None:
     tsc = ts_code(code)
     try:
         df = pro.suspend(ts_code=tsc, limit=1)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_suspend: best-effort fallback after %r", _ble_exc)
         return None
     if df is None or df.empty:
         return None
@@ -1462,7 +1472,8 @@ def fetch_top_inst(trade_date: str | None = None) -> list[dict[str, Any]]:
     td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.top_inst(trade_date=td)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_top_inst: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1567,7 +1578,8 @@ def fetch_index_daily(
     ed = end_date or date.today().strftime("%Y%m%d")
     try:
         df = pro.index_daily(ts_code=target, start_date=sd, end_date=ed)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_index_daily: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1604,7 +1616,8 @@ def fetch_auction(code: str, trade_date: str | None = None) -> dict[str, Any] | 
     td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.stk_auction(ts_code=tsc, trade_date=td)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_auction: best-effort fallback after %r", _ble_exc)
         return None
     if df is None or df.empty:
         return None
@@ -1637,7 +1650,8 @@ def fetch_factor_pro(code: str, days: int = 90, trade_date: str | None = None) -
     ed = end_day.strftime("%Y%m%d")
     try:
         df = pro.stk_factor_pro(ts_code=tsc, start_date=sd, end_date=ed)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_factor_pro: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1699,7 +1713,8 @@ def fetch_holder_trade(code: str) -> list[dict[str, Any]]:
     tsc = ts_code(code)
     try:
         df = pro.stk_holdertrade(ts_code=tsc)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_holder_trade: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1730,7 +1745,8 @@ def fetch_repurchase(code: str) -> list[dict[str, Any]]:
     tsc = ts_code(code)
     try:
         df = pro.repurchase(ts_code=tsc)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_repurchase: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1759,7 +1775,8 @@ def fetch_pledge_stat(code: str) -> dict[str, Any] | None:
     tsc = ts_code(code)
     try:
         df = pro.pledge_stat(ts_code=tsc)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_pledge_stat: best-effort fallback after %r", _ble_exc)
         return None
     if df is None or df.empty:
         return None
@@ -1785,7 +1802,8 @@ def fetch_share_float(code: str) -> list[dict[str, Any]]:
     tsc = ts_code(code)
     try:
         df = pro.share_float(ts_code=tsc)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_share_float: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1813,7 +1831,8 @@ def fetch_broker_recommend(month: str | None = None) -> list[dict[str, Any]]:
     m = month or date.today().strftime("%Y%m")
     try:
         df = pro.broker_recommend(month=m)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_broker_recommend: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -1921,13 +1940,14 @@ def _fetch_baostock_minute_kbars(
                     break
                 last_err = f"error_code={rs.error_code} {rs.error_msg}"
                 logger.warning("baostock minute query failed code=%s freq=%s attempt=%d: %s", code, freq, attempt + 1, last_err)
-            except Exception as exc:  # 网络/COM 异常 → 重 login 重试
+            except Exception as exc:  # 网络/COM 异常 → 重 login 重试  # noqa: BLE001
                 last_err = f"{type(exc).__name__}: {str(exc)[:120]}"
                 logger.warning("baostock minute query exception code=%s freq=%s attempt=%d: %s", code, freq, attempt + 1, last_err)
             if attempt < _BAOSTOCK_MAX_RETRIES:
                 try:
                     _baostock_relogin()
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+                    logger.debug("_fetch_baostock_minute_kbars: best-effort fallback after %r", exc)
                     last_err = f"relogin failed: {exc}"
         if rs is None or getattr(rs, "error_code", "1") != "0":
             _record_minute_source_trace(
@@ -2190,7 +2210,7 @@ def _fetch_xiaoshi_minute_kbars(
             row_count=len(rows),
         )
         return rows
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         _record_minute_source_trace(
             trace,
             source="xiaoshi_min1",
@@ -2245,7 +2265,7 @@ def _fetch_tushare_minute_kbars(
                 )
                 return []
             frames.append(frame)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         reason = str(exc)
         status = "permission_denied" if _is_tushare_permission_error(exc) else "error"
         _record_minute_source_trace(
@@ -2386,7 +2406,8 @@ def fetch_margin_detail_batch(trade_date: str | None = None) -> list[dict[str, A
     td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.margin_detail(trade_date=td)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_margin_detail_batch: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -2421,7 +2442,8 @@ def fetch_block_trade(trade_date: str | None = None) -> list[dict[str, Any]]:
     td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.block_trade(trade_date=td)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_block_trade: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -2457,7 +2479,8 @@ def fetch_hsgt_flow(trade_date: str | None = None) -> dict[str, Any] | None:
     td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.moneyflow_hsgt(trade_date=td)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_hsgt_flow: best-effort fallback after %r", _ble_exc)
         return None
     if df is None or df.empty:
         return None
@@ -2479,7 +2502,8 @@ def fetch_hsgt_top10(trade_date: str | None = None) -> list[dict[str, Any]]:
     td = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.hsgt_top10(trade_date=td)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_hsgt_top10: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -2531,7 +2555,8 @@ def fetch_fina_indicator(
     target = _compact_trade_date(trade_date)
     try:
         df = pro.fina_indicator(ts_code=tsc, limit=limit)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_fina_indicator: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []
@@ -2572,7 +2597,8 @@ def fetch_fina_indicator_batch(
     target = _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
     try:
         df = pro.fina_indicator(ann_date=target)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("fetch_fina_indicator_batch: best-effort fallback after %r", _ble_exc)
         return []
     if df is None or df.empty:
         return []

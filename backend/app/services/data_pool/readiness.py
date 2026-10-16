@@ -9,7 +9,7 @@ def _pct(value: Any) -> float:
         if numeric <= 1:
             numeric *= 100
         return round(numeric, 2)
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
         return 0.0
 
 

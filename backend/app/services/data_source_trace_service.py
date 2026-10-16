@@ -106,7 +106,7 @@ class MySQLTraceSink:
                     db.add(_attempt_to_row(trace.trace_id, attempt))
                 db.commit()
                 return TracePersistResult(ok=True, telemetry_status="ok")
-        except Exception as exc:  # 持久化失败不阻断已取到的数据，但显式标记
+        except Exception as exc:  # 持久化失败不阻断已取到的数据，但显式标记  # noqa: BLE001
             logger.warning("data source trace persist failed trace=%s: %s", trace.trace_id, exc)
             return TracePersistResult(
                 ok=False, telemetry_status="failed", error=str(exc)[:160]

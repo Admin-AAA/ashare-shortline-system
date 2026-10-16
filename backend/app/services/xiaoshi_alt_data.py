@@ -96,7 +96,7 @@ def sync_xiaoshi_alt_data(db: Session, *, client: Any | None = None) -> dict[str
         if client is None:
             from app.services.xiaoshi_client import get_xiaoshi_client
             client = get_xiaoshi_client()
-    except Exception as exc:  # 未配置 key 等
+    except Exception as exc:  # 未配置 key 等  # noqa: BLE001
         result["errors"].append(f"client: {str(exc)[:120]}")
         return result
 
@@ -121,7 +121,7 @@ def sync_xiaoshi_alt_data(db: Session, *, client: Any | None = None) -> dict[str
             db.bulk_insert_mappings(MarginDetail, new)
             db.commit()
         result.update(margin_inserted=len(new), margin_days=days, margin_rows=len(margin))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         db.rollback()
         logger.warning("xiaoshi margin_trading fallback failed: %s", exc)
         result["errors"].append(f"margin: {str(exc)[:120]}")
@@ -144,7 +144,7 @@ def sync_xiaoshi_alt_data(db: Session, *, client: Any | None = None) -> dict[str
             db.bulk_insert_mappings(ShareFloat, new_f)
             db.commit()
         result.update(float_inserted=len(new_f), float_rows=len(floats))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         db.rollback()
         logger.warning("xiaoshi restricted_unlock fallback failed: %s", exc)
         result["errors"].append(f"float: {str(exc)[:120]}")

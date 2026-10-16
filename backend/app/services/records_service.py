@@ -285,7 +285,8 @@ def get_matrix_record_detail(db: Session, record_id: int) -> dict[str, Any] | No
     import json
     try:
         data["result"] = json.loads(row.result_json) if row.result_json else {}
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("get_matrix_record_detail: best-effort fallback after %r", _ble_exc)
         data["result"] = {}
     # 附加该股票从分析日到今天的收益率（与推荐记录同口径）
     bars = list(

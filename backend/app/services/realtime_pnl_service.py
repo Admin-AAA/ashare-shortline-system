@@ -163,7 +163,7 @@ def _fetch_rtk_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
     quotes: dict[str, dict[str, Any]] = {}
     try:
         df = get_pro().rt_k(ts_code=",".join(ts_codes))
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         logger.warning("rt_k 实时盈亏拉取失败: %s", str(exc)[:200])
         df = None
     if df is not None and not df.empty:
@@ -328,7 +328,7 @@ def _compute_one(
             5,
             signal_bar=signal_bar,
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         logger.warning("实时盈亏入场判定失败 %s: %s", rec.code, str(exc)[:160])
         return {**base, "status": "unavailable", "reason": f"入场判定异常: {str(exc)[:80]}"}
 

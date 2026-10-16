@@ -351,7 +351,7 @@ def _loads(raw: str | None, default: Any) -> Any:
         return default
     try:
         return json.loads(raw)
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
         return default
 
 
@@ -362,7 +362,7 @@ def _iso(value: datetime | None) -> str | None:
 def _float_value(value: Any) -> float:
     try:
         return float(value or 0)
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
         return 0.0
 
 
@@ -379,5 +379,5 @@ def _metric_int(metrics: dict[str, Any], key: str, fallback_key: str) -> int:
         value = metrics.get(fallback_key)
     try:
         return int(value or 0)
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
         return 0

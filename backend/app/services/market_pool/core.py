@@ -424,7 +424,7 @@ def get_market_universe_from_pool_with_realtime(db: Session) -> tuple[list[dict[
                 code = _normalize_code(str(_row_value(item, "TS_CODE", "ts_code", "code") or "").split(".")[0])
                 if code:
                     realtime_map[code] = item
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             logger.warning("realtime_quote 批次 %d-%d 失败: %s", start, start + chunk_size, exc)
 
     if not realtime_map:

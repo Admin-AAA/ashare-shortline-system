@@ -49,7 +49,7 @@ class TushareMarketSourceAdapter:
                 list[Mapping[str, object]],
                 market_data._fetch_quotes(self.source_name, self.settings),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - re-raised/wrapped
             error = MarketSourceError(
                 operation=MarketSourceOperation.QUOTES,
                 code=MarketSourceErrorCode.SOURCE_UNAVAILABLE,
@@ -113,7 +113,7 @@ class TushareMarketSourceAdapter:
                         end_date=request.end_date,
                     ),
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 - re-raised/wrapped
                 error = MarketSourceError(
                     operation=MarketSourceOperation.DAILY_BARS,
                     code=MarketSourceErrorCode.INSTRUMENT_UNAVAILABLE,
@@ -165,7 +165,7 @@ class TushareMarketSourceAdapter:
                 list[Mapping[str, object]],
                 fetch_daily_kbars_for_trade_date(str(request.trade_date)),
             )
-        except Exception:
+        except Exception:  # noqa: BLE001 - re-raised/wrapped
             error = MarketSourceError(
                 operation=MarketSourceOperation.DAILY_BARS,
                 code=MarketSourceErrorCode.SOURCE_UNAVAILABLE,

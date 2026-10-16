@@ -2821,7 +2821,8 @@ def regime_win_loss_breakdown(db: Session) -> dict[str, dict[str, float]]:
         try:
             ctx = _loads(mj)
             regime = (ctx.get("breadth") or {}).get("regime") or "unknown"
-        except Exception:
+        except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("regime_win_loss_breakdown: best-effort fallback after %r", _ble_exc)
             regime = "parse_error"
         b = buckets.setdefault(regime, {"wins": [], "losses": []})
         ret = float(ret or 0)

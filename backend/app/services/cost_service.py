@@ -486,7 +486,8 @@ def _loads(value: str | None, fallback: Any) -> Any:
         return fallback
     try:
         return json.loads(value)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_loads: best-effort fallback after %r", _ble_exc)
         return fallback
 
 

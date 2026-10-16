@@ -121,7 +121,7 @@ async def run_skill_reviews(
 
         except asyncio.TimeoutError:
             result["error"] = f"Skill '{skill.name}' 审查超时 (>{SKILL_TIMEOUT_SECONDS}s)，已跳过"
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - logged or recorded, non-blocking by design
             result["error"] = str(e)
 
         return result

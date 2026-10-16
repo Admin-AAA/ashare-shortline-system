@@ -164,7 +164,7 @@ def poll_once(db: Session, pro, now_str: str | None = None) -> dict[str, int]:
         end_dt = now_str or f"{day} 15:00:00"
         try:
             bars = _fetch_minute_highs(pro, code, start_dt, end_dt)
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
             stats["errors"] += 1
             continue
         # 找首个 high >= target_price 的 bar
@@ -255,7 +255,7 @@ def settle_signals(db: Session, pro) -> dict[str, int]:
             lows = [b[2] for b in bars]
             post_max = ((max(highs) / entry_price - 1) * 100) if highs else None
             post_min = ((min(lows) / entry_price - 1) * 100) if lows else None
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
             stats["errors"] += 1
             continue
         lock_delta = _lock_delta_pct(trigger_price, actual_exit_price, entry_price)

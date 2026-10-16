@@ -123,7 +123,7 @@ def local_minute_inventory(db: Session) -> dict[str, Any]:
             "trade_date_count_scope": "db_raw_trade_dates_indexed",
             "inventory_status": "ok",
         }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         logger.warning("local minute inventory unavailable: %s", exc)
         try:
             db.rollback()

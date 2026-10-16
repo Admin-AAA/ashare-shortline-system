@@ -104,7 +104,7 @@ def analyze_stock_matrix(
     for skill in active_skills:
         try:
             signal = run_strategy(skill, stock_result, main_industries, skip_universe_check=True)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             logger.warning("Skill %s rule scoring failed for %s: %s", skill.skill_id, code, exc)
             signal = _empty_signal(skill)
 
@@ -221,7 +221,7 @@ def analyze_stock_matrix(
             elapsed_ms=elapsed_ms,
         ))
         db.commit()
-    except Exception as hist_exc:
+    except Exception as hist_exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         logger.warning("写入 stock_matrix_history 失败: %s", hist_exc)
         db.rollback()
 

@@ -67,7 +67,7 @@ def resolve_org_id(code: str, client: httpx.Client | None = None) -> str | None:
                 break
         _org_cache[code] = org
         return org
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         logger.debug("cninfo orgId resolve failed code=%s: %s", code, exc)
         _org_cache[code] = None
         return None
@@ -79,7 +79,8 @@ def resolve_org_id(code: str, client: httpx.Client | None = None) -> str | None:
 def _ms_to_date(ms: Any) -> str:
     try:
         return datetime.fromtimestamp(int(ms) / 1000.0).strftime("%Y-%m-%d")
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_ms_to_date: best-effort fallback after %r", _ble_exc)
         return ""
 
 

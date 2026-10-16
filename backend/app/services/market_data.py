@@ -263,7 +263,7 @@ def _fetch_first_kline(
             if len(bars) >= 30:
                 return bars, source, errors
             errors.append(f"{source}: 日K不足30条")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             errors.append(f"{source}: {exc}")
     return [], "", errors
 
@@ -338,7 +338,8 @@ def _load_local_stock_basics() -> list[dict[str, Any]]:
 
         from app.db.session import SessionLocal
         from app.models.tables import Stock
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_load_local_stock_basics: best-effort fallback after %r", _ble_exc)
         return []
 
     industry_cache = _load_industry_cache()
@@ -354,7 +355,8 @@ def _load_local_stock_basics() -> list[dict[str, Any]]:
                 Stock.is_st,
             )
         ).all()
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_load_local_stock_basics: best-effort fallback after %r", _ble_exc)
         db.close()
         return []
     db.close()
@@ -518,7 +520,8 @@ def _load_tushare_daily_basic_map(pro: Any, settings: Any, trade_date: str) -> d
             if code:
                 result[code] = dict(row)
         return result
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_load_tushare_daily_basic_map: best-effort fallback after %r", _ble_exc)
         return {}
 
 

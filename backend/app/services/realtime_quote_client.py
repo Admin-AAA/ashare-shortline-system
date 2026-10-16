@@ -167,7 +167,7 @@ def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[s
             df = ts.realtime_quote(ts_code=",".join(chunk))
             if df is not None and not df.empty:
                 frames.append(df)
-        except Exception as exc:  # 上游 504/超时/权限等——降级为空，单片失败不影响其他片
+        except Exception as exc:  # 上游 504/超时/权限等——降级为空，单片失败不影响其他片  # noqa: BLE001
             logger.warning("realtime_quote 拉取失败（%d 只）: %s", len(chunk), str(exc)[:160])
             continue
 

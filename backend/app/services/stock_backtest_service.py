@@ -111,7 +111,8 @@ def run_stock_backtest(
         for skill in active_skills:
             try:
                 signal = run_strategy(skill, stock_dict, [], skip_universe_check=True)
-            except Exception:
+            except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+                logger.debug("run_stock_backtest: best-effort fallback after %r", _ble_exc)
                 continue
 
             score = float(signal.get("score", 0))

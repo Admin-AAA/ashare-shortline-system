@@ -59,7 +59,7 @@ def _resolve_analysis_market_snapshot(
                 .order_by(RecommendationRun.started_at.desc())
                 .limit(1)
             ).scalar_one_or_none()
-    except Exception as exc:  # pragma: no cover - 防御
+    except Exception as exc:  # pragma: no cover - 防御  # noqa: BLE001
         logger.warning("load formal market snapshot failed for %s: %s", trade_date, exc)
         raw = None
         selected_scope = ""
@@ -425,7 +425,7 @@ def _persist_single_stock_history(db: Session, code: str, trade_date: str, resul
             elapsed_ms=result.get("elapsed_ms"),
         ))
         db.commit()
-    except Exception as hist_exc:
+    except Exception as hist_exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         logger.warning("写入单股票评分历史失败 (code=%s): %s", code, hist_exc)
         db.rollback()
 

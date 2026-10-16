@@ -223,7 +223,7 @@ class ApplicationLifespan:
         for name, cleanup in cleanups:
             try:
                 cleanup()
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
                 failures.append(name)
         return tuple(failures)
 

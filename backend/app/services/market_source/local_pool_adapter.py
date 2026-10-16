@@ -74,7 +74,7 @@ class LocalPoolMarketSourceAdapter:
                     refresh=self._refresh,
                     as_of_date=self._as_of_date,
                 )
-        except Exception:
+        except Exception:  # noqa: BLE001 - re-raised/wrapped
             error = MarketSourceError(
                 operation=MarketSourceOperation.QUOTES,
                 code=MarketSourceErrorCode.SOURCE_UNAVAILABLE,
@@ -148,7 +148,7 @@ class LocalPoolMarketSourceAdapter:
                         },
                     )
                 )
-        except Exception:
+        except Exception:  # noqa: BLE001 - re-raised/wrapped
             errors = tuple(
                 MarketSourceError(
                     operation=MarketSourceOperation.DAILY_BARS,

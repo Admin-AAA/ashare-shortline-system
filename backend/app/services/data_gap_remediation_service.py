@@ -223,7 +223,8 @@ def _backfill_news_announcements(
                 len(remaining_for_tushare),
             )
             break
-        except Exception:
+        except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("_backfill_news_announcements: best-effort fallback after %r", _ble_exc)
             failed_codes.append(code)
             consecutive_failures += 1
             remaining_for_tushare.append(code)
@@ -252,7 +253,8 @@ def _backfill_news_announcements(
                 rows = fetch_cninfo(
                     code, start_date=target_start, end_date=end_today, page_size=30, max_pages=2,
                 )
-            except Exception:
+            except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+                logger.debug("_backfill_news_announcements: best-effort fallback after %r", _ble_exc)
                 still_need.append(code)
                 continue
             if not rows:
@@ -271,7 +273,8 @@ def _backfill_news_announcements(
         pro = None
         try:
             pro = get_pro()
-        except Exception:
+        except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("_backfill_news_announcements: best-effort fallback after %r", _ble_exc)
             pro = None
         if pro is not None:
             tushare_failures = 0
@@ -291,7 +294,8 @@ def _backfill_news_announcements(
                         end_date=compact_end,
                         limit=effective_limit,
                     )
-                except Exception:
+                except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+                    logger.debug("_backfill_news_announcements: best-effort fallback after %r", _ble_exc)
                     tushare_failures += 1
                     if code not in failed_codes:
                         failed_codes.append(code)
@@ -396,7 +400,8 @@ def remediate_data_health_gaps(
     timings: dict[str, Any] = {}
     try:
         before = diagnose_all(db)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("remediate_data_health_gaps: best-effort fallback after %r", exc)
         db.rollback()
         return _diagnosis_failed_remediation_result(
             requested_tables=requested_tables,
@@ -457,7 +462,8 @@ def remediate_data_health_gaps(
             after_snapshot = _diagnosis_snapshot(after)
             comparison = _compare_diagnosis(before, after, requested_tables=requested_tables)
             remaining_issues = after.get("issues") or []
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("remediate_data_health_gaps: best-effort fallback after %r", exc)
             db.rollback()
             post_diagnosis_failed = True
             after_snapshot = _diagnosis_failure_snapshot(exc, stage="post")
@@ -912,7 +918,7 @@ def _execute_recommendation_auxiliary_action_safely(db: Session, item: dict[str,
                 "requested_code_count": len(codes),
                 "checked_codes": checked_codes,
             }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         db.rollback()
         return {**item, "status": "failed", "row_count": 0, "error": str(exc), "error_type": type(exc).__name__}
     return {**item, "status": "skipped", "row_count": 0, "reason": "unsupported_table"}
@@ -953,7 +959,8 @@ def _loads_json(raw: Any, default: Any) -> Any:
         return raw
     try:
         return json.loads(str(raw))
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_loads_json: best-effort fallback after %r", _ble_exc)
         return default
 
 
@@ -1220,7 +1227,7 @@ def _build_remediation_plan(
 def _execute_plan_item_safely(db: Session, item: dict[str, Any]) -> dict[str, Any]:
     try:
         return _execute_plan_item(db, item)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         db.rollback()
         return {
             **item,

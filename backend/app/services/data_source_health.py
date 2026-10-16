@@ -57,7 +57,7 @@ def active_alerts(db: Session) -> list[dict[str, Any]]:
         model_alert = _model_completion_alert(model_completion_capability(db))
         if model_alert is not None:
             alerts.append(model_alert)
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
         # 数据库局部初始化或迁移期间仍应返回其余告警，同时明确健康投影不可用。
         alerts.append({
             "source": "model_completion",
@@ -94,7 +94,7 @@ def active_alerts(db: Session) -> list[dict[str, Any]]:
             reference_trade_date = str(
                 _resolve_reference_trade_date(db).get("reference_trade_date") or ""
             ) or None
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
             reference_trade_date = None
         if _recommendation_is_stale(
             reference_trade_date=reference_trade_date,

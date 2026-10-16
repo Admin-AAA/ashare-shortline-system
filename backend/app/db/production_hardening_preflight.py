@@ -215,7 +215,7 @@ def collect_compatibility(
             "collation_database": str(variables["database_collation_value"]),
             "innodb_page_size": int(variables["innodb_page_size_value"]),
         }
-    except Exception as error:  # pragma: no cover - depends on server grants/version
+    except Exception as error:  # pragma: no cover - depends on server grants/version  # noqa: BLE001
         result["variables"] = _safe_error(error)
     non_innodb = [
         item["table"]
@@ -250,7 +250,7 @@ def collect_metadata_locks(connection: Connection) -> dict[str, Any]:
     query = text(statement).bindparams(bindparam("table_names", expanding=True))
     try:
         rows = connection.execute(query, {"table_names": list(target_tables())}).mappings().all()
-    except Exception as error:  # pragma: no cover - depends on performance_schema grants
+    except Exception as error:  # pragma: no cover - depends on performance_schema grants  # noqa: BLE001
         return _safe_error(error)
     locks = [
         {
@@ -304,7 +304,7 @@ def collect_disk_headroom(connection: Connection, table_scale: Mapping[str, Any]
             }
         )
         return result
-    except Exception as error:  # pragma: no cover - depends on variable grants/local topology
+    except Exception as error:  # pragma: no cover - depends on variable grants/local topology  # noqa: BLE001
         return {**result, **_safe_error(error), "status": "manual_verification_required"}
 
 

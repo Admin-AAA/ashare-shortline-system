@@ -256,7 +256,8 @@ def _load_cached_review(cache_key: str) -> dict[str, Any] | None:
         from app.services.llm_review_cache_service import get_cached_review
         with SessionLocal() as db:
             return get_cached_review(db, cache_key)
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_load_cached_review: best-effort fallback after %r", _ble_exc)
         return None
 
 
@@ -380,7 +381,8 @@ def _build_system_prompt(skill: StrategySkill) -> str:
                 continue
             try:
                 text = ref_path.read_text(encoding="utf-8")
-            except Exception:
+            except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+                logger.debug("_build_system_prompt: best-effort fallback after %r", _ble_exc)
                 continue
             # 限制每个参考文件 2000 字符
             if len(text) > 2000:
@@ -664,7 +666,8 @@ async def run_skill_agent(
             )
             return output
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("run_skill_agent: best-effort fallback after %r", e)
             last_error = str(e)
             # 按错误类型差异化冷却：402/auth/model 永久性错误长冷却，避免无效重试
             record_result(model_id, success=False, error_type=_route_error_status(e))
@@ -980,7 +983,7 @@ async def run_skill_agent_direct(
         route_key = route.circuit_key
         try:
             check_circuit(route_key)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             error_message = f"{route.name} ({route.model}) 熔断: {exc}"
             _append_api_cost(
                 route=route,
@@ -1046,7 +1049,8 @@ async def run_skill_agent_direct(
                     )
                     _persist_review_cache(skill, cache_key, code, trade_date, parsed, route.model)
                     return result
-                except Exception as exc:
+                except Exception as exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+                    logger.debug("run_skill_agent_direct: best-effort fallback after %r", exc)
                     last_latency_ms = (asyncio.get_event_loop().time() - t0) * 1000
                     last_error = str(exc)
                     last_status = _route_error_status(exc)

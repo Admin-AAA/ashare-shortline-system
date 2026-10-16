@@ -346,7 +346,7 @@ async def check_route_availability() -> list[dict]:
                     data = resp.json()
                     models = data.get("data") or data.get("models") or []
                     model_count = len(models) if isinstance(models, list) else 0
-                except Exception:
+                except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
                     model_count = 0
             # 401/403 = 鉴权失败（key 无效/过期），base_url 可达但路由不可用；
             # 5xx = 上游不可用。两者都标 reachable=False，让用户知道路由实际不可用。
@@ -370,7 +370,7 @@ async def check_route_availability() -> list[dict]:
             return {"route_id": route.route_id, "name": route.name, "base_url": base,
                     "model": route.model, "reachable": False, "status_code": None,
                     "model_count": 0, "error": "timeout (>5s)"}
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             return {"route_id": route.route_id, "name": route.name, "base_url": base,
                     "model": route.model, "reachable": False, "status_code": None,
                     "model_count": 0, "error": str(exc)[:120]}
@@ -383,7 +383,7 @@ async def check_route_availability() -> list[dict]:
         breaker = get_circuit_breaker()
         for r, route in zip(results, routes):
             r["circuit"] = breaker.status(route.circuit_key)
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
         for r in results:
             r["circuit"] = None
     _route_health_cache = (now, results)
@@ -394,7 +394,7 @@ def has_active_model_routes() -> bool:
     """是否存在至少一条可用（自带 key/base_url/model）的模型路由。"""
     try:
         return bool(get_active_model_routes())
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
         return False
 
 

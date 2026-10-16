@@ -114,7 +114,7 @@ def resolve_adaptive_selection_policy(
         load_policy = load_production_selection_policy
     try:
         edge = compute_consensus_edge(db, signal_date)
-    except Exception:  # 统计量不可得时绝不阻塞跑批
+    except Exception:  # 统计量不可得时绝不阻塞跑批  # noqa: BLE001
         return default_policy
     if edge is None:
         return default_policy
@@ -126,5 +126,5 @@ def resolve_adaptive_selection_policy(
         version = NEUTRAL_VERSION
     try:
         return load_policy(version=version)
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
         return default_policy

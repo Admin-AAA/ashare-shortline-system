@@ -127,7 +127,7 @@ def query_market_snapshot(session_id: str) -> dict:
                 "hot_theme": breadth.get("hot_theme"),
             },
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - logged or recorded, non-blocking by design
         return {"error": f"查询市场快照失败: {e}"}
 
 
@@ -308,7 +308,7 @@ def query_stock_detail(code: str, session_id: str) -> dict:
                         result[dsa_key] = stock_cached[dsa_key]
 
             return result
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - logged or recorded, non-blocking by design
         return {"error": f"查询股票详情失败: {e}", "code": code}
 
 
@@ -387,7 +387,7 @@ def query_skill_signals(code: str, skill_id: str, session_id: str) -> dict:
             "runtime": "strategy_yaml",
             "note": "该 Skill 有 strategy.yaml 但该股票尚未执行策略计算",
         }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - logged or recorded, non-blocking by design
         return {"error": f"查询策略信号失败: {e}", "skill_id": skill_id, "code": code}
 
 
@@ -516,7 +516,7 @@ def audit_data_quality(code: str, session_id: str) -> dict:
                 "source_summary": source_summary,
                 "total_features": total_features,
             }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - logged or recorded, non-blocking by design
         return {"error": f"审计数据质量失败: {e}", "code": code}
 
 
@@ -565,7 +565,7 @@ def query_stock_history(code: str, days: int, session_id: str) -> dict:
                 "count": len(history),
                 "history": history,
             }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - logged or recorded, non-blocking by design
         return {"error": f"查询股票历史数据失败: {e}", "code": code}
 
 
@@ -656,7 +656,7 @@ def query_dragon_tiger(code: str, session_id: str) -> dict:
                 "hot_money_flags": hot_money_flags[:5],
                 "has_hot_money": has_hot_money,
             }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - logged or recorded, non-blocking by design
         return {"error": f"查询龙虎榜数据失败: {e}", "code": code}
 
 
@@ -808,7 +808,7 @@ def query_industry_peers(code: str, session_id: str) -> dict:
                 "peer_count": len(peers),
                 "all_peers": peers_sorted[:30],  # 最多返回 30 只
             }
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - logged or recorded, non-blocking by design
         return {"error": f"查询同行业数据失败: {e}", "code": code}
 
 

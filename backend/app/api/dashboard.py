@@ -162,7 +162,8 @@ def _select_dashboard_market_snapshot(db: Session) -> dict[str, Any]:
             from app.services.market_pool import get_market_snapshot_from_pool
 
             return get_market_snapshot_from_pool(db, refresh=False)
-        except Exception:
+        except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("_select_dashboard_market_snapshot: best-effort fallback after %r", _ble_exc)
             return persisted_snapshot
     return persisted_snapshot
 
@@ -235,7 +236,8 @@ def _loads(raw: Any, default: Any) -> Any:
         return raw
     try:
         return json.loads(str(raw))
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_loads: best-effort fallback after %r", _ble_exc)
         return default
 
 

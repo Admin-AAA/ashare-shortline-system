@@ -438,7 +438,8 @@ def _approx_table_counts(db: Session, table_names: list[str]) -> dict[str, int]:
             params,
         ).all()
         return {row[0]: int(row[1] or 0) for row in rows}
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_approx_table_counts: best-effort fallback after %r", _ble_exc)
         return {}
 
 
@@ -974,7 +975,7 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
             ok, error = _probe_pro_provider(provider_name)
     except KeyError:
         raise
-    except Exception as exc:  # 探针本身异常也算失败
+    except Exception as exc:  # 探针本身异常也算失败  # noqa: BLE001
         ok = False
         error = f"{type(exc).__name__}: {str(exc)[:200]}"
     latency_ms = round((time.perf_counter() - started) * 1000, 1)
@@ -1015,7 +1016,8 @@ def _probe_xiaoshi_source() -> dict[str, Any]:
         try:
             manifest = client.get_manifest()
             return ({"manifest_version": str(manifest.get("version") or "")}, None)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("_probe_xiaoshi_source: best-effort fallback after %r", exc)
             return ({}, f"manifest: {type(exc).__name__}: {str(exc)[:160]}")
 
     def _probe_quote() -> tuple[bool, dict[str, Any], str | None]:
@@ -1027,7 +1029,8 @@ def _probe_xiaoshi_source() -> dict[str, Any]:
             if ok:
                 return (True, detail, None)
             return (False, detail, "xiaoshi quote 返回空或价格无效")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("_probe_xiaoshi_source: best-effort fallback after %r", exc)
             return (False, {}, f"{type(exc).__name__}: {str(exc)[:160]}")
 
     def _probe_kline() -> tuple[bool, dict[str, Any], str | None]:
@@ -1050,7 +1053,8 @@ def _probe_xiaoshi_source() -> dict[str, Any]:
             if available or total:
                 return (True, detail, None)
             return (False, detail, "xiaoshi 历史清单没有可交付条目")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+            logger.debug("_probe_xiaoshi_source: best-effort fallback after %r", exc)
             return (False, {}, f"{type(exc).__name__}: {str(exc)[:160]}")
 
     with ThreadPoolExecutor(max_workers=3) as pool:
@@ -1100,7 +1104,8 @@ def _probe_pro_provider(provider_name: str) -> tuple[bool, str | None]:
             params={"ts_code": "000001.SZ"},
             fields="ts_code",
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_probe_pro_provider: best-effort fallback after %r", exc)
         return False, f"{type(exc).__name__}: {str(exc)[:200]}"
     items = (envelope.get("data") or {}).get("items") if isinstance(envelope, dict) else None
     if items:

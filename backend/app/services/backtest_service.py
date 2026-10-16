@@ -172,7 +172,7 @@ def run_backtest(
             )
             date_result["elapsed_ms"] = round((time.perf_counter() - t0) * 1000, 1)
             results.append(date_result)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             results.append({
                 "trade_date": trade_date,
                 "status": "error",
@@ -1245,7 +1245,8 @@ def _bar_index_at_or_after(dates: list[str], trade_date: str) -> int | None:
 def _strategy_names_from_recommendation(rec: Recommendation) -> list[tuple[str, str]]:
     try:
         signals = json.loads(rec.skill_breakdown_json or "[]")
-    except Exception:
+    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
+        logger.debug("_strategy_names_from_recommendation: best-effort fallback after %r", _ble_exc)
         signals = []
     names: list[tuple[str, str]] = []
     if isinstance(signals, list):

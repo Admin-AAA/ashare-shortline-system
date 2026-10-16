@@ -620,7 +620,7 @@ def prefect_retry_condition(_task: Any, _task_run: Any, state: Any) -> bool:
 
     try:
         result = state.result(raise_on_failure=False)
-    except Exception as error:  # Prefect versions differ in failed-state extraction.
+    except Exception as error:  # Prefect versions differ in failed-state extraction.  # noqa: BLE001
         result = error
     return isinstance(result, RetryableSchedulerFailure)
 

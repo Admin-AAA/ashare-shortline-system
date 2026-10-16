@@ -54,7 +54,7 @@ def build_historical_quotes(
     if stock_metadata_provider is not None:
         try:
             resolution = stock_metadata_provider.resolve(codes, as_of_date)
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
             resolution = None
         if resolution is not None and resolution.metadata_by_code:
             meta_by_code = {

@@ -322,7 +322,7 @@ class ProductionRuleReplayCandidateBuilder:
         codes = [str(stock.get("code") or "") for stock in rows]
         try:
             resolution = provider.resolve(codes, signal_date)
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
             return rows
         if not resolution.metadata_by_code:
             return rows

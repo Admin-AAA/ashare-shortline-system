@@ -406,7 +406,7 @@ def _compute_batch(
     bootstrap_default_factor_registry()
     try:
         stocks, snapshot = get_market_universe()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         # 批次公共行情完全失败 → 请求级错误（Spec 7），不伪装成「未命中」。
         logger.warning("批量执行确认公共行情失败: %s", str(exc)[:200])
         _persist_fresh_assessments(db, expired_assessments)
@@ -472,7 +472,7 @@ def _compute_batch(
                 quote_date,
                 build_stock_from_bars=_build_stock_from_bars,
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             logger.warning("批量确认实时 K 重建失败 %s: %s", code, str(exc)[:160])
             missing_rt_codes.append(code)
             continue
@@ -534,7 +534,7 @@ def _compute_batch(
             )
             assessments.append(result)
             items.append(_to_batch_item(result))
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
             logger.warning("批量确认单票失败 %s: %s", code, str(exc)[:160])
             errors.append({"recommendation_id": str(rec.recommendation_id), "code": code, "message": str(exc)[:80]})
 

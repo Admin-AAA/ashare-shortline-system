@@ -489,7 +489,7 @@ def _age_in_days(iso_date: Any) -> int | None:
         current = datetime.now(timezone.utc).date()
         target = date.fromisoformat(str(iso_date)[:10])
         return max(0, (current - target).days)
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
         return None
 
 
@@ -498,5 +498,5 @@ def _optional_float(values: dict[str, Any], key: str) -> float | None:
         return None
     try:
         return float(values.get(key))
-    except Exception:
+    except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
         return None

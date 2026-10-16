@@ -430,7 +430,7 @@ def d_diagnostics(db: Session = Depends(get_db)):
                         )
                     ),
                 }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         logger.warning("phase information for d-diagnostics failed: %s", exc)
         phase_info = None
 

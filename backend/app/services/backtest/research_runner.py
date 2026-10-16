@@ -620,7 +620,7 @@ class LocalResearchSnapshotBuilder:
         for signal_date in dates:
             try:
                 day_resolution = self._stock_metadata_provider.resolve(codes, signal_date)
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
                 day_resolution = None
             day_resolutions[signal_date] = day_resolution
             if day_resolution is not None and day_resolution.temporality == POINT_IN_TIME:
@@ -927,7 +927,7 @@ class LocalResearchSnapshotBuilder:
             limit_up_rows = self._session.scalars(
                 select(LimitUpBoard).where(LimitUpBoard.trade_date.in_(tuple(dates)))
             ).all()
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
             limit_up_rows = ()
         for row in limit_up_rows:
             rows_by_date.setdefault(str(row.trade_date), {})[
@@ -951,7 +951,7 @@ class LocalResearchSnapshotBuilder:
                     DragonTiger.trade_date < sorted_dates[-1],
                 )
             ).all()
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
             dragon_tiger_rows = ()
         import bisect as _bisect
 
@@ -977,7 +977,7 @@ class LocalResearchSnapshotBuilder:
             quote_rows = self._session.scalars(
                 select(StockQuote).where(StockQuote.trade_date.in_(tuple(dates)))
             ).all()
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
             quote_rows = ()
         for row in quote_rows:
             rows_by_date.setdefault(str(row.trade_date), {}).setdefault(str(row.code), {}).update(
@@ -1033,7 +1033,7 @@ class LocalResearchSnapshotBuilder:
                     CapitalFlow.trade_date < max(dates),
                 )
             ).all()
-        except Exception:
+        except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
             flow_rows = ()
         for row in flow_rows:
             rows_by_date.setdefault(str(row.trade_date), {})[
@@ -1416,7 +1416,7 @@ class ResearchBacktestRunner:
                     },
                 )
                 self._session.commit()
-            except Exception:
+            except Exception:  # noqa: BLE001 - best-effort fallback, now debug-logged
                 self._session.rollback()
             raise
 
@@ -1466,7 +1466,7 @@ class ResearchBacktestRunner:
                 evaluated_candidate_count += 1
                 try:
                     signal = dict(strategy.evaluate(stock, StrategyContext()))
-                except Exception as exc:  # preserve individual evidence without promoting it to a trade
+                except Exception as exc:  # preserve individual evidence without promoting it to a trade  # noqa: BLE001
                     candidate_rows.append(
                         {
                             "signal_date": signal_date,

@@ -211,7 +211,7 @@ def _run_agent_review(skill: Any, stock: dict[str, Any], snapshot: dict[str, Any
         costs = drain_api_costs()
         raw["elapsed_cost_calls"] = len(costs)
         return raw
-    except Exception as exc:  # Agent 只增强解释，失败不能阻断规则确认
+    except Exception as exc:  # Agent 只增强解释，失败不能阻断规则确认  # noqa: BLE001
         return {"status": "fallback", "error": str(exc)}
 
 
