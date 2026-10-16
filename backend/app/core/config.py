@@ -26,42 +26,42 @@ class Settings(BaseSettings):
     database_url: str = "mysql+pymysql://aowang@127.0.0.1:3306/ashare_workbench?charset=utf8mb4"
     data_provider: str = "tushare"
     # Deprecated compatibility fields. New upstream credentials use provider-specific settings.
-    tushare_token: str = ""
+    tushare_token: str = Field(default="", repr=False)
     tushare_rate_limit_per_minute: int = 0
     tushare_fastapic_url: str = "https://fastapic.stockai888.top/"
-    tushare_fastapic_token: str = ""
+    tushare_fastapic_token: str = Field(default="", repr=False)
     tushare_fastapic_rate_limit_per_minute: int = 30
     tushare_fastapic_max_concurrency: int = 1
     tushare_ai_tool_url: str = "https://ai-tool.indevs.in/tushare/pro"
-    tushare_ai_tool_api_key: str = ""
+    tushare_ai_tool_api_key: str = Field(default="", repr=False)
     tushare_ai_tool_rate_limit_per_minute: int = 90
     tushare_ai_tool_rt_min_rate_limit_per_minute: int = 72
     tushare_ai_tool_stk_mins_rate_limit_per_minute: int = 48
     # Promax：X-API-Key + GET /tushare/pro/{api_name} 聚合网关。
     # 服务端公开健康信息显示单 IP 200 RPM；客户端保留余量按 180 RPM 限速。
     tushare_promax_url: str = "https://pcd.mobcvb.cn/tushare/pro"
-    tushare_promax_api_key: str = ""
+    tushare_promax_api_key: str = Field(default="", repr=False)
     tushare_promax_rate_limit_per_minute: int = 180
     tushare_promax_max_concurrency: int = 4
     # xiaodefa：第三方 tushare pro 协议数据源（pro_http），作为通用同步的补充 fallback。
     tushare_xiaodefa_url: str = "https://t.xiaodefa.top/"
-    tushare_xiaodefa_token: str = ""
+    tushare_xiaodefa_token: str = Field(default="", repr=False)
     tushare_xiaodefa_rate_limit_per_minute: int = 60
     # tushare_official：Tushare 官方 api.tushare.pro。核心批量接口（daily/daily_basic/
     # moneyflow/adj_factor/top_list）有权限且低延迟；stk_factor/cyq_perf/rt_k/stk_mins/
     # anns_d 无权限（40203 权限错误会自动 fallback 到下一源）。
     tushare_official_url: str = "https://api.tushare.pro"
-    tushare_official_token: str = ""
+    tushare_official_token: str = Field(default="", repr=False)
     tushare_official_rate_limit_per_minute: int = 120
     # quantdata：第三方 tushare pro 协议数据源（JSON token，POST 根路径不带 api 路径）。
     # 探测权限：日线/基本面/筹码/资金流/涨跌停/龙虎榜/同花顺概念全量可用（数据到当天）；
     # anns_d/rt_k/stk_mins 未购买（走 per-API 路由链自动 fallback）。平滑限速，稳态 6rps 无限制。
     tushare_quantdata_url: str = "https://quantdata888.duckdns.org"
-    tushare_quantdata_token: str = ""
+    tushare_quantdata_token: str = Field(default="", repr=False)
     tushare_quantdata_rate_limit_per_minute: int = 120
     # Xiaoshi v3：独立于 Tushare Pro 协议，提供全市场快照、复权日线、财务与量化数据。
     xiaoshi_api_base_url: str = "https://api.shizixi.com"
-    xiaoshi_api_key: str = ""
+    xiaoshi_api_key: str = Field(default="", repr=False)
     xiaoshi_max_qps: int = 30
     xiaoshi_max_attempts: int = 2
     xiaoshi_timeout_seconds: float = 30.0
@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     # 模型路由改由数据库 model_route_config 表驱动：每条路由自带独立
     # api_key / base_url / model。「全局默认 key/url」不再参与任何路由解析，
     # 也不作为回退。保留字段仅为向后兼容 .env 解析，路由代码不再读取。
-    agent_skill_api_key: str = ""          # 弃用：不再作为任何路由的回退 key
+    agent_skill_api_key: str = Field(default="", repr=False)          # 弃用：不再作为任何路由的回退 key
     agent_skill_base_url: str = ""         # 弃用：不再作为任何路由的回退 base_url
     agent_skill_model: str = ""            # 弃用
     agent_skill_timeout_seconds: float = 300.0  # 单次 Skill 调用超时，避免单 Skill 异常拖长整次推荐
@@ -144,7 +144,7 @@ class Settings(BaseSettings):
     log_dir_override: str = Field(default="", alias="log_dir")
     log_max_bytes: int = 10 * 1024 * 1024
     log_backup_count: int = 5
-    access_password: str = ""
+    access_password: str = Field(default="", repr=False)
     access_cookie_name: str = "ashare_access"
     access_session_days: int = 7
 
