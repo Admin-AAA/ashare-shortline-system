@@ -112,25 +112,99 @@ def refresh_kbar_cache(db, *, full: bool = False) -> dict[str, Any]:
             "seconds": round(time.perf_counter() - t0, 1)}
 
 
+_DATE_RE = None
+
+
+def _date_int(value: str) -> int | None:
+    """'YYYY-MM-DD' -> YYYYMMDD（整数序与字符串序一致）；格式不符返回 None。"""
+    global _DATE_RE
+    if _DATE_RE is None:
+        import re
+        _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    if not isinstance(value, str) or not _DATE_RE.match(value):
+        return None
+    return int(value[0:4] + value[5:7] + value[8:10])
+
+
+def _trim_spec() -> tuple[str, int] | None:
+    """回放内存裁剪：ASHARE_KBAR_CACHE_MIN_DATE=YYYY-MM-DD + ASHARE_KBAR_CACHE_KEEP_BACK=N（默认 120）。
+    每只股票只保留 trade_date>=MIN_DATE 的行，外加其前 N 行。只要 as_of>=MIN_DATE 且 limit<=N，
+    as_of 前最近 limit 行全部在保留集合内 → 与全表逐值一致；否则 load_rows 返回 None（回退 SQL）。"""
+    v = os.environ.get("ASHARE_KBAR_CACHE_MIN_DATE") or ""
+    if _date_int(v) is None:
+        return None
+    return v, int(os.environ.get("ASHARE_KBAR_CACHE_KEEP_BACK") or 120)
+
+
+def _segments(idx):
+    import numpy as np
+
+    n = len(idx)
+    cuts = np.flatnonzero(np.diff(idx)) + 1
+    return np.concatenate(([0], cuts)), np.concatenate((cuts, [n]))
+
+
 def _load() -> bool:
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.compute as pc
     import pyarrow.parquet as pq
     if not PARQUET.exists():
         return False
     mtime = PARQUET.stat().st_mtime
     with _lock:
-        if _mem["mtime"] == mtime:
+        trim = _trim_spec()
+        if _mem["mtime"] == mtime and _mem.get("trim") == trim:
             return True
-        table = pq.read_table(PARQUET)
-        codes = table.column("code").to_pylist()
-        dates = table.column("trade_date").to_pylist()
-        index: dict[str, tuple[int, list[str]]] = {}
-        start = 0
-        n = len(codes)
-        for i in range(1, n + 1):
-            if i == n or codes[i] != codes[start]:
-                index[codes[start]] = (start, dates[start:i])
-                start = i
-        _mem.update(mtime=mtime, table=table, index=index, max_date=max(dates) if dates else None)
+        _mem.update(mtime=None, trim=None, table=None, index=None, max_date=None)
+        # 逐列读取：瞬时内存只有单列，避免整表解码后分配器不归还页（实测 RSS 4.1GB → ~2GB 全表）。
+        pf = pq.ParquetFile(PARQUET, memory_map=True, pre_buffer=False)
+        names = pf.schema_arrow.names
+        td = pf.read(columns=["trade_date"]).column(0).combine_chunks()
+        n = len(td)
+        if n and not bool(pc.all(pc.match_substring_regex(td, r"^\d{4}-\d{2}-\d{2}$")).as_py()):
+            logger.warning("kbar cache trade_date format unexpected; cache disabled (SQL fallback)")
+            return False
+        date_ints = (
+            pc.cast(pc.replace_substring(td, "-", ""), "int32").to_numpy(zero_copy_only=False)
+            if n else np.empty(0, dtype=np.int32)
+        )
+        enc = pf.read(columns=["code"]).column(0).combine_chunks().dictionary_encode()
+        idx = enc.indices.to_numpy(zero_copy_only=False)
+        code_names = enc.dictionary.to_pylist()
+        del enc
+        mask = None
+        if n and trim is not None:
+            min_i = _date_int(trim[0])
+            starts, ends = _segments(idx)
+            mask = np.zeros(n, dtype=bool)
+            for a, b in zip(starts.tolist(), ends.tolist()):
+                first = a + int(np.searchsorted(date_ints[a:b], min_i, side="left"))
+                mask[max(a, first - trim[1]):b] = True
+            date_ints = date_ints[mask]
+            idx = idx[mask]
+            n = int(mask.sum())
+        amask = pa.array(mask) if mask is not None else None
+        arrays = []
+        for name in names:
+            if name == "trade_date":
+                col = td
+            else:
+                col = pf.read(columns=[name]).column(0).combine_chunks()
+            if amask is not None:
+                col = pc.filter(col, amask)
+            arrays.append(col)
+            del col
+        del td
+        table = pa.table(arrays, schema=pf.schema_arrow)
+        del arrays
+        index: dict[str, tuple[int, Any]] = {}
+        if n:
+            starts, ends = _segments(idx)
+            for a, b in zip(starts.tolist(), ends.tolist()):
+                index[code_names[idx[a]]] = (a, date_ints[a:b])
+        max_date = pc.max(table.column("trade_date")).as_py() if n else None
+        _mem.update(mtime=mtime, trim=trim, table=table, index=index, max_date=max_date)
     return True
 
 
@@ -157,7 +231,13 @@ def load_rows(codes: list[str], limit: int, as_of: str) -> dict[str, list[dict[s
     import bisect
     import pyarrow as pa
 
-    if not covers(as_of):
+    import numpy as np
+
+    as_of_i = _date_int(as_of)
+    if as_of_i is None or not covers(as_of):
+        return None
+    trim = _mem.get("trim")
+    if trim is not None and (as_of < trim[0] or limit > trim[1]):
         return None
     table, index = _mem["table"], _mem["index"]
     takes: list[int] = []
@@ -167,7 +247,7 @@ def load_rows(codes: list[str], limit: int, as_of: str) -> dict[str, list[dict[s
         if not ent:
             continue
         start, dates = ent
-        hi = bisect.bisect_right(dates, as_of)
+        hi = int(np.searchsorted(dates, as_of_i, side="right"))
         lo = max(0, hi - limit)
         if hi > lo:
             spans.append((code, len(takes), hi - lo))
@@ -206,11 +286,17 @@ def load_bars(codes: list[str], limit: int, as_of: str, convert) -> dict[str, li
     import bisect
     import pyarrow as pa
 
-    if not covers(as_of):
+    import numpy as np
+
+    as_of_i = _date_int(as_of)
+    if as_of_i is None or not covers(as_of):
+        return None
+    trim = _mem.get("trim")
+    if trim is not None and (as_of < trim[0] or limit > trim[1]):
         return None
     table, index = _mem["table"], _mem["index"]
-    if _ROW_MEMO["mtime"] != _mem["mtime"]:
-        _ROW_MEMO.update(mtime=_mem["mtime"], bars={})
+    if _ROW_MEMO["mtime"] is not table:  # 行号只对同一张内存表有效（mtime 或 min_date 变化都会换表）
+        _ROW_MEMO.update(mtime=table, bars={})
     old = _ROW_MEMO["bars"]
     spans: list[tuple[str, int, int]] = []
     for code in codes:
@@ -218,7 +304,7 @@ def load_bars(codes: list[str], limit: int, as_of: str, convert) -> dict[str, li
         if not ent:
             continue
         start, dates = ent
-        hi = bisect.bisect_right(dates, as_of)
+        hi = int(np.searchsorted(dates, as_of_i, side="right"))
         lo = max(0, hi - limit)
         if hi > lo:
             spans.append((code, start + lo, start + hi))
@@ -228,9 +314,14 @@ def load_bars(codes: list[str], limit: int, as_of: str, convert) -> dict[str, li
         import polars as pl
 
         with gc_paused():
-            rows = pl.from_arrow(table.take(pa.array(missing, type=pa.int64()))).rows(named=True)
-            for i, r in zip(missing, rows):
-                new[i] = convert(r)
+            # 分块转换：中间态行字典不与整批结果同时驻留（首日全量转换的内存峰值减半）
+            step = 50_000
+            for off in range(0, len(missing), step):
+                chunk = missing[off:off + step]
+                rows = pl.from_arrow(table.take(pa.array(chunk, type=pa.int64()))).rows(named=True)
+                for i, r in zip(chunk, rows):
+                    new[i] = convert(r)
+                del rows
     out: dict[str, list[dict[str, Any]]] = {}
     keep: dict[int, dict[str, Any]] = {}
     with gc_paused():
