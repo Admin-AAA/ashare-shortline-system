@@ -1,0 +1,1734 @@
+{
+ "live": {
+  "000001@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "entry_price": 10.79,
+   "entry_triggered": true,
+   "executed_return": 0.63,
+   "exit_date": "2026-03-12",
+   "exit_price": 10.86,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.56,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000001@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "entry_price": 10.78,
+   "entry_triggered": true,
+   "executed_return": 0.73,
+   "exit_date": "2026-03-12",
+   "exit_price": 10.86,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.66,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000001@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "entry_price": 10.88,
+   "entry_triggered": true,
+   "executed_return": 0.35,
+   "exit_date": "2026-03-16",
+   "exit_price": 10.92,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.28,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000001@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "entry_price": 10.94,
+   "entry_triggered": true,
+   "executed_return": 0.81,
+   "exit_date": "2026-03-18",
+   "exit_price": 11.03,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.74,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000001@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "entry_price": 11.05,
+   "entry_triggered": true,
+   "executed_return": -5.71,
+   "exit_date": "2026-03-23",
+   "exit_price": 10.42,
+   "exit_reason": "stop_loss_hit",
+   "net_return_pct": -5.78,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "000001@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "entry_price": 10.88,
+   "entry_triggered": true,
+   "executed_return": 0.44,
+   "exit_date": "2026-03-26",
+   "exit_price": 10.93,
+   "exit_reason": "horizon_close",
+   "net_return_pct": 0.37,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000001@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "entry_price": 10.53,
+   "entry_triggered": true,
+   "executed_return": 2.4,
+   "exit_date": "2026-03-25",
+   "exit_price": 10.78,
+   "exit_reason": "trailing_stop_hit",
+   "net_return_pct": 2.33,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000001@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "entry_price": 10.92,
+   "entry_triggered": true,
+   "executed_return": 0.44,
+   "exit_date": "2026-03-30",
+   "exit_price": 10.97,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.37,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000001@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "entry_price": 10.99,
+   "entry_triggered": true,
+   "executed_return": 0.8,
+   "exit_date": "2026-04-01",
+   "exit_price": 11.08,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.73,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000001@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "entry_price": 11.1,
+   "entry_triggered": true,
+   "executed_return": 1.51,
+   "exit_date": "2026-04-03",
+   "exit_price": 11.27,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.44,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000001@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "entry_price": 11.29,
+   "entry_triggered": true,
+   "executed_return": -1.88,
+   "exit_date": "2026-04-10",
+   "exit_price": 11.08,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -1.95,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "000001@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "entry_price": 11.12,
+   "entry_triggered": true,
+   "executed_return": 0.34,
+   "exit_date": "2026-04-09",
+   "exit_price": 11.16,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.27,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000858@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "entry_price": 101.44,
+   "entry_triggered": true,
+   "executed_return": -0.22,
+   "exit_date": "2026-03-09",
+   "exit_price": 101.22,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -0.29,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "000858@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "entry_price": 101.98,
+   "entry_triggered": true,
+   "executed_return": 0.7,
+   "exit_date": "2026-03-16",
+   "exit_price": 102.7,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.63,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000858@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "entry_price": 102.1,
+   "entry_triggered": true,
+   "executed_return": 0.58,
+   "exit_date": "2026-03-16",
+   "exit_price": 102.7,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.51,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000858@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "entry_price": 102.9,
+   "entry_triggered": true,
+   "executed_return": 1.49,
+   "exit_date": "2026-03-17",
+   "exit_price": 104.44,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.42,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000858@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "entry_price": 104.89,
+   "entry_triggered": true,
+   "executed_return": -3.49,
+   "exit_date": "2026-03-24",
+   "exit_price": 101.24,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -3.56,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "000858@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "entry_price": 102.63,
+   "entry_triggered": true,
+   "executed_return": -1.42,
+   "exit_date": "2026-03-26",
+   "exit_price": 101.18,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -1.49,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "000858@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "entry_price": 100.98,
+   "entry_triggered": true,
+   "executed_return": 1.11,
+   "exit_date": "2026-03-26",
+   "exit_price": 102.1,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.04,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000858@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "entry_price": 102.3,
+   "entry_triggered": true,
+   "executed_return": 2.4,
+   "exit_date": "2026-03-31",
+   "exit_price": 104.75,
+   "exit_reason": "trailing_stop_hit",
+   "net_return_pct": 2.33,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000858@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "entry_price": 102.09,
+   "entry_triggered": true,
+   "executed_return": 2.4,
+   "exit_date": "2026-03-31",
+   "exit_price": 104.54,
+   "exit_reason": "trailing_stop_hit",
+   "net_return_pct": 2.33,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000858@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "entry_price": 104.07,
+   "entry_triggered": true,
+   "executed_return": 0.76,
+   "exit_date": "2026-04-03",
+   "exit_price": 104.86,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.69,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "000858@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "entry_price": 105.08,
+   "entry_triggered": true,
+   "executed_return": -2.96,
+   "exit_date": "2026-04-10",
+   "exit_price": 101.97,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -3.03,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "000858@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "entry_price": 104.0,
+   "entry_triggered": true,
+   "executed_return": -0.97,
+   "exit_date": "2026-04-14",
+   "exit_price": 103.0,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -1.04,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "002594@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "entry_price": 96.1,
+   "entry_triggered": true,
+   "executed_return": 1.03,
+   "exit_date": "2026-03-10",
+   "exit_price": 97.08,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.96,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "002594@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "entry_price": 97.28,
+   "entry_triggered": true,
+   "executed_return": 1.91,
+   "exit_date": "2026-03-12",
+   "exit_price": 99.13,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.84,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "002594@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "entry_price": 99.33,
+   "entry_triggered": true,
+   "executed_return": 0.24,
+   "exit_date": "2026-03-16",
+   "exit_price": 99.57,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.17,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "002594@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "entry_price": 99.77,
+   "entry_triggered": true,
+   "executed_return": 2.95,
+   "exit_date": "2026-03-18",
+   "exit_price": 102.72,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 2.88,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "002594@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "entry_price": 102.92,
+   "entry_triggered": true,
+   "executed_return": -1.0,
+   "exit_date": "2026-03-20",
+   "exit_price": 101.9,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -1.07,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "002594@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "entry_price": 102.1,
+   "entry_triggered": true,
+   "executed_return": 1.63,
+   "exit_date": "2026-03-23",
+   "exit_price": 103.77,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.56,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "002594@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "entry_price": 108.51,
+   "entry_triggered": true,
+   "executed_return": -2.36,
+   "exit_date": "2026-03-30",
+   "exit_price": 105.94,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -2.43,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "002594@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "entry_price": 106.73,
+   "entry_triggered": true,
+   "executed_return": 0.16,
+   "exit_date": "2026-03-31",
+   "exit_price": 106.89,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.09,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "002594@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "entry_price": 103.61,
+   "entry_triggered": true,
+   "executed_return": 2.4,
+   "exit_date": "2026-03-31",
+   "exit_price": 106.1,
+   "exit_reason": "trailing_stop_hit",
+   "net_return_pct": 2.33,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "002594@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "entry_price": 106.01,
+   "entry_triggered": true,
+   "executed_return": -5.68,
+   "exit_date": "2026-04-03",
+   "exit_price": 99.98,
+   "exit_reason": "stop_loss_hit",
+   "net_return_pct": -5.75,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "002594@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "entry_price": 101.9,
+   "entry_triggered": true,
+   "executed_return": -0.33,
+   "exit_date": "2026-04-10",
+   "exit_price": 101.57,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -0.4,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "002594@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "entry_price": 98.6,
+   "entry_triggered": true,
+   "executed_return": 1.53,
+   "exit_date": "2026-04-09",
+   "exit_price": 100.11,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.46,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300059@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "entry_price": 21.02,
+   "entry_triggered": true,
+   "executed_return": 0.51,
+   "exit_date": "2026-03-09",
+   "exit_price": 21.13,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.44,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300059@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "entry_price": 21.44,
+   "entry_triggered": true,
+   "executed_return": -1.18,
+   "exit_date": "2026-03-16",
+   "exit_price": 21.19,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -1.25,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "300059@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "entry_price": 21.4,
+   "entry_triggered": true,
+   "executed_return": 0.13,
+   "exit_date": "2026-03-18",
+   "exit_price": 21.43,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.06,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300059@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "entry_price": 21.11,
+   "entry_triggered": true,
+   "executed_return": 1.5,
+   "exit_date": "2026-03-18",
+   "exit_price": 21.43,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.43,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300059@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "entry_price": 21.47,
+   "entry_triggered": true,
+   "executed_return": -5.69,
+   "exit_date": "2026-03-20",
+   "exit_price": 20.25,
+   "exit_reason": "stop_loss_hit",
+   "net_return_pct": -5.76,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "300059@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "entry_price": 21.22,
+   "entry_triggered": true,
+   "executed_return": -6.88,
+   "exit_date": "2026-03-23",
+   "exit_price": 19.76,
+   "exit_reason": "stop_loss_gap",
+   "net_return_pct": -6.95,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "300059@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "entry_price": 19.89,
+   "entry_triggered": true,
+   "executed_return": -0.5,
+   "exit_date": "2026-03-26",
+   "exit_price": 19.79,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -0.57,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "300059@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "entry_price": 19.83,
+   "entry_triggered": true,
+   "executed_return": -3.32,
+   "exit_date": "2026-04-01",
+   "exit_price": 19.17,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -3.39,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "300059@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "entry_price": 18.94,
+   "entry_triggered": true,
+   "executed_return": 1.28,
+   "exit_date": "2026-04-01",
+   "exit_price": 19.18,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.21,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300059@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "entry_price": 19.22,
+   "entry_triggered": true,
+   "executed_return": 1.31,
+   "exit_date": "2026-04-08",
+   "exit_price": 19.47,
+   "exit_reason": "horizon_close",
+   "net_return_pct": 1.24,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300059@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "entry_price": 18.84,
+   "entry_triggered": true,
+   "executed_return": 1.55,
+   "exit_date": "2026-04-09",
+   "exit_price": 19.13,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.48,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300059@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "entry_price": 18.92,
+   "entry_triggered": true,
+   "executed_return": 1.12,
+   "exit_date": "2026-04-09",
+   "exit_price": 19.13,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.05,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300750@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "entry_price": 349.35,
+   "entry_triggered": true,
+   "executed_return": -0.25,
+   "exit_date": "2026-03-09",
+   "exit_price": 348.49,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -0.32,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "300750@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "entry_price": 375.38,
+   "entry_triggered": true,
+   "executed_return": 8.69,
+   "exit_date": "2026-03-16",
+   "exit_price": 407.99,
+   "exit_reason": "horizon_close",
+   "net_return_pct": 8.62,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300750@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "entry_price": 400.4,
+   "entry_triggered": true,
+   "executed_return": 0.24,
+   "exit_date": "2026-03-16",
+   "exit_price": 401.37,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.17,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300750@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "entry_price": 402.17,
+   "entry_triggered": true,
+   "executed_return": 2.4,
+   "exit_date": "2026-03-17",
+   "exit_price": 411.81,
+   "exit_reason": "trailing_stop_hit",
+   "net_return_pct": 2.33,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300750@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "entry_price": 405.77,
+   "entry_triggered": true,
+   "executed_return": -0.27,
+   "exit_date": "2026-03-20",
+   "exit_price": 404.67,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -0.34,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "300750@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "entry_price": 405.49,
+   "entry_triggered": true,
+   "executed_return": 2.4,
+   "exit_date": "2026-03-23",
+   "exit_price": 415.21,
+   "exit_reason": "trailing_stop_hit",
+   "net_return_pct": 2.33,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300750@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "entry_price": 405.4,
+   "entry_triggered": true,
+   "executed_return": 0.08,
+   "exit_date": "2026-03-27",
+   "exit_price": 405.71,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.01,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300750@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "entry_price": 394.23,
+   "entry_triggered": true,
+   "executed_return": 2.4,
+   "exit_date": "2026-03-27",
+   "exit_price": 403.69,
+   "exit_reason": "trailing_stop_hit",
+   "net_return_pct": 2.33,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300750@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "entry_price": 413.41,
+   "entry_triggered": true,
+   "executed_return": -0.99,
+   "exit_date": "2026-04-01",
+   "exit_price": 409.32,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -1.06,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "300750@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "entry_price": 410.14,
+   "entry_triggered": true,
+   "executed_return": -5.69,
+   "exit_date": "2026-04-03",
+   "exit_price": 386.8,
+   "exit_reason": "stop_loss_hit",
+   "net_return_pct": -5.76,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "300750@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "entry_price": 400.4,
+   "entry_triggered": true,
+   "executed_return": 3.79,
+   "exit_date": "2026-04-10",
+   "exit_price": 415.58,
+   "exit_reason": "horizon_close",
+   "net_return_pct": 3.72,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "300750@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "entry_price": 396.9,
+   "entry_triggered": true,
+   "executed_return": 4.49,
+   "exit_date": "2026-04-14",
+   "exit_price": 414.7,
+   "exit_reason": "trailing_stop_hit",
+   "net_return_pct": 4.42,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "600519@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "entry_price": 1396.39,
+   "entry_triggered": true,
+   "executed_return": 0.37,
+   "exit_date": "2026-03-11",
+   "exit_price": 1401.59,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.3,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "600519@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "entry_price": 1406.3,
+   "entry_triggered": true,
+   "executed_return": 0.87,
+   "exit_date": "2026-03-16",
+   "exit_price": 1418.58,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.8,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "600519@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "entry_price": 1396.39,
+   "entry_triggered": true,
+   "executed_return": 1.59,
+   "exit_date": "2026-03-16",
+   "exit_price": 1418.58,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.52,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "600519@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "entry_price": 1421.42,
+   "entry_triggered": true,
+   "executed_return": 2.59,
+   "exit_date": "2026-03-19",
+   "exit_price": 1458.29,
+   "exit_reason": "trailing_stop_hit",
+   "net_return_pct": 2.52,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "600519@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "entry_price": 1490.49,
+   "entry_triggered": true,
+   "executed_return": -5.69,
+   "exit_date": "2026-03-23",
+   "exit_price": 1405.7,
+   "exit_reason": "stop_loss_hit",
+   "net_return_pct": -5.76,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "600519@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "entry_price": 1454.41,
+   "entry_triggered": true,
+   "executed_return": -3.76,
+   "exit_date": "2026-03-26",
+   "exit_price": 1399.78,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -3.83,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "600519@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "entry_price": 1417.42,
+   "entry_triggered": true,
+   "executed_return": 0.08,
+   "exit_date": "2026-03-30",
+   "exit_price": 1418.58,
+   "exit_reason": "horizon_close",
+   "net_return_pct": 0.01,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "600519@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "entry_price": 1410.41,
+   "entry_triggered": true,
+   "executed_return": -0.34,
+   "exit_date": "2026-03-30",
+   "exit_price": 1405.59,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -0.41,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "600519@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "entry_price": 1408.41,
+   "entry_triggered": true,
+   "executed_return": 3.56,
+   "exit_date": "2026-04-03",
+   "exit_price": 1458.54,
+   "exit_reason": "horizon_close",
+   "net_return_pct": 3.49,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "600519@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "entry_price": 1465.95,
+   "entry_triggered": true,
+   "executed_return": -0.16,
+   "exit_date": "2026-04-08",
+   "exit_price": 1463.56,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -0.23,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "600519@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "entry_price": 1461.0,
+   "entry_triggered": true,
+   "executed_return": -0.58,
+   "exit_date": "2026-04-10",
+   "exit_price": 1452.51,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -0.65,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "600519@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "entry_price": 1461.46,
+   "entry_triggered": true,
+   "executed_return": -1.1,
+   "exit_date": "2026-04-14",
+   "exit_price": 1445.45,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -1.17,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "601318@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "entry_price": 61.85,
+   "entry_triggered": true,
+   "executed_return": -0.77,
+   "exit_date": "2026-03-09",
+   "exit_price": 61.38,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -0.84,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "601318@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "entry_price": 61.92,
+   "entry_triggered": true,
+   "executed_return": 0.27,
+   "exit_date": "2026-03-12",
+   "exit_price": 62.09,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.2,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "601318@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "entry_price": 62.21,
+   "entry_triggered": true,
+   "executed_return": -0.65,
+   "exit_date": "2026-03-18",
+   "exit_price": 61.81,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -0.72,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "601318@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "entry_price": 61.26,
+   "entry_triggered": true,
+   "executed_return": 0.89,
+   "exit_date": "2026-03-18",
+   "exit_price": 61.81,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.82,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "601318@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "entry_price": 61.93,
+   "entry_triggered": true,
+   "executed_return": -5.68,
+   "exit_date": "2026-03-23",
+   "exit_price": 58.41,
+   "exit_reason": "stop_loss_hit",
+   "net_return_pct": -5.75,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "601318@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "entry_price": 60.86,
+   "entry_triggered": true,
+   "executed_return": -5.68,
+   "exit_date": "2026-03-23",
+   "exit_price": 57.4,
+   "exit_reason": "stop_loss_hit",
+   "net_return_pct": -5.75,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "601318@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "entry_price": 58.06,
+   "entry_triggered": true,
+   "executed_return": 1.14,
+   "exit_date": "2026-03-26",
+   "exit_price": 58.72,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.07,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "601318@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "entry_price": 58.84,
+   "entry_triggered": true,
+   "executed_return": -1.22,
+   "exit_date": "2026-04-01",
+   "exit_price": 58.12,
+   "exit_reason": "horizon_close",
+   "net_return_pct": -1.29,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "601318@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "entry_price": 56.4,
+   "entry_triggered": true,
+   "executed_return": 2.0,
+   "exit_date": "2026-04-01",
+   "exit_price": 57.52,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.93,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "601318@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "entry_price": 57.64,
+   "entry_triggered": true,
+   "executed_return": 0.53,
+   "exit_date": "2026-04-02",
+   "exit_price": 57.94,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.46,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "601318@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "entry_price": 57.64,
+   "entry_triggered": true,
+   "executed_return": 2.26,
+   "exit_date": "2026-04-09",
+   "exit_price": 58.94,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 2.19,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "601318@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "entry_price": 58.06,
+   "entry_triggered": true,
+   "executed_return": 1.52,
+   "exit_date": "2026-04-09",
+   "exit_price": 58.94,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.45,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "688981@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "entry_price": 107.11,
+   "entry_triggered": true,
+   "executed_return": -0.2,
+   "exit_date": "2026-03-12",
+   "exit_price": 106.89,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -0.27,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "688981@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "entry_price": 107.01,
+   "entry_triggered": true,
+   "executed_return": -0.11,
+   "exit_date": "2026-03-12",
+   "exit_price": 106.89,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -0.18,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "688981@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "entry_price": 107.11,
+   "entry_triggered": true,
+   "executed_return": 1.24,
+   "exit_date": "2026-03-17",
+   "exit_price": 108.43,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.17,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "688981@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "entry_price": 106.42,
+   "entry_triggered": true,
+   "executed_return": 1.89,
+   "exit_date": "2026-03-17",
+   "exit_price": 108.43,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 1.82,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "688981@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "entry_price": 105.89,
+   "entry_triggered": true,
+   "executed_return": -0.75,
+   "exit_date": "2026-03-20",
+   "exit_price": 105.09,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": -0.82,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "688981@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "entry_price": 105.31,
+   "entry_triggered": true,
+   "executed_return": -5.69,
+   "exit_date": "2026-03-23",
+   "exit_price": 99.31,
+   "exit_reason": "stop_loss_hit",
+   "net_return_pct": -5.76,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "688981@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "entry_price": 99.0,
+   "entry_triggered": true,
+   "executed_return": 0.46,
+   "exit_date": "2026-03-26",
+   "exit_price": 99.45,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.39,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "688981@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "entry_price": 99.65,
+   "entry_triggered": true,
+   "executed_return": -5.69,
+   "exit_date": "2026-03-30",
+   "exit_price": 93.98,
+   "exit_reason": "stop_loss_hit",
+   "net_return_pct": -5.76,
+   "outcome_label": "failed",
+   "position_size": 0.35
+  },
+  "688981@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "entry_price": 95.9,
+   "entry_triggered": true,
+   "executed_return": 0.43,
+   "exit_date": "2026-04-01",
+   "exit_price": 96.3,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.36,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "688981@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "entry_price": 96.5,
+   "entry_triggered": true,
+   "executed_return": 4.75,
+   "exit_date": "2026-04-08",
+   "exit_price": 101.08,
+   "exit_reason": "horizon_close",
+   "net_return_pct": 4.68,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "688981@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "entry_price": 93.5,
+   "entry_triggered": true,
+   "executed_return": 7.92,
+   "exit_date": "2026-04-10",
+   "exit_price": 100.91,
+   "exit_reason": "horizon_close",
+   "net_return_pct": 7.85,
+   "outcome_label": "success",
+   "position_size": 0.35
+  },
+  "688981@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "entry_price": 99.12,
+   "entry_triggered": true,
+   "executed_return": 0.18,
+   "exit_date": "2026-04-09",
+   "exit_price": 99.3,
+   "exit_reason": "trailing_stop_gap",
+   "net_return_pct": 0.11,
+   "outcome_label": "success",
+   "position_size": 0.35
+  }
+ },
+ "research": {
+  "000001@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "exit_date": "2026-03-12",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 1.281464
+  },
+  "000001@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "exit_date": "2026-03-16",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 0.915747
+  },
+  "000001@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "exit_date": "2026-03-18",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 0.626512
+  },
+  "000001@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "exit_date": "2026-03-20",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -1.660736
+  },
+  "000001@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "exit_date": "2026-03-23",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "000001@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "exit_date": "2026-03-26",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 0.442887
+  },
+  "000001@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "exit_date": "2026-03-30",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 4.258954
+  },
+  "000001@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "exit_date": "2026-04-01",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 1.995621
+  },
+  "000001@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "exit_date": "2026-04-03",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.395276
+  },
+  "000001@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "exit_date": "2026-04-08",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 0.970085
+  },
+  "000001@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "exit_date": "2026-04-10",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -1.880832
+  },
+  "000001@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "exit_date": "2026-04-14",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 0.339175
+  },
+  "000858@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "exit_date": "2026-03-12",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 0.716069
+  },
+  "000858@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "exit_date": "2026-03-16",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 2.405898
+  },
+  "000858@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "exit_date": "2026-03-18",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.718908
+  },
+  "000858@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "exit_date": "2026-03-18",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.316037
+  },
+  "000858@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "exit_date": "2026-03-24",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -3.485521
+  },
+  "000858@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "exit_date": "2026-03-26",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -1.41652
+  },
+  "000858@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "exit_date": "2026-03-30",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 2.352584
+  },
+  "000858@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "exit_date": "2026-04-01",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 1.528638
+  },
+  "000858@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "exit_date": "2026-04-01",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.714198
+  },
+  "000858@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "exit_date": "2026-04-08",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 0.011377
+  },
+  "000858@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "exit_date": "2026-04-10",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -2.956974
+  },
+  "000858@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "exit_date": "2026-04-14",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -0.968233
+  },
+  "002594@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "exit_date": "2026-03-12",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 3.022915
+  },
+  "002594@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "exit_date": "2026-03-12",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.4727
+  },
+  "002594@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "exit_date": "2026-03-18",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 3.410829
+  },
+  "002594@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "exit_date": "2026-03-18",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 2.954315
+  },
+  "002594@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "exit_date": "2026-03-24",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 4.217936
+  },
+  "002594@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "exit_date": "2026-03-24",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 4.654208
+  },
+  "002594@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "exit_date": "2026-03-26",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "002594@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "exit_date": "2026-04-01",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -3.915865
+  },
+  "002594@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "exit_date": "2026-04-01",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 2.104542
+  },
+  "002594@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "exit_date": "2026-04-02",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "002594@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "exit_date": "2026-04-10",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -0.327246
+  },
+  "002594@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "exit_date": "2026-04-09",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.228052
+  },
+  "300059@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "exit_date": "2026-03-09",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 0.513058
+  },
+  "300059@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "exit_date": "2026-03-16",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -1.178234
+  },
+  "300059@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "exit_date": "2026-03-18",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 0.126954
+  },
+  "300059@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "exit_date": "2026-03-18",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 1.503759
+  },
+  "300059@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "exit_date": "2026-03-20",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "300059@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "exit_date": "2026-03-23",
+   "exit_reason": "stop_loss_gap",
+   "gross_return_pct": -6.884531
+  },
+  "300059@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "exit_date": "2026-03-27",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "300059@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "exit_date": "2026-03-30",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "300059@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "exit_date": "2026-04-01",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.036942
+  },
+  "300059@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "exit_date": "2026-04-08",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 1.307599
+  },
+  "300059@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "exit_date": "2026-04-09",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 1.55015
+  },
+  "300059@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "exit_date": "2026-04-09",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 1.120308
+  },
+  "300750@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "exit_date": "2026-03-11",
+   "exit_reason": "take_profit_hit",
+   "gross_return_pct": 9.89
+  },
+  "300750@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "exit_date": "2026-03-16",
+   "exit_reason": "take_profit_hit",
+   "gross_return_pct": 9.89
+  },
+  "300750@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "exit_date": "2026-03-17",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.493061
+  },
+  "300750@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "exit_date": "2026-03-18",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 0.691961
+  },
+  "300750@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "exit_date": "2026-03-20",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": -0.268737
+  },
+  "300750@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "exit_date": "2026-03-24",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": -0.21951
+  },
+  "300750@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "exit_date": "2026-03-27",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 0.07619
+  },
+  "300750@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "exit_date": "2026-03-30",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 2.953018
+  },
+  "300750@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "exit_date": "2026-04-03",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "300750@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "exit_date": "2026-04-03",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "300750@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "exit_date": "2026-04-10",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 3.792208
+  },
+  "300750@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "exit_date": "2026-04-14",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 4.485209
+  },
+  "600519@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "exit_date": "2026-03-12",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -0.414424
+  },
+  "600519@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "exit_date": "2026-03-16",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 3.727138
+  },
+  "600519@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "exit_date": "2026-03-18",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 5.079952
+  },
+  "600519@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "exit_date": "2026-03-19",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 2.593551
+  },
+  "600519@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "exit_date": "2026-03-23",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "600519@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "exit_date": "2026-03-26",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -3.756439
+  },
+  "600519@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "exit_date": "2026-03-30",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 0.082121
+  },
+  "600519@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "exit_date": "2026-04-01",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 3.372891
+  },
+  "600519@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "exit_date": "2026-04-03",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 3.559553
+  },
+  "600519@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "exit_date": "2026-04-08",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -0.163682
+  },
+  "600519@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "exit_date": "2026-04-10",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -0.581349
+  },
+  "600519@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "exit_date": "2026-04-14",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -1.095268
+  },
+  "601318@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "exit_date": "2026-03-12",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -0.506679
+  },
+  "601318@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "exit_date": "2026-03-16",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -2.426187
+  },
+  "601318@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "exit_date": "2026-03-18",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -0.617307
+  },
+  "601318@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "exit_date": "2026-03-18",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 0.892784
+  },
+  "601318@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "exit_date": "2026-03-23",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "601318@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "exit_date": "2026-03-23",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "601318@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "exit_date": "2026-03-26",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.020171
+  },
+  "601318@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "exit_date": "2026-03-30",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "601318@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "exit_date": "2026-04-02",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.577207
+  },
+  "601318@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "exit_date": "2026-04-08",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 3.041366
+  },
+  "601318@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "exit_date": "2026-04-09",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.644008
+  },
+  "601318@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "exit_date": "2026-04-09",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 1.097602
+  },
+  "688981@2026-03-05": {
+   "entry_date": "2026-03-06",
+   "exit_date": "2026-03-09",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "688981@2026-03-09": {
+   "entry_date": "2026-03-10",
+   "exit_date": "2026-03-16",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 1.387294
+  },
+  "688981@2026-03-11": {
+   "entry_date": "2026-03-12",
+   "exit_date": "2026-03-17",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 1.236577
+  },
+  "688981@2026-03-13": {
+   "entry_date": "2026-03-16",
+   "exit_date": "2026-03-17",
+   "exit_reason": "trailing_stop_hit",
+   "gross_return_pct": 0.924987
+  },
+  "688981@2026-03-17": {
+   "entry_date": "2026-03-18",
+   "exit_date": "2026-03-23",
+   "exit_reason": "stop_loss_gap",
+   "gross_return_pct": -5.643619
+  },
+  "688981@2026-03-19": {
+   "entry_date": "2026-03-20",
+   "exit_date": "2026-03-23",
+   "exit_reason": "stop_loss_gap",
+   "gross_return_pct": -5.123403
+  },
+  "688981@2026-03-23": {
+   "entry_date": "2026-03-24",
+   "exit_date": "2026-03-30",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "688981@2026-03-25": {
+   "entry_date": "2026-03-26",
+   "exit_date": "2026-03-30",
+   "exit_reason": "stop_loss_hit",
+   "gross_return_pct": -5.095
+  },
+  "688981@2026-03-27": {
+   "entry_date": "2026-03-30",
+   "exit_date": "2026-04-03",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": -4.387658
+  },
+  "688981@2026-03-31": {
+   "entry_date": "2026-04-01",
+   "exit_date": "2026-04-07",
+   "exit_reason": "stop_loss_gap",
+   "gross_return_pct": -5.272632
+  },
+  "688981@2026-04-02": {
+   "entry_date": "2026-04-03",
+   "exit_date": "2026-04-10",
+   "exit_reason": "horizon_close",
+   "gross_return_pct": 7.920118
+  },
+  "688981@2026-04-07": {
+   "entry_date": "2026-04-08",
+   "exit_date": "2026-04-09",
+   "exit_reason": "trailing_stop_gap",
+   "gross_return_pct": 0.183194
+  }
+ }
+}
