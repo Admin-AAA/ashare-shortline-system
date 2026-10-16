@@ -1,7 +1,7 @@
 import { Activity, Moon, RefreshCw, Sun } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 import AuthGate from "./AuthGate";
-import { NAV_ITEMS, navMatches, type Section } from "./nav";
+import { HORIZONS, NAV_ITEMS, horizonFromPath, navMatches, type Section } from "./nav";
 import { useUrlRoute } from "./useUrlRoute";
 import { useThemePreference } from "../shared/theme/useThemePreference";
 import { WaveBackground } from "../components/WaveBackground";
@@ -16,6 +16,7 @@ const MetricsPage = lazy(() => import("../pages/MetricsPage").then((m) => ({ def
 const StrategiesPage = lazy(() => import("../pages/StrategiesPage").then((m) => ({ default: m.StrategiesPage })));
 const StrategyDetailPage = lazy(() => import("../pages/StrategyDetailPage").then((m) => ({ default: m.StrategyDetailPage })));
 const ConfigPage = lazy(() => import("../pages/ConfigPage").then((m) => ({ default: m.ConfigPage })));
+const HorizonPage = lazy(() => import("../pages/HorizonPage").then((m) => ({ default: m.HorizonPage })));
 const RunDetailPage = lazy(() => import("../pages/RunDetailPage").then((m) => ({ default: m.RunDetailPage })));
 
 function SectionView({ section }: { section: Section }) {
@@ -38,6 +39,10 @@ function SectionView({ section }: { section: Section }) {
       return <StrategiesPage />;
     case "config":
       return <ConfigPage />;
+    case "mid":
+      return <HorizonPage horizon="mid" />;
+    case "long":
+      return <HorizonPage horizon="long" />;
   }
 }
 
@@ -66,6 +71,7 @@ export function AppShell() {
     }
   }, [pathname, navigate]);
 
+  const horizon = horizonFromPath(pathname);
   const handleRefresh = () => setRefreshSignal((n) => n + 1);
 
   return (
@@ -80,11 +86,25 @@ export function AppShell() {
             tabIndex={0}
           >
             <span className="topbar__brand-badge">A</span>
-            <span>短线驾驶舱</span>
+            <span>{horizon === "short" ? "短线驾驶舱" : horizon === "mid" ? "中线策略" : "长线策略"}</span>
+          </div>
+
+          <div className="topbar__horizon" role="tablist" aria-label="策略周期">
+            {HORIZONS.map((h) => (
+              <button
+                key={h.id}
+                role="tab"
+                aria-selected={horizon === h.id}
+                className={`topbar__horizon-item${horizon === h.id ? " topbar__horizon-item--active" : ""}`}
+                onClick={() => navigate(h.path)}
+              >
+                {h.label}
+              </button>
+            ))}
           </div>
 
           <nav className="topbar__nav">
-            {NAV_ITEMS.map((item) => {
+            {horizon === "short" && NAV_ITEMS.map((item) => {
               const Icon = item.icon;
               const active = navMatches(item.section, pathname);
               return (

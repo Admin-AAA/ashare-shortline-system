@@ -21,7 +21,23 @@ export type Section =
   | "matrix" // 📈 矩阵
   | "metrics" // 📐 指标分析
   | "strategies" // 🧩 策略清单（8 策略 + 简介 + 回测胜率）
-  | "config"; // ⚙️ 配置
+  | "config" // ⚙️ 配置
+  | "mid" // 中线
+  | "long"; // 长线
+
+/** 策略周期：短线沿用原有导航；中线/长线各自一页（策略画像 + 选股 + 持仓复盘） */
+export type Horizon = "short" | "mid" | "long";
+export const HORIZONS: { id: Horizon; label: string; path: string }[] = [
+  { id: "short", label: "短线", path: "/dashboard" },
+  { id: "mid", label: "中线", path: "/mid" },
+  { id: "long", label: "长线", path: "/long" },
+];
+export function horizonFromPath(pathname: string): Horizon {
+  const n = pathname.replace(/\/+$/, "");
+  if (n === "/mid" || n.startsWith("/mid/")) return "mid";
+  if (n === "/long" || n.startsWith("/long/")) return "long";
+  return "short";
+}
 
 export type NavItem = {
   section: Section;
@@ -59,6 +75,8 @@ export const SECTION_PATHS: Record<Section, string> = {
   metrics: "/metrics",
   strategies: "/strategies",
   config: "/config",
+  mid: "/mid",
+  long: "/long",
 };
 
 /** 从 URL pathname 反向解析 section（不含 run 等子路由） */

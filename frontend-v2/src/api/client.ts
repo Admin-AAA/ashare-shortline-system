@@ -184,6 +184,16 @@ function metricsQuery(windowDays: number | undefined, sampleScope: MetricsSample
   return params.toString();
 }
 
+export type HorizonMetrics = { n?: number; win?: number; avg?: number; pf?: number; days?: number; tot?: number; mdd?: number };
+export type HorizonStrategy = {
+  id: string; name: string; horizon: string; summary: string; schedule: string; hold_days: number; top_n: number;
+  metrics: { recent_12m?: HorizonMetrics; phases?: Record<string, HorizonMetrics>; window?: string; note?: string };
+};
+export type HorizonStrategiesResponse = { horizon: string; strategies: HorizonStrategy[]; rejected?: { name: string; reason: string }[] };
+export type HorizonPick = { code: string; name: string; total_mv: number; status: string; entry_date?: string; exit_date?: string; mark_date?: string; ret?: number; days?: number };
+export type HorizonBatch = { strategy_id: string; strategy_name: string; signal_date: string; status: string; avg_ret: number | null; picks: HorizonPick[] };
+export type HorizonPicksResponse = { batches: HorizonBatch[] };
+
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
   login: (password: string) => request<{ ok: boolean }>("/api/auth/login", json("POST", { password })),
@@ -338,6 +348,10 @@ export const api = {
   skills: () => request<SkillSummary[]>("/api/skills", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   standaloneMetrics: () =>
     request<StandaloneMetricsResponse>("/api/strategies/standalone-metrics", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
+  horizonStrategies: (horizon: "mid" | "long") =>
+    request<HorizonStrategiesResponse>(`/api/horizons/${horizon}/strategies`),
+  horizonPicks: (horizon: "mid", strategyId?: string, limit = 30) =>
+    request<HorizonPicksResponse>(`/api/horizons/${horizon}/picks?limit=${limit}${strategyId ? `&strategy_id=${encodeURIComponent(strategyId)}` : ""}`),
   strategies: () =>
     request<StrategyListItem[]>("/api/strategies", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   strategyDetail: (strategyId: string, versionId?: string) => {
