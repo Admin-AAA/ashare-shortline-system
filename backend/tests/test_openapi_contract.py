@@ -26,6 +26,6 @@ def test_every_operation_has_unique_id_and_typed_success_response() -> None:
             ):
                 missing.append(f"{method.upper()} {path}")
 
-    assert len(operation_ids) == 125
+    assert len(operation_ids) == 128  # +3 /api/horizons (mid/long-term)
     assert len(operation_ids) == len(set(operation_ids))
     assert missing == []
