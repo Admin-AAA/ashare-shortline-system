@@ -1,0 +1,15 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: [--config, backend/ruff.toml]
+        files: ^backend/app/
+  - repo: local
+    hooks:
+      - id: layering-contract
+        name: layering contract (api -> services -> engine)
+        entry: bash -c 'cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_layering_contract.py'
+        language: system
+        pass_filenames: false
+        files: ^backend/app/

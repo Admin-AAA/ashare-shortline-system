@@ -1,0 +1,11 @@
+# Gate against regressions of silently swallowed exceptions.
+# Existing intentional sites carry `# noqa: BLE001`; new ones must justify themselves.
+target-version = "py312"
+extend-exclude = ["output", "node_modules", "data", "logs"]
+
+[lint]
+select = ["E9", "F63", "F7", "F82", "BLE001", "S110"]
+
+[lint.per-file-ignores]
+"tests/**" = ["BLE001", "S110"]
+"scripts/**" = ["BLE001", "S110"]
