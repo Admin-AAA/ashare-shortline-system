@@ -42,6 +42,8 @@ def _stock(**kw):
         "is_main_theme": False,
         "market_regime": "震荡",
         "market_sample_count": 300,
+        # 上涨比 55%：避开 c861ef1 的"弱市停出"(<30%) 与震荡/过热停出，专测软阶段遮蔽逻辑
+        "up_count": 165,
         "data_completeness_score": 100.0,
         "evidence_quality_score": 100.0,
         "industry_capacity_like_count": 3,
@@ -83,3 +85,13 @@ def test_first_match_hard_veto_still_works():
     assert signal.get("hard_veto") is True
     assert signal.get("phase") == "退潮"
     assert signal.get("score_cap") == 35.0
+
+
+def test_weak_breadth_stop_takes_priority():
+    """c861ef1：上涨比 < 30% 时首命中"弱市停出"硬否决（cap20），优先于"弱市降权"。"""
+    skill = _chao_gu()
+    stock = _stock(market_regime="弱势", up_count=60, is_main_theme=True)
+    signal = run_strategy(skill, stock, ["半导体", "电子"])
+    assert signal.get("hard_veto") is True
+    assert signal.get("phase") == "弱市停出"
+    assert signal.get("score_cap") == 20.0

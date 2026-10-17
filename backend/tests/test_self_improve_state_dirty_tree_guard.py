@@ -232,6 +232,8 @@ def test_identity_context_marks_production_owned(tmp_path):
     scripts.mkdir(parents=True)
     import shutil
     shutil.copy(Path(sis.__file__), scripts / "self_improve_state.py")
+    # exec_module 会写 __pycache__，忽略之以免误判为脏树
+    (repo / ".gitignore").write_text("__pycache__/\n*.pyc\n")
     git("add", "-A")
     git("commit", "-qm", "init")
 
