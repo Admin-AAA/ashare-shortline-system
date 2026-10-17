@@ -8,6 +8,7 @@ Stages (each resumable via data/midterm/backfill_state.json):
   forecast     : pro.forecast per stock -> data/midterm/forecast/<code>.parquet
   dividend     : pro.dividend per stock -> data/midterm/dividend/<code>.parquet
   hk_hold      : pro.hk_hold weekly (Fridays) SH+SZ since 2018 -> MySQL hk_holdings (upsert)
+  holdernum    : pro.stk_holdernumber per stock (full history, ann_date PIT) -> data/midterm/holdernum/<code>.parquet
 """
 from __future__ import annotations
 import json, logging, sys, time, datetime as dt
@@ -116,6 +117,7 @@ def _per_code_pass(pro, db, s, key, api, outdir, to_mysql):
     for n, c in enumerate(todo):
         kw = {"ts_code": ts(c)}
         if api == "fina_indicator": kw["start_date"] = "20170101"
+        if api == "stk_holdernumber": time.sleep(1.0)  # promax per-minute quota for this api is low; stay under it
         df = call(pro, api, tries=6, **kw)
         if df is None:
             time.sleep(30); continue  # transient failure: leave undone for the next pass
@@ -175,6 +177,7 @@ def main():
         elif st == "forecast": per_code_stage(pro, db, s, st, "forecast", "forecast")
         elif st == "dividend": per_code_stage(pro, db, s, st, "dividend", "dividend")
         elif st == "hk_hold": hk_stage(pro, db, s)
+        elif st == "holdernum": per_code_stage(pro, db, s, st, "stk_holdernumber", "holdernum")
     log.info("ALL DONE")
 
 if __name__ == "__main__":
