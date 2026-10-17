@@ -39,7 +39,7 @@ def fina_pit() -> pl.DataFrame:
     f = f.drop_nulls("ann_date").with_columns(pl.col("ts_code").str.slice(0, 6).alias("code"), _dash("ann_date").alias("trade_date"))
     # annualised ROE: quarterly roe is YTD -> scale by 12/months
     m = pl.col("end_date").str.slice(4, 2).cast(pl.Int32)
-    f = f.with_columns((pl.col("roe") * 12 / m).alias("roe_ann"))
+    f = f.with_columns((pl.col("roe").cast(pl.Float64, strict=False) * 12 / m).alias("roe_ann"))
     return f.sort("end_date").unique(["code", "trade_date"], keep="last").sort("code", "trade_date")
 
 def forecast_events() -> pl.DataFrame:
