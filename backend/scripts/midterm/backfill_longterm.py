@@ -3,6 +3,7 @@
 Uses the project's Tushare facade (app.services.tushare_client.get_pro -> shared rate limiter / transport).
 Stages (each resumable via data/midterm/backfill_state.json):
   daily_hist   : pro.daily by trade_date 2018-01-02..2021-05-25 -> data/midterm/daily_hist_<year>.parquet
+  daily_hist2  : pro.daily 2021-05-26..2021-12-31 (the daily_kbar parquet cache only has ~5 codes/day until 2022-01-04)
   basic_full   : pro.daily_basic by trade_date 2018-01-02..today (pe/pb/dv_ttm/total_mv...) -> data/midterm/basic_<year>.parquet
   fina         : pro.fina_indicator per stock since 2017 -> MySQL stock_fina_indicator (upsert) + data/midterm/fina/<code>.parquet
   forecast     : pro.forecast per stock -> data/midterm/forecast/<code>.parquet
@@ -172,6 +173,7 @@ def main():
     for st in stages:
         log.info("== stage %s", st)
         if st == "daily_hist": by_date_stage(pro, s, st, "daily", "20180102", "20210525", "daily_hist")
+        elif st == "daily_hist2": by_date_stage(pro, s, st, "daily", "20210526", "20211231", "daily_hist")
         elif st == "basic_full": by_date_stage(pro, s, st, "daily_basic", "20180102", today, "basic", weekly=True)
         elif st == "fina": per_code_stage(pro, db, s, st, "fina_indicator", "fina", to_mysql=True)
         elif st == "forecast": per_code_stage(pro, db, s, st, "forecast", "forecast")

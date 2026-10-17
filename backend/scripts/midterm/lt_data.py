@@ -20,7 +20,12 @@ def prices() -> pl.DataFrame:
         h = h.select(pl.col("ts_code").str.slice(0, 6).alias("code"), _dash("trade_date").alias("trade_date"),
                      "open", "high", "low", "close", (pl.col("amount") * 1000).alias("amount"), "pct_chg",
                      (pl.col("vol") * 100).alias("volume"))
-        h = h.filter(pl.col("trade_date") < new["trade_date"].min())
+        # cache is sparse (~5 codes/day) until 2022-01-04 -> switch to the cache only once it is broad
+        cnt = new.group_by("trade_date").len()
+        cut = cnt.filter(pl.col("len") >= 2000)["trade_date"].min()
+        new = new.filter(pl.col("trade_date") >= cut)
+        parts = [new]
+        h = h.filter(pl.col("trade_date") < cut)
         parts.insert(0, h.cast({c: new.schema[c] for c in cols}))
     df = pl.concat(parts).filter((pl.col("close") > 0) & (pl.col("open") > 0)).unique(["code", "trade_date"]).sort("code", "trade_date")
     return df
