@@ -1,12 +1,21 @@
 import { Loader2, LogIn } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
-import { api } from "../api/client";
+import { api, UNAUTHORIZED_EVENT } from "../api/client";
+
+const AUTH_OK_KEY = "ashare.auth.ok";
 
 type Props = { children: ReactNode };
 
 export default function AuthGate({ children }: Props) {
-  const [ready, setReady] = useState(false);
-  const [authenticated, setAuthenticated] = useState(false);
+  // 性能：上次已通过鉴权则先渲染页面（各接口自身仍受鉴权保护），后台再校验；
+  // 校验失败或任何接口返回 401 → 回到登录。避免每次打开都被 /api/auth/status 阻塞。
+  const remembered = (() => { try { return localStorage.getItem(AUTH_OK_KEY) === "1"; } catch { return false; } })();
+  const [ready, setReady] = useState(remembered);
+  const [authenticated, setAuthenticatedState] = useState(remembered);
+  const setAuthenticated = (ok: boolean) => {
+    setAuthenticatedState(ok);
+    try { if (ok) localStorage.setItem(AUTH_OK_KEY, "1"); else localStorage.removeItem(AUTH_OK_KEY); } catch { /* ignore */ }
+  };
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -14,8 +23,12 @@ export default function AuthGate({ children }: Props) {
   useEffect(() => {
     void api.authStatus()
       .then((status) => setAuthenticated(!status.enabled || status.authenticated))
-      .catch(() => setError("无法确认访问状态"))
+      .catch(() => { if (!remembered) setError("无法确认访问状态"); })
       .finally(() => setReady(true));
+    const onUnauthorized = () => { setAuthenticated(false); setReady(true); };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function submit(event: FormEvent<HTMLFormElement>) {

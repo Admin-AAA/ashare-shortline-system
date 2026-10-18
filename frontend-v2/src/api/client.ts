@@ -70,6 +70,8 @@ export type AuthStatus = {
 const LONG_REQUEST_THRESHOLD_MS = 3000;
 const CONTROL_CONFIG_TIMEOUT_MS = 30_000;
 
+export const UNAUTHORIZED_EVENT = "ashare:unauthorized";
+
 export type MetricsSampleScope = "live_forward" | "historical_replay";
 
 type RequestOptions = {
@@ -89,7 +91,21 @@ if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => { pageUnloading = true; });
 }
 
-async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
+// 性能：并发的相同 GET（同路径、无外部取消信号）合并为一次网络请求；
+// 后到的调用方拿到结果的深拷贝，避免共享对象被就地修改。响应内容不变。
+const inflightGets = new Map<string, Promise<unknown>>();
+function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
+  const method = init?.method ?? "GET";
+  if (method !== "GET" || options?.signal) return requestNetwork<T>(path, init, options);
+  const key = `${path}|${options?.timeoutMs ?? ""}`;
+  const existing = inflightGets.get(key) as Promise<T> | undefined;
+  if (existing) return existing.then((v) => structuredClone(v));
+  const p = requestNetwork<T>(path, init, options).finally(() => inflightGets.delete(key));
+  inflightGets.set(key, p);
+  return p;
+}
+
+async function requestNetwork<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
   const method = init?.method ?? "GET";
   const timeoutMs = options?.timeoutMs;
   const externalSignal = options?.signal;
@@ -118,6 +134,7 @@ async function request<T>(path: string, init?: RequestInit, options?: RequestOpt
     if (!res.ok) {
       const text = await res.text();
       if (res.status === 401) {
+        if (!path.startsWith("/api/auth/")) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
         throw new Error("UNAUTHORIZED");
       }
       throw new Error(userFacingErrorMessage(text || `Request failed: ${res.status}`, res.status));

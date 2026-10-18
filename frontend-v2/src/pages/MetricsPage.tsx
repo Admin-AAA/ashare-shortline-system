@@ -122,8 +122,9 @@ export function MetricsPage() {
     [windowDays, sampleScope],
   );
 
-  const loading = l1 || l2 || l3 || l4 || l5 || l6 || l7;
-  const error = e1 || e2 || e3 || e4 || e5 || e6 || e7;
+  // 性能：只由「概览」决定整块骨架/空态；其余 6 个面板各自到达即渲染（原先需等 7 个端点全部返回）。
+  const loading = l6;
+  const error = e6;
 
   // 概览覆盖窗口内全部推荐及 pending/missed；其余端点只作无概览时的降级来源。
   const dateRange: DateRangeMeta | undefined =
@@ -170,12 +171,12 @@ export function MetricsPage() {
               gap: "var(--space-4)",
             }}
           >
-            <PrecisionPanel rows={precisionAtK ?? []} />
-            <FilterEffectivenessPanel data={filterEffect} />
-            <ScoreLinePanel rows={scoreLines ?? []} />
-            <StrategyPanel rows={strategies ?? []} />
-            <SetupPanel rows={setups ?? []} />
-            <AlphaDecayPanel data={alphaDecay} />
+            <PanelSlot loading={l4} error={e4} title="Precision@K"><PrecisionPanel rows={precisionAtK ?? []} /></PanelSlot>
+            <PanelSlot loading={l5} error={e5} title="过滤效果"><FilterEffectivenessPanel data={filterEffect} /></PanelSlot>
+            <PanelSlot loading={l1} error={e1} title="分数段胜率"><ScoreLinePanel rows={scoreLines ?? []} /></PanelSlot>
+            <PanelSlot loading={l2} error={e2} title="策略胜率"><StrategyPanel rows={strategies ?? []} /></PanelSlot>
+            <PanelSlot loading={l3} error={e3} title="Setup 胜率"><SetupPanel rows={setups ?? []} /></PanelSlot>
+            <PanelSlot loading={l7} error={e7} title="Alpha 衰减"><AlphaDecayPanel data={alphaDecay} /></PanelSlot>
             <SkillsCatalogPanel />
           </div>
           <DNetPanel windowDays={windowDays} sampleScope={sampleScope} />
@@ -183,6 +184,13 @@ export function MetricsPage() {
       )}
     </div>
   );
+}
+
+/** 面板占位：数据未到显示骨架、出错显示该面板错误，到达后渲染原面板（内容与计算不变）。 */
+function PanelSlot({ loading, error, title, children }: { loading: boolean; error: string; title: string; children: ReactNode }) {
+  if (loading) return <PageSkeleton title={title} hint="加载中" rowCount={4} />;
+  if (error) return <ErrorPage title={`${title}加载失败`} message={error} />;
+  return <>{children}</>;
 }
 
 /** 指标页通用可折叠卡片：标题 kicker/title 垂直排列，右上角带折叠按钮。 */
