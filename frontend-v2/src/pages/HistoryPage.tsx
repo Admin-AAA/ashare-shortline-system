@@ -21,6 +21,10 @@ import { bucketLabel, exitReasonLabel, formatApiDateTime, isOutcomeSettled, outc
 import { ruleKeyLevelLabels, rulesMentionKeyLevel } from "../utils/ruleKeyLevels";
 import { cancelObservationText, collectUnsettledIds, executionDecisionCode, historyExecutedReturn, holdingDecisionPresentation, isPlaceholderEntryRule } from "../utils/executionConfirmation";
 
+const CONFIRMATION_RETRY_MAX_ATTEMPTS = 5;
+const CONFIRMATION_RETRY_BASE_MS = 2_000;
+const CONFIRMATION_RETRY_CAP_MS = 60_000;
+
 /**
  * 复盘页 —— 正式运行推荐历史（跨 run，按 trade_date 倒序，带 outcome）。
  * 填补北极星"推荐历史记录页"缺口：用户查看每笔推荐的实际表现，支持分页 + 筛选。
@@ -55,6 +59,10 @@ export function HistoryPage() {
   const [confirmationComputedAt, setConfirmationComputedAt] = useState<string | null>(null);
   // 请求序号：分页/筛选变化时旧请求晚到不覆盖新页面（Spec 6.1.5）
   const confirmationReqRef = useRef(0);
+  const confirmationRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadExecutionConfirmationsRef = useRef<(ids: string[], refresh?: boolean, attempt?: number) => Promise<void>>(
+    async () => undefined,
+  );
   const pageSize = 50;
 
   // 日期预设 → 实际 dateFrom/dateTo（基于今天）。custom 用手选，all 不限。
@@ -138,7 +146,11 @@ export function HistoryPage() {
 
   // 批量买入确认：自动加载 + 手动刷新共用。只有存在未结算行时才请求（Spec 9.2）。
   const loadExecutionConfirmations = useCallback(
-    async (ids: string[], refresh = false) => {
+    async (ids: string[], refresh = false, attempt = 0): Promise<void> => {
+      if (confirmationRetryTimerRef.current) {
+        clearTimeout(confirmationRetryTimerRef.current);
+        confirmationRetryTimerRef.current = null;
+      }
       const reqSeq = ++confirmationReqRef.current;
       if (ids.length === 0) {
         setConfirmationLoadingIds(new Set());
@@ -179,6 +191,15 @@ export function HistoryPage() {
         setConfirmationComputedAt(res.computed_at);
       } catch (error) {
         if (reqSeq !== confirmationReqRef.current) return;
+        // 后端不可达时指数退避重试（2s→4s→…，单次上限 60s，最多 5 次），
+        // 避免一次后端故障刷出上万条 Failed to fetch（2026-07-29 曾 1 小时 2.3 万条）。
+        if (attempt < CONFIRMATION_RETRY_MAX_ATTEMPTS) {
+          const delay = Math.min(CONFIRMATION_RETRY_BASE_MS * 2 ** attempt, CONFIRMATION_RETRY_CAP_MS);
+          confirmationRetryTimerRef.current = setTimeout(() => {
+            confirmationRetryTimerRef.current = null;
+            if (reqSeq === confirmationReqRef.current) void loadExecutionConfirmationsRef.current(ids, refresh, attempt + 1);
+          }, delay);
+        }
         const message = (error as Error).message || "实时判断失败";
         setConfirmationErrors((previous) => ({
           ...previous,
@@ -189,6 +210,14 @@ export function HistoryPage() {
           setConfirmationLoadingIds(new Set());
         }
       }
+    },
+    [],
+  );
+
+  loadExecutionConfirmationsRef.current = loadExecutionConfirmations;
+  useEffect(
+    () => () => {
+      if (confirmationRetryTimerRef.current) clearTimeout(confirmationRetryTimerRef.current);
     },
     [],
   );
