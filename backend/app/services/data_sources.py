@@ -535,8 +535,87 @@ def _raw_quote_source_rows(db: Session) -> list[dict[str, Any]]:
     ]
 
 
+_BAR_SOURCE_STATS_REFRESH_S = 1800
+_bar_source_stats_refreshing = False
+_bar_source_stats_lock = __import__("threading").Lock()
+
+
+def _bar_source_stats_path():
+    from pathlib import Path
+
+    return Path(get_settings().backend_root) / "data" / "runtime" / "pool_bar_source_stats.json"
+
+
 def _raw_bar_source_rows(db: Session) -> list[dict[str, Any]]:
-    latest_allowed_bar_date = _latest_allowed_bar_date()
+    """daily_kbars 按 source 的全表聚合（600 万行全扫约 60s，是 /api/data-sources/pool 的瓶颈）。
+
+    结果按 latest_allowed_bar_date 落盘预计算：同一可用 bar 日期内直接读盘（重启后仍有效），
+    超过 30 分钟则后台单飞刷新；bar 日期变化（新交易日数据）或无缓存时同步现算。
+    输出与 _compute_raw_bar_source_rows 逐字段一致，只是计算时机不同。
+    """
+    import json
+    import threading
+
+    latest_allowed_bar_date = str(_latest_allowed_bar_date())
+    path = _bar_source_stats_path()
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cached = None
+    if isinstance(cached, dict) and cached.get("latest_allowed_bar_date") == latest_allowed_bar_date:
+        if time.time() - float(cached.get("computed_at_epoch") or 0) > _BAR_SOURCE_STATS_REFRESH_S:
+            _refresh_bar_source_stats_in_background()
+        return list(cached.get("rows") or [])
+    rows = _compute_raw_bar_source_rows(db, latest_allowed_bar_date)
+    _write_bar_source_stats(latest_allowed_bar_date, rows)
+    return rows
+
+
+def _write_bar_source_stats(latest_allowed_bar_date: str, rows: list[dict[str, Any]]) -> None:
+    import json
+    import os
+
+    path = _bar_source_stats_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({
+            "latest_allowed_bar_date": latest_allowed_bar_date,
+            "computed_at_epoch": time.time(),
+            "rows": rows,
+        }, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        logger.warning("pool bar source stats cache write failed: %s", exc)
+
+
+def _refresh_bar_source_stats_in_background() -> None:
+    global _bar_source_stats_refreshing
+    import threading
+
+    with _bar_source_stats_lock:
+        if _bar_source_stats_refreshing:
+            return
+        _bar_source_stats_refreshing = True
+
+    def _run() -> None:
+        global _bar_source_stats_refreshing
+        from app.db.session import SessionLocal
+
+        try:
+            with SessionLocal() as bg_db:
+                bar_date = str(_latest_allowed_bar_date())
+                _write_bar_source_stats(bar_date, _compute_raw_bar_source_rows(bg_db, bar_date))
+        except Exception as exc:  # noqa: BLE001 - best-effort background refresh, logged
+            logger.warning("pool bar source stats background refresh failed: %s", exc)
+        finally:
+            with _bar_source_stats_lock:
+                _bar_source_stats_refreshing = False
+
+    threading.Thread(target=_run, name="pool-bar-source-stats", daemon=True).start()
+
+
+def _compute_raw_bar_source_rows(db: Session, latest_allowed_bar_date: Any) -> list[dict[str, Any]]:
     rows = db.execute(
         select(
             DailyKbar.source,
