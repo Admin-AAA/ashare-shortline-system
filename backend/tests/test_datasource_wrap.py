@@ -43,3 +43,18 @@ def test_original_exception_passes_and_block_opens_breaker(monkeypatch):
         wrap.gw_call("ann.list", "eastmoney", lambda: [1])
     assert e.value.kind is gw.ErrorKind.CIRCUIT_OPEN
     assert wrap.gw_call("ann.list", "cninfo", lambda: [1]) == [1]
+
+
+def test_market_data_step4_identical_under_cutover(monkeypatch):
+    from app.services import market_data as md
+
+    bars = [{"trade_date": f"2026-01-{i:02d}"} for i in range(1, 31)]
+    monkeypatch.setattr(md, "_fetch_xiaoshi_kline", lambda q, s, start_date=None, end_date=None: bars)
+    monkeypatch.setattr(md, "_fetch_tushare_kline", lambda q, s, start_date=None, end_date=None: (_ for _ in ()).throw(RuntimeError("x")))
+    for flag in (False, True):
+        monkeypatch.setattr(gw, "is_cutover", lambda d, f=flag: f)
+        wrap._breakers.clear()
+        assert md._fetch_first_kline({"code": "000001"}, ["tushare", "xiaoshi"], None) == (bars, "xiaoshi", ["tushare: x"])
+    monkeypatch.setattr(gw, "_db_disabled_keys", lambda: {("xiaoshi", "kline")})
+    got = md._fetch_first_kline({"code": "000001"}, ["xiaoshi"], None)
+    assert got[0] == [] and "disabled" in got[2][0]  # explicit missing, never stale

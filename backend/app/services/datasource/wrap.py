@@ -33,6 +33,12 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "xiaoshi_quote": ProviderSpec((("xiaoshi", "quote"),), 0),
     "xiaoshi_kline": ProviderSpec((("xiaoshi", "kline"),), 0),
     "xiaoshi_alt": ProviderSpec((("xiaoshi", "quote"),), 0),
+    "tushare_quote": ProviderSpec((("tushare", "quote"),), 0),
+    "tushare_kline": ProviderSpec((("tushare", "kline"),), 0),
+    "tushare_limit_up": ProviderSpec((("tushare", "limit_up"),), 0),
+    "tushare_concept_sector": ProviderSpec((("tushare", "concept_sector"),), 0),
+    "tushare_capital_flow": ProviderSpec((("tushare", "capital_flow"),), 0),
+    "tushare_dragon_tiger": ProviderSpec((("tushare", "dragon_tiger"),), 0),
     "tushare": ProviderSpec((), 0),  # Tushare calls already go through the router limiter/LB
     "local": ProviderSpec((), 0),
 }
