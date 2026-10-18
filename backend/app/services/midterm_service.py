@@ -75,6 +75,16 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 60,
         "schedule": "month_end",
     },
+    # §102 红利低波（scripts/midterm/lt_research19.py DVLV_h60，预注册 3 版中唯一达标，未调参）
+    "long-dividend-lowvol": {
+        "name": "红利低波月度组合（股息率+低波动，持60日）",
+        "horizon": "long",
+        "summary": "每月最后一个交易日收盘后，在全A（剔除北交所）总市值前1500名里，剔除ST、上市不足250个交易日、股价<3元，只看近12个月股息率（dv_ttm，取当周或上周最近一期周度快照）>0 的股票；按股息率排名（越高越好）+ 近60日日收益波动率排名（越低越好）相加，取得分最低的10只，次日开盘等权买入、各持有60个交易日。仍在持有期内的不重复买、也不顺延补位（与回测一致）。",
+        "kind": "dividend_lowvol",
+        "top_n": 10,
+        "hold_days": 60,
+        "schedule": "month_end",
+    },
 }
 
 
@@ -408,6 +418,110 @@ def lowturn_lowvol_candidates(db, as_of: str, top_n: int = 10) -> list[dict[str,
             for r in g.sort_values("score").itertuples()]
 
 
+BASIC_DIR = Path(__file__).resolve().parents[2] / "data" / "midterm"
+
+
+def _weekly_snapshot_date(db, as_of: str, dates: list[str]) -> str | None:
+    """§102 研究口径的周度 daily_basic 快照日：as_of 若是当周（ISO 周）最后一个交易日则取 as_of，否则取上一周最后一个交易日。
+    dates = daily_kbars 交易日（降序，dates[0]==as_of）。"""
+    d = _dt.date.fromisoformat(as_of)
+    nxt = db.execute(text(
+        "SELECT MIN(cal_date) FROM trade_calendar WHERE exchange='SSE' AND is_open=1 AND cal_date>:d"),
+        {"d": as_of.replace("-", "")}).scalar()
+    if nxt:
+        nd = _dt.datetime.strptime(str(nxt).replace("-", "")[:8], "%Y%m%d").date()
+    else:
+        nd = d + _dt.timedelta(days=3 if d.weekday() == 4 else 1)
+    wk = d.isocalendar()[:2]
+    if nd.isocalendar()[:2] != wk:
+        return as_of
+    for x in dates:
+        if _dt.date.fromisoformat(x).isocalendar()[:2] != wk:
+            return x
+    return None
+
+
+def _weekly_basic(snap: str):
+    """周度 daily_basic 快照（ts_code,total_share,dv_ttm）：先读研究用 data/midterm/basic_<year>.parquet，
+    没有该日再经统一数据网关（tushare_client.get_pro 的 provider router，只读）拉 daily_basic。失败返回 None。"""
+    import pandas as pd
+    key = snap.replace("-", "")
+    f = BASIC_DIR / f"basic_{key[:4]}.parquet"
+    if f.exists():
+        try:
+            b = pd.read_parquet(f, columns=["ts_code", "trade_date", "total_share", "dv_ttm"])
+            b = b[b["trade_date"].astype(str) == key]
+            if not b.empty:
+                return b
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly basic parquet %s read failed: %s", f.name, exc)
+    try:
+        from app.services.tushare_client import get_pro
+        b = get_pro().daily_basic(trade_date=key, fields="ts_code,trade_date,total_share,dv_ttm")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("daily_basic %s via gateway failed: %s", key, exc)
+        return None
+    return b if b is not None and not b.empty else None
+
+
+def dividend_lowvol_candidates(db, as_of: str, top_n: int = 10) -> list[dict[str, Any]] | None:
+    """§102 lt_research19 DVLV_h60 口径：非北交所按 周度 total_share × 当日收盘 从大到小排名第 1–1500、非ST、上市≥250交易日、收盘≥3；
+    dv_ttm（周度快照：当周最后交易日=as_of 时取 as_of，否则上周最后交易日）>0 的子集内，dv_ttm 秩（高好，平均秩）+ 近60日日收益标准差秩
+    （低好，平均秩；同分按波动率低者、再按代码）之和最低的 top_n 只。数据不足返回 None。"""
+    import pandas as pd
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 300"), {"d": as_of})]
+    if len(dates) < 251 or dates[0] != as_of:
+        return None
+    snap = _weekly_snapshot_date(db, as_of, dates)
+    b = _weekly_basic(snap) if snap else None
+    if b is None:
+        return None
+    b = pd.DataFrame({"code": b["ts_code"].astype(str).str[:6],
+                      "total_share": pd.to_numeric(b["total_share"], errors="coerce"),
+                      "dv_ttm": pd.to_numeric(b["dv_ttm"], errors="coerce")})
+    b = b[~b["code"].str[0].isin(["4", "8", "9"]) & b["total_share"].notna()].drop_duplicates("code")
+    px = pd.DataFrame(db.execute(text(
+        "SELECT code, close FROM daily_kbars WHERE trade_date=:d AND close>0"), {"d": as_of}).mappings().all())
+    if px.empty:
+        return None
+    mv = b.merge(px, on="code")
+    mv["close"] = mv["close"].astype(float)
+    mv["mvd"] = mv["total_share"] * mv["close"]  # 万股 × 元 = 万元（研究口径）
+    mv["rk_mv"] = mv["mvd"].rank(ascending=False, method="first")
+    st = {r[0] for r in db.execute(text(
+        "SELECT code FROM stock_metadata_history WHERE name LIKE '%ST%' AND effective_from<=:d "
+        "AND (effective_to IS NULL OR effective_to>:d)"), {"d": as_of})}
+    mv = mv[(mv["rk_mv"] <= 1500) & (mv["close"] >= 3) & ~mv["code"].isin(st)]
+    if mv.empty:
+        return []
+    k = pd.DataFrame(db.execute(text(
+        "SELECT code, trade_date, pct_chg FROM daily_kbars "
+        "WHERE trade_date>=:d0 AND trade_date<=:d AND close>0 AND code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"d0": dates[-1], "d": as_of, "codes": mv["code"].tolist()}).mappings().all())
+    if k.empty:
+        return None
+    k = k.sort_values(["code", "trade_date"])
+    age = k.groupby("code").size()
+    k = k[k["code"].isin(age[age >= 251].index)].groupby("code").tail(60)
+    g = k.groupby("code").agg(n=("pct_chg", "size"),
+                              vol60=("pct_chg", lambda x: (x.astype(float) / 100).clip(-0.35, 0.35).std(ddof=1)))
+    g = g[(g["n"] >= 60) & g["vol60"].notna()].reset_index().merge(mv[["code", "mvd", "rk_mv", "dv_ttm"]], on="code")
+    g = g[g["dv_ttm"] > 0].sort_values("code").reset_index(drop=True)
+    if g.empty:
+        return []
+    g["score"] = ((-g["dv_ttm"]).rank(method="average") + g["vol60"].rank(method="average")
+                  + g["vol60"].rank(method="first") * 1e-6)
+    g = g.sort_values(["score", "code"]).head(int(top_n))
+    names = dict(db.execute(text("SELECT code,name FROM stocks WHERE code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"codes": g["code"].tolist()}).all())
+    return [{"code": r.code, "name": names.get(r.code, ""), "total_mv": round(float(r.mvd), 1), "mv_rank": int(r.rk_mv),
+             "dv_ttm": round(float(r.dv_ttm), 2), "vol60": round(float(r.vol60) * 100, 3), "score": round(float(r.score), 1),
+             "basic_date": snap}
+            for r in g.itertuples()]
+
+
 def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
     """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。"""
     d = _dt.date.fromisoformat(as_of)
@@ -419,8 +533,9 @@ def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
                 continue
         elif not force and not is_signal_day(sid, d):
             continue
-        if meta.get("kind") == "lowturn_lowvol":
-            cands = lowturn_lowvol_candidates(db, as_of, int(meta["top_n"]))
+        if meta.get("kind") in ("lowturn_lowvol", "dividend_lowvol"):
+            cand_fn = lowturn_lowvol_candidates if meta["kind"] == "lowturn_lowvol" else dividend_lowvol_candidates
+            cands = cand_fn(db, as_of, int(meta["top_n"]))
             if cands is None:
                 result[sid] = "no_data"
                 continue
