@@ -39,6 +39,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "tushare_concept_sector": ProviderSpec((("tushare", "concept_sector"),), 0),
     "tushare_capital_flow": ProviderSpec((("tushare", "capital_flow"),), 0),
     "tushare_dragon_tiger": ProviderSpec((("tushare", "dragon_tiger"),), 0),
+    "tushare_news": ProviderSpec((("tushare", "news"),), 0),
     "tushare": ProviderSpec((), 0),  # Tushare calls already go through the router limiter/LB
     "local": ProviderSpec((), 0),
 }
