@@ -254,6 +254,12 @@ def sync_skills(db: Session) -> list[StrategySkill]:
                 raise RuntimeError(
                     f"策略版本快照不可变约束冲突: {descriptor.strategy_id}/{version_id}"
                 )
+        # 盘上已删除的策略：registry 行保留（历史 run 仍引用），但强制 enabled=False，避免幽灵策略被当作启用。
+        on_disk = {d.strategy_id for d in descriptors.values() if d is not None}
+        for row in db.query(SkillRegistry).filter(SkillRegistry.enabled.is_(True)).all():
+            if row.skill_id not in on_disk:
+                row.enabled = False
+                has_changes = True
         if has_changes:
             db.commit()
         # 自愈逻辑已移除：repair_preset_registration 会在用户编辑预设后把删掉的策略加回来，
