@@ -141,10 +141,16 @@ def run_outcome_labeling(db):
                        s["triggered_count"], s["hit_rate"] * 100, s["avg_return"], s["avg_drawdown"])
 
 
-def main():
+def main() -> int:
+    from app.services.trade_calendar import TradeCalendarUnavailable
+
     db = SessionLocal()
     try:
-        missing = get_missing_trade_dates(db)
+        try:
+            missing = get_missing_trade_dates(db)
+        except TradeCalendarUnavailable as exc:
+            logger.error("交易日历不可用，无法确定缺失交易日，终止回填: %s", exc)
+            return 2
         for td in missing:
             logger.info("回填 %s ...", td)
             batch_backfill_date(db, td)
@@ -153,7 +159,8 @@ def main():
         run_outcome_labeling(db)
     finally:
         db.close()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

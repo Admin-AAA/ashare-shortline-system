@@ -21,7 +21,6 @@ from sqlalchemy import func, select
 
 from app.core.config import get_settings
 from app.db.session import SessionLocal
-from app.engine.trading_calendar import latest_allowed_bar_date
 from app.models.tables import DailyKbar, StockQuote
 from app.services.indicator_computer import compute_daily_bar_indicators, compute_daily_indicators
 from app.services.tushare_client import fetch_daily_kbars, fetch_latest_trade_date
@@ -108,10 +107,13 @@ def load_universe(db, limit_codes: list[str] | None) -> list[dict[str, Any]]:
 def main() -> int:
     args = parse_args()
     settings = get_settings()
+    from app.services.trade_calendar import TradeCalendarUnavailable
     try:
         latest_allowed = fetch_latest_trade_date()
-    except Exception:
-        latest_allowed = latest_allowed_bar_date().replace("-", "")
+    except TradeCalendarUnavailable as exc:
+        # 不再按工作日猜（节假日会猜错目标日）；拿不到交易日历就明确失败。
+        print(f"ERROR: 交易日历不可用，无法确定最新交易日，终止回填: {exc}", file=sys.stderr)
+        return 2
     target_display = f"{latest_allowed[:4]}-{latest_allowed[4:6]}-{latest_allowed[6:]}"
 
     limit_codes = None
