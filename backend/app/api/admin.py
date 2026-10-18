@@ -1,4 +1,7 @@
 """运维管理 API：成本追踪、系统健康、调度任务、数据源监控。"""
+import logging
+import threading
+import time
 
 from fastapi import Depends, HTTPException
 from app.api.contracts import ContractRouter as APIRouter
@@ -177,13 +180,66 @@ def get_temporal_consistency(
     - 特征快照是否引用未来日期
     - Outcome 标注日期 vs 推荐日期（入场必须在推荐日之后）
     """
-    from app.services.temporal_consistency import check_run_temporal_consistency
-    from app.services.outcome_service import _cached as outcome_cached
+    return _temporal_consistency_cached(db)
 
-    cache_key = "temporal_consistency"
-    def _compute():
-        return check_run_temporal_consistency(db)
-    return outcome_cached(cache_key, _compute)
+
+# 时态一致性：30s 内视为新鲜（与原 _cached 相同）；过期但 10 分钟内先返回旧结果并在
+# 后台单飞刷新（stale-while-revalidate），无缓存时同步单飞计算。计算逻辑不变。
+_TC_FRESH_SECONDS = 30.0
+_TC_STALE_SECONDS = 600.0
+_tc_cache: dict[str, tuple[float, object]] = {}
+_tc_state_lock = threading.Lock()
+_tc_compute_lock = threading.Lock()
+
+
+def _tc_compute(db) -> object:
+    from app.services.temporal_consistency import check_run_temporal_consistency
+
+    result = check_run_temporal_consistency(db)
+    with _tc_state_lock:
+        _tc_cache["v"] = (time.time(), result)
+    return result
+
+
+def _tc_background_refresh() -> None:
+    if not _tc_compute_lock.acquire(blocking=False):
+        return
+    try:
+        from app.db.session import SessionLocal
+
+        session = SessionLocal()
+        try:
+            _tc_compute(session)
+        finally:
+            session.close()
+    except Exception:  # noqa: BLE001 - 后台刷新失败保留旧值，下次请求重试
+        logging.getLogger(__name__).warning("temporal-consistency background refresh failed", exc_info=True)
+    finally:
+        _tc_compute_lock.release()
+
+
+def _temporal_consistency_cached(db):
+    with _tc_state_lock:
+        entry = _tc_cache.get("v")
+    now = time.time()
+    if entry is not None:
+        age = now - entry[0]
+        if age < _TC_FRESH_SECONDS:
+            return entry[1]
+        if age < _TC_STALE_SECONDS:
+            threading.Thread(target=_tc_background_refresh, daemon=True).start()
+            return entry[1]
+    with _tc_compute_lock:
+        with _tc_state_lock:
+            entry = _tc_cache.get("v")
+        if entry is not None and time.time() - entry[0] < _TC_FRESH_SECONDS:
+            return entry[1]
+        return _tc_compute(db)
+
+
+def invalidate_temporal_consistency_cache() -> None:
+    with _tc_state_lock:
+        _tc_cache.clear()
 
 
 @router.get("/model-routes")
@@ -326,3 +382,7 @@ def _reload_scheduler() -> int:
     from app.orchestration import schedule_all_enabled_tasks
 
     return schedule_all_enabled_tasks().scheduled_task_count
+
+from app.services.cache_hooks import register as _register_cache_hook  # noqa: E402
+
+_register_cache_hook("outcome_metrics", invalidate_temporal_consistency_cache)
