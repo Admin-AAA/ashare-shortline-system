@@ -10,6 +10,7 @@ import { CommandPalette } from "../ui/CommandPalette";
 import { RunConfirmPanel } from "../ui/RunConfirmPanel";
 
 const HomePage = lazy(() => import("../pages/HomePage").then((m) => ({ default: m.HomePage })));
+const PositionsPage = lazy(() => import("../pages/PositionsPage").then((m) => ({ default: m.PositionsPage })));
 const PoolPage = lazy(() => import("../pages/PoolPage").then((m) => ({ default: m.PoolPage })));
 const HistoryPage = lazy(() => import("../pages/HistoryPage").then((m) => ({ default: m.HistoryPage })));
 const RecordsPage = lazy(() => import("../pages/RecordsPage").then((m) => ({ default: m.RecordsPage })));
@@ -71,6 +72,7 @@ export function AppShell() {
   else if (p.startsWith("/strategies/")) content = <StrategyDetailPage refreshSignal={refreshSignal} />;
   else switch (p) {
     case "/dashboard": content = <HomePage />; break;
+    case "/positions": content = <PositionsPage />; break;
     case "/review": content = <BatchReviewPage />; break;
     case "/history": content = <HistoryPage />; break;
     case "/records": content = <RecordsPage />; break;

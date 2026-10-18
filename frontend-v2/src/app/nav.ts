@@ -24,6 +24,7 @@ export const NAV_ITEMS: NavItem[] = [
 export const SUB_TABS: Record<Section, { path: string; label: string; shortOnly?: boolean }[]> = {
   today: [
     { path: "/pool", label: "今日出票" },
+    { path: "/positions", label: "持仓 / 待卖" },
     { path: "/dashboard", label: "驾驶舱" },
     { path: "/run", label: "运行详情" },
   ],
