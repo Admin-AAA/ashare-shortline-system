@@ -201,8 +201,15 @@ def analyze_stock(
             decision=pipeline_decision,
         )
 
+    # 管线审计里含 tuple 等非 JSON 原生类型，ContractRouter 的 JsonResponse(JsonValue)
+    # 会拒绝 → 中间件吞掉异常返回 500（历史已落库但前端永远拿到 500）。统一转成 JSON 原生结构。
+    result = _json_safe(result)
     _persist_single_stock_history(db, code, trade_date, result)
     return result
+
+
+def _json_safe(value: Any) -> Any:
+    return json.loads(json.dumps(value, ensure_ascii=False, default=str))
 
 
 class _SingleStockMarketUniverse:

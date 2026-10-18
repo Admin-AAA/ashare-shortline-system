@@ -10,8 +10,13 @@ from app.services.auxiliary import snapshot_repository  # noqa: F401 - register 
 
 
 config = context.config
-if config.config_file_name:
-    fileConfig(config.config_file_name)
+# 只在独立 CLI（root logger 尚无 handler）时套用 alembic.ini 的日志配置。
+# 后端进程内 get_alembic_health()/upgrade 也会执行本文件；无条件 fileConfig 会替换
+# root handlers 并禁用已有 logger，导致 backend/logs/app.log 自 9 月起再无任何写入。
+import logging
+
+if config.config_file_name and not logging.getLogger().handlers:
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
