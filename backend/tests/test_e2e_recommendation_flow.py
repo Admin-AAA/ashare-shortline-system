@@ -1517,7 +1517,7 @@ class TestE2ERecommendationFlow:
         assert persisted.progress_total == 100
         assert persisted.progress_message == "规则扫描 42/100"
 
-    def test_recover_interrupted_runs_marks_active_runs(self, db):
+    def test_recover_interrupted_runs_marks_active_runs(self, db, monkeypatch):
         suffix = uuid.uuid4().hex[:8]
         run_ids = {
             "queued": f"run_queued_{suffix}",
@@ -1539,7 +1539,13 @@ class TestE2ERecommendationFlow:
             )
         db.commit()
 
+        import app.services.workbench_service as workbench_service
+
+        dispatched: list[str] = []
+        monkeypatch.setattr(workbench_service, "_trigger_recommendation", dispatched.append)
         recovered = recover_interrupted_runs(db, run_ids=[run_ids["queued"], run_ids["running"], run_ids["completed"]])
+        # 事务内的假 queued run 只能在测试内被"派发"，绝不能到生产 Prefect。
+        assert dispatched == [run_ids["queued"]]
 
         assert recovered == 1
         assert db.get(RecommendationRun, run_ids["queued"]).status == "queued"

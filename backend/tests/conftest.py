@@ -2,6 +2,12 @@ import sys
 import os
 from pathlib import Path
 
+# 测试绝不能连生产 Prefect（:4200）。在任何 prefect 导入前把 API 指向不可达地址，
+# 任何漏网的 get_client()/run_deployment 都会立即连接失败而不是在生产建 flow run。
+# 历史事故：test_recover_interrupted_runs_marks_active_runs 把事务内假 queued run
+# 重新派发到生产 Prefect，worker 看不到未提交行 → 每天数条 recommendation-run FAILED。
+os.environ["PREFECT_API_URL"] = "http://127.0.0.1:9/api"
+
 import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -105,3 +111,38 @@ def db(production_mysql):
         if transaction.is_active:
             transaction.rollback()
         connection.close()
+
+
+class ProductionPrefectDispatchBlocked(RuntimeError):
+    """测试中试图向 Prefect 投递 deployment run。"""
+
+
+@pytest.fixture(autouse=True)
+def _block_prefect_dispatch(request, monkeypatch):
+    """所有测试默认禁止 Prefect 派发：拦截 run_deployment，记录并在 teardown 失败。
+
+    业务代码常把派发异常吞掉只记日志（如 recover_interrupted_runs），所以仅抛异常不够，
+    teardown 时检查尝试记录并让测试失败。需要验证派发的测试自行 monkeypatch
+    ``app.orchestration.api.run_deployment``（会覆盖本拦截），或标记
+    ``@pytest.mark.allow_prefect_dispatch_attempt``（仍拦截，但不报失败）。
+    """
+    attempts: list[dict] = []
+
+    def _blocked_run_deployment(*args, **kwargs):
+        attempts.append({"args": args, "kwargs": kwargs})
+        raise ProductionPrefectDispatchBlocked(
+            f"tests must not dispatch Prefect deployments: name={kwargs.get('name')!r}"
+        )
+
+    try:
+        import app.orchestration.api as orchestration_api
+    except Exception:  # pragma: no cover - prefect 不可用时没有派发风险
+        orchestration_api = None
+    if orchestration_api is not None:
+        monkeypatch.setattr(orchestration_api, "run_deployment", _blocked_run_deployment)
+    yield attempts
+    if attempts and request.node.get_closest_marker("allow_prefect_dispatch_attempt") is None:
+        pytest.fail(
+            f"test attempted {len(attempts)} Prefect deployment dispatch(es): "
+            + ", ".join(str(a["kwargs"].get("name")) for a in attempts)
+        )
