@@ -187,7 +187,7 @@ def list_strategies(
     skills = list_skills(db)
     if not include_retired:
         # 策略页只展示每日独立运行的现役策略；退役/停用/风险提示技能自动隐藏（名单以 standalone_strategies 为准）。
-        from app.services.standalone_strategies import WATCH_STRATEGY_IDS, standalone_strategy_ids
+        from app.services.standalone_strategies import standalone_strategy_ids
         from app.services.workbench_service import sync_skills
 
         active = set(standalone_strategy_ids(sync_skills(db)))
@@ -288,7 +288,7 @@ def standalone_metrics(db: Session = Depends(get_db)):
     """
     import json
 
-    from app.services.standalone_strategies import standalone_strategy_ids
+    from app.services.standalone_strategies import WATCH_STRATEGY_IDS, standalone_strategy_ids
     from app.services.workbench_service import sync_skills
 
     skills = sync_skills(db)
