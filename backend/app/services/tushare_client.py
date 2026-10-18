@@ -346,6 +346,7 @@ class _TushareSession:
 # 官方 Tushare 账号无权限的接口（40203，2026-10-18 实测）。
 # fina_indicator 逐股走 promax；period 批量只有 quantdata 的 fina_indicator_vip 可用；
 # broker_recommend 只有 quantdata 可用；anns_d 无可用源（公告走东财/巨潮/xiaoshi）。
+QUANTDATA_ALLOWED_APIS = frozenset({"fina_indicator_vip", "broker_recommend", "trade_cal"})
 _OFFICIAL_NO_PERMISSION_APIS = frozenset({"anns_d", "fina_indicator", "fina_indicator_vip", "broker_recommend"})
 
 
@@ -442,6 +443,8 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                         0, int(settings.tushare_quantdata_rate_limit_per_minute)
                     ),
                     append_api_path=False,
+                    # 白名单：只服务它独有/兜底的接口，绝不进入其它 API 的路由（2026-10-18 决策）。
+                    included_apis=QUANTDATA_ALLOWED_APIS,
                     # anns_d: 2003 api not purchased（2026-10-18 实测）
                     excluded_apis=frozenset({"anns_d"}),
                     priority=1,

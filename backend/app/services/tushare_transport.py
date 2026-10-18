@@ -135,6 +135,9 @@ class ProviderConfig:
     proxy: str = field(default="", repr=False)
     http_method: HttpMethod = HttpMethod.POST
     excluded_apis: frozenset[str] = frozenset()
+    # Allowlist: when set, the provider only serves these APIs (and never enters
+    # routing for any other API). None = no allowlist.
+    included_apis: frozenset[str] | None = None
     # Business-facing source identity.  This is intentionally separate from
     # the provider name so legacy DB overrides remain compatible while two
     # credentials can be exposed as two independent data sources.
@@ -458,6 +461,9 @@ class TushareHttpProvider:
         return payload
 
     def supports(self, api_name: str) -> bool:
+        included = self.config.included_apis
+        if included is not None and api_name not in included:
+            return False
         return api_name not in self.config.excluded_apis
 
     def _wait_for_capacity(self, api_name: str) -> None:
