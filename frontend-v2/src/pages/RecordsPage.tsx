@@ -188,6 +188,31 @@ type RunSortKey = "trade_date" | "recommended_count" | "score_line" | "return_1d
 
 const FULL_REPLAY_RUN_NAME = "REPLAY-全量重放";
 
+/** 校验当前页是否符合 min_picks / sort / order（旧后端忽略参数时会不符合） */
+function newParamsHonored(items: RunSummary[], extra: { min_picks?: number; sort?: string; order?: string }) {
+  if (extra.min_picks !== undefined && items.some((r) => (r.recommended_count ?? 0) < extra.min_picks!)) return false;
+  if (!extra.sort || items.length < 2) return true;
+  const dur = (r: RunSummary) => (r.started_at && r.finished_at ? new Date(r.finished_at).getTime() - new Date(r.started_at).getTime() : null);
+  const val = (r: RunSummary): number | string | null =>
+    extra.sort === "picks" ? r.recommended_count : extra.sort === "duration" ? dur(r) : extra.sort === "status" ? r.status : r.started_at ?? "";
+  const vals = items.map(val);
+  const nonNull = vals.filter((v) => v !== null) as (number | string)[];
+  if (extra.sort === "duration" && vals.findIndex((v) => v === null) !== -1 && vals.slice(vals.findIndex((v) => v === null)).some((v) => v !== null)) return false;
+  for (let i = 1; i < nonNull.length; i++) {
+    const c = nonNull[i - 1] < nonNull[i] ? -1 : nonNull[i - 1] > nonNull[i] ? 1 : 0;
+    if (extra.order === "asc" ? c > 0 : c < 0) return false;
+  }
+  return true;
+}
+
+type RunPageSort = "started_at" | "picks" | "duration" | "status";
+function fmtDuration(start?: string | null, end?: string | null) {
+  if (!start || !end) return "—";
+  const s = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000);
+  if (!Number.isFinite(s) || s < 0) return "—";
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s` : `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
+}
+
 function RunRecordsList() {
   const { navigate } = useUrlRoute();
   // 服务端分页 + 筛选（/api/records/runs?page=&page_size=），按 started_at 倒序，后端只覆盖最近 500 次运行。
@@ -201,6 +226,15 @@ function RunRecordsList() {
   const [page, setPage] = useState(1);
   const pageSize = 20;
   const resetPage = () => setPage(1);
+  // 推荐数下限（后端 min_picks：推荐数 ≥ N）与列排序（sort/order，默认 started_at desc）
+  const [minPicks, setMinPicks] = useState("");
+  const [sortKey, setSortKey] = useState<RunPageSort>("started_at");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  const handleSort = (key: RunPageSort) => {
+    if (key === sortKey) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir("desc"); }
+    resetPage();
+  };
 
   const effectiveDateRange = useMemo(() => {
     if (datePreset === "custom") return { from: dateFrom, to: dateTo };
@@ -225,15 +259,34 @@ function RunRecordsList() {
     trade_date_from: effectiveDateRange.from || undefined,
     trade_date_to: effectiveDateRange.to || undefined,
   };
+  const minPicksNum = minPicks.trim() === "" ? undefined : Math.max(0, Math.floor(Number(minPicks)));
+  const extra = {
+    min_picks: Number.isFinite(minPicksNum) ? minPicksNum : undefined,
+    sort: sortKey === "started_at" && sortDir === "desc" ? undefined : sortKey,
+    order: sortKey === "started_at" && sortDir === "desc" ? undefined : sortDir,
+  };
+  const usesNewParams = extra.min_picks !== undefined || extra.sort !== undefined;
+  // 后端未更新时新参数返回 422：去掉新参数重试，并提示「需后端更新后生效」
   const q = useQuery({
-    queryKey: ["records", "run-page", filters],
-    queryFn: () => api.runRecordsPage(filters),
+    queryKey: ["records", "run-page", filters, extra],
+    queryFn: async () => {
+      if (!usesNewParams) return { ...(await api.runRecordsPage(filters)), degraded: false };
+      try {
+        const r = await api.runRecordsPage({ ...filters, ...extra });
+        // 旧后端会静默忽略未知参数（不报 422）：按返回页自检是否真的生效
+        return { ...r, degraded: !newParamsHonored(r.items, extra) };
+      } catch (e) {
+        if (!/422|Unprocessable|less_than|literal_error|enum|Input should/i.test((e as Error).message)) throw e;
+        return { ...(await api.runRecordsPage(filters)), degraded: true };
+      }
+    },
     placeholderData: keepPreviousData,
   });
 
   const resetFilters = () => {
     setDatePreset("all"); setDateFrom(""); setDateTo("");
     setStatusFilter("__all__"); setPresetFilter("__all__"); setModeFilter("__all__");
+    setMinPicks(""); setSortKey("started_at"); setSortDir("desc");
     resetPage();
   };
 
@@ -242,7 +295,15 @@ function RunRecordsList() {
   const data = q.data!;
   const total = data.total;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const filtered = [statusFilter, presetFilter, modeFilter].some((v) => v !== "__all__") || datePreset !== "all";
+  const filtered = [statusFilter, presetFilter, modeFilter].some((v) => v !== "__all__") || datePreset !== "all" || (extra.min_picks !== undefined && !data.degraded);
+  const SortTh = ({ col, align = "left", children }: { col: RunPageSort; align?: "left" | "right"; children: React.ReactNode }) => {
+    const active = !data.degraded && sortKey === col;
+    return (
+      <th style={{ ...thStyle, textAlign: align, cursor: "pointer", userSelect: "none", color: active ? "var(--text)" : "var(--muted)" }} onClick={() => handleSort(col)} title={`按${String(children)}排序`}>
+        {children}{active ? (sortDir === "asc" ? " ↑" : " ↓") : ""}
+      </th>
+    );
+  };
 
   return (
     <>
@@ -295,12 +356,18 @@ function RunRecordsList() {
             {(presetsQ.data ?? []).map((p) => <option key={p.preset_id} value={p.preset_id}>{p.name}</option>)}
           </select>
         </div>
+        <div className="records-filterbar__group">
+          <label className="records-filterbar__label">推荐数 ≥</label>
+          <input className="cfg-input records-filterbar__select" type="number" min={0} value={minPicks} placeholder="不限" style={{ width: 80 }}
+            onChange={(e) => { setMinPicks(e.target.value); resetPage(); }} />
+        </div>
         <button className="btn btn--ghost records-filterbar__reset" onClick={resetFilters} title="重置筛选">
           <RotateCcw size={13} /> 重置
         </button>
         <span className="records-filterbar__count" title="统计口径：后端只覆盖最近 500 次运行，按开始时间倒序">
           {filtered ? "筛选后" : ""}共 {total} 条（最近 500 次运行内）{q.isFetching ? " · 更新中…" : ""}
         </span>
+        {data.degraded && <span className="tag tag--warn" title="后端返回 422，已按默认（开始时间倒序、不限推荐数）显示">排序/推荐数筛选需后端更新后生效</span>}
       </div>
 
       {data.items.length === 0 ? (
@@ -312,13 +379,14 @@ function RunRecordsList() {
               <tr>
                 <th style={thStyle}>日期</th>
                 <th style={thStyle}>运行名</th>
-                <th style={{ ...thStyle, textAlign: "right" }}>推荐数</th>
+                <SortTh col="picks" align="right">推荐数</SortTh>
                 <th style={{ ...thStyle, textAlign: "right" }}>分数线</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>一日收益</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>三日收益</th>
                 <th style={{ ...thStyle, textAlign: "right" }}>五日收益</th>
-                <th style={thStyle}>状态</th>
-                <th style={thStyle}>开始时间 ↓</th>
+                <SortTh col="status">状态</SortTh>
+                <SortTh col="started_at">开始时间</SortTh>
+                <SortTh col="duration" align="right">耗时</SortTh>
                 <th style={thStyle}></th>
               </tr>
             </thead>
@@ -339,6 +407,7 @@ function RunRecordsList() {
                   <ReturnCell value={run.returns?.return_5d ?? null} />
                   <td style={tdStyle}><StatusBadge status={run.status} /></td>
                   <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>{run.started_at ? formatTime(run.started_at) : "—"}</td>
+                  <td style={{ ...tdStyle, textAlign: "right", color: "var(--muted)", fontFamily: "var(--font-mono)", fontSize: "var(--text-sm)" }}>{fmtDuration(run.started_at, run.finished_at)}</td>
                   <td style={{ ...tdStyle, textAlign: "right", whiteSpace: "nowrap" }}>
                     {["failed", "interrupted", "error", "cancelled"].includes(String(run.status).toLowerCase()) && <ResumeRunButton runId={run.run_id} />}
                     <ChevronRight size={14} style={{ color: "var(--muted)", verticalAlign: "middle" }} />

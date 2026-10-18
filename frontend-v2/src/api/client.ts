@@ -473,7 +473,7 @@ export const api = {
     return request<RunSummary[]>(`/api/records/runs${str ? `?${str}` : ""}`);
   },
   // 服务端分页：按 started_at 倒序，覆盖最近 500 次运行
-  runRecordsPage: (params: { page: number; page_size: number; run_mode?: string; status?: string; preset_id?: string; trade_date_from?: string; trade_date_to?: string; fields?: "slim" | "full" }) => {
+  runRecordsPage: (params: { page: number; page_size: number; run_mode?: string; status?: string; preset_id?: string; trade_date_from?: string; trade_date_to?: string; fields?: "slim" | "full"; min_picks?: number; sort?: "started_at" | "picks" | "duration" | "status"; order?: "asc" | "desc" }) => {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
     return request<{ items: RunSummary[]; total: number; page: number; page_size: number }>(`/api/records/runs?${qs.toString()}`);
