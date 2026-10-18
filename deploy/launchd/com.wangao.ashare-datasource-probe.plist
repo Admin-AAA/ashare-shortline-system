@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>com.wangao.ashare-datasource-probe</string>
+	<key>WorkingDirectory</key><string>/Users/wangao/Desktop/ashare-shortline-system/backend</string>
+	<key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>/Users/wangao/Desktop/ashare-shortline-system/backend</string></dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/backend/.venv/bin/python</string>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/backend/scripts/probe_datasource_capabilities.py</string>
+	</array>
+	<!-- 每周六 10:00 重测能力矩阵（周末不占交易时段配额）；漂移写入日志，exit 1。
+	     路由表需人工/agent 确认后用 --from-existing --write-routes 重新生成。 -->
+	<key>StartCalendarInterval</key><dict><key>Weekday</key><integer>6</integer><key>Hour</key><integer>10</integer><key>Minute</key><integer>0</integer></dict>
+	<key>StandardOutPath</key><string>/Users/wangao/Desktop/ashare-shortline-system/backend/logs/datasource_probe.log</string>
+	<key>StandardErrorPath</key><string>/Users/wangao/Desktop/ashare-shortline-system/backend/logs/datasource_probe.log</string>
+</dict>
+</plist>

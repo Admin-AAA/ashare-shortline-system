@@ -23,6 +23,8 @@ def test_allowlisted_provider_not_routed_for_other_apis():
     assert "quantdata" in [p.name for p in r._ordered_providers("fina_indicator_vip")]
 
 
-def test_real_quantdata_config_uses_allowlist():
-    from app.services import tushare_client as tc
-    assert tc.QUANTDATA_ALLOWED_APIS == {"fina_indicator_vip", "broker_recommend", "trade_cal"}
+def test_real_routing_table_drives_quantdata_capabilities():
+    from app.services.datasource.capability import load_routing_table
+    t = load_routing_table()
+    assert t["fina_indicator_vip"]["order"][0] == "quantdata"
+    assert "quantdata" in t["daily"]["order"]  # no longer restricted to 3 apis

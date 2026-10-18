@@ -343,12 +343,6 @@ class _TushareSession:
         return caller
 
 
-# 官方 Tushare 账号无权限的接口（40203，2026-10-18 实测）。
-# fina_indicator 逐股走 promax；period 批量只有 quantdata 的 fina_indicator_vip 可用；
-# broker_recommend 只有 quantdata 可用；anns_d 无可用源（公告走东财/巨潮/xiaoshi）。
-QUANTDATA_ALLOWED_APIS = frozenset({"fina_indicator_vip", "broker_recommend", "trade_cal"})
-
-
 def _build_provider_router() -> tuple[TushareProviderRouter, str]:
     settings = get_settings()
     timeout = (
@@ -378,11 +372,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                     ),
                     max_concurrency=max(0, int(settings.tushare_promax_max_concurrency)),
                     append_api_path=True,
-                    # anns_d 只接受 ann_date，而项目使用日期区间，暂不参与路由。
-                    # stk_mins 由 _PromaxHttpProvider 门禁，只接受标准分钟响应。
-                    # fina_indicator_vip=unknown_api、broker_recommend=invalid_params（2026-10-18 实测），
-                    # 排除避免每次先失败再回退。fina_indicator 逐股 ts_code= 可用（长线回补靠它），保留。
-                    excluded_apis=frozenset({"anns_d", "fina_indicator_vip", "broker_recommend"}),
+                    # 各 API 可用性/顺序由 datasource/routing_table.json 决定（实测能力矩阵生成）。
                     source="promax",
                     priority=4,
                     **common,
@@ -442,10 +432,6 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                         0, int(settings.tushare_quantdata_rate_limit_per_minute)
                     ),
                     append_api_path=False,
-                    # 白名单：只服务它独有/兜底的接口，绝不进入其它 API 的路由（2026-10-18 决策）。
-                    included_apis=QUANTDATA_ALLOWED_APIS,
-                    # anns_d: 2003 api not purchased（2026-10-18 实测）
-                    excluded_apis=frozenset({"anns_d"}),
                     priority=1,
                     **common,
                 )
@@ -482,14 +468,41 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
         raise RuntimeError(
             "Tushare 上游未配置：请至少设置一个 Provider 凭据。"
         )
+    providers, api_routes = _apply_routing_table(providers)
     return (
         TushareProviderRouter(
             providers,
+            api_routes=api_routes,
             enabled_override=_provider_enabled_override,
             priority_override=_provider_priority_override,
         ),
         settings.tushare_fastapic_url,
     )
+
+
+def _apply_routing_table(
+    providers: list[TushareHttpProvider],
+) -> tuple[list[TushareHttpProvider], dict[str, tuple[str, ...]]]:
+    """Apply the data-driven routing table (capability matrix -> per-API order).
+
+    The table's ``unsupported`` entries become each provider's excluded_apis; its
+    ``order`` becomes the per-API chain on top of DEFAULT_API_ROUTES.  Providers not
+    in the table (new backup sources) still participate, appended by priority.
+    """
+    from dataclasses import replace
+
+    from app.services.datasource.capability import load_routing_table, resolve_routes
+
+    routes, excluded = resolve_routes(load_routing_table(), TushareProviderRouter.DEFAULT_API_ROUTES)
+    out: list[TushareHttpProvider] = []
+    for provider in providers:
+        extra = excluded.get(provider.name)
+        if extra:
+            provider.config = replace(
+                provider.config, excluded_apis=provider.config.excluded_apis | extra
+            )
+        out.append(provider)
+    return out, routes
 
 
 def _provider_enabled_override() -> dict[str, bool]:
