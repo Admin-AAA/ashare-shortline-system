@@ -901,6 +901,13 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
         except Exception as exc:  # pragma: no cover - 防御  # noqa: BLE001
             result["xiaoshi_alt"] = {"errors": [str(exc)[:160]]}
         step_timings["xiaoshi_alt"] = _lap()
+        # 东财另类数据备份（margin_detail 缺口 / 未来解禁日历），flag eastmoney.alt 默认关闭。
+        try:
+            from app.services.datasource.eastmoney import sync_eastmoney_alt
+
+            result["eastmoney_alt"] = sync_eastmoney_alt(db, str(payload.get("trade_date") or datetime.now().strftime("%Y%m%d")))
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
+            result["eastmoney_alt"] = {"errors": [str(exc)[:160]]}
 
     # 4. 最终健康补数与诊断，确保后续推荐读取的是所有同步阶段之后的快照。
     if sync_scope in ("health_remediation", "all") and not bool(payload.get("skip_health_remediation")):

@@ -37,6 +37,16 @@ def _news_sources(settings: Any) -> list[str]:
     return _split_sources(settings.news_sources)
 
 
+def _em():
+    from app.services.datasource import eastmoney
+
+    return eastmoney
+
+
+def _em_td(trade_date: str | None) -> str:
+    return _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
+
+
 # ── Dispatch ────────────────────────────────────────────────────────────
 
 def _compact_trade_date(value: Any) -> str:
@@ -53,6 +63,8 @@ def _fetch_limit_up_board(source: str, settings: Any, trade_date: str | None = N
         if local_rows:
             logger.info("涨停板使用本地表 fallback: %d 行 (trade_date=%s)", len(local_rows), trade_date)
         return local_rows
+    if source == "eastmoney" and _em().aux_enabled():
+        return _em().limit_up(_em_td(trade_date))
     return []
 
 
@@ -106,18 +118,24 @@ def _fetch_local_limit_up_board(trade_date: str | None = None) -> list[dict[str,
 def _fetch_concept_sectors(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
         return _fetch_tushare_concept_sectors(settings, trade_date=trade_date)
+    if source == "eastmoney" and _em().aux_enabled():
+        return _em().concept_sectors()
     return []
 
 
 def _fetch_capital_flow(source: str, code: str, settings: Any, trade_date: str | None = None) -> dict[str, Any] | None:
     if source == "tushare":
         return _fetch_tushare_moneyflow(code, settings, trade_date=trade_date)
+    if source == "eastmoney" and _em().aux_enabled():
+        return _em().capital_flow(code, _em_td(trade_date) if trade_date else None)
     return None
 
 
 def _fetch_dragon_tiger(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
         return _fetch_tushare_dragon_tiger(settings, trade_date=trade_date)
+    if source == "eastmoney" and _em().aux_enabled():
+        return _em().dragon_tiger(_em_td(trade_date))
     return []
 
 
