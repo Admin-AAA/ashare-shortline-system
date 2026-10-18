@@ -2,8 +2,7 @@
 
 研究：scripts/midterm/lt_research23.py INC_opt_h20（预注册 3 版中采纳的一版，未调参）。
 数据：巨潮资讯公开检索（与 app/services/cninfo_news.py 同一 hisAnnouncement/query 接口，只读），
-category_gqjl_szsh（股权激励）+ searchkey「草案」，全市场。统一数据网关没有全市场股权激励检索 op、
-tushare anns_d 无权限，故直连只读（同 cninfo_news）。
+category_gqjl_szsh（股权激励）+ searchkey「草案」，全市场。经统一数据网关 ann.search.cninfo（app.services.datasource.cninfo_search）。
 口径：标题含「激励计划」且含「草案」、不含 修订/更正/调整/终止/撤销/取消/延期；日期 = announcementTime 的北京时间日期
 （巨潮多把晚间公告标为次日 00:00）；按 (股票, 日期) 聚合，首次 = 该股前 180 自然日内无同类公告；
 当日任一标题含「股票期权」才入选（INC_opt）。公告日在 (上一交易日, as_of]，as_of 收盘出信号、次日开盘买、持 20 日。
@@ -15,7 +14,6 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import re
-import time
 from pathlib import Path
 from typing import Any
 
@@ -26,9 +24,6 @@ logger = logging.getLogger(__name__)
 ROOT = Path(__file__).resolve().parents[2]
 HIST_DIR = ROOT / "output" / "research" / "sprint4" / "incentive"
 LIVE_DIR = ROOT / "data" / "midterm" / "events"
-QUERY_URL = "http://www.cninfo.com.cn/new/hisAnnouncement/query"
-HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-           "Referer": "http://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search"}
 BAD = re.compile("修订|更正|调整|终止|撤销|取消|延期")
 FIRST_DAYS = 180
 COLS = ["code", "name", "ann_ms", "ann_date", "title", "ann_id"]
@@ -40,28 +35,23 @@ def is_draft(title: str) -> bool:
 
 
 def fetch_range(start: str, end: str, max_pages: int = 60) -> list[dict[str, Any]] | None:
-    """巨潮按披露日期区间（YYYY-MM-DD）拉全市场股权激励「草案」公告；失败返回 None。"""
-    import httpx
+    """巨潮按披露日期区间（YYYY-MM-DD）拉全市场股权激励「草案」公告（经数据网关 ann.search.cninfo）；失败返回 None。"""
+    from app.services.datasource.cninfo_search import search_announcements
     rows: list[dict[str, Any]] = []
     try:
-        with httpx.Client(headers=HEADERS, timeout=20.0) as cl:
-            for page in range(1, max_pages + 1):
-                time.sleep(0.6)
-                r = cl.post(QUERY_URL, data={
-                    "pageNum": page, "pageSize": 30, "column": "szse", "tabName": "fulltext", "plate": "", "stock": "",
-                    "searchkey": "草案", "secid": "", "category": "category_gqjl_szsh", "trade": "",
-                    "seDate": f"{start}~{end}", "sortName": "", "sortType": "", "isHLtitle": "true"})
-                r.raise_for_status()
-                d = r.json() or {}
-                ann = d.get("announcements") or []
-                for x in ann:
-                    ms = int(x.get("announcementTime") or 0)
-                    rows.append({"code": str(x.get("secCode") or ""), "name": str(x.get("secName") or ""), "ann_ms": ms,
-                                 "ann_date": _dt.datetime.fromtimestamp(ms / 1000, _TZ).strftime("%Y%m%d"),
-                                 "title": re.sub(r"</?em>", "", str(x.get("announcementTitle") or "")),
-                                 "ann_id": str(x.get("announcementId") or "")})
-                if not ann or not d.get("hasMore"):
-                    break
+        ann = search_announcements(searchkey="草案", category="category_gqjl_szsh", start=start, end=end,
+                                   column="szse", max_pages=max_pages, page_size=30)
+        for x in ann:
+            raw = x.get("raw") or {}
+            ms = raw.get("announcementTime")
+            if ms is None:
+                t = x.get("announcementTime")
+                ms = int(t.timestamp() * 1000) if isinstance(t, _dt.datetime) else 0
+            ms = int(ms or 0)
+            rows.append({"code": str(x.get("secCode") or ""), "name": str(x.get("secName") or ""), "ann_ms": ms,
+                         "ann_date": _dt.datetime.fromtimestamp(ms / 1000, _TZ).strftime("%Y%m%d"),
+                         "title": re.sub(r"</?em>", "", str(x.get("announcementTitle") or "")),
+                         "ann_id": str(x.get("announcementId") or "")})
     except Exception as exc:  # noqa: BLE001
         logger.warning("cninfo incentive %s~%s failed: %s", start, end, exc)
         return None
