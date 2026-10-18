@@ -10,6 +10,8 @@ Stages (each resumable via data/midterm/backfill_state.json):
   dividend     : pro.dividend per stock -> data/midterm/dividend/<code>.parquet
   hk_hold      : pro.hk_hold weekly (Fridays) SH+SZ since 2018 -> MySQL hk_holdings (upsert)
   holdernum    : pro.stk_holdernumber per stock (full history, ann_date PIT) -> data/midterm/holdernum/<code>.parquet
+  events       : pro.stk_holdertrade (7-day ann_date windows, auto-split near the row cap) + pro.repurchase (monthly)
+                 2017-07..today -> data/midterm/events/{holdertrade,repurchase}_<year>.parquet
 """
 from __future__ import annotations
 import json, logging, sys, time, datetime as dt
@@ -141,6 +143,42 @@ def _per_code_pass(pro, db, s, key, api, outdir, to_mysql):
     s[key] = sorted(done)
     return len([c for c in todo if c not in done])
 
+def _range_fetch(pro, api, a, b, cap):
+    """fetch [a,b] by ann_date range; bisect the window when the result is at/near the provider row cap."""
+    df = call(pro, api, start_date=a, end_date=b)
+    if df is None: return None
+    if len(df) >= cap and a != b:
+        da, db_ = dt.datetime.strptime(a, "%Y%m%d"), dt.datetime.strptime(b, "%Y%m%d")
+        mid = da + (db_ - da) / 2
+        m1, m2 = mid.strftime("%Y%m%d"), (mid + dt.timedelta(days=1)).strftime("%Y%m%d")
+        l, r = _range_fetch(pro, api, a, m1, cap), _range_fetch(pro, api, m2, b, cap)
+        if l is None or r is None: return None
+        df = pd.concat([l, r])
+    return df
+
+def events_stage(pro, s, start="20170701"):
+    out = D / "events"; out.mkdir(exist_ok=True)
+    today = dt.date.today()
+    for api, name, step, cap in (("repurchase", "repurchase", 31, 1900), ("stk_holdertrade", "holdertrade", 7, 2900)):
+        key = f"events_{name}"; done = set(s.get(key, []))
+        a = dt.datetime.strptime(start, "%Y%m%d").date(); wins = []
+        while a <= today:
+            b = min(a + dt.timedelta(days=step - 1), today); wins.append((a.strftime("%Y%m%d"), b.strftime("%Y%m%d"))); a = b + dt.timedelta(days=1)
+        todo = [w for w in wins if f"{w[0]}-{w[1]}" not in done]
+        buf: dict[str, list] = {}
+        for n, (wa, wb) in enumerate(todo):
+            df = _range_fetch(pro, api, wa, wb, cap)
+            if df is not None:
+                if len(df): buf.setdefault(wa[:4], []).append(df)
+                done.add(f"{wa}-{wb}")
+            if n % 10 == 9 or n == len(todo) - 1:
+                for y, parts in buf.items():
+                    f = out / f"{name}_{y}.parquet"; new = pd.concat(parts)
+                    if f.exists(): new = pd.concat([pd.read_parquet(f), new])
+                    _to_parquet(new.drop_duplicates(), f)
+                buf = {}; s[key] = sorted(done); log.info("%s %d/%d", key, n + 1, len(todo))
+            time.sleep(0.6)
+
 def hk_stage(pro, db, s):
     done = set(s.get("hk_hold", []))
     days = trade_days(pro, "20180101", dt.date.today().strftime("%Y%m%d"))
@@ -180,6 +218,7 @@ def main():
         elif st == "dividend": per_code_stage(pro, db, s, st, "dividend", "dividend")
         elif st == "hk_hold": hk_stage(pro, db, s)
         elif st == "holdernum": per_code_stage(pro, db, s, st, "stk_holdernumber", "holdernum")
+        elif st == "events": events_stage(pro, s)
     log.info("ALL DONE")
 
 if __name__ == "__main__":
