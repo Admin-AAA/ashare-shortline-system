@@ -43,10 +43,12 @@ def first_break_date(
     window: int,
     after_date: str,
     before_date: str,
+    prior_closes: Sequence[float] = (),
 ) -> str | None:
     """rows：带 trade_date/close/ma5/ma10/open/high/low/pct_chg/volume 的日 K（升序）。"""
     attr = f"ma{window}"
-    closes: list[float] = []
+    # prior_closes：入场前的日 K 收盘（仅用于 ma 为 0/NULL 时的现算兜底，不参与破位判定窗口）
+    closes: list[float] = [float(c or 0) for c in list(prior_closes)[-60:]]
     for r in rows:
         d = str(r.trade_date)
         close = float(getattr(r, "close", 0) or 0)

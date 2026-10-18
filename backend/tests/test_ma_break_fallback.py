@@ -22,3 +22,13 @@ def test_partial_window_skipped():
 def test_stored_ma_still_preferred():
     closes = [10, 10, 10, 10, 10, 9]
     assert first_break_date("000001", _rows(closes, 8.0), 5, "2026-01-01", "2026-01-31") is None
+
+
+def test_prior_closes_complete_the_window_without_changing_scan_range():
+    rows = _rows([10, 9], 0.0)  # holding bars only; day2 close 9
+    # without context: window not full -> no break
+    assert first_break_date("000001", rows, 5, "2026-01-01", "2026-01-31") is None
+    # with 4 prior closes of 10 -> ma5 on day2 = (10*3 + 10 + 9)/5 = 9.8 > 9 -> break on day2
+    assert first_break_date("000001", rows, 5, "2026-01-01", "2026-01-31", prior_closes=[10, 10, 10, 10]) == "2026-01-02"
+    # prior closes never become break candidates themselves (scan still starts after after_date)
+    assert first_break_date("000001", rows, 5, "2026-01-02", "2026-01-31", prior_closes=[1, 1, 1, 1]) is None

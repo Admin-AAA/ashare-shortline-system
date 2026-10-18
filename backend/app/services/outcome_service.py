@@ -696,6 +696,7 @@ def label_pending_outcomes(
                 bounded_bars,
                 bounded_dates,
                 horizon_days=horizon_days,
+                ma_context_bars=bars_by_code.get(str(rec.code), []),
             )
             if simulation is None:
                 continue
@@ -780,7 +781,11 @@ def _load_outcome_bars(
 ) -> tuple[dict[str, list[DailyKbar]], dict[str, list[str]]]:
     """批量加载 recs 涉及股票的日K（从最早 trade_date 起），返回 (bars_by_code, dates_by_code)。"""
     codes = sorted({str(rec.code) for rec in recs})
-    min_trade_date = min(str(rec.trade_date) for rec in recs)
+    # 多取入场前约 60 个交易日（120 自然日），仅作均线破位兜底的 ma_context_bars；
+    # bounded_outcome_bars 按信号日截取，结算窗口不受影响。
+    min_trade_date = (
+        date.fromisoformat(min(str(rec.trade_date) for rec in recs)[:10]) - timedelta(days=120)
+    ).isoformat()
     bars = db.scalars(
         select(DailyKbar)
         .where(DailyKbar.code.in_(codes), DailyKbar.trade_date >= min_trade_date)
@@ -882,6 +887,7 @@ def recompute_stale_outcomes(
             bounded_bars,
             bounded_dates,
             horizon_days=rec_horizon,
+            ma_context_bars=bars_by_code.get(str(rec.code), []),
         )
         if simulation is None:
             continue

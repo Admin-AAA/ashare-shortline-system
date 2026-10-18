@@ -137,8 +137,12 @@ def _simulate_outcome(
     pre_resolved_entry: dict[str, Any] | None = None,
     exit_resolver: Any = None,
     entry_policy: EntryPolicy | None = None,
+    ma_context_bars: list[DailyKbar] | None = None,
 ) -> dict[str, Any] | None:
     """模拟单笔推荐 outcome。
+
+    ma_context_bars：可选，含入场前日 K 的序列，仅用于均线破位出场在库内 ma 为 0/NULL 时的
+    现算兜底（取入场前最多 60 根收盘），不改变结算窗口与其他逻辑。
 
     exit_resolver 默认 None → 用生产单路径因果利润地板 `_resolve_exit`。
     传入自定义解析器（签名同 _resolve_exit：holding_bars, stop_loss, take_profit,
@@ -288,7 +292,11 @@ def _simulate_outcome(
         # Sprint3 §71：逐策略均线破位出场（与回测 _simulate_card 同口径：截断持仓窗到破位日重算）
         _ma_w = ma_break_window_for(exit_strategy_id(feature_snapshot))
         if _ma_w and exit_result is not None:
-            _t = first_break_date(str(rec.code), holding_bars, _ma_w, entry_date, str(exit_result.trade_date))
+            _first_hold = str(holding_bars[0].trade_date)
+            _prior_src = ma_context_bars if ma_context_bars is not None else bars
+            _prior = [float(b.close or 0) for b in _prior_src if str(b.trade_date) < _first_hold][-60:]
+            _t = first_break_date(str(rec.code), holding_bars, _ma_w, entry_date, str(exit_result.trade_date),
+                                  prior_closes=_prior)
             if _t is not None:
                 _cut = [b for b in holding_bars if str(b.trade_date) <= _t]
                 _r2 = _resolve_exit_result(
