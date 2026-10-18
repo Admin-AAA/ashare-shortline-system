@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { Panel } from "../components/Panel";
+import { ScopedStrategyStats } from "../ui/ScopedStrategyStats";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 
@@ -46,6 +47,7 @@ export function StrategiesPage() {
         </div>
       }
     >
+      <ScopedStrategyStats />
       <StandaloneMetricsSection />
       {tab === "skills" ? (
         <SkillsView skills={skills} windowDays={windowDays} onWindowDaysChange={setWindowDays} />

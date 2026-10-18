@@ -41,8 +41,8 @@ const SAMPLE_SCOPE_OPTIONS: Array<{
   label: string;
   value: MetricsSampleScope;
 }> = [
-  { label: "历史回放（研究）", value: "historical_replay" },
   { label: "LIVE 前瞻", value: "live_forward" },
+  { label: "历史重建（研究）", value: "historical_replay" },
 ];
 
 /** 英文因子名 → 中文小字翻译（Alpha 衰减面板的因子列）。 */
