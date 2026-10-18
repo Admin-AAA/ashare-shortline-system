@@ -9,7 +9,7 @@ import { useApi } from "../app/useApi";
 export function HorizonPage({ horizon }: { horizon: "mid" | "long" }) {
   const strategies = useApi<HorizonStrategiesResponse>(() => api.horizonStrategies(horizon), [horizon]);
   const picks = useApi<HorizonPicksResponse | null>(
-    () => (horizon === "mid" ? api.horizonPicks("mid", undefined, 40) : Promise.resolve(null)),
+    () => api.horizonPicks(horizon, undefined, 40),
     [horizon],
   );
   const title = horizon === "mid" ? "中线策略（持有约 2–8 周）" : "长线策略（持有数月）";
@@ -35,10 +35,10 @@ export function HorizonPage({ horizon }: { horizon: "mid" | "long" }) {
         )}
       </Panel>
 
-      {horizon === "mid" && (
+      {(horizon === "mid" || horizon === "long") && (
         <Panel kicker="选股与复盘" title="每周选股 · 持仓 · 已平仓收益">
           {picks.loading ? <PageSkeleton title="加载中" /> : picks.error ? <ErrorPage title="加载失败" message={picks.error} onRetry={picks.refetch} /> :
-            (picks.data?.batches ?? []).length === 0 ? <EmptyState title="还没有选股记录" reason="周五盘后生成。" /> :
+            (picks.data?.batches ?? []).length === 0 ? <EmptyState title="还没有选股记录" reason="信号日盘后生成。" /> :
             <Batches batches={picks.data!.batches} />}
         </Panel>
       )}

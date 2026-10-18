@@ -348,7 +348,7 @@ export const api = {
     request<StandaloneMetricsResponse>("/api/strategies/standalone-metrics", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   horizonStrategies: (horizon: "mid" | "long") =>
     request<HorizonStrategiesResponse>(`/api/horizons/${horizon}/strategies`),
-  horizonPicks: (horizon: "mid", strategyId?: string, limit = 30) =>
+  horizonPicks: (horizon: "mid" | "long", strategyId?: string, limit = 30) =>
     request<HorizonPicksResponse>(`/api/horizons/${horizon}/picks?limit=${limit}${strategyId ? `&strategy_id=${encodeURIComponent(strategyId)}` : ""}`),
   strategies: () =>
     request<StrategyListItem[]>("/api/strategies", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
