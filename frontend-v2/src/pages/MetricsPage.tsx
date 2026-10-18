@@ -16,6 +16,7 @@ import type {
   PrecisionAtKRow,
   ScoreLineStatsRow,
   StrategyStatsRow,
+  StrategyListItem,
   SetupStatsRow,
   TemporalConsistency,
   RuntimeMetricsSnapshot,
@@ -1479,19 +1480,33 @@ function ScoreLinePanel({ rows }: { rows: ScoreLineStatsRow[] }) {
 }
 
 function StrategyPanel({ rows }: { rows: StrategyStatsRow[] }) {
+  // by-strategy 不带 enabled 字段：用策略清单 /api/strategies 判定，默认隐藏已停用/已下线策略
+  const { data: list } = useApi<StrategyListItem[]>(() => api.strategies(), []);
+  const [showDisabled, setShowDisabled] = useState(false);
   if (rows.length === 0) return null;
-  const sorted = [...rows].sort((a, b) => b.hit_rate - a.hit_rate);
+  const enabledIds = list ? new Set(list.filter((s) => s.enabled).map((s) => s.skill_id)) : null;
+  const visible = showDisabled || !enabledIds ? rows : rows.filter((r) => enabledIds.has(r.strategy_id));
+  const hidden = rows.length - visible.length;
+  const sorted = [...visible].sort((a, b) => b.hit_rate - a.hit_rate);
   return (
     <MetricCard
       kicker="分析"
       title="策略胜率"
       actions={
-        <span style={{ color: "var(--text-muted)", fontSize: 13 }}>
+        <span style={{ color: "var(--text-muted)", fontSize: 13, display: "flex", gap: 8, alignItems: "center" }}>
           按胜率降序
+          {enabledIds && (hidden > 0 || showDisabled) && (
+            <button className="btn btn--ghost" style={{ fontSize: 12 }} onClick={() => setShowDisabled((v) => !v)}>
+              {showDisabled ? "隐藏已停用" : `显示已停用（${hidden}）`}
+            </button>
+          )}
         </span>
       }
     >
       <div style={{ display: "grid", gap: "var(--space-2)" }}>
+        {sorted.length === 0 && (
+          <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>启用中的策略暂无样本</div>
+        )}
         {sorted.map((r) => (
           <StatsRow
             key={r.strategy_id}
