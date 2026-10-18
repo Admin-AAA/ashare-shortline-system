@@ -1,0 +1,12 @@
+{
+  "id": "research-platform-breakout",
+  "name": "放量突破平台",
+  "version": "0.1.0",
+  "mode": "declarative",
+  "status": "disabled",
+  "requirements": ["stock_feature_context"],
+  "capabilities": ["signal_evaluation"],
+  "enabled": false,
+  "source_type": "local",
+  "description": "放量突破平台（研究原型 [新策略]，仅 ASHARE_RESEARCH_EXTRA_SKILLS 回放）"
+}

@@ -1,0 +1,12 @@
+{
+  "id": "research-first-board",
+  "name": "首板次日溢价",
+  "version": "0.1.0",
+  "mode": "declarative",
+  "status": "disabled",
+  "requirements": ["stock_feature_context"],
+  "capabilities": ["signal_evaluation"],
+  "enabled": false,
+  "source_type": "local",
+  "description": "首板次日溢价（研究原型 [新策略]，仅 ASHARE_RESEARCH_EXTRA_SKILLS 回放）"
+}

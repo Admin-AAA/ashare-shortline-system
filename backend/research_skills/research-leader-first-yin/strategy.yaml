@@ -1,0 +1,65 @@
+id: research-leader-first-yin
+name: 龙头首阴
+enabled: false
+weight: 1.0
+default_entry_mode: next_open
+meta:
+  author: grokbot
+  version: 0.1.0
+  holding_days: [1, 3, 5]
+  strategy_independence: 0.8
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+require_setup: true
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+prefilter:
+  market:
+    include:
+      - when: "limit_up_days20 >= 3"
+        reason: "not_leader"
+      - when: "pct < 0"
+        reason: "not_yin"
+      - when: "pct > -8"
+        reason: "crash"
+phases:
+  - name: 冰点
+    when: "market_sentiment_phase == '冰点'"
+    score_cap: 55
+    hard_veto: true
+setups:
+  - name: 龙头首阴
+    when: "limit_up_days20 >= 3 and pct < 0 and pct > -8 and ma5 > ma10"
+    score_delta: 12
+    entry_rule: "首阴次日低吸，跌破首阴低点止损"
+scoring:
+  base: 50
+  rules:
+    - when: "limit_up_days20 >= 4"
+      delta: 4
+      reason: 高度龙头
+    - when: "support_ma5 == true"
+      delta: 4
+      reason: 守住5日线
+    - when: "main_net_inflow_yi > 0"
+      delta: 4
+      reason: 资金未撤
+    - when: "is_main_theme == true"
+      delta: 4
+      reason: 主线龙头
+    - when: "vol5_20 <= 1.5"
+      delta: 3
+      reason: 缩量首阴
+risk:
+  rules:
+    - when: "max_dd20 < -20"
+      level: high
+      flag: 回撤过大
+      score_delta: -8

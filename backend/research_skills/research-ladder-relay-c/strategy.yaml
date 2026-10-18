@@ -1,0 +1,74 @@
+id: research-ladder-relay-c
+name: 连板接力
+enabled: false
+weight: 1.0
+default_entry_mode: next_open
+meta:
+  author: grokbot
+  version: 0.1.0
+  holding_days: [1, 3, 5]
+  strategy_independence: 0.8
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+require_setup: true
+universe:
+  include:
+    - "amount_yi >= 3"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+prefilter:
+  market:
+    include:
+      - when: "is_limit_up == true"
+        reason: "not_limit_up"
+      - when: "limit_up_consecutive_days >= 2"
+        reason: "not_ladder"
+phases:
+  - name: 开板过
+    when: "limit_up_open_times >= 1"
+    score_cap: 60
+    hard_veto: true
+  - name: 冰点不接力
+    when: "market_sentiment_phase == '冰点'"
+    score_cap: 55
+    hard_veto: true
+  - name: 高位过热
+    when: "limit_up_consecutive_days >= 6"
+    score_cap: 60
+    hard_veto: true
+setups:
+  - name: 连板接力
+    when: "is_limit_up == true and limit_up_consecutive_days >= 2 and limit_up_consecutive_days <= 5"
+    score_delta: 12
+    entry_rule: "次日分歧低吸，跌破止损离场"
+scoring:
+  base: 54
+  rules:
+    - when: "limit_up_open_times == 0"
+      delta: 5
+      reason: 封板未开
+    - when: "is_shortline_leader_candidate == true"
+      delta: 6
+      reason: 短线龙头候选
+    - when: "sector_ladder_height >= 3"
+      delta: 4
+      reason: 板块梯队完整
+    - when: "is_main_theme == true"
+      delta: 4
+      reason: 主线题材
+    - when: "limit_up_consecutive_days == 2"
+      delta: 3
+      reason: 一进二成功率高
+    - when: "turnover_rate >= 5 and turnover_rate <= 25"
+      delta: 3
+      reason: 换手充分
+risk:
+  rules:
+    - when: "limit_up_overheat_level == 'high'"
+      level: high
+      flag: 情绪过热
+      score_delta: -8

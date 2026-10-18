@@ -1,0 +1,66 @@
+id: research-platform-breakout
+name: 放量突破平台
+enabled: false
+weight: 1.0
+default_entry_mode: next_open
+meta:
+  author: grokbot
+  version: 0.1.0
+  holding_days: [1, 3, 5]
+  strategy_independence: 0.8
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+require_setup: true
+universe:
+  include:
+    - "amount_yi >= 2"
+    - "twenty_cm_risk_gate != 'block'"
+  exclude:
+    - "is_st == true"
+    - "announcement_negative_count > 0"
+    - "news_risk_count > 0"
+prefilter:
+  market:
+    include:
+      - when: "breakout60 == true"
+        reason: "no_breakout"
+      - when: "vol5_20 >= 1.3"
+        reason: "no_volume"
+      - when: "pct >= 4"
+        reason: "weak_candle"
+phases:
+  - name: 冰点
+    when: "market_sentiment_phase == '冰点'"
+    score_cap: 55
+    hard_veto: true
+setups:
+  - name: 放量突破平台
+    when: "breakout60 == true and vol5_20 >= 1.3 and pct >= 4 and chg20 <= 25"
+    score_delta: 12
+    entry_rule: "回踩突破位低吸，跌回平台止损"
+scoring:
+  base: 50
+  rules:
+    - when: "is_limit_up == true"
+      delta: 5
+      reason: 涨停突破
+    - when: "vol5_20 >= 2"
+      delta: 4
+      reason: 倍量
+    - when: "main_net_inflow_yi > 0"
+      delta: 4
+      reason: 主力净流入
+    - when: "is_main_theme == true"
+      delta: 4
+      reason: 主线题材
+    - when: "upper_shadow_count20 <= 3"
+      delta: 3
+      reason: 抛压轻
+risk:
+  rules:
+    - when: "chg60 >= 60"
+      level: high
+      flag: 位置过高
+      score_delta: -8

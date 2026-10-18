@@ -92,10 +92,30 @@ class StrategySkill:
         return str(value) if value else None
 
 
+def _research_skill_paths(skills_dir: Path) -> list[Path]:
+    """研究原型放在 backend/research_skills/（生产不加载）。
+
+    仅当回放显式设置 ASHARE_RESEARCH_EXTRA_SKILLS 时，把其中点名的目录追加进来；
+    生产进程不设该变量，结果与只读 skills/ 完全一致。
+    """
+    import os
+
+    wanted = {s.strip() for s in str(os.environ.get("ASHARE_RESEARCH_EXTRA_SKILLS") or "").split(",") if s.strip()}
+    research_dir = skills_dir.parent / "research_skills"
+    if not wanted or skills_dir.name != "skills" or not research_dir.is_dir():
+        return []
+    return [
+        path
+        for path in sorted(research_dir.iterdir())
+        if path.is_dir() and path.name in wanted and not (skills_dir / path.name).exists()
+    ]
+
+
 def load_skills(skills_dir: Path) -> list[StrategySkill]:
     if not skills_dir.exists():
         return []
-    return [load_skill(path) for path in sorted(path for path in skills_dir.iterdir() if path.is_dir())]
+    paths = sorted(path for path in skills_dir.iterdir() if path.is_dir())
+    return [load_skill(path) for path in paths + _research_skill_paths(skills_dir)]
 
 
 def load_skill(path: Path) -> StrategySkill:
