@@ -74,7 +74,7 @@ export function SkillsCatalogPanel() {
 
   if (error) {
     return (
-      <Panel kicker="策略清单" title={loading ? "启用策略总览" : `${skills.length} 个启用策略`}>
+      <Panel kicker="策略清单" title="启用策略总览">
         <div style={{ padding: "var(--space-4)", color: "var(--color-down)", fontSize: 13 }}>
           {error}
         </div>
