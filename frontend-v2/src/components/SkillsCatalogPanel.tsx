@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { SkillSummary } from "../types";
+import type { StrategyListItem } from "../types";
 import { Panel } from "./Panel";
 
 /**
- * 策略清单面板 —— 展示 8 个策略的名称/模式/独立性/正式实盘胜率。
+ * 策略清单面板 —— 展示当前启用策略的名称/模式/正式实盘胜率。
+ * 数据源 /api/strategies（enabled=true）；不再用 /api/skills：它返回 skill_registry 全表，
+ * 含磁盘上已删除的历史策略行，会显示 30+ 条。标题数量按实际启用数动态生成。
  * 填补北极星 B 表红色缺口"策略清单页"。
  * 嵌入 MetricsPage 底部，与策略胜率视图（StrategyPanel）互补：
  * StrategyPanel 显示回测数据，SkillsCatalogPanel 显示策略元信息。
@@ -22,7 +24,7 @@ interface PerfSummary {
 }
 
 export function SkillsCatalogPanel() {
-  const [skills, setSkills] = useState<SkillSummary[]>([]);
+  const [skills, setSkills] = useState<StrategyListItem[]>([]);
   const [perfMap, setPerfMap] = useState<Record<string, PerfSummary>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -33,7 +35,7 @@ export function SkillsCatalogPanel() {
       try {
         setLoading(true);
         setError("");
-        const skillsData = await api.skills();
+        const skillsData = (await api.strategies()).filter((s) => s.enabled);
         if (cancelled) return;
         setSkills(skillsData);
 
@@ -62,7 +64,7 @@ export function SkillsCatalogPanel() {
 
   if (loading) {
     return (
-      <Panel kicker="策略清单" title="8 策略总览">
+      <Panel kicker="策略清单" title={loading ? "启用策略总览" : `${skills.length} 个启用策略`}>
         <div style={{ padding: "var(--space-4)", color: "var(--text-muted)", fontSize: 13 }}>
           正在加载策略清单…
         </div>
@@ -72,7 +74,7 @@ export function SkillsCatalogPanel() {
 
   if (error) {
     return (
-      <Panel kicker="策略清单" title="8 策略总览">
+      <Panel kicker="策略清单" title={loading ? "启用策略总览" : `${skills.length} 个启用策略`}>
         <div style={{ padding: "var(--space-4)", color: "var(--color-down)", fontSize: 13 }}>
           {error}
         </div>
@@ -83,10 +85,10 @@ export function SkillsCatalogPanel() {
   return (
     <Panel
       kicker="策略清单"
-      title="8 策略总览"
+      title={loading ? "启用策略总览" : `${skills.length} 个启用策略`}
       actions={
         <span style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 13 }}>
-          {skills.length} 套
+          来自 /api/strategies
         </span>
       }
     >
@@ -120,7 +122,7 @@ export function SkillsCatalogPanel() {
 
               {/* Agent 能力 */}
               <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-                {s.has_agent_contract ? "Agent" : "规则"}
+                {s.mode === "imperative" ? "命令式" : "声明式"}
               </div>
 
               {/* 正式实盘胜率 */}

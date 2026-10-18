@@ -18,7 +18,7 @@ export type Section =
   | "history" // 📊 复盘
   | "records" // 📋 记录中心（运行/矩阵记录 + 收益复盘）
   | "metrics" // 📐 指标分析
-  | "strategies" // 🧩 策略清单（8 策略 + 简介 + 回测胜率）
+  | "strategies" // 🧩 策略清单（启用策略 + 简介 + 回测胜率）
   | "config" // ⚙️ 配置
   | "mid" // 中线
   | "long"; // 长线
