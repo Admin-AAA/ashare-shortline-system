@@ -202,9 +202,9 @@ function ScoreRow({
                 padding: "1px 5px",
                 borderRadius: 3,
                 border: soft.banned
-                  ? "1px solid var(--warning, #d4a017)40"
+                  ? "1px solid color-mix(in srgb, var(--warning) 25%, transparent)"
                   : "1px solid var(--border)",
-                color: soft.banned ? "var(--warning, #d4a017)" : "var(--muted)",
+                color: soft.banned ? "var(--warning)" : "var(--muted)",
                 fontWeight: soft.banned ? 600 : 400,
                 letterSpacing: 0.3,
                 whiteSpace: "nowrap",
@@ -318,7 +318,7 @@ function ExpandedDetail({ row }: { row: FunnelAuditRow }) {
               <KV
                 k={soft.banned ? "软降线·污染" : "软降线"}
                 v={soft.line}
-                accent={soft.banned ? "var(--warning, #d4a017)" : "var(--muted)"}
+                accent={soft.banned ? "var(--warning)" : "var(--muted)"}
               />
             ) : null}
           </DetailBlock>

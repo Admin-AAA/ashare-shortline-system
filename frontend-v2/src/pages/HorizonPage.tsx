@@ -55,7 +55,7 @@ export function HorizonPage({ horizon }: { horizon: "mid" | "long" }) {
 }
 
 const pct = (v?: number | null) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(2)}%`);
-const color = (v?: number | null) => (v == null ? undefined : v > 0 ? "var(--up, #d14343)" : v < 0 ? "var(--down, #2f9e5b)" : undefined);
+const color = (v?: number | null) => (v == null ? undefined : v > 0 ? "var(--up)" : v < 0 ? "var(--down)" : undefined);
 const cell = { padding: "4px 10px", textAlign: "right" as const, whiteSpace: "nowrap" as const };
 
 function MetricsTable({ recent, phases }: { recent?: HorizonMetrics; phases?: Record<string, HorizonMetrics> }) {

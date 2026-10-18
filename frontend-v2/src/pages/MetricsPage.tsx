@@ -1153,7 +1153,7 @@ function scopeButtonStyle(active: boolean): CSSProperties {
     fontSize: 13,
     borderRadius: 4,
     border: "1px solid var(--border)",
-    background: active ? "var(--color-accent, #2563eb)" : "var(--surface-1)",
+    background: active ? "var(--color-accent)" : "var(--surface-1)",
     color: active ? "#fff" : "var(--text-secondary)",
     cursor: "pointer",
     fontWeight: active ? 600 : 400,
@@ -1382,12 +1382,12 @@ function PrecisionPanel({ rows }: { rows: PrecisionAtKRow[] }) {
             transform: "translateX(-50%)",
             width: 320,
             padding: "12px 16px",
-            background: "#252540",
-            border: "1px solid #555",
+            background: "var(--surface-strong)",
+            border: "1px solid var(--line)",
             borderRadius: 8,
             fontSize: 13,
             lineHeight: 1.7,
-            color: "#d0d0d0",
+            color: "var(--ink-secondary)",
             whiteSpace: "normal",
             zIndex: 99999,
             boxShadow: "0 8px 24px rgba(0,0,0,.6)",
@@ -1399,7 +1399,7 @@ function PrecisionPanel({ rows }: { rows: PrecisionAtKRow[] }) {
           </strong>
           系统每次会推荐一组股票并按好坏排序。<br />
           「前 K」表示取排名最靠前的 K 只来看，「命中率」是其中真正赚钱的比例。<br />
-          <span style={{ color: "#aaa", display: "block", marginTop: 6 }}>
+          <span style={{ color: "var(--muted)", display: "block", marginTop: 6 }}>
             例：前1 = 60% → 每次推荐的第1只股票，有60%概率是涨的。<br />
             数值越高且从前1到前10递减越慢，说明排序越准。
           </span>

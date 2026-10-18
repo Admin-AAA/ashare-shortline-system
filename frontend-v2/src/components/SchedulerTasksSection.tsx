@@ -54,7 +54,7 @@ const STATUS_COLOR: Record<string, string> = {
   running: "var(--color-up)",
   completed: "var(--color-up)",
   failed: "var(--color-down)",
-  partial_completed: "var(--color-warn, #e0a800)",
+  partial_completed: "var(--color-warn)",
   skipped: "var(--muted)",
 };
 

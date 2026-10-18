@@ -25,7 +25,7 @@ export function ScoreLineCell({
         justifyContent: align === "right" ? "flex-end" : "flex-start",
         gap: 6,
         fontFamily: "var(--font-mono)",
-        color: polluted ? "var(--warning, #d4a017)" : "inherit",
+        color: polluted ? "var(--warning)" : "inherit",
         fontWeight: polluted ? 600 : 400,
       }}
     >
@@ -36,8 +36,8 @@ export function ScoreLineCell({
             fontSize: 10,
             padding: "1px 5px",
             borderRadius: 3,
-            border: "1px solid var(--warning, #d4a017)40",
-            color: "var(--warning, #d4a017)",
+            border: "1px solid color-mix(in srgb, var(--warning) 25%, transparent)",
+            color: "var(--warning)",
             letterSpacing: 0.4,
             whiteSpace: "nowrap",
           }}
@@ -63,7 +63,7 @@ export function ScoreLineMetricValue({
       <span
         style={{
           fontFamily: "var(--font-mono)",
-          color: polluted ? "var(--warning, #d4a017)" : "var(--text)",
+          color: polluted ? "var(--warning)" : "var(--text)",
           fontWeight: polluted ? 600 : 400,
         }}
       >
@@ -94,7 +94,7 @@ export function TicketScoreBadge({
   const flag = ticketScoreFlag(finalScore, scoreLineMeta);
   if (!flag) return null;
   const isSoft = flag.kind === "soft_floor";
-  const color = isSoft ? "#6aa9ff" : "var(--warning, #d4a017)";
+  const color = isSoft ? "var(--accent)" : "var(--warning)";
   return (
     <span
       title={flag.title}

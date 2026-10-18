@@ -258,7 +258,7 @@ export function DataHealthSection() {
                 评分 −{domSummary.score_penalty}
               </span>
             ) : (
-              <span style={{ fontSize: "var(--text-sm)", color: "#16a34a" }}>全覆盖</span>
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--positive)" }}>全覆盖</span>
             )
           }
         >
@@ -488,7 +488,7 @@ type SourceEntry = {
 
 function SourceRow({ entry, tone }: { entry: SourceEntry; tone: "up" | "down" | "warn" | "muted" }) {
   const color =
-    tone === "up" ? "#16a34a" : tone === "down" ? "#dc2626" : tone === "warn" ? "#d97706" : "var(--text-muted)";
+    tone === "up" ? "var(--positive)" : tone === "down" ? "var(--danger)" : tone === "warn" ? "var(--warning)" : "var(--text-muted)";
   const providerDetail = entry.source_type === "tushare_provider"
     ? [
         entry.last_api ? `最近 ${entry.last_api}` : "待首次调用",
@@ -532,7 +532,7 @@ function SourceRow({ entry, tone }: { entry: SourceEntry; tone: "up" | "down" | 
 function SourceGroup({ label, tone, items }: { label: string; tone: "up" | "down" | "warn" | "muted"; items?: SourceEntry[] }) {
   if (!items || items.length === 0) return null;
   const color =
-    tone === "up" ? "#16a34a" : tone === "down" ? "#dc2626" : tone === "warn" ? "#d97706" : "var(--text-muted)";
+    tone === "up" ? "var(--positive)" : tone === "down" ? "var(--danger)" : tone === "warn" ? "var(--warning)" : "var(--text-muted)";
   return (
     <div style={{ marginBottom: "var(--space-3)" }}>
       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)", fontSize: "var(--text-sm)", fontWeight: 600, color, marginBottom: "var(--space-1)" }}>
@@ -552,9 +552,9 @@ function DataSourceSection({ summary }: { summary: DataSourceHealthSummary }) {
     <div>
       <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-2)" }}>
         共 {summary.total ?? 0} 个数据源接入策略：
-        <span style={{ color: "#16a34a" }}> {summary.working_count ?? 0} 个通畅</span>
+        <span style={{ color: "var(--positive)" }}> {summary.working_count ?? 0} 个通畅</span>
         {summary.broken_count ? (
-          <>,<span style={{ color: "#dc2626" }}> {summary.broken_count} 个不通</span></>
+          <>,<span style={{ color: "var(--danger)" }}> {summary.broken_count} 个不通</span></>
         ) : null}
         {summary.untested_count ? <>, {summary.untested_count} 个待观测</> : null}
         {summary.disabled_count ? <>, {summary.disabled_count} 个未启用</> : null}。
@@ -577,10 +577,10 @@ function DataSourceSection({ summary }: { summary: DataSourceHealthSummary }) {
 
 // ─── 数据域接入覆盖分组 ───────────────────────────────────────────
 const DOMAIN_STATUS_META: Record<string, { color: string; label: string }> = {
-  covered: { color: "#16a34a", label: "已接入" },
-  stale: { color: "#d97706", label: "滞后" },
-  empty: { color: "#dc2626", label: "空" },
-  error: { color: "#dc2626", label: "异常" },
+  covered: { color: "var(--positive)", label: "已接入" },
+  stale: { color: "var(--warning)", label: "滞后" },
+  empty: { color: "var(--danger)", label: "空" },
+  error: { color: "var(--danger)", label: "异常" },
 };
 
 function DomainRow({ d }: { d: DataDomainCoverage }) {
@@ -658,8 +658,8 @@ function DomainCoverageSection({ summary }: { summary: DataDomainCoverageSummary
     <div>
       <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-2)" }}>
         共 {summary.total} 个数据域（指标级）。日频数据必须覆盖参考交易日才算最新；
-        <span style={{ color: "#d97706" }}> 滞后</span> = 接入过但策略未持续刷新，
-        <span style={{ color: "#dc2626" }}> 空</span> = 无数据（未接入 / 未拉取）。
+        <span style={{ color: "var(--warning)" }}> 滞后</span> = 接入过但策略未持续刷新，
+        <span style={{ color: "var(--danger)" }}> 空</span> = 无数据（未接入 / 未拉取）。
       </div>
       {summary.categories.map((cat) => (
         <DomainCategoryGroup key={cat.category} cat={cat} />
@@ -673,8 +673,8 @@ function DomainCoverageSection({ summary }: { summary: DataDomainCoverageSummary
 // 这里展示每个数据源的累积成功率、延迟、最近成功/失败时间、失败原因——
 // self_check 报 Tushare 500/429 或 LLM 成功率波动时，在此一屏定位是哪个接口在降级。
 const REALTIME_STATUS_META: Record<string, { color: string; label: string }> = {
-  healthy: { color: "#16a34a", label: "健康" },
-  degraded: { color: "#dc2626", label: "降级" },
+  healthy: { color: "var(--positive)", label: "健康" },
+  degraded: { color: "var(--danger)", label: "降级" },
   disabled: { color: "var(--text-muted)", label: "未启用" },
   untested: { color: "var(--text-muted)", label: "未测试" },
 };
@@ -712,7 +712,7 @@ function RealtimeDataSourcePanel() {
       kicker="数据源实时健康"
       title={`共 ${rows.length} 个数据源${providerCount ? ` · ${providerCount} 个独立 Provider` : ""}`}
       actions={
-        <span style={{ fontSize: "var(--text-sm)", color: degraded ? "#dc2626" : "#16a34a" }}>
+        <span style={{ fontSize: "var(--text-sm)", color: degraded ? "var(--danger)" : "var(--positive)" }}>
           {degraded
             ? `${degraded} 个降级`
             : historicalLowSuccess
@@ -744,7 +744,7 @@ function RealtimeDataSourcePanel() {
               const meta = REALTIME_STATUS_META[r.status] ?? { color: "var(--text-muted)", label: r.status };
               const sr = r.success_rate;
               // 涨红跌绿：A股惯例红=好。成功率越高越红，低于 0.9 转绿（警示）
-              const srColor = sr == null ? "var(--text-muted)" : sr >= 0.95 ? "#dc2626" : sr >= 0.9 ? "#d97706" : "#16a34a";
+              const srColor = sr == null ? "var(--text-muted)" : sr >= 0.95 ? "var(--danger)" : sr >= 0.9 ? "var(--warning)" : "var(--positive)";
               return (
                 <tr key={`${r.source_type}-${r.source}`} style={{ borderBottom: "1px solid var(--line)" }}>
                   <td style={{ padding: "var(--space-2)" }}>
@@ -786,7 +786,7 @@ function RealtimeDataSourcePanel() {
                       overflow: "hidden",
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
-                      color: r.last_error ? "#dc2626" : "var(--text-muted)",
+                      color: r.last_error ? "var(--danger)" : "var(--text-muted)",
                     }}
                     title={r.last_error ?? ""}
                   >

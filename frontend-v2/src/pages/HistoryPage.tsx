@@ -555,7 +555,7 @@ export function HistoryPage() {
                     : labelTone === "danger"
                       ? "var(--market-down)"
                       : labelTone === "warning"
-                        ? "var(--market-gold, #b8860b)"
+                        ? "var(--market-gold)"
                         : "var(--muted)";
                 const matchedVersion = it.strategy_versions?.find((version) => version.strategy_id === strategyId);
                 const keyLevelLabels = ruleKeyLevelLabels(it.entry_rule, it.invalid_rule, it.key_levels);
@@ -707,7 +707,7 @@ export function HistoryPage() {
                           )}
                           {savedExecution?.cancelled_before_entry && !savedExecution.ever_buy_confirmed && (
                             <span
-                              style={{ color: "var(--market-gold, #b8860b)", fontSize: "var(--text-xs)", fontWeight: 600 }}
+                              style={{ color: "var(--market-gold)", fontSize: "var(--text-xs)", fontWeight: 600 }}
                               title={savedExecution.first_cancel_reason || "系统在买入条件命中前取消了本次推荐"}
                             >
                               买入前已取消 · 未计入交易胜负
@@ -932,8 +932,8 @@ const shortVersionId = (value: string) => value.length <= 14 ? value : `${value.
 const EXECUTION_DECISION_TONE: Record<string, { color: string; border?: string }> = {
   buy: { color: "var(--market-up)" },
   hold: { color: "var(--market-up)" },
-  wait: { color: "var(--market-gold, #b8860b)" },
-  reduce: { color: "var(--market-gold, #b8860b)" },
+  wait: { color: "var(--market-gold)" },
+  reduce: { color: "var(--market-gold)" },
   cancel: { color: "var(--market-down)" },
   exit: { color: "var(--market-down)" },
   observe: { color: "var(--muted)" },

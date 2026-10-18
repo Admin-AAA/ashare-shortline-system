@@ -29,7 +29,7 @@
   height: 100%;
   min-width: 2%;
   border-radius: 999px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+  background: var(--accent);
   transition: width 0.6s ease;
 }
 .run-progress-bar__fill--indeterminate::after {
@@ -40,7 +40,7 @@
   left: 0;
   width: 38%;
   border-radius: 999px;
-  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  background: color-mix(in srgb, var(--surface) 45%, transparent);
   animation: run-progress-indeterminate 1.3s ease-in-out infinite;
 }
 .run-progress-spin {

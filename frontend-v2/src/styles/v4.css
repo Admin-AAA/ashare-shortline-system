@@ -69,3 +69,13 @@ kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--li
 .score-cut { position: relative; display: inline-block; width: 56px; height: 4px; background: var(--surface-soft); border-radius: 2px; vertical-align: middle; margin-left: 6px; }
 .score-cut i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--accent); border-radius: 2px; }
 .score-cut em { position: absolute; top: -3px; width: 2px; height: 10px; background: var(--market-up); }
+
+/* 旧页面变量别名（统一到 v4 令牌） */
+:root, :root[data-theme] {
+  --text-primary: var(--ink); --color-accent: var(--accent); --color-border: var(--line); --color-warn: var(--warning);
+  --color-up: var(--market-up); --color-down: var(--market-down); --up: var(--market-up); --down: var(--market-down);
+  --accent-line: var(--accent); --accent-contrast: #fff; --accent-gradient: var(--accent);
+  --market-up-soft: color-mix(in srgb, var(--market-up) 12%, transparent);
+  --market-down-soft: color-mix(in srgb, var(--market-down) 12%, transparent);
+  --market-gold: var(--warning);
+}
