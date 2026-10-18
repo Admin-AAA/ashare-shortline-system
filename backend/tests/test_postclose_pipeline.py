@@ -23,6 +23,7 @@ def _stub_ma250_fill(monkeypatch):
     import app.services.ma250_fill as ma250_fill
 
     monkeypatch.setattr(ma250_fill, "fill_ma250", lambda _db, **_kw: {"rows_changed": 0})
+    monkeypatch.setattr(ma250_fill, "fill_moving_averages", lambda _db, **_kw: {"rows_changed": 0})
 
 
 @pytest.fixture(autouse=True)

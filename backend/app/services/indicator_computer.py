@@ -250,10 +250,11 @@ def compute_daily_bar_indicators(code: str, bars: list[dict[str, Any]]) -> dict[
 
         trade_date = str(bar["trade_date"])
         result[trade_date] = {
-            "ma5": round(ma(closes, 5), 3),
-            "ma10": round(ma(closes, 10), 3),
-            "ma20": round(ma(closes, 20), 3),
-            "ma60": round(ma(closes, 60), 3) if len(closes) >= 60 else round(ma(closes, len(closes)), 3),
+            # 2026-10-19：窗口不足写 None（不再用短样本均值兜底，也不写 0）
+            "ma5": round(ma(closes, 5), 3) if len(closes) >= 5 else None,
+            "ma10": round(ma(closes, 10), 3) if len(closes) >= 10 else None,
+            "ma20": round(ma(closes, 20), 3) if len(closes) >= 20 else None,
+            "ma60": round(ma(closes, 60), 3) if len(closes) >= 60 else None,
             # 2026-10-19：年线，不足 250 根为 None（不写 0）
             "ma250": round(ma(closes, 250), 3) if len(closes) >= 250 else None,
             "volume_ratio_5d": round(safe_div(ma(volumes, 5), ma(volumes, 20), 1.0), 3),

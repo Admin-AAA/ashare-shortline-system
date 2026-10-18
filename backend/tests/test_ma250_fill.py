@@ -17,3 +17,10 @@ def test_indicator_computer_ma250_none_when_short():
     res = compute_daily_bar_indicators("000001", bars)
     assert res["d0248"]["ma250"] is None
     assert res["d0249"]["ma250"] == 10.0
+
+
+def test_short_ma_partial_window_is_none():
+    bars = [{"trade_date": f"d{i:03d}", "close": 10.0, "volume": 1.0} for i in range(61)]
+    res = compute_daily_bar_indicators("000001", bars)
+    assert res["d003"]["ma5"] is None and res["d004"]["ma5"] == 10.0
+    assert res["d058"]["ma60"] is None and res["d059"]["ma60"] == 10.0

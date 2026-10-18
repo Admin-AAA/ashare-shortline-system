@@ -1,4 +1,6 @@
-"""ma250 (年线) computed locally — 2026-10-19 owner ruling.
+"""Moving averages ma5/10/20/60/250 computed locally (ma250 since 2026-10-19 03:00; ma5-60 added 03:40).
+
+ma250 (年线) computed locally — 2026-10-19 owner ruling.
 
 Tushare stk_factor has no ma250, so the column was 0 market-wide. Basis matches ma5..ma60: simple mean of
 the last 250 stored UNADJUSTED closes (same as indicator_computer). Fewer than 250 bars -> NULL (never 0).
@@ -20,13 +22,42 @@ WINDOW = 250
 _WARMUP_CAL_DAYS = 420  # >= 250 trading days
 
 
+MA_WINDOWS = (5, 10, 20, 60, 250)
+
+
 def compute_ma250(closes: pd.Series) -> pd.Series:
-    return closes.rolling(WINDOW, min_periods=WINDOW).mean().round(3)
+    return compute_ma(closes, WINDOW)
+
+
+def compute_ma(closes: pd.Series, window: int) -> pd.Series:
+    """Simple mean of the last ``window`` unadjusted closes; partial window -> NaN (NULL)."""
+    return closes.rolling(window, min_periods=window).mean().round(3)
+
+
+def _col_set(col: str) -> str:
+    # only replace missing/zero values, partial-window leftovers (new value NULL) or real mismatches;
+    # float-rounding noise (<=0.0015) on already-correct rows is left untouched.
+    return (
+        f"{col} = CASE WHEN {col} IS NULL OR {col} = 0 OR :{col} IS NULL OR ABS({col} - :{col}) > 0.0015 "
+        f"THEN :{col} ELSE {col} END"
+    )
+
+
+def _col_dirty(col: str) -> str:
+    return (
+        f"(NOT ({col} <=> :{col}) AND ({col} IS NULL OR {col} = 0 OR :{col} IS NULL OR ABS({col} - :{col}) > 0.0015))"
+    )
 
 
 def fill_ma250(db, *, since: str | None = None, end: str | None = None,
                batch_codes: int = 300) -> dict[str, Any]:
     """Recompute ma250 for rows with trade_date in [since, end] (None = all history)."""
+    return fill_moving_averages(db, since=since, end=end, batch_codes=batch_codes, windows=(WINDOW,))
+
+
+def fill_moving_averages(db, *, since: str | None = None, end: str | None = None,
+                         batch_codes: int = 300, windows: tuple[int, ...] = MA_WINDOWS) -> dict[str, Any]:
+    """Recompute ma{windows} (unadjusted close SMA, partial window -> NULL) for rows in [since, end]."""
     t0 = time.perf_counter()
     params: dict[str, Any] = {}
     where = []
@@ -47,9 +78,10 @@ def fill_ma250(db, *, since: str | None = None, end: str | None = None,
         + (" AND trade_date <= :end" if end else "")
         + " ORDER BY code, trade_date"
     ).bindparams(bindparam("codes", expanding=True))
+    cols = [f"ma{w}" for w in windows]
     upd = text(
-        "UPDATE daily_kbars SET ma250 = :v, updated_at = UTC_TIMESTAMP() "
-        "WHERE code = :c AND trade_date = :d AND NOT (ma250 <=> :v)"
+        "UPDATE daily_kbars SET " + ", ".join(_col_set(c) for c in cols) + ", updated_at = UTC_TIMESTAMP() "
+        "WHERE code = :c AND trade_date = :d AND (" + " OR ".join(_col_dirty(c) for c in cols) + ")"
     )
     changed = 0
     for i in range(0, len(codes), batch_codes):
@@ -63,12 +95,16 @@ def fill_ma250(db, *, since: str | None = None, end: str | None = None,
         if df.empty:
             continue
         df["close"] = pd.to_numeric(df["close"], errors="coerce")
-        df["ma250"] = df.groupby("code", sort=False)["close"].transform(compute_ma250)
+        grouped = df.groupby("code", sort=False)["close"]
+        for w, c in zip(windows, cols):
+            df[c] = grouped.transform(lambda s, _w=w: compute_ma(s, _w))
         if since:
             df = df[df["trade_date"] >= since]
+        records = df[["code", "trade_date", *cols]].to_dict("records")
         rows = [
-            {"c": c, "d": d, "v": (None if pd.isna(v) else float(v))}
-            for c, d, v in zip(df["code"], df["trade_date"], df["ma250"])
+            {"c": r["code"], "d": r["trade_date"],
+             **{c: (None if pd.isna(r[c]) else float(r[c])) for c in cols}}
+            for r in records
         ]
         for j in range(0, len(rows), 5000):
             res = db.execute(upd, rows[j:j + 5000])
