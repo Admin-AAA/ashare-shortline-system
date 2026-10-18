@@ -254,6 +254,8 @@ def compute_daily_bar_indicators(code: str, bars: list[dict[str, Any]]) -> dict[
             "ma10": round(ma(closes, 10), 3),
             "ma20": round(ma(closes, 20), 3),
             "ma60": round(ma(closes, 60), 3) if len(closes) >= 60 else round(ma(closes, len(closes)), 3),
+            # 2026-10-19：年线，不足 250 根为 None（不写 0）
+            "ma250": round(ma(closes, 250), 3) if len(closes) >= 250 else None,
             "volume_ratio_5d": round(safe_div(ma(volumes, 5), ma(volumes, 20), 1.0), 3),
         }
 

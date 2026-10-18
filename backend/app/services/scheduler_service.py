@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import datetime as _dt_mod
 import logging
 import threading
 import time
@@ -1481,6 +1482,16 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         indicator_fill = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
         logger.warning("tdx indicator gap fill failed: %s", exc)
     _plap("indicator_fill")
+
+    # ma250（年线）本地计算：未复权收盘 250 日均值，不足 250 根写 NULL；失败只告警。
+    try:
+        from app.services.ma250_fill import fill_ma250
+
+        _since = (_dt_mod.date.fromisoformat(str(trade_date)[:10]) - _dt_mod.timedelta(days=15)).isoformat()
+        indicator_fill["ma250"] = fill_ma250(db, since=_since)
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.warning("ma250 fill failed: %s", exc)
 
     # [中长线] 中线策略选股（周五信号日落盘，独立于短线出票）；失败只告警。
     try:

@@ -932,7 +932,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
                 "ma10": _f(fac.get("ma10")),
                 "ma20": _f(fac.get("ma20")),
                 "ma60": _f(fac.get("ma60")),
-                "ma250": _f(fac.get("ma250")),
+                "ma250": _f(fac.get("ma250"), None),
                 "macd_dif": _f(fac.get("macd_dif"), None),
                 "macd_dea": _f(fac.get("macd_dea"), None),
                 "macd": _f(fac.get("macd"), None),

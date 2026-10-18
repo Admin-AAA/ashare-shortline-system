@@ -321,7 +321,7 @@ def test_compute_daily_bar_indicators_keys_and_count():
     out = ic.compute_daily_bar_indicators("000001", bars)
     assert len(out) == 5
     for row in out.values():
-        assert set(row) == {"ma5", "ma10", "ma20", "ma60", "volume_ratio_5d"}
+        assert set(row) == {"ma5", "ma10", "ma20", "ma60", "ma250", "volume_ratio_5d"}
 
 
 # ── compute_daily_indicators ──────────────────────────────────────────

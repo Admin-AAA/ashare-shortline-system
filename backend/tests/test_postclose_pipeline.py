@@ -17,6 +17,14 @@ from app.services.data_gap_remediation_service import _refresh_auxiliary_dataset
 from app.services.registry import data_source as data_source_registry
 
 
+
+@pytest.fixture(autouse=True)
+def _stub_ma250_fill(monkeypatch):
+    import app.services.ma250_fill as ma250_fill
+
+    monkeypatch.setattr(ma250_fill, "fill_ma250", lambda _db, **_kw: {"rows_changed": 0})
+
+
 @pytest.fixture(autouse=True)
 def _no_kbar_cache_refresh(monkeypatch):
     """盘后流程会增量刷新日K Parquet 缓存（6f8ac43）；这里用的是桩 db，关掉缓存刷新免得调到真实查询。"""
