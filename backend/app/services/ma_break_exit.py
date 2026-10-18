@@ -46,14 +46,22 @@ def first_break_date(
 ) -> str | None:
     """rows：带 trade_date/close/ma5/ma10/open/high/low/pct_chg/volume 的日 K（升序）。"""
     attr = f"ma{window}"
+    closes: list[float] = []
     for r in rows:
         d = str(r.trade_date)
+        close = float(getattr(r, "close", 0) or 0)
+        closes.append(close)
         if d <= after_date:
             continue
         if d >= before_date:
             return None
-        close = float(getattr(r, "close", 0) or 0)
         ma = float(getattr(r, attr, 0) or 0)
+        if ma <= 0:
+            # 2026-10-19：库里 ma 为 0/NULL 时按 K 线现算（未复权收盘简单均值，与 market_data 兜底同口径）；
+            # 窗口不足（rows 内可用收盘 < window）则跳过该日。
+            window_closes = closes[-window:]
+            if len(window_closes) == window and all(c > 0 for c in window_closes):
+                ma = sum(window_closes) / window
         if close <= 0 or ma <= 0 or float(getattr(r, "volume", 0) or 0) <= 0:
             continue
         if is_one_word_limit_down_bar(code, r):
