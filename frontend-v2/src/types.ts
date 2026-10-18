@@ -2895,6 +2895,17 @@ export type SingleStockAnalysis = {
   final_score: number | null;
   recommended?: boolean;
   pipeline_decision?: string;
+  /** 当日/近 7 日是否已被实盘正式 run 推荐（单股分析不再按重复推荐剔除，改为标注） */
+  prior_formal_recommendations?: {
+    available: boolean;
+    same_day: boolean;
+    recent_7d: boolean;
+    dates?: string[];
+    label?: string | null;
+    items: { trade_date: string; final_score: number | null; run_id: string }[];
+  };
+  /** 单股评分口径说明：按当前数据重算 */
+  score_basis_note?: string;
   pipeline?: {
     decision: string;
     recommended: boolean;

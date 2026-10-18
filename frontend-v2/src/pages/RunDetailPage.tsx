@@ -8,6 +8,7 @@ import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 import { useCreateRunMutation, usePresetsQuery, useRunQuery } from "../api/queries/useRunQueries";
 import { isActiveRunStatus } from "../utils/display";
+import { formatBj } from "../utils/time";
 
 /**
  * 运行详情页 —— 从驾驶舱主 CTA 进入
@@ -531,7 +532,7 @@ function SingleStockHistoryList({
                 {h.trade_date}
               </span>
               <span className="text-muted" style={{ fontSize: "var(--text-xs)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {h.created_at ? new Date(h.created_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+                {formatBj(h.created_at, "short")}
               </span>
               <span className="text-mono" style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--accent)" }}>
                 {h.final_score != null ? h.final_score.toFixed(1) : "—"}
@@ -579,11 +580,15 @@ function SingleStockScoreResult({ result }: { result: SingleStockAnalysis }) {
           </div>
           <span className="tag">{result.trade_date}</span>
         </div>
+        <div className="text-muted" style={{ fontSize: "var(--text-xs)", marginBottom: "var(--space-2)" }}>
+          {result.score_basis_note ?? "单股评分按当前库内数据重算，可能与当时正式 run 的分数不同；历史出票分数以推荐记录原始值为准。"}
+        </div>
+        <PriorFormalRecs prior={result.prior_formal_recommendations} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)" }}>
           <ScoreMetric label="规则分（出票依据）" value={result.final_score} />
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>推荐结果</span>
-            <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: result.recommended ? "var(--market-up)" : "var(--ink-secondary)" }}>
+            <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: result.recommended ? "var(--accent)" : "var(--ink-secondary)" }}>
               {result.recommended ? "已入选" : "未入选"}
             </span>
           </div>
@@ -1014,5 +1019,29 @@ function RunProgressPanel({ detail, onResume }: { detail: RunDetail; onResume?: 
         )}
       </div>
     </Panel>
+  );
+}
+
+/** 当日/近 7 日正式推荐标注：状态色（同日=琥珀，近7日=蓝），不用涨跌色 */
+function PriorFormalRecs({ prior }: { prior?: SingleStockAnalysis["prior_formal_recommendations"] }) {
+  const { navigate } = useUrlRoute();
+  if (!prior || (!prior.label && !(prior.items?.length))) return null;
+  const tone = prior.same_day ? "var(--warning)" : prior.recent_7d ? "var(--accent)" : "var(--muted)";
+  return (
+    <div style={{ border: `1px solid ${tone}`, borderLeftWidth: 3, borderRadius: "var(--radius-md)", padding: "var(--space-2) var(--space-3)", marginBottom: "var(--space-2)", fontSize: "var(--text-sm)" }}>
+      <div style={{ color: tone, fontWeight: 600, marginBottom: prior.items?.length ? 4 : 0 }}>
+        {prior.label ?? (prior.same_day ? "当日已被正式推荐" : prior.recent_7d ? "近7日已被正式推荐" : "近7日未被正式推荐")}
+      </div>
+      {prior.items?.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+          {prior.items.map((it) => (
+            <button key={`${it.run_id}-${it.trade_date}`} className="tag" style={{ cursor: "pointer", fontFamily: "var(--font-mono)" }}
+              title={`run ${it.run_id}`} onClick={() => navigate("/records", { params: { tab: "run", run_id: it.run_id } })}>
+              {it.trade_date} · 正式分 {it.final_score != null ? it.final_score.toFixed(1) : "—"}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
