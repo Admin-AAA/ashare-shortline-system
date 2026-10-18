@@ -1,9 +1,11 @@
+import pytest
 from sqlalchemy import select
 
 from app.models.tables import DailyKbar
 from app.services.market_pool.core import _load_cached_bars_batch
 
 
+@pytest.mark.requires_market_data
 def test_cached_bar_batch_returns_only_latest_rows_in_ascending_order(db):
     codes = ["000001", "600000"]
     as_of = "2026-07-24"

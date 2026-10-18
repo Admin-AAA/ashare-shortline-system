@@ -943,6 +943,7 @@ class TestE2ERecommendationFlow:
         finally:
             db.rollback()
 
+    @pytest.mark.requires_market_data
     def test_component_scores_match_aggregator_dimensions(self, db):
         """Verify feature_snapshot_json.component_scores keys match aggregator DIMENSIONS."""
         rec_id = f"rec_dims_{uuid.uuid4().hex[:8]}"
@@ -994,6 +995,7 @@ class TestE2ERecommendationFlow:
         actual_keys = set(cs.keys())
         assert actual_keys == expected_keys, f"Component keys mismatch: {actual_keys} != {expected_keys}"
 
+    @pytest.mark.requires_market_data
     def test_recommendation_detail_builds_replay_summary(self, db):
         rec_id = f"rec_replay_{uuid.uuid4().hex[:8]}"
         run = RecommendationRun(

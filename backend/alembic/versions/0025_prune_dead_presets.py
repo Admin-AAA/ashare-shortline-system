@@ -33,7 +33,8 @@ def upgrade() -> None:
     n_skills = bind.execute(sa.text("DELETE FROM preset_skills WHERE preset_id IN :ids").bindparams(ids), {"ids": list(DEAD_PRESETS)}).rowcount
     n_presets = bind.execute(sa.text("DELETE FROM presets WHERE preset_id IN :ids").bindparams(ids), {"ids": list(DEAD_PRESETS)}).rowcount
     orphans = bind.execute(sa.text(
-        "DELETE ps FROM preset_skills ps LEFT JOIN skill_registry s ON s.skill_id = ps.skill_id WHERE s.skill_id IS NULL"
+        # portable (MySQL + SQLite used by alembic runtime tests)
+        "DELETE FROM preset_skills WHERE skill_id NOT IN (SELECT skill_id FROM skill_registry)"
     )).rowcount
     bind.execute(sa.text("UPDATE presets SET hide_recent_repeats = 1 WHERE preset_id = 'preset_single_chao_gu'"))
     bind.execute(sa.text(

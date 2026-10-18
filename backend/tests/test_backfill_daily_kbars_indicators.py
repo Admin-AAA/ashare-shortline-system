@@ -86,6 +86,7 @@ def _db_reachable():
 
 
 @pytest.mark.skipif(not _db_reachable(), reason="MySQL 不可达（无网/CI 环境）")
+@pytest.mark.requires_market_data
 def test_db_indicators_consistency_readonly():
     """DB 正确性校验（只读）：取一只股票，用 compute_indicators 计算 ma20，
     对照原始 close 的 pandas 滚动均值，断言一致。不写入。"""

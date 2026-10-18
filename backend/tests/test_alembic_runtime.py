@@ -6,7 +6,7 @@ import pytest
 from app.db.alembic_runtime import get_alembic_health, upgrade_database
 
 
-HEAD_REVISION = "0024_share_floats_unique"
+HEAD_REVISION = "0025_prune_dead_presets"
 
 
 def test_upgrade_database_creates_schema_and_is_idempotent() -> None:

@@ -184,6 +184,7 @@ def _db_reachable():
 
 
 @pytest.mark.skipif(not _db_reachable(), reason="MySQL 不可达（无网/CI 环境）")
+@pytest.mark.requires_market_data
 def test_integration_single_backtest_runs_and_spans_years():
     """集成测试：跑一次全量回测，断言结构正确、无未来函数、信号跨多年份。
 

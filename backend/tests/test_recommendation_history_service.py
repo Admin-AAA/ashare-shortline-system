@@ -195,6 +195,7 @@ def test_history_items_have_outcome_field():
         db.close()
 
 
+@pytest.mark.requires_market_data
 def test_missed_observation_is_bypass_only_and_needs_a_complete_window():
     """未触发买点的旁路参考：只统计 missed、扣附加成本，且窗口未满不给数值。
 

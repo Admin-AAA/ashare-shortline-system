@@ -84,6 +84,7 @@ def test_twenty_cm_gate_requires_injection():
 
 
 @pytest.mark.integration
+@pytest.mark.requires_market_data
 def test_diagnostic_pool_twenty_cm_populated_after_injection():
     """诊断整池注入后 twenty_cm_risk_gate 应全非空（复刻生产管线）。"""
     db = SessionLocal()

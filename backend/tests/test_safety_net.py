@@ -39,6 +39,7 @@ def test_check_gap_no_runs(db):
     assert "total_count" in result
 
 
+@pytest.mark.requires_market_data
 def test_check_gap_already_has_recommendations(db):
     """已有 completed formal 的日期不会因为推荐数为 0 而反复重跑。"""
     result = check_formal_recommendation_gap(db)
