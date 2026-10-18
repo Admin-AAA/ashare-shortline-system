@@ -124,7 +124,7 @@ def main() -> int:
                 new.append(r)
             if new and not a.dry_run:
                 db.execute(text(
-                    "INSERT INTO share_floats (code, ann_date, float_date, float_share, float_ratio, holder_name, created_at) "
+                    "INSERT IGNORE INTO share_floats (code, ann_date, float_date, float_share, float_ratio, holder_name, created_at) "
                     "VALUES (:code, :ann_date, :float_date, :float_share, :float_ratio, :holder_name, UTC_TIMESTAMP())"), new)
                 db.commit()
             per_year[lo.year] += len(new)
