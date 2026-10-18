@@ -641,16 +641,6 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
                 "health_scope": "process_runtime",
             }
         )
-    # realtime_quote 实时报价爬虫（独立于 pro HTTP provider，单独进程内统计）。
-    # 追加为第三个 provider 条目，复用数据源面板的 provider 渲染。
-    try:
-        from app.services.realtime_quote_client import get_realtime_quote_health
-
-        realtime_health = get_realtime_quote_health()
-        if realtime_health.get("configured"):
-            rows.append(realtime_health)
-    except Exception:
-        logger.warning("realtime_quote health projection failed", exc_info=True)
     return rows
 
 

@@ -68,33 +68,6 @@ def test_set_provider_enabled_toggles_existing_row(db_session, monkeypatch):
     assert row.enabled is False
 
 
-def test_test_provider_realtime_quote_path(db_session, monkeypatch):
-    _stub_providers(monkeypatch, ["realtime_quote"])
-    # realtime_quote 探针走 fetch_realtime_quotes；mock 成返回有数据
-    import app.services.realtime_quote_client as rq
-    monkeypatch.setattr(rq, "fetch_realtime_quotes", lambda codes, use_cache=False: {"000001": {"price": 11.0}})
-
-    out = ds.test_provider(db_session, "realtime_quote")
-    assert out["ok"] is True
-    assert out["status"] == "healthy"
-    assert out["latency_ms"] is not None
-
-    health = db_session.get(DataSourceHealth, {"source": "realtime_quote", "source_type": "tushare_provider"})
-    assert health is not None and health.success_count == 1 and health.last_error is None
-
-
-def test_test_provider_realtime_quote_empty_is_degraded(db_session, monkeypatch):
-    _stub_providers(monkeypatch, ["realtime_quote"])
-    import app.services.realtime_quote_client as rq
-    monkeypatch.setattr(rq, "fetch_realtime_quotes", lambda codes, use_cache=False: {})
-
-    out = ds.test_provider(db_session, "realtime_quote")
-    assert out["ok"] is False
-    assert out["status"] == "degraded"
-    health = db_session.get(DataSourceHealth, {"source": "realtime_quote", "source_type": "tushare_provider"})
-    assert health.failure_count == 1 and health.last_error
-
-
 def test_test_provider_unknown_raises_keyerror(db_session, monkeypatch):
     _stub_providers(monkeypatch, ["gw_a"])
 
@@ -231,50 +204,14 @@ def test_sync_orphan_cleanup_spares_tushare_provider_rows(db_session, monkeypatc
     assert db_session.get(DataSourceConfig, {"source": "ghost", "source_type": "quote"}) is None
 
 
-def test_realtime_quote_disabled_override_blocks_fetch(monkeypatch):
-    """realtime_quote 的禁用开关必须被 fetch 消费：禁用时直接降级为空，不发爬虫请求。"""
-    import app.services.realtime_quote_client as rq
-
-    called = {"realtime": False}
-
-    def _boom(*a, **k):  # 若走到真实 ts.realtime_quote 会抛
-        called["realtime"] = True
-        raise AssertionError("禁用后不应调用 ts.realtime_quote")
-
-    import tushare as ts
-    monkeypatch.setattr(ts, "realtime_quote", _boom)
-    monkeypatch.setattr(rq, "_enabled_override", lambda: False)
-
-    rows = rq.fetch_realtime_quotes(["000001"], use_cache=False)
-    assert rows == {}
-    assert called["realtime"] is False
-
-
-def test_realtime_quote_health_reads_disabled_override(monkeypatch):
-    """get_realtime_quote_health 的 enabled/status 必须反映 DB 覆盖，而非只看 token。"""
-    import app.services.realtime_quote_client as rq
-
-    class _S:
-        tushare_realtime_quote_token = "fake-token"  # token 在 → configured=True，但运行时禁用
-    monkeypatch.setattr(rq, "get_settings", lambda: _S())
-    monkeypatch.setattr(rq, "_enabled_override", lambda: False)
-
-    health = rq.get_realtime_quote_health()
-    assert health["enabled"] is False
-    assert health["configured"] is True
-    assert health["status"] == "disabled"
-
-
 def test_provider_health_only_projects_configured_sources(monkeypatch):
     """管理页只展示当前配置的 Provider，旧 Key 为空时不能显示为 disabled。"""
-    import app.services.realtime_quote_client as rq
     import app.services.tushare_client as tc
 
     class _Settings:
         tushare_promax_api_key = "promax-key"
         tushare_promax_rate_limit_per_minute = 180
         tushare_promax_max_concurrency = 4
-        tushare_realtime_quote_token = ""
         tushare_quantdata_token = "quantdata"
         tushare_quantdata_rate_limit_per_minute = 120
 
@@ -287,8 +224,6 @@ def test_provider_health_only_projects_configured_sources(monkeypatch):
     monkeypatch.setattr(tc, "_provider_enabled_override", lambda: {"promax": False})
     monkeypatch.setattr(tc, "_provider_priority_override", lambda: {})
     monkeypatch.setattr(tc, "get_pro", lambda: _Pro())
-    monkeypatch.setattr(rq, "get_settings", lambda: settings)
-    monkeypatch.setattr(rq, "_enabled_override", lambda: True)
 
     rows = tc.get_tushare_provider_health()
     by_name = {row["provider_name"]: row for row in rows}

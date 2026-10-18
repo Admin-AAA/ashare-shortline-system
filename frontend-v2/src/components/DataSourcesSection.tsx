@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, Loader2, Plug, RefreshCw, Server } from "lucide-rea
 import { api } from "../api/client";
 import type { DataSourceProvider, ProviderTestResult } from "../types";
 
-// 参与路由调序的 pro provider（realtime_quote 是独立爬虫，不在路由链，不调序）。
+// 参与路由调序的 pro provider（不在路由链的条目不调序）。
 const ROUTABLE = new Set(["promax", "quantdata"]);
 
 /**
@@ -37,7 +37,7 @@ export function DataSourcesSection() {
     load();
   }, [load]);
 
-  // 可路由 provider 按优先级排前，realtime_quote 等不可路由的排后（保持原序）。
+  // 可路由 provider 按优先级排前，不可路由的排后（保持原序）。
   function sortProviders(list: DataSourceProvider[]): DataSourceProvider[] {
     const routable = list.filter((p) => ROUTABLE.has(p.provider_name)).sort((a, b) => a.priority - b.priority);
     const rest = list.filter((p) => !ROUTABLE.has(p.provider_name));

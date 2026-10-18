@@ -1,4 +1,4 @@
-"""Dataset ``quote.realtime``: stockai888 realtime_quote -> promax rt_k -> quantdata rt_min -> xiaoshi snapshot.
+"""Dataset ``quote.realtime``: promax rt_k -> quantdata rt_min -> xiaoshi snapshot.
 
 Fill mode: each provider is asked only for codes still missing.  Every adapter
 returns ``{code6: row}`` normalized to ``SCHEMAS["quote.realtime"]``.
@@ -25,23 +25,6 @@ def _ts(code6: str) -> str:
     from app.services.tushare_client import ts_code
 
     return ts_code(code6)
-
-
-class Stockai888Provider:
-    name = "realtime_quote"
-    config_keys = (("realtime_quote", "tushare_provider"),)
-
-    def supports(self, dataset: str, query: Mapping[str, Any]) -> bool:
-        return dataset == DATASET
-
-    def fetch(self, dataset: str, query: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
-        from app.services import realtime_quote_client as rq
-
-        try:
-            rq._configure_realtime_session()
-        except RuntimeError as exc:
-            raise DataSourceError(ErrorKind.CONFIGURATION, str(exc), provider=self.name, dataset=dataset) from exc
-        return rq._fetch_stockai888_rows(list(query["keys"]))
 
 
 class RtkProvider:
@@ -141,7 +124,7 @@ _GATEWAY: DatasetGateway | None = None
 def gateway() -> DatasetGateway:
     global _GATEWAY
     if _GATEWAY is None:
-        _GATEWAY = DatasetGateway([Stockai888Provider(), RtkProvider(), RtMinProvider(), XiaoshiSnapshotProvider()])
+        _GATEWAY = DatasetGateway([RtkProvider(), RtMinProvider(), XiaoshiSnapshotProvider()])
     return _GATEWAY
 
 

@@ -885,7 +885,7 @@ def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict
     )
 
 
-# 参与路由调序的 tushare pro provider（realtime_quote 是独立爬虫，不在 Router 链里，不调序）。
+# 参与路由调序的 tushare pro provider。
 _ROUTABLE_PROVIDERS = (
     "promax",
     "quantdata",
@@ -939,7 +939,6 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
 
     - pro_http 源（promax/quantdata）：直连该 provider 调单股票 stock_basic，
       绕过 Router 选路，专测这一源的连通 + 鉴权。
-    - realtime_quote：调 fetch_realtime_quotes(["000001"]) 测爬虫端点。
     返回 {ok, latency_ms, status, error}；provider 未接入抛 KeyError。
     """
     started = time.perf_counter()
@@ -960,13 +959,6 @@ def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
             quote_error = probe["quote_error"]
             kline_ok = probe["kline_ok"]
             kline_error = probe["kline_error"]
-        elif provider_name == "realtime_quote":
-            from app.services.realtime_quote_client import fetch_realtime_quotes
-
-            rows = fetch_realtime_quotes(["000001"], use_cache=False)
-            ok = bool(rows)
-            if not ok:
-                error = "realtime_quote 返回空（端点不可达或无数据）"
         else:
             ok, error = _probe_pro_provider(provider_name)
     except KeyError:

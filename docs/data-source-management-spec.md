@@ -21,7 +21,7 @@
 |---|---|---|---|---|
 | 旧网关A | pro_http | config 写死 | ❌ 无 | ❌ 无 |
 | 旧网关C | pro_http | config 写死 | ❌ 无 | ❌ 无 |
-| realtime_quote | 爬虫(realtime.stockai888) | config 写死 | ❌ 无 | ❌ 无 |
+| realtime_quote | 爬虫(realtime.已删除报价网关) | config 写死 | ❌ 无 | ❌ 无 |
 | 旧网关B（新） | pro_http | 待接入 | ❌ 无 | ❌ 无 |
 
 - 数据域（quote/kline/news…）已有 `set_data_source_enabled`，管的是「某域用哪些源」，

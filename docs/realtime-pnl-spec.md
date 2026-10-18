@@ -49,7 +49,7 @@
    - 未触发买点 → 状态 `watching`，显示「距买点 x%」而非浮盈。
    - 已触发 → 状态 `holding`，用实时价算浮盈。
 2. **拉实时价**：`fetch_realtime_quotes(codes)`（tushare `realtime_quote`，走
-   `realtime.stockai888.top`，多代码批量一次调用，含现价/最高/最低/昨收）。
+   `（已删除的 token 报价网关）`，多代码批量一次调用，含现价/最高/最低/昨收）。
    - 批量：pending 列表通常 ≤ 几十只，一次批量调用 + 服务端 TTL 缓存（默认 20s）即可，不扫全市场。
    - 上游（realtime 端点）失败/超时 → 返回 `{}`，该票降级 `unavailable`，不报错。
 3. **算浮盈**：`pnl_pct = (realtime_price - entry_price) / entry_price * 100`，并给出日内高/低、是否触及止损止盈的提示。
