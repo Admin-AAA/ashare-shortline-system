@@ -904,6 +904,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
         logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
 
+    # stk_factor 指标列缺失时写 None（上游 upsert 对 0/NULL 都保留旧值），不再写 0（2026-10-19）
     bars: list[dict[str, Any]] = []
     for _, row in daily.iterrows():
         raw_ts_code = str(row.get("ts_code") or "")
@@ -932,19 +933,19 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
                 "ma20": _f(fac.get("ma20")),
                 "ma60": _f(fac.get("ma60")),
                 "ma250": _f(fac.get("ma250")),
-                "macd_dif": _f(fac.get("macd_dif")),
-                "macd_dea": _f(fac.get("macd_dea")),
-                "macd": _f(fac.get("macd")),
-                "kdj_k": _f(fac.get("kdj_k")),
-                "kdj_d": _f(fac.get("kdj_d")),
-                "kdj_j": _f(fac.get("kdj_j")),
-                "rsi_6": _f(fac.get("rsi_6")),
-                "rsi_12": _f(fac.get("rsi_12")),
-                "rsi_24": _f(fac.get("rsi_24")),
-                "boll_upper": _f(fac.get("boll_upper")),
-                "boll_mid": _f(fac.get("boll_mid")),
-                "boll_lower": _f(fac.get("boll_lower")),
-                "cci": _f(fac.get("cci")),
+                "macd_dif": _f(fac.get("macd_dif"), None),
+                "macd_dea": _f(fac.get("macd_dea"), None),
+                "macd": _f(fac.get("macd"), None),
+                "kdj_k": _f(fac.get("kdj_k"), None),
+                "kdj_d": _f(fac.get("kdj_d"), None),
+                "kdj_j": _f(fac.get("kdj_j"), None),
+                "rsi_6": _f(fac.get("rsi_6"), None),
+                "rsi_12": _f(fac.get("rsi_12"), None),
+                "rsi_24": _f(fac.get("rsi_24"), None),
+                "boll_upper": _f(fac.get("boll_upper"), None),
+                "boll_mid": _f(fac.get("boll_mid"), None),
+                "boll_lower": _f(fac.get("boll_lower"), None),
+                "cci": _f(fac.get("cci"), None),
                 "adj_factor": (_f(fac.get("adj_factor")) or adj_map.get(raw_ts_code)) or None,
                 "chip_cost_15": _f(chp.get("cost_15pct")),
                 "chip_cost_50": _f(chp.get("cost_50pct")),

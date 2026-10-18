@@ -130,7 +130,7 @@ def main() -> None:
             pairs = [(v, i) for v, i in zip(vals, ids)]
             for i in range(0, len(pairs), args.batch_size):
                 chunk = pairs[i:i + args.batch_size]
-                db.execute(text(f"UPDATE daily_kbars SET {col} = :v WHERE id = :id"),
+                db.execute(text(f"UPDATE daily_kbars SET {col} = :v, updated_at = UTC_TIMESTAMP() WHERE id = :id"),
                            [{"v": v, "id": uid} for (v, uid) in chunk])
                 db.commit()
                 done += len(chunk)

@@ -1679,6 +1679,7 @@ def _persist_kbars(db: Session, bars: list[dict[str, Any]]) -> None:
                 close=stmt.inserted.close,
                 volume=stmt.inserted.volume,
                 amount=stmt.inserted.amount,
+                updated_at=func.utc_timestamp(),  # 2026-10-19: revisions bump updated_at (outcome finality gate / auto re-projection)
                 **group.quote_metric_update(stmt),
                 **_preserve_derived_on_duplicate(stmt),
             ))

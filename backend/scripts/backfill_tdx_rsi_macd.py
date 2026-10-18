@@ -49,7 +49,7 @@ def main():
         {"s": a.start, "e": a.end})]
     print("codes", len(codes), flush=True)
     sets = ", ".join(f"{c} = IF({c} IS NULL OR {c} = 0, :{c}, {c})" for c in COLS)
-    upd = text(f"UPDATE daily_kbars SET {sets} WHERE code = :code AND trade_date = :td")
+    upd = text(f"UPDATE daily_kbars SET {sets}, updated_at = UTC_TIMESTAMP() WHERE code = :code AND trade_date = :td")
     load = text("SELECT code, trade_date, close, high FROM daily_kbars WHERE code IN :codes "
                 "AND trade_date <= :e ORDER BY code, trade_date").bindparams(bindparam("codes", expanding=True))
     total = 0

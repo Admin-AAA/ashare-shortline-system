@@ -90,3 +90,9 @@ def test_preserve_original_is_write_once():
     o.rule_version = "other"
     svc._preserve_original_settlement(o)
     assert o.original_executed_return == 14.9
+
+
+def test_backfill_bump_never_makes_settled_bar_provisional():
+    # backfills now bump updated_at to "now": any time after trade_date 17:30 CST stays final
+    for ts in (datetime(2026, 9, 21, 9, 30), datetime(2026, 10, 19, 1, 0), datetime(2030, 1, 1)):
+        assert svc._bar_is_final(SimpleNamespace(trade_date="2026-09-21", updated_at=ts))

@@ -42,7 +42,7 @@ def main() -> None:
         ]
         if not args.dry_run and rows:
             res = db.execute(text(
-                "UPDATE daily_kbars SET adj_factor = :a WHERE code = :c AND trade_date = :d "
+                "UPDATE daily_kbars SET adj_factor = :a, updated_at = UTC_TIMESTAMP() WHERE code = :c AND trade_date = :d "
                 "AND (adj_factor IS NULL OR adj_factor = 0)"), rows)
             db.commit()
             total += res.rowcount or 0

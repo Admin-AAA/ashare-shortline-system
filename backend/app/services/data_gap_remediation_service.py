@@ -1356,7 +1356,7 @@ def _repair_quote_metric_columns(
 
     assignments = ", ".join(f"{name} = :{name}" for name in targets)
     statement = text(
-        f"UPDATE daily_kbars SET {assignments} WHERE code = :code AND trade_date = :trade_date"
+        f"UPDATE daily_kbars SET {assignments}, updated_at = UTC_TIMESTAMP() WHERE code = :code AND trade_date = :trade_date"
     )
     updated = 0
     for row in rows:
@@ -1608,6 +1608,7 @@ def _backfill_chip_date(db: Session, trade_date: str) -> dict[str, Any]:
         stmt = mysql_insert(DailyKbar).values(chunk)
         db.execute(
             stmt.on_duplicate_key_update(
+                updated_at=func.utc_timestamp(),  # 2026-10-19: revisions bump updated_at (outcome finality gate / auto re-projection)
                 chip_cost_15=stmt.inserted.chip_cost_15,
                 chip_cost_50=stmt.inserted.chip_cost_50,
                 chip_cost_85=stmt.inserted.chip_cost_85,

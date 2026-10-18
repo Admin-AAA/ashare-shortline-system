@@ -29,7 +29,7 @@ def fill_recent_indicator_gaps(db, trade_date: str, *, lookback_days: int = 20,
         "AND (rsi_24 IS NULL OR rsi_24 = 0 OR macd_dif IS NULL OR macd_dif = 0)"),
         {"s": start, "e": end})]
     sets = ", ".join(f"{c} = IF({c} IS NULL OR {c} = 0, :{c}, {c})" for c in COLS)
-    upd = text(f"UPDATE daily_kbars SET {sets} WHERE code = :code AND trade_date = :td")
+    upd = text(f"UPDATE daily_kbars SET {sets}, updated_at = UTC_TIMESTAMP() WHERE code = :code AND trade_date = :td")
     load = text("SELECT code, trade_date, close, high FROM daily_kbars WHERE code IN :codes "
                 "AND trade_date >= :w AND trade_date <= :e ORDER BY code, trade_date"
                 ).bindparams(bindparam("codes", expanding=True))

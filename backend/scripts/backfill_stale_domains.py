@@ -29,7 +29,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from app.db.session import SessionLocal
@@ -119,6 +119,7 @@ def backfill_chip(db, pro, trade_days: list[str]) -> int:
         stmt = mysql_insert(DailyKbar).values(rows)
         # 只更新筹码列，不覆盖其他已存在的列
         update_cols = {
+            "updated_at": func.utc_timestamp(),
             "chip_cost_15": stmt.inserted.chip_cost_15,
             "chip_cost_50": stmt.inserted.chip_cost_50,
             "chip_cost_85": stmt.inserted.chip_cost_85,
