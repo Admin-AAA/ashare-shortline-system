@@ -203,11 +203,56 @@ def analyze_stock(
             decision=pipeline_decision,
         )
 
+    result["prior_formal_recommendations"] = _prior_formal_recommendations(
+        db, code, str(result.get("trade_date") or trade_date)
+    )
+    result["score_basis_note"] = (
+        "单股评分按当前库内数据重算，可能与当时正式 run 的分数不同；"
+        "历史出票分数以推荐记录（recommendations）原始值为准。"
+    )
     # 管线审计里含 tuple 等非 JSON 原生类型，ContractRouter 的 JsonResponse(JsonValue)
     # 会拒绝 → 中间件吞掉异常返回 500（历史已落库但前端永远拿到 500）。统一转成 JSON 原生结构。
     result = _json_safe(result)
     _persist_single_stock_history(db, code, trade_date, result)
     return result
+
+
+def _prior_formal_recommendations(db: Session, code: str, trade_date: str) -> dict[str, Any]:
+    """该股在分析日及之前 7 天是否已被实盘正式 run 推荐（与正式去重同一口径：live_forward）。"""
+    from datetime import date, timedelta
+
+    from app.models.tables import Recommendation
+    from app.services.workbench_service import live_forward_run_conditions
+
+    try:
+        start = (date.fromisoformat(trade_date) - timedelta(days=7)).isoformat()
+        rows = db.execute(
+            select(Recommendation.trade_date, Recommendation.final_score, RecommendationRun.run_id)
+            .join(RecommendationRun, Recommendation.run_id == RecommendationRun.run_id)
+            .where(
+                Recommendation.code == code,
+                Recommendation.trade_date >= start,
+                Recommendation.trade_date <= trade_date,
+                *live_forward_run_conditions(),
+            )
+            .order_by(Recommendation.trade_date.desc())
+        ).all()
+    except Exception as exc:  # noqa: BLE001 - annotation only, logged
+        logger.warning("prior formal recommendation lookup failed for %s: %s", code, exc)
+        return {"available": False, "same_day": False, "recent_7d": False, "items": []}
+    items = [
+        {"trade_date": str(r.trade_date), "final_score": r.final_score, "run_id": r.run_id}
+        for r in rows
+    ]
+    dates = sorted({item["trade_date"] for item in items}, reverse=True)
+    return {
+        "available": True,
+        "same_day": trade_date in dates,
+        "recent_7d": bool(dates),
+        "dates": dates,
+        "label": ("当日/近7日已被正式推荐：" + "、".join(dates)) if dates else None,
+        "items": items,
+    }
 
 
 def _json_safe(value: Any) -> Any:
@@ -317,6 +362,11 @@ def _single_stock_run_request(
         "preset_id": preset_id,
         "trade_date_override": trade_date,
         "disable_agent_review": not include_llm,
+        # 单股分析是"这只票现在按管线算多少分"，不是出票：关闭跨 run/跨日重复推荐过滤，
+        # 否则当日/近 7 日已被正式推荐的票会在打分后被剔除，显示成"已审查未打分"。
+        # 是否已被正式推荐改由结果里的 prior_formal_recommendations 标注。仅影响单股请求。
+        "hide_recent_repeats": False,
+        "dedup_same_day": False,
         "run_name": f"单股推荐 · {skill_id if not preset else preset.name}",
     }
     if preset is None:

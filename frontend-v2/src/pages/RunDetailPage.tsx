@@ -570,6 +570,18 @@ function SingleStockScoreResult({ result }: { result: SingleStockAnalysis }) {
           </div>
           <span className="tag">{result.trade_date}</span>
         </div>
+        <div className="text-muted" style={{ fontSize: "var(--text-xs)", marginBottom: "var(--space-2)" }}>
+          {result.score_basis_note ?? "单股评分按当前库内数据重算，可能与当时正式 run 的分数不同；历史出票分数以推荐记录原始值为准。"}
+        </div>
+        {result.prior_formal_recommendations?.label && (
+          <div className="tag" style={{ marginBottom: "var(--space-2)", display: "inline-block" }}>
+            {result.prior_formal_recommendations.label}
+            {result.prior_formal_recommendations.items.length > 0 &&
+              `（正式分：${result.prior_formal_recommendations.items
+                .map((it) => `${it.trade_date} ${it.final_score != null ? it.final_score.toFixed(1) : "—"}`)
+                .join("，")}）`}
+          </div>
+        )}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)" }}>
           <ScoreMetric label="管线最终分" value={result.final_score} />
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
