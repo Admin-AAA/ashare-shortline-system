@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import os
 from datetime import date, timedelta
 from typing import Any, Iterable, Mapping
 
@@ -84,7 +85,7 @@ def trend_by_dates(session: Any, dates: Iterable[str]) -> dict[str, dict[str, fl
 def trend_for_live(session: Any, trade_date: str, stocks: Iterable[Mapping[str, Any]]) -> dict[str, float]:
     """实盘：DB 里还没有当日 K 线时，用当日行情 pct 均值补上最后一天。"""
     zero = {k: 0.0 for k in FIELDS}
-    if not trade_date:
+    if not trade_date or os.environ.get("ASHARE_MKT_TREND_OFF") == "1":  # 研究对照：关闭趋势闸门
         return zero
     td = str(trade_date)[:10]
     try:
