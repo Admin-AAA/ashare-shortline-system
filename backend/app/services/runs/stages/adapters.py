@@ -685,6 +685,15 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
             "policy_verdict_summary": dict(policy_result.verdict_summary),
             "policy_verdicts": [asdict(item) for item in policy_result.verdicts],
         }
+        # Sprint4 §104：短线策略级权益曲线冷却（仅 live_forward formal 单策略 run、已采纳的策略；出错放行）。
+        if standalone_sid and formal_cards:
+            from app.services.shortline_cooldown import apply_live_cooldown
+
+            formal_cards, _cooldown = apply_live_cooldown(
+                self._db, self._run_id, standalone_sid, str(snapshot.get("trade_date") or ""), formal_cards,
+            )
+            if _cooldown:
+                pipeline_updates["shortline_cooldown"] = _cooldown
         return tuple(formal_cards), tuple(scored_cards), pipeline_updates
 
 
