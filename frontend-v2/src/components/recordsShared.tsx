@@ -94,11 +94,11 @@ export const pageBtnStyle = (disabled: boolean): CSSProperties => ({
 export function StatusBadge({ status }: { status: string }) {
   const color =
     status === "succeeded" || status === "completed"
-      ? "var(--market-up)"
+      ? "var(--positive)"
       : status === "running"
         ? "var(--accent)"
         : status === "failed" || status === "interrupted"
-          ? "var(--market-down)"
+          ? "var(--warning)"
           : "var(--muted)";
   return (
     <span style={{

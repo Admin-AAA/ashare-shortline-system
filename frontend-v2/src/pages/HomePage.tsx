@@ -286,6 +286,9 @@ function StatusBar({
         top: "calc(var(--topbar-height) + var(--space-3))",
         zIndex: "var(--z-sticky)",
         fontSize: "var(--text-sm)",
+        flexWrap: "wrap",
+        rowGap: "var(--space-1)",
+        whiteSpace: "nowrap",
       }}
     >
       {/* 左侧：核心状态信息 */}
