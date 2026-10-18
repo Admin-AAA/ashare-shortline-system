@@ -1886,6 +1886,66 @@ def fetch_minute_kbars(
       （严格限速，见 _fetch_baostock_minute_kbars）。须配合 trade_date 使用；
       未传 trade_date 时回落到「最近一个有数据的交易日」。
     """
+    from app.services.datasource import gateway as _gw
+
+    if _gw.is_cutover("bar.minute"):
+        return _fetch_minute_kbars_gateway(code, trade_date, trace, freq)
+    rows = _legacy_fetch_minute_kbars(code, trade_date, trace, freq)
+    if _gw.is_shadow("bar.minute"):
+        _gw.shadow_compare("bar.minute", rows, lambda: _fetch_minute_kbars_gateway(code, trade_date, None, freq))
+    return rows
+
+
+def _fetch_minute_kbars_gateway(
+    code: str,
+    trade_date: str | None,
+    trace: list[dict[str, Any]] | None,
+    freq: str,
+) -> list[dict[str, Any]]:
+    """Gateway path for ``bar.minute``; post-processing per provider mirrors the legacy branches."""
+    from app.services.datasource import bar_minute
+
+    target_trade_date = _normalize_trade_date(trade_date)
+    normalized_freq = str(freq or "1min").lower()
+    if target_trade_date:
+        res = bar_minute.fetch(code, target_trade_date, target_trade_date, normalized_freq, trace)
+        if res.provider == "xiaoshi_min1":
+            return _attach_pre_close(res.rows)
+        if res.provider == "tushare_stk_mins":
+            return [row for row in res.rows if row["trade_date"] == target_trade_date]
+        return list(res.rows or [])
+    if normalized_freq != "1min":
+        end_day = date.today()
+        start_day = end_day - timedelta(days=10)
+        res = bar_minute.fetch(code, start_day.isoformat(), end_day.isoformat(), normalized_freq, trace)
+        rows = list(res.rows or [])
+        latest = max((row["trade_date"] for row in rows), default="")
+        picked = [row for row in rows if row["trade_date"] == latest]
+        return _attach_pre_close(picked) if res.provider == "xiaoshi_min1" else picked
+    rows = _recent_minute_kbars_gateway(code, 5, trace)
+    latest_trade_date = max((row["trade_date"] for row in rows), default="")
+    return [row for row in rows if row["trade_date"] == latest_trade_date]
+
+
+def _recent_minute_kbars_gateway(code: str, ndays: int, trace: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    from app.services.datasource import bar_minute
+
+    end_day = date.today()
+    start_day = end_day - timedelta(days=max(10, int(ndays or 5) * 3))
+    res = bar_minute.fetch(code, start_day.isoformat(), end_day.isoformat(), "1min", trace)
+    if not res.rows:
+        return []
+    if res.provider == "xiaoshi_min1":
+        return _trim_recent_trade_dates(_attach_pre_close(res.rows), ndays)
+    return _trim_recent_trade_dates(res.rows, ndays)
+
+
+def _legacy_fetch_minute_kbars(
+    code: str,
+    trade_date: str | None,
+    trace: list[dict[str, Any]] | None,
+    freq: str,
+) -> list[dict[str, Any]]:
     target_trade_date = _normalize_trade_date(trade_date)
     normalized_freq = str(freq or "1min").lower()
 
@@ -1943,7 +2003,11 @@ def fetch_recent_minute_kbars(
     ndays: int = 5,
     trace: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """获取个股近 N 个交易日的 1 分钟数据。仅使用 Tushare stk_mins。"""
+    """获取个股近 N 个交易日的 1 分钟数据（xiaoshi → Tushare stk_mins）。"""
+    from app.services.datasource import gateway as _gw
+
+    if _gw.is_cutover("bar.minute"):
+        return _recent_minute_kbars_gateway(code, ndays, trace)
     end_day = date.today()
     start_day = end_day - timedelta(days=max(10, int(ndays or 5) * 3))
     xiaoshi_rows = _fetch_xiaoshi_minute_kbars(
