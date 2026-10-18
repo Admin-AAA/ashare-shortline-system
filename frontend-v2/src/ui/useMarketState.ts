@@ -3,8 +3,27 @@ import { api } from "../api/client";
 import type { MarketState } from "./strategyRules";
 
 /** 市场状态（GET /api/home/bootstrap → market_snapshot），5 分钟刷新 */
+// 性能：上次的市场快照存 localStorage，打开页面即显示（stale-while-revalidate），
+// initialDataUpdatedAt 用存储时间，过期即立刻后台刷新；返回内容与接口一致。
+const BOOT_KEY = "ashare.bootstrap.v1";
+type Boot = Awaited<ReturnType<typeof api.bootstrap>>;
+function readBoot(): { at: number; data: Boot } | undefined {
+  try { const raw = localStorage.getItem(BOOT_KEY); return raw ? JSON.parse(raw) : undefined; } catch { return undefined; }
+}
 export function useBootstrap() {
-  return useQuery({ queryKey: ["home-bootstrap"], queryFn: () => api.bootstrap(), refetchInterval: 300_000, staleTime: 60_000 });
+  const cached = readBoot();
+  return useQuery({
+    queryKey: ["home-bootstrap"],
+    queryFn: async () => {
+      const data = await api.bootstrap();
+      try { localStorage.setItem(BOOT_KEY, JSON.stringify({ at: Date.now(), data })); } catch { /* quota */ }
+      return data;
+    },
+    initialData: cached?.data,
+    initialDataUpdatedAt: cached?.at,
+    refetchInterval: 300_000,
+    staleTime: 60_000,
+  });
 }
 
 export function useMarketState(): { market: MarketState | null; tradeDate?: string; hotTheme?: string; generatedAt?: string } {
