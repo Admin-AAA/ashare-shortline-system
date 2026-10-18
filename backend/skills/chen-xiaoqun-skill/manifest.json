@@ -3,10 +3,10 @@
   "name": "陈小群龙头战法",
   "version": "0.1.0",
   "mode": "declarative",
-  "status": "retired",
+  "status": "active",
   "requirements": ["stock_feature_context"],
   "capabilities": ["signal_evaluation"],
-  "enabled": false,
+  "enabled": true,
   "source_type": "local",
   "description": "A股短线龙头、分歧转一致、加速阶段识别。"
 }
