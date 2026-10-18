@@ -31,6 +31,16 @@ def _slugify(value: str) -> str:
     return hashlib.md5(value.encode("utf-8")).hexdigest()[:12]
 
 
+FULL_COMBO_PRESET_ID = "preset_formal_opening"
+
+
+def _preset_description(preset: Preset, skill_count: int) -> str | None:
+    """全策略组合的描述按实际成员数生成，增删策略后不会再过时（旧文案曾写死“12 个”）。"""
+    if preset.preset_id == FULL_COMBO_PRESET_ID:
+        return f"全部 {skill_count} 个在跑策略的组合预设，盘前 formal run 使用。"
+    return preset.description
+
+
 def _serialize_preset(db: Session, preset: Preset) -> dict[str, Any]:
     skills = db.scalars(
         select(PresetSkill).where(PresetSkill.preset_id == preset.preset_id).order_by(PresetSkill.sort_order.asc())
@@ -38,7 +48,7 @@ def _serialize_preset(db: Session, preset: Preset) -> dict[str, Any]:
     return {
         "preset_id": preset.preset_id,
         "name": preset.name,
-        "description": preset.description,
+        "description": _preset_description(preset, len(skills)),
         "skip_aux_refresh": preset.skip_aux_refresh,
         "market_scope": preset.market_scope,
         "market_scope_value": preset.market_scope_value,
@@ -93,7 +103,7 @@ def _serialize_presets_batched(db: Session, presets: list[Preset]) -> list[dict[
         {
             "preset_id": preset.preset_id,
             "name": preset.name,
-            "description": preset.description,
+            "description": _preset_description(preset, len(skills_by_preset.get(preset.preset_id, []))),
             "skip_aux_refresh": preset.skip_aux_refresh,
             "market_scope": preset.market_scope,
             "market_scope_value": preset.market_scope_value,
