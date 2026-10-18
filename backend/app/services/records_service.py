@@ -86,6 +86,14 @@ def _compute_returns(recommend_price: float, bars: list[DailyKbar], today_date: 
     return result
 
 
+SLIM_DROP_KEYS = ("result_summary",)
+
+
+def slim_run(run: dict[str, Any]) -> dict[str, Any]:
+    """fields=slim 投影：去掉体积占比约 80% 的 result_summary，其余字段原样。"""
+    return {k: v for k, v in run.items() if k not in SLIM_DROP_KEYS}
+
+
 def list_run_records(
     db: Session,
     *,

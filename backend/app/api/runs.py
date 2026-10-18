@@ -32,7 +32,10 @@ async def create_run(payload: dict, db: Session = Depends(get_db)):
         if not payload.get("preset_id") and not payload.get("single_skill_id"):
             raise ValueError("preset_id or single_skill_id is required")
         if not payload.get("wait_for_completion") and payload.get("async", True) is not False:
-            return enqueue_workbench_run(db, payload)
+            # 同步 DB 写入放到线程池，避免阻塞事件循环（期间所有请求含 /api/auth/status 都会卡住）。
+            from starlette.concurrency import run_in_threadpool
+
+            return await run_in_threadpool(enqueue_workbench_run, db, payload)
         return await run_workbench(db, payload)
     except (ValueError, MarketDataError, RuntimeError) as exc:
         logger.exception("create_run failed")
@@ -271,9 +274,15 @@ def backtest_detail(backtest_id: str, db: Session = Depends(get_db)):
 def get_runs(
     limit: int = Query(default=100, ge=1, le=500),
     run_mode: str | None = Query(default=None, pattern="^(formal|experiment|backtest)$"),
+    fields: str | None = Query(default=None, pattern="^(full|slim)$", description="slim：去掉体积最大的 result_summary（默认 full，返回不变）"),
     db: Session = Depends(get_db),
 ):
-    return list_runs(db, limit=limit, run_mode=run_mode)
+    runs = list_runs(db, limit=limit, run_mode=run_mode)
+    if fields == "slim":
+        from app.services.records_service import slim_run
+
+        runs = [slim_run(r) for r in runs]
+    return runs
 
 
 @router.get("/{run_id}")

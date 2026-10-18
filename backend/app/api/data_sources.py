@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 # 缓存 key 不含分页参数：heavy computation 共享，pagination 按需裁剪
 _pool_status_cache: dict = {}
 _pool_status_lock = threading.Lock()
+# single-flight：同一 key 的缓存未命中只允许一个线程重算，其余等待后直接命中缓存。
+_pool_compute_locks: dict[str, threading.Lock] = {}
 _POOL_CACHE_KEY = "__pool__"  # 单一 key，不按分页拆分
 
 
@@ -116,6 +118,34 @@ def local_pool(
 
 
 def get_cached_local_pool_status(
+    db: Session,
+    *,
+    u_limit: int = 50,
+    u_offset: int = 0,
+    b_limit: int = 50,
+    b_offset: int = 0,
+    cache_ttl: int = 300,
+    include_paginated: bool = True,
+    include_details: bool = True,
+    cache_only: bool = False,
+) -> dict:
+    kwargs = dict(
+        u_limit=u_limit, u_offset=u_offset, b_limit=b_limit, b_offset=b_offset,
+        cache_ttl=cache_ttl, include_paginated=include_paginated,
+        include_details=include_details, cache_only=cache_only,
+    )
+    cache_key = _pool_cache_key(include_details)
+    with _pool_status_lock:
+        cached = _pool_status_cache.get(cache_key)
+        fresh = bool(cached and (time.monotonic() - cached["ts"]) < cache_ttl)
+        compute_lock = _pool_compute_locks.setdefault(cache_key, threading.Lock())
+    if fresh or cache_only:
+        return _get_cached_local_pool_status_impl(db, **kwargs)
+    with compute_lock:
+        return _get_cached_local_pool_status_impl(db, **kwargs)
+
+
+def _get_cached_local_pool_status_impl(
     db: Session,
     *,
     u_limit: int = 50,
