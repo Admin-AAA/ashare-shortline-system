@@ -44,7 +44,7 @@ export function BatchReviewPage() {
 
   const q = useQuery({
     queryKey: ["batch-review", code, strategy],
-    queryFn: () => api.recommendationHistory({ code: code || undefined, strategy_id: strategy || undefined, limit: 500 }),
+    queryFn: () => api.recommendationHistory({ code: code || undefined, strategy_id: strategy || undefined, limit: 200 }),
   });
 
   const batches = useMemo(() => {
