@@ -74,6 +74,9 @@ class Settings(BaseSettings):
     tushare_realtime_quote_url: str = "https://realtime.stockai888.top"
     tushare_realtime_quote_batch_size: int = 60
     tushare_realtime_quote_ttl_seconds: float = 20.0
+    # 同质量档内按剩余限速额度×实时健康度加权分流（档位见 datasource/routing_table.json，
+    # 单个 api 可用 "balance": false 关闭）；False = 全局关闭，退回纯链序。
+    tushare_load_balancing: bool = True
     tushare_provider_failure_threshold: int = 3
     tushare_provider_recovery_seconds: float = 60.0
     tushare_provider_max_attempts: int = 2

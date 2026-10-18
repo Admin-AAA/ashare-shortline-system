@@ -408,11 +408,24 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
         TushareProviderRouter(
             providers,
             api_routes=api_routes,
+            api_tiers=_routing_tiers(),
             enabled_override=_provider_enabled_override,
             priority_override=_provider_priority_override,
         ),
         settings.tushare_promax_url,
     )
+
+
+def _routing_table():
+    from app.services.datasource.capability import load_routing_table
+
+    return load_routing_table()
+
+
+def _routing_tiers() -> dict[str, tuple[tuple[str, ...], ...]]:
+    from app.services.datasource.capability import resolve_tiers
+
+    return resolve_tiers(_routing_table(), enabled=bool(get_settings().tushare_load_balancing))
 
 
 def _apply_routing_table(
@@ -428,7 +441,7 @@ def _apply_routing_table(
 
     from app.services.datasource.capability import load_routing_table, resolve_routes
 
-    routes, excluded = resolve_routes(load_routing_table(), TushareProviderRouter.DEFAULT_API_ROUTES)
+    routes, excluded = resolve_routes(_routing_table(), TushareProviderRouter.DEFAULT_API_ROUTES)
     out: list[TushareHttpProvider] = []
     for provider in providers:
         extra = excluded.get(provider.name)

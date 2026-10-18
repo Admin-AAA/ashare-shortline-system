@@ -299,6 +299,15 @@ class SlidingWindowLimiter:
         self._timestamps: deque[float] = deque()
         self._lock = threading.Lock()
 
+    def headroom(self) -> float:
+        """Fraction of the window still free; observational, never blocks."""
+        if self._limit <= 0:
+            return 1.0
+        with self._lock:
+            cutoff = time.monotonic() - self._window
+            used = sum(1 for t in self._timestamps if t > cutoff)
+        return max(0.0, 1.0 - used / self._limit)
+
     def acquire(self) -> None:
         if self._limit <= 0:
             return
@@ -397,6 +406,9 @@ class TushareHttpProvider:
         self._breakers: dict[str, CircuitBreaker] = {}
         self._breaker_lock = threading.Lock()
         self._health = ProviderRuntimeHealth()
+        # Load-balancing health: per-API time-decayed failure score (half-life LB_HALF_LIFE_S).
+        self._lb_errors: dict[str, tuple[float, float]] = {}
+        self._lb_lock = threading.Lock()
 
     @property
     def name(self) -> str:
@@ -434,6 +446,38 @@ class TushareHttpProvider:
             "breaker_state": breaker_state,
             "open_circuits": open_circuits,
         }
+
+    LB_HALF_LIFE_S = 120.0
+
+    def _lb_record(self, api_name: str, failed: bool, *, weight: float = 1.0) -> None:
+        now = time.monotonic()
+        with self._lb_lock:
+            score, ts = self._lb_errors.get(api_name, (0.0, now))
+            score *= 0.5 ** ((now - ts) / self.LB_HALF_LIFE_S)
+            self._lb_errors[api_name] = (score + (weight if failed else 0.0), now)
+
+    def lb_health(self, api_name: str) -> float:
+        """1.0 = healthy; decays toward 0 with recent errors/429s; 0 when breaker open."""
+        with self._breaker_lock:
+            breaker = self._breakers.get(api_name)
+        if breaker is not None and breaker.state == "open":
+            return 0.0
+        now = time.monotonic()
+        with self._lb_lock:
+            score, ts = self._lb_errors.get(api_name, (0.0, now))
+        score *= 0.5 ** ((now - ts) / self.LB_HALF_LIFE_S)
+        return 1.0 / (1.0 + score)
+
+    def lb_headroom(self, api_name: str) -> float:
+        def h(limiter: Any) -> float:
+            fn = getattr(limiter, "headroom", None)
+            return float(fn()) if fn else 1.0
+
+        value = h(self._provider_limiter)
+        api_limiter = self._api_limiters.get(api_name)
+        if api_limiter is not None:
+            value = min(value, h(api_limiter))
+        return value
 
     def _breaker(self, api_name: str) -> CircuitBreaker:
         with self._breaker_lock:
@@ -516,6 +560,10 @@ class TushareHttpProvider:
                     latency_ms=(time.perf_counter() - started) * 1000,
                 )
                 _metrics.inc("provider_requests", provider=self.name, outcome=str(failure.category.value))
+                rate_limited = failure.category in (
+                    FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT
+                )
+                self._lb_record(api_name, True, weight=2.0 if rate_limited else 1.0)
                 raise
             data = envelope.get("data")
             items = data.get("items") if isinstance(data, Mapping) else None
@@ -525,6 +573,8 @@ class TushareHttpProvider:
                 empty=not bool(items),
             )
             _metrics.inc("provider_requests", provider=self.name, outcome="success")
+            _metrics.inc("provider_api_requests", provider=self.name, api=api_name, outcome="success")
+            self._lb_record(api_name, False)
             _metrics.observe("provider_latency", time.perf_counter() - started, provider=self.name)
             return envelope
         finally:
@@ -849,6 +899,9 @@ class TushareProviderRouter:
         providers: list[TushareHttpProvider],
         *,
         api_routes: Mapping[str, tuple[str, ...]] | None = None,
+        api_tiers: Mapping[str, Sequence[Sequence[str]]] | None = None,
+        balance_rng: random.Random | None = None,
+        balance_deterministic: bool = False,
         enabled_override: Any = None,
         priority_override: Any = None,
         trace_sink: Any = None,
@@ -858,6 +911,11 @@ class TushareProviderRouter:
         # per-API 选路链：api_name -> [provider 名按尝试顺序]。默认 DEFAULT_API_ROUTES，
         # 可由 api_routes 覆盖（数据源管理/未来新源在此调链序，与业务解耦）。
         self._api_routes = dict(api_routes) if api_routes is not None else dict(self.DEFAULT_API_ROUTES)
+        # Load balancing: api -> equal-quality tiers. Absent = no balancing (pure chain order),
+        # which is the default for directly-constructed routers (equivalence tests).
+        self._api_tiers = {k: tuple(tuple(t) for t in v) for k, v in (api_tiers or {}).items()}
+        self._balance_rng = balance_rng or random.Random()
+        self._balance_deterministic = bool(balance_deterministic)
         # enabled_override: 可选可调用 () -> Mapping[str, bool]，提供 provider 运行时启停
         # （DB 覆盖 config）。为 None 时全部启用。每次选路时读取，使启停即时生效。
         self._enabled_override = enabled_override
@@ -913,8 +971,63 @@ class TushareProviderRouter:
             ordered = [by_name[name] for name in route if name in by_name]
             # 链里没列出但已启用的 provider 追加在末尾（按 priority），避免漏掉 fallback
             rest = sorted((p for p in enabled if p.name not in route), key=self._effective_priority)
-            return ordered + rest
-        return sorted(enabled, key=self._effective_priority)
+            return self._balance(api_name, ordered + rest)
+        return self._balance(api_name, sorted(enabled, key=self._effective_priority))
+
+    def balance_weights(self, api_name: str, providers: Sequence[TushareHttpProvider]) -> dict[str, float]:
+        out: dict[str, float] = {}
+        for p in providers:
+            health = p.lb_health(api_name) if hasattr(p, "lb_health") else 1.0
+            headroom = p.lb_headroom(api_name) if hasattr(p, "lb_headroom") else 1.0
+            rpm = max(1, int(getattr(getattr(p, "config", None), "rate_limit_per_minute", 0) or 60))
+            # remaining absolute capacity × live health; floor keeps an idle-but-full provider eligible
+            out[p.name] = health * max(0.02, headroom) * rpm
+        return out
+
+    def _balance(self, api_name: str, ordered: list[TushareHttpProvider]) -> list[TushareHttpProvider]:
+        """Reorder within equal-quality tiers by headroom×health; tiers & fallback order kept."""
+        tiers = self._api_tiers.get(api_name)
+        if not tiers or len(ordered) < 2:
+            return ordered
+        tier_of = {name: i for i, tier in enumerate(tiers) for name in tier}
+        n = len(tiers)
+        # stable: tiered providers first by tier index, then untiered in chain order
+        indexed = sorted(enumerate(ordered), key=lambda t: (tier_of.get(t[1].name, n), t[0]))
+        result: list[TushareHttpProvider] = []
+        i = 0
+        while i < len(indexed):
+            tidx = tier_of.get(indexed[i][1].name, n)
+            group = []
+            while i < len(indexed) and tier_of.get(indexed[i][1].name, n) == tidx:
+                group.append(indexed[i][1])
+                i += 1
+            if tidx < n and len(group) > 1:
+                group = self._weighted_order(api_name, group)
+            result.extend(group)
+        _metrics.inc("provider_lb_choice", api=api_name, provider=result[0].name)
+        return result
+
+    def _weighted_order(self, api_name: str, group: list[TushareHttpProvider]) -> list[TushareHttpProvider]:
+        weights = self.balance_weights(api_name, group)
+        for name, w in weights.items():
+            _metrics.set_gauge("provider_lb_weight", w, api=api_name, provider=name)
+        live = [p for p in group if weights[p.name] > 0]
+        dead = [p for p in group if weights[p.name] <= 0]  # breaker open: last, still a fallback
+        if self._balance_deterministic:
+            live.sort(key=lambda p: -weights[p.name])  # stable on ties
+            return live + dead
+        out: list[TushareHttpProvider] = []
+        pool = list(live)
+        while pool:
+            total = sum(weights[p.name] for p in pool)
+            pick = self._balance_rng.random() * total
+            acc = 0.0
+            for idx, p in enumerate(pool):
+                acc += weights[p.name]
+                if pick < acc or idx == len(pool) - 1:
+                    out.append(pool.pop(idx))
+                    break
+        return out + dead
 
     def request(
         self,
