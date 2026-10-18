@@ -40,6 +40,18 @@ def observe(name: str, seconds: float, **labels: Any) -> None:
         return
 
 
+_gauges: dict[tuple[str, tuple[tuple[str, str], ...]], float] = {}
+
+
+def set_gauge(name: str, value: float, **labels: Any) -> None:
+    try:
+        k = _key(name, labels)
+        with _lock:
+            _gauges[k] = float(value)
+    except Exception:  # noqa: BLE001 - metrics must never break callers
+        return
+
+
 @contextmanager
 def timed(name: str, **labels: Any) -> Iterator[None]:
     t0 = time.perf_counter()
@@ -55,10 +67,12 @@ def snapshot() -> dict[str, Any]:
         timings = [{"name": n, "labels": dict(l), "count": int(s[0]), "sum_seconds": round(s[1], 6),
                     "avg_seconds": round(s[1] / s[0], 6) if s[0] else 0.0, "max_seconds": round(s[2], 6)}
                    for (n, l), s in sorted(_timings.items())]
-    return {"counters": counters, "timings": timings}
+        gauges = [{"name": n, "labels": dict(l), "value": round(v, 4)} for (n, l), v in sorted(_gauges.items())]
+    return {"counters": counters, "timings": timings, "gauges": gauges}
 
 
 def reset() -> None:
     with _lock:
         _counters.clear()
         _timings.clear()
+        _gauges.clear()

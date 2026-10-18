@@ -1,10 +1,12 @@
+> 2026-10-18：旧网关A/B/C（三个无凭据的第三方 Tushare 网关）及 tushare_official 已从代码中删除，现役 Tushare 兼容源为 promax、quantdata；路由见 backend/app/services/datasource/routing_table.json。下文为历史设计记录。
+
 # 数据源管理（配置页 Tab）
 
 日期：2026-07-27 · 状态：待实施 · 端口：frontend-v2 (5174)
 
 ## 目标
 
-系统已接入多个 tushare 系数据源（fastapic / ai-tool / realtime_quote / xiaodefa），
+系统已接入多个 tushare 系数据源（旧网关A / 旧网关C / realtime_quote / 旧网关B），
 后续还会加。在配置页新增「数据源管理」Tab，对**已接入**的数据源提供三个操作：
 
 - **启用 / 禁用**（运行时生效，不用改 config 重启）
@@ -17,10 +19,10 @@
 
 | 数据源 | 协议 | 现在 enabled 来自 | 运行时启停 | 测试 |
 |---|---|---|---|---|
-| fastapic | pro_http | config 写死 | ❌ 无 | ❌ 无 |
-| ai_tool | pro_http | config 写死 | ❌ 无 | ❌ 无 |
+| 旧网关A | pro_http | config 写死 | ❌ 无 | ❌ 无 |
+| 旧网关C | pro_http | config 写死 | ❌ 无 | ❌ 无 |
 | realtime_quote | 爬虫(realtime.stockai888) | config 写死 | ❌ 无 | ❌ 无 |
-| xiaodefa（新） | pro_http | 待接入 | ❌ 无 | ❌ 无 |
+| 旧网关B（新） | pro_http | 待接入 | ❌ 无 | ❌ 无 |
 
 - 数据域（quote/kline/news…）已有 `set_data_source_enabled`，管的是「某域用哪些源」，
   **不管 provider 级启停**。
@@ -29,16 +31,16 @@
 
 ## 方案
 
-### 1. 接入 xiaodefa（pro_http 协议，复用现有 provider 基建）
+### 1. 接入 旧网关B（pro_http 协议，复用现有 provider 基建）
 
 `_build_provider_router()` 里追加第三个 `TushareHttpProvider`：
 
-- name=`xiaodefa`，base_url=`https://t.xiaodefa.top/`，auth_mode=JSON_TOKEN（pro 标准协议）。
-- token 走 config（`tushare_xiaodefa_token`），不进 Git。
-- 加入 Router 候选池，参与 pro API 的 fallback（priority 排在 fastapic 之后）。
+- name=`旧网关B`，base_url=`https://t.旧网关B.top/`，auth_mode=JSON_TOKEN（pro 标准协议）。
+- token 走 config（`tushare_旧网关B_token`），不进 Git。
+- 加入 Router 候选池，参与 pro API 的 fallback（priority 排在 旧网关A 之后）。
 
-> 注：Router 的 `_ordered_providers` 当前写死 `("fastapic","ai_tool")` 两源序。
-> 接入 xiaodefa 需把优先级从「写死二元」改为「按 provider priority 排序 + enabled 过滤」。
+> 注：Router 的 `_ordered_providers` 当前写死 `("旧网关A","旧网关C")` 两源序。
+> 接入 旧网关B 需把优先级从「写死二元」改为「按 provider priority 排序 + enabled 过滤」。
 
 ### 2. provider 运行时启停（DB 覆盖 config）
 
@@ -53,7 +55,7 @@
 ### 3. provider 测试探针
 
 - 新增 `POST /api/data-sources/{provider}/test`：
-  - pro_http 源（fastapic/ai_tool/xiaodefa）→ 调一个轻量真实 API（如 `stock_basic limit=1`）
+  - pro_http 源（旧网关A/旧网关C/旧网关B）→ 调一个轻量真实 API（如 `stock_basic limit=1`）
     测连通 + 鉴权，返回 `{ok, latency_ms, error}`。
   - realtime_quote → 调 `fetch_realtime_quotes(["000001"])` 测爬虫端点。
 - 测试结果写入 `data_source_health`（success/failure/last_error/latency），面板直接读。
@@ -68,15 +70,15 @@
 
 ## 实施步骤（verify）
 
-1. xiaodefa 接入 Router + config token → verify：直接调 `pro.daily` 经 Router 能走通 xiaodefa。
-2. Router 优先级改「priority 排序 + enabled 过滤」→ verify：禁用 fastapic 后请求自动落到下一源。
-3. provider 启停 DB 覆盖 + 缓存失效 → verify：API 禁用 xiaodefa，下一次 pro 调用不再走它。
-4. 测试探针接口 → verify：`curl POST .../xiaodefa/test` 返回 ok+latency；禁用时返回不可用。
+1. 旧网关B 接入 Router + config token → verify：直接调 `pro.daily` 经 Router 能走通 旧网关B。
+2. Router 优先级改「priority 排序 + enabled 过滤」→ verify：禁用 旧网关A 后请求自动落到下一源。
+3. provider 启停 DB 覆盖 + 缓存失效 → verify：API 禁用 旧网关B，下一次 pro 调用不再走它。
+4. 测试探针接口 → verify：`curl POST .../旧网关B/test` 返回 ok+latency；禁用时返回不可用。
 5. 配置页 Tab → verify：页面看到 4 个 provider，可启停、可测试，状态实时刷新。
 
 ## 风险
 
 - **Router 优先级改造**影响日常同步链路 → 需保证默认（全启用）时行为与现状一致
-  （fastapic 主、ai_tool 备），xiaodefa 仅作新增 fallback，不改变既有调用顺序假设。
+  （旧网关A 主、旧网关C 备），旧网关B 仅作新增 fallback，不改变既有调用顺序假设。
 - **enabled 覆盖的缓存一致性**：多 worker/多进程下，DB 启停变更要能让各进程及时感知
   （短 TTL 缓存或操作后广播失效）。

@@ -6,7 +6,7 @@ Tushare 稳定数据源客户端。
     pro = get_pro()
     df = pro.daily(ts_code="000001.SZ", limit=5)
 
-代理服务器：https://fastapic.stockai888.top/
+上游 provider：promax / quantdata（见 _build_provider_router 与 datasource/routing_table.json）。
 兼容 Tushare pro_api HTTP 协议（POST JSON: api_name/token/params/fields）。
 """
 
@@ -343,12 +343,6 @@ class _TushareSession:
         return caller
 
 
-# 官方 Tushare 账号无权限的接口（40203，2026-10-18 实测）。
-# fina_indicator 逐股走 promax；period 批量只有 quantdata 的 fina_indicator_vip 可用；
-# broker_recommend 只有 quantdata 可用；anns_d 无可用源（公告走东财/巨潮/xiaoshi）。
-QUANTDATA_ALLOWED_APIS = frozenset({"fina_indicator_vip", "broker_recommend", "trade_cal"})
-
-
 def _build_provider_router() -> tuple[TushareProviderRouter, str]:
     settings = get_settings()
     timeout = (
@@ -378,52 +372,9 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                     ),
                     max_concurrency=max(0, int(settings.tushare_promax_max_concurrency)),
                     append_api_path=True,
-                    # anns_d 只接受 ann_date，而项目使用日期区间，暂不参与路由。
-                    # stk_mins 由 _PromaxHttpProvider 门禁，只接受标准分钟响应。
-                    # fina_indicator_vip=unknown_api、broker_recommend=invalid_params（2026-10-18 实测），
-                    # 排除避免每次先失败再回退。fina_indicator 逐股 ts_code= 可用（长线回补靠它），保留。
-                    excluded_apis=frozenset({"anns_d", "fina_indicator_vip", "broker_recommend"}),
+                    # 各 API 可用性/顺序由 datasource/routing_table.json 决定（实测能力矩阵生成）。
                     source="promax",
                     priority=4,
-                    **common,
-                )
-            )
-        )
-
-    fastapic_token = settings.tushare_fastapic_token.strip()
-    if fastapic_token:
-        providers.append(
-            TushareHttpProvider(
-                ProviderConfig(
-                    name="fastapic",
-                    base_url=settings.tushare_fastapic_url,
-                    credential=fastapic_token,
-                    auth_mode=AuthMode.JSON_TOKEN,
-                    rate_limit_per_minute=max(
-                        0, int(settings.tushare_fastapic_rate_limit_per_minute)
-                    ),
-                    max_concurrency=max(0, int(settings.tushare_fastapic_max_concurrency)),
-                    append_api_path=True,
-                    priority=0,
-                    **common,
-                )
-            )
-        )
-
-    xiaodefa_token = settings.tushare_xiaodefa_token.strip()
-    if xiaodefa_token:
-        providers.append(
-            TushareHttpProvider(
-                ProviderConfig(
-                    name="xiaodefa",
-                    base_url=settings.tushare_xiaodefa_url,
-                    credential=xiaodefa_token,
-                    auth_mode=AuthMode.JSON_TOKEN,
-                    rate_limit_per_minute=max(
-                        0, int(settings.tushare_xiaodefa_rate_limit_per_minute)
-                    ),
-                    append_api_path=False,
-                    priority=1,
                     **common,
                 )
             )
@@ -442,37 +393,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                         0, int(settings.tushare_quantdata_rate_limit_per_minute)
                     ),
                     append_api_path=False,
-                    # 白名单：只服务它独有/兜底的接口，绝不进入其它 API 的路由（2026-10-18 决策）。
-                    included_apis=QUANTDATA_ALLOWED_APIS,
-                    # anns_d: 2003 api not purchased（2026-10-18 实测）
-                    excluded_apis=frozenset({"anns_d"}),
                     priority=1,
-                    **common,
-                )
-            )
-        )
-
-    ai_tool_api_key = settings.tushare_ai_tool_api_key.strip()
-    if ai_tool_api_key:
-        providers.append(
-            TushareHttpProvider(
-                ProviderConfig(
-                    name="ai_tool",
-                    base_url=settings.tushare_ai_tool_url,
-                    credential=ai_tool_api_key,
-                    auth_mode=AuthMode.API_KEY_HEADER,
-                    rate_limit_per_minute=max(
-                        0, int(settings.tushare_ai_tool_rate_limit_per_minute)
-                    ),
-                    api_rate_limits={
-                        "rt_min": max(
-                            0, int(settings.tushare_ai_tool_rt_min_rate_limit_per_minute)
-                        ),
-                        "stk_mins": max(
-                            0, int(settings.tushare_ai_tool_stk_mins_rate_limit_per_minute)
-                        ),
-                    },
-                    priority=2,
                     **common,
                 )
             )
@@ -482,14 +403,54 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
         raise RuntimeError(
             "Tushare 上游未配置：请至少设置一个 Provider 凭据。"
         )
+    providers, api_routes = _apply_routing_table(providers)
     return (
         TushareProviderRouter(
             providers,
+            api_routes=api_routes,
+            api_tiers=_routing_tiers(),
             enabled_override=_provider_enabled_override,
             priority_override=_provider_priority_override,
         ),
-        settings.tushare_fastapic_url,
+        settings.tushare_promax_url,
     )
+
+
+def _routing_table():
+    from app.services.datasource.capability import load_routing_table
+
+    return load_routing_table()
+
+
+def _routing_tiers() -> dict[str, tuple[tuple[str, ...], ...]]:
+    from app.services.datasource.capability import resolve_tiers
+
+    return resolve_tiers(_routing_table(), enabled=bool(get_settings().tushare_load_balancing))
+
+
+def _apply_routing_table(
+    providers: list[TushareHttpProvider],
+) -> tuple[list[TushareHttpProvider], dict[str, tuple[str, ...]]]:
+    """Apply the data-driven routing table (capability matrix -> per-API order).
+
+    The table's ``unsupported`` entries become each provider's excluded_apis; its
+    ``order`` becomes the per-API chain on top of DEFAULT_API_ROUTES.  Providers not
+    in the table (new backup sources) still participate, appended by priority.
+    """
+    from dataclasses import replace
+
+    from app.services.datasource.capability import load_routing_table, resolve_routes
+
+    routes, excluded = resolve_routes(_routing_table(), TushareProviderRouter.DEFAULT_API_ROUTES)
+    out: list[TushareHttpProvider] = []
+    for provider in providers:
+        extra = excluded.get(provider.name)
+        if extra:
+            provider.config = replace(
+                provider.config, excluded_apis=provider.config.excluded_apis | extra
+            )
+        out.append(provider)
+    return out, routes
 
 
 def _provider_enabled_override() -> dict[str, bool]:
@@ -559,11 +520,11 @@ def get_pro() -> _TushareSession:
     """
     from app.services.data_source_trace_service import MySQLTraceSink
 
-    router, fastapic_url = _build_provider_router()
+    router, http_url = _build_provider_router()
     sink = MySQLTraceSink(_trace_session_factory)
     router._trace_sink = sink
     router._correlation_id_factory = _trace_correlation_id
-    return _TushareSession(router, http_url=fastapic_url)
+    return _TushareSession(router, http_url=http_url)
 
 
 def clear_pro_cache() -> None:
@@ -596,52 +557,6 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
             ),
             "api_rate_limits": {},
             "max_concurrency": max(0, int(settings.tushare_promax_max_concurrency)),
-        },
-        {
-            "name": "fastapic",
-            "source": "fastapic",
-            "configured": bool(settings.tushare_fastapic_token.strip()),
-            "priority": 0,
-            "note": "通用同步主源；其余源可在故障时接管",
-            "auth_mode": AuthMode.JSON_TOKEN.value,
-            "rate_limit_per_minute": max(
-                0, int(settings.tushare_fastapic_rate_limit_per_minute)
-            ),
-            "api_rate_limits": {},
-            "max_concurrency": max(0, int(settings.tushare_fastapic_max_concurrency)),
-        },
-        {
-            "name": "xiaodefa",
-            "source": "xiaodefa",
-            "configured": bool(settings.tushare_xiaodefa_token.strip()),
-            "priority": 1,
-            "note": "第三方 pro 协议源；通用同步补充 fallback",
-            "auth_mode": AuthMode.JSON_TOKEN.value,
-            "rate_limit_per_minute": max(
-                0, int(settings.tushare_xiaodefa_rate_limit_per_minute)
-            ),
-            "api_rate_limits": {},
-            "max_concurrency": 0,
-        },
-        {
-            "name": "ai_tool",
-            "source": "ai-tool",
-            "configured": bool(settings.tushare_ai_tool_api_key.strip()),
-            "priority": 2,
-            "note": "历史分钟/公告主源；通用同步备用源",
-            "auth_mode": AuthMode.API_KEY_HEADER.value,
-            "rate_limit_per_minute": max(
-                0, int(settings.tushare_ai_tool_rate_limit_per_minute)
-            ),
-            "api_rate_limits": {
-                "rt_min": max(
-                    0, int(settings.tushare_ai_tool_rt_min_rate_limit_per_minute)
-                ),
-                "stk_mins": max(
-                    0, int(settings.tushare_ai_tool_stk_mins_rate_limit_per_minute)
-                ),
-            },
-            "max_concurrency": 0,
         },
         {
             "name": "quantdata",
@@ -2306,7 +2221,7 @@ def fetch_realtime_minute_kbar(code: str, freq: str | int = "1MIN") -> dict[str,
         "volume": _f(row.get("vol") if "vol" in row else row.get("volume")),
         "amount": _f(row.get("amount")),
         "is_complete": str(row.get("is_complete") or "").strip().lower() in {"1", "true", "yes"},
-        "source": "ai_tool_rt_min",
+        "source": "tushare_rt_min",
     }
 
 
@@ -2323,7 +2238,7 @@ def fetch_realtime_k_snapshot(code: str) -> dict[str, Any] | None:
         "trade_date": _normalize_trade_date(
             row.get("trade_date") or row.get("date") or row.get("time")
         ),
-        "source": "ai_tool_rt_k",
+        "source": "tushare_rt_k",
     }
 
 

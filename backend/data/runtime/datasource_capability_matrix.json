@@ -1,0 +1,772 @@
+{
+ "probed_at": "2026-10-18T21:20:56+0800",
+ "last_trade_date": "20261016",
+ "rows": [
+  {
+   "provider": "promax",
+   "api": "daily",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 30,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "daily",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 1503,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "adj_factor",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 565,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "adj_factor",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 1289,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "daily_basic",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 5819,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "daily_basic",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 572,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "stk_limit",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 542,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "stk_limit",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 566,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "trade_cal",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 30,
+   "latest": "20261017",
+   "latency_ms": 262,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "trade_cal",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 30,
+   "latest": "20261017",
+   "latency_ms": 300,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "stock_basic",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 1,
+   "latest": null,
+   "latency_ms": 27,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "stock_basic",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 1,
+   "latest": null,
+   "latency_ms": 1053,
+   "field_completeness": 0.667
+  },
+  {
+   "provider": "promax",
+   "api": "namechange",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 4,
+   "latest": "20120120",
+   "latency_ms": 916,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "namechange",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 4,
+   "latest": "20120120",
+   "latency_ms": 567,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "suspend_d",
+   "rate_limit_per_minute": 180,
+   "status": "error",
+   "error": "http_rate_limit",
+   "message": "promax suspend_d failed (http_rate_limit)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 344,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "suspend_d",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 96,
+   "latest": "20261016",
+   "latency_ms": 546,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "moneyflow",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 677,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "moneyflow",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 616,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "moneyflow_hsgt",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 193,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "moneyflow_hsgt",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 544,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "hsgt_top10",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 70,
+   "latest": "20261016",
+   "latency_ms": 665,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "hsgt_top10",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 70,
+   "latest": "20261016",
+   "latency_ms": 1082,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "hk_hold",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 1,
+   "latest": "20260930",
+   "latency_ms": 478,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "hk_hold",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 1,
+   "latest": "20260930",
+   "latency_ms": 604,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "top_list",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 61,
+   "latest": "20261016",
+   "latency_ms": 15095,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "top_list",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 61,
+   "latest": "20261016",
+   "latency_ms": 645,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "top_inst",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 660,
+   "latest": "20261016",
+   "latency_ms": 5824,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "top_inst",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 660,
+   "latest": "20261016",
+   "latency_ms": 372,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "limit_list_d",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 120,
+   "latest": "20261016",
+   "latency_ms": 1894,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "limit_list_d",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 120,
+   "latest": "20261016",
+   "latency_ms": 865,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "block_trade",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 586,
+   "latest": "20261016",
+   "latency_ms": 3107,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "block_trade",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 628,
+   "latest": "20261016",
+   "latency_ms": 534,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "margin",
+   "rate_limit_per_minute": 180,
+   "status": "error",
+   "error": "http_client",
+   "message": "promax margin failed (http_client, upstream=invalid_params)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 245,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "margin",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 19,
+   "latest": "20261016",
+   "latency_ms": 557,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "margin_detail",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 14,
+   "latest": "20261015",
+   "latency_ms": 81,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "margin_detail",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 14,
+   "latest": "20261015",
+   "latency_ms": 389,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "ths_index",
+   "rate_limit_per_minute": 180,
+   "status": "error",
+   "error": "http_client",
+   "message": "promax ths_index failed (http_client, upstream=invalid_params)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 243,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "ths_index",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 395,
+   "latest": null,
+   "latency_ms": 745,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "ths_member",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 280,
+   "latest": null,
+   "latency_ms": 959,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "ths_member",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 280,
+   "latest": null,
+   "latency_ms": 700,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "stk_mins",
+   "rate_limit_per_minute": 180,
+   "status": "empty",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 50,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "stk_mins",
+   "rate_limit_per_minute": 120,
+   "status": "error",
+   "error": "provider_error",
+   "message": "quantdata stk_mins failed (provider_error, upstream=2003: api not purchased)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 269,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "promax",
+   "api": "rt_k",
+   "rate_limit_per_minute": 180,
+   "status": "error",
+   "error": "http_rate_limit",
+   "message": "promax rt_k failed (http_rate_limit, upstream=upstream_pool_exhausted)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 8931,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "rt_k",
+   "rate_limit_per_minute": 120,
+   "status": "error",
+   "error": "provider_error",
+   "message": "quantdata rt_k failed (provider_error, upstream=2003: api not purchased)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 215,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "promax",
+   "api": "rt_min",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 1,
+   "latest": null,
+   "latency_ms": 44,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "rt_min",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 1,
+   "latest": null,
+   "latency_ms": 427,
+   "field_completeness": 0.889
+  },
+  {
+   "provider": "promax",
+   "api": "stk_auction",
+   "rate_limit_per_minute": 180,
+   "status": "error",
+   "error": "http_rate_limit",
+   "message": "promax stk_auction failed (http_rate_limit, upstream=upstream_pool_exhausted)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 8265,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "stk_auction",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 7,
+   "latest": "20261016",
+   "latency_ms": 819,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "stk_factor",
+   "rate_limit_per_minute": 180,
+   "status": "error",
+   "error": "http_rate_limit",
+   "message": "promax stk_factor failed (http_rate_limit, upstream=upstream_pool_exhausted)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 1026,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "stk_factor",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 1850,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "stk_factor_pro",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 5095,
+   "field_completeness": 0.077
+  },
+  {
+   "provider": "quantdata",
+   "api": "stk_factor_pro",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 864,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "cyq_perf",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 1007,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "cyq_perf",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 1578,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "index_daily",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 1015,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "index_daily",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 15,
+   "latest": "20261016",
+   "latency_ms": 610,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "fina_indicator",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 56,
+   "latest": "20260815",
+   "latency_ms": 21,
+   "field_completeness": 0.083
+  },
+  {
+   "provider": "quantdata",
+   "api": "fina_indicator",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 100,
+   "latest": "20260815",
+   "latency_ms": 895,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "fina_indicator_vip",
+   "rate_limit_per_minute": 180,
+   "status": "error",
+   "error": "http_client",
+   "message": "promax fina_indicator_vip failed (http_client, upstream=unknown_api)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 23,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "fina_indicator_vip",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 8115,
+   "latest": "20260902",
+   "latency_ms": 14949,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "broker_recommend",
+   "rate_limit_per_minute": 180,
+   "status": "error",
+   "error": "http_client",
+   "message": "promax broker_recommend failed (http_client, upstream=invalid_params)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 21,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "broker_recommend",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 237,
+   "latest": "202610",
+   "latency_ms": 2059,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "anns_d",
+   "rate_limit_per_minute": 180,
+   "status": "error",
+   "error": "http_client",
+   "message": "promax anns_d failed (http_client, upstream=invalid_params)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 47,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "anns_d",
+   "rate_limit_per_minute": 120,
+   "status": "error",
+   "error": "provider_error",
+   "message": "quantdata anns_d failed (provider_error, upstream=2003: api not purchased)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 286,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "promax",
+   "api": "share_float",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 106,
+   "latest": "20150520",
+   "latency_ms": 157,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "share_float",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 106,
+   "latest": "20150520",
+   "latency_ms": 824,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "stk_holdernumber",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 149,
+   "latest": "20260815",
+   "latency_ms": 74,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "stk_holdernumber",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 149,
+   "latest": "20260815",
+   "latency_ms": 1157,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "stk_holdertrade",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 2391,
+   "latest": "20261017",
+   "latency_ms": 28714,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "stk_holdertrade",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 2447,
+   "latest": "20261017",
+   "latency_ms": 2539,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "pledge_stat",
+   "rate_limit_per_minute": 180,
+   "status": "error",
+   "error": "http_rate_limit",
+   "message": "promax pledge_stat failed (http_rate_limit, upstream=upstream_pool_exhausted)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 8063,
+   "field_completeness": 0.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "pledge_stat",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 649,
+   "latest": "20261016",
+   "latency_ms": 1397,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "repurchase",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 588,
+   "latest": "20261017",
+   "latency_ms": 564,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "repurchase",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 588,
+   "latest": "20261017",
+   "latency_ms": 1613,
+   "field_completeness": 1.0
+  }
+ ]
+}

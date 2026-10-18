@@ -1,6 +1,6 @@
 """Tushare 实时报价爬虫客户端（realtime_quote）。
 
-走 ``realtime.stockai888.top``，独立于 ai-tool/fastapic 的 pro HTTP 协议
+走 ``realtime.stockai888.top``，独立的 pro HTTP 协议
 （``TushareHttpProvider`` 那套 JSON POST 不适用这里——realtime_quote 是
 tushare SDK 内置的多源爬虫函数）。多代码批量、含现价/最高/最低/昨收/五档盘口，
 用于未结算推荐的盘中实时浮盈。
@@ -10,7 +10,7 @@ tushare SDK 内置的多源爬虫函数）。多代码批量、含现价/最高/
     quotes = fetch_realtime_quotes(["000011", "603893"])
     # -> {"000011": {"price": 8.11, "high": 9.09, ...}, ...}
 
-token 复用 fastapic token（同一 Tushare 账号）。
+token 使用独立的 ASHARE_TUSHARE_REALTIME_QUOTE_TOKEN。
 """
 
 from __future__ import annotations
@@ -43,9 +43,9 @@ def _configure_realtime_session() -> None:
     from tushare.stock import cons as ct
 
     settings = get_settings()
-    token = settings.tushare_fastapic_token.strip()
+    token = settings.tushare_realtime_quote_token.strip()
     if not token:
-        raise RuntimeError("实时报价需要 tushare_fastapic_token（复用同一 Tushare 账号）")
+        raise RuntimeError("实时报价需要 tushare_realtime_quote_token（ASHARE_TUSHARE_REALTIME_QUOTE_TOKEN）")
     ts.set_token(token)
     ct.verify_token_url = settings.tushare_realtime_quote_url
 
@@ -60,7 +60,7 @@ def _f(value: Any) -> float:
 def _enabled_override() -> bool:
     """读管理面 Tab 写入的运行时启停覆盖（source_type=tushare_provider）。
 
-    与 fastapic/xiaodefa/ai_tool 走 Router._is_enabled 不同，realtime_quote 直连爬虫端点、
+    与 Router 管理的 provider 走 Router._is_enabled 不同，realtime_quote 直连爬虫端点、
     不在 Router 的 provider 链里，需自行消费同一份 DB 覆盖，否则「禁用」对它失效（返回 200
     但照跑）。查不到/出错视为启用（与 Router overrides.get(name, True) 同款默认）。
     """
@@ -128,7 +128,7 @@ def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[s
     ttl = max(0.0, float(settings.tushare_realtime_quote_ttl_seconds))
     batch_size = max(1, int(settings.tushare_realtime_quote_batch_size))
 
-    # 管理面禁用 → 直接降级为空，不发爬虫请求（与 fastapic 等源的「禁用即时生效」对齐）
+    # 管理面禁用 → 直接降级为空，不发爬虫请求（与 Router provider 的「禁用即时生效」对齐）
     if not _enabled_override():
         logger.info("realtime_quote 已被管理面禁用，跳过拉取")
         return {}
@@ -189,7 +189,7 @@ def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[s
 def get_realtime_quote_health() -> dict[str, Any]:
     """向数据源健康面板汇报 realtime_quote 的进程内状态。"""
     settings = get_settings()
-    configured = bool(settings.tushare_fastapic_token.strip())
+    configured = bool(settings.tushare_realtime_quote_token.strip())
     enabled = configured and _enabled_override()
     with _cache_lock:
         fetched_at = _cache["fetched_at"]

@@ -2795,7 +2795,7 @@ export type RuntimeMetricTiming = {
   max_seconds: number;
 };
 /** GET /api/metrics/runtime：进程内运行时指标快照（重启后清零） */
-export type RuntimeMetricsSnapshot = { counters: RuntimeMetricCounter[]; timings: RuntimeMetricTiming[] };
+export type RuntimeMetricsSnapshot = { counters: RuntimeMetricCounter[]; timings: RuntimeMetricTiming[]; gauges?: RuntimeMetricCounter[] };
 
 export type MatrixRecordsResponse = {
   page: number;

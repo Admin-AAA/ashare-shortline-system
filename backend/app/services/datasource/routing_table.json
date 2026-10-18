@@ -1,0 +1,502 @@
+{
+ "generated_from": "2026-10-18T21:20:56+0800",
+ "apis": {
+  "adj_factor": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "anns_d": {
+   "order": [],
+   "unsupported": [
+    "promax",
+    "quantdata"
+   ],
+   "tiers": []
+  },
+  "block_trade": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata"
+    ],
+    [
+     "promax"
+    ]
+   ]
+  },
+  "broker_recommend": {
+   "order": [
+    "quantdata"
+   ],
+   "unsupported": [
+    "promax"
+   ],
+   "tiers": [
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "cyq_perf": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "daily": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "daily_basic": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "fina_indicator": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata"
+    ],
+    [
+     "promax"
+    ]
+   ]
+  },
+  "fina_indicator_vip": {
+   "order": [
+    "quantdata"
+   ],
+   "unsupported": [
+    "promax"
+   ],
+   "tiers": [
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "hk_hold": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "hsgt_top10": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "index_daily": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "limit_list_d": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "margin": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "margin_detail": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "moneyflow": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "moneyflow_hsgt": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "namechange": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "pledge_stat": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "repurchase": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "rt_k": {
+   "order": [
+    "promax"
+   ],
+   "unsupported": [
+    "quantdata"
+   ],
+   "tiers": []
+  },
+  "rt_min": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax"
+    ],
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "share_float": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "stk_auction": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "stk_factor": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "stk_factor_pro": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata"
+    ],
+    [
+     "promax"
+    ]
+   ]
+  },
+  "stk_holdernumber": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "stk_holdertrade": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata",
+     "promax"
+    ]
+   ]
+  },
+  "stk_limit": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "stk_mins": {
+   "order": [
+    "promax"
+   ],
+   "unsupported": [
+    "quantdata"
+   ],
+   "tiers": [
+    [
+     "promax"
+    ]
+   ]
+  },
+  "stock_basic": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax"
+    ],
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "suspend_d": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "ths_index": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "ths_member": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "top_inst": {
+   "order": [
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "top_list": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata",
+     "promax"
+    ]
+   ]
+  },
+  "trade_cal": {
+   "order": [
+    "quantdata",
+    "promax"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "quantdata",
+     "promax"
+    ]
+   ]
+  }
+ },
+ "manual": {
+  "anns_d": {
+   "unsupported": [
+    "promax"
+   ],
+   "note": "promax 只接受单日 ann_date 且实测仍 invalid_params；项目用日期区间。三源均无可用 anns_d，公告走东财/巨潮/xiaoshi"
+  },
+  "broker_recommend": {
+   "unsupported": [
+    "promax"
+   ],
+   "note": "promax 对任意 month 参数 invalid_params（2026-10-18 两次实测）"
+  },
+  "stk_mins": {
+   "first": [
+    "promax"
+   ],
+   "note": "promax 分钟线由 _PromaxHttpProvider 门禁；quantdata 未购买"
+  }
+ },
+ "_doc": "Generated by scripts/probe_datasource_capabilities.py --write-routes from the capability matrix; edit only the 'manual' section by hand."
+}

@@ -130,7 +130,7 @@ def test_realtime_route_prefers_promax() -> None:
     router = TushareProviderRouter(
         [
             _FakeProvider("promax", -2, "success"),
-            _FakeProvider("ai_tool", 2, "success"),
+            _FakeProvider("gw_c", 2, "success"),
         ]
     )
 
@@ -148,11 +148,11 @@ def test_promax_is_only_excluded_from_incompatible_announcement_contract() -> No
                 "success",
                 excluded_apis=frozenset({"anns_d"}),
             ),
-            _FakeProvider("ai_tool", 2, "success"),
+            _FakeProvider("gw_c", 2, "success"),
         ]
     )
 
-    assert router.request("anns_d")["data"]["items"] == [["ai_tool"]]
+    assert router.request("anns_d")["data"]["items"] == [["gw_c"]]
     assert router.request("stk_mins")["data"]["items"] == [["promax"]]
 
 
@@ -233,10 +233,10 @@ def test_promax_minute_contract_rejection_falls_back_to_next_provider(monkeypatc
             return None
 
     monkeypatch.setattr(promax._session, "get", lambda *args, **kwargs: _SnapshotResponse())
-    router = TushareProviderRouter([promax, _FakeProvider("ai_tool", 2, "success")])
+    router = TushareProviderRouter([promax, _FakeProvider("gw_c", 2, "success")])
     try:
         result = router.request("stk_mins", params={"ts_code": "000001.SZ"})
-        assert result["data"]["items"] == [["ai_tool"]]
+        assert result["data"]["items"] == [["gw_c"]]
     finally:
         promax.close()
 

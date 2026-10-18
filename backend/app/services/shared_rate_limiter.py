@@ -81,6 +81,18 @@ class SharedSlidingWindowLimiter:
             conn.execute("ROLLBACK")
             raise
 
+    def headroom(self) -> float:
+        """Fraction of the cross-process window still free (read-only, never blocks)."""
+        if self._limit <= 0:
+            return 1.0
+        try:
+            now = time.time()
+            (count,) = self._conn().execute(
+                "SELECT COUNT(*) FROM hits WHERE k=? AND ts>?", (self._key, now - self._window)).fetchone()
+            return max(0.0, 1.0 - count / self._limit)
+        except Exception:  # noqa: BLE001 - observational only
+            return self._fallback.headroom() if self._fallback is not None else 1.0
+
     def acquire(self) -> None:
         if self._limit <= 0:
             return

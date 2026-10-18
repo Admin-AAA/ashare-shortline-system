@@ -55,7 +55,7 @@ def list_traces(
 
 @router.get("/traces/fallback-chains")
 def fallback_chains(limit: int = 20, db: Session = Depends(get_db)):
-    """最近发生过 fallback 的请求链（tushare→xiaodefa→... / tushare→baostock）。"""
+    """最近发生过 fallback 的请求链（promax→quantdata→... / tushare→baostock）。"""
     return trace_service.recent_fallback_chains(db, limit=limit)
 
 

@@ -25,7 +25,7 @@ class ProviderSettings:
     api_rate_limits: dict = field(default_factory=dict)
 
 
-_PROVIDER_PREFIXES = ("fastapic", "ai_tool", "promax", "xiaodefa", "quantdata")
+_PROVIDER_PREFIXES = ("promax", "quantdata")
 
 
 class Settings(BaseSettings):
@@ -45,25 +45,12 @@ class Settings(BaseSettings):
     # Deprecated compatibility fields. New upstream credentials use provider-specific settings.
     tushare_token: str = Field(default="", repr=False)
     tushare_rate_limit_per_minute: int = 0
-    tushare_fastapic_url: str = "https://fastapic.stockai888.top/"
-    tushare_fastapic_token: str = Field(default="", repr=False)
-    tushare_fastapic_rate_limit_per_minute: int = 30
-    tushare_fastapic_max_concurrency: int = 1
-    tushare_ai_tool_url: str = "https://ai-tool.indevs.in/tushare/pro"
-    tushare_ai_tool_api_key: str = Field(default="", repr=False)
-    tushare_ai_tool_rate_limit_per_minute: int = 90
-    tushare_ai_tool_rt_min_rate_limit_per_minute: int = 72
-    tushare_ai_tool_stk_mins_rate_limit_per_minute: int = 48
     # Promax：X-API-Key + GET /tushare/pro/{api_name} 聚合网关。
     # 服务端公开健康信息显示单 IP 200 RPM；客户端保留余量按 180 RPM 限速。
     tushare_promax_url: str = "https://pcd.mobcvb.cn/tushare/pro"
     tushare_promax_api_key: str = Field(default="", repr=False)
     tushare_promax_rate_limit_per_minute: int = 180
     tushare_promax_max_concurrency: int = 4
-    # xiaodefa：第三方 tushare pro 协议数据源（pro_http），作为通用同步的补充 fallback。
-    tushare_xiaodefa_url: str = "https://t.xiaodefa.top/"
-    tushare_xiaodefa_token: str = Field(default="", repr=False)
-    tushare_xiaodefa_rate_limit_per_minute: int = 60
     # quantdata：第三方 tushare pro 协议数据源（JSON token，POST 根路径不带 api 路径）。
     # 探测权限：日线/基本面/筹码/资金流/涨跌停/龙虎榜/同花顺概念全量可用（数据到当天）；
     # anns_d/rt_k/stk_mins 未购买（走 per-API 路由链自动 fallback）。平滑限速，稳态 6rps 无限制。
@@ -81,11 +68,15 @@ class Settings(BaseSettings):
     xiaoshi_skill_sha256: str = "a6683e89da671b78ec04456f12b18a463cf9874707f81ee26f65c64ca043b1f7"
     xiaoshi_minute_cache_dir: str = ""
     # 实时报价爬虫接口（tushare realtime_quote，走 realtime.stockai888.top）。
-    # 独立于 ai-tool/fastapic 的 pro HTTP 协议：多代码批量、含现价/最高/最低/昨收，
-    # 用于未结算推荐的盘中实时浮盈。token 复用 fastapic token。
+    # 独立 pro HTTP 协议：多代码批量、含现价/最高/最低/昨收，用于未结算推荐的盘中实时浮盈。
+    # 使用独立凭据，未配置时实时浮盈降级为空。
+    tushare_realtime_quote_token: str = Field(default="", repr=False)
     tushare_realtime_quote_url: str = "https://realtime.stockai888.top"
     tushare_realtime_quote_batch_size: int = 60
     tushare_realtime_quote_ttl_seconds: float = 20.0
+    # 同质量档内按剩余限速额度×实时健康度加权分流（档位见 datasource/routing_table.json，
+    # 单个 api 可用 "balance": false 关闭）；False = 全局关闭，退回纯链序。
+    tushare_load_balancing: bool = True
     tushare_provider_failure_threshold: int = 3
     tushare_provider_recovery_seconds: float = 60.0
     tushare_provider_max_attempts: int = 2
@@ -170,10 +161,7 @@ class Settings(BaseSettings):
             cred = getattr(self, pre + "token", None)
             if cred is None:
                 cred = getattr(self, pre + "api_key", "")
-            api_limits = {}
-            if name == "ai_tool":
-                api_limits = {"rt_min": self.tushare_ai_tool_rt_min_rate_limit_per_minute,
-                              "stk_mins": self.tushare_ai_tool_stk_mins_rate_limit_per_minute}
+            api_limits: dict = {}
             out[name] = ProviderSettings(
                 name=name,
                 url=getattr(self, pre + "url"),
@@ -204,10 +192,7 @@ class Settings(BaseSettings):
         # model_route_config 表驱动，每条路由自带独立 key，不再依赖全局 env key。
         if not any(
             (
-                self.tushare_fastapic_token,
-                self.tushare_ai_tool_api_key,
                 self.tushare_promax_api_key,
-                self.tushare_xiaodefa_token,
                 self.tushare_quantdata_token,
             )
         ):

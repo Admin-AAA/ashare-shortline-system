@@ -13,7 +13,6 @@ SHORTLINE_SKILL_IDS = {
     "high-range-breakout-momentum",
     "overnight-holding-method",
     "sector-relative-strength-leader",
-    "trend-pullback-continuation",
 }
 
 
@@ -154,7 +153,6 @@ def test_shared_shortline_factors_enter_real_strategy_inputs():
             "sector-relative-strength-leader",
         }
     }
-    signals["trend-pullback-continuation"] = run_strategy(skills["trend-pullback-continuation"], pullback_stock, ["机器人"])
 
     assert "buy_signal" not in stock
     assert stock["is_main_theme"] is True
@@ -166,7 +164,6 @@ def test_shared_shortline_factors_enter_real_strategy_inputs():
     yangjia_evidence = "；".join(signals["chao-gu-yang-jia-skill"]["evidence"])
     overnight_evidence = "；".join(signals["overnight-holding-method"]["evidence"])
     breakout_evidence = "；".join(signals["high-range-breakout-momentum"]["evidence"])
-    pullback_evidence = "；".join(signals["trend-pullback-continuation"]["evidence"])
     sector_evidence = "；".join(signals["sector-relative-strength-leader"]["evidence"])
 
     assert "龙头候选" in chen_evidence
@@ -177,8 +174,6 @@ def test_shared_shortline_factors_enter_real_strategy_inputs():
     assert "隔夜尾盘确认" in overnight_evidence
     assert "60日新高突破" in breakout_evidence
     assert "阶段新高确认" in breakout_evidence
-    assert "资金承接未弱化" in pullback_evidence
-    assert "强趋势轻分歧" in pullback_evidence
     assert "个股20日超额收益占优" in sector_evidence
     assert "主线龙头突破" in sector_evidence
 
@@ -188,12 +183,10 @@ def test_shared_shortline_factors_enter_real_strategy_inputs():
         "平台突破",
         "隔夜尾盘确认",
         "60日新高放量突破",
-        "强趋势轻分歧",
         "主线龙头突破",
     }
     assert len({signal["score"] for signal in signals.values()}) > 1
     assert signals["overnight-holding-method"]["strategy_independence"] == 0.9
-    assert signals["trend-pullback-continuation"]["strategy_independence"] == 0.78
     assert signals["sector-relative-strength-leader"]["strategy_independence"] == 0.8
     assert signals["high-range-breakout-momentum"]["strategy_independence"] == 0.82
     assert signals["chen-xiaoqun-skill"]["strategy_independence"] == 0.75
@@ -205,7 +198,6 @@ def test_strategies_use_shared_factors_with_different_contract_boundaries():
     yangjia = str(skills["chao-gu-yang-jia-skill"].contract)
     breakout = str(skills["high-range-breakout-momentum"].contract)
     overnight = str(skills["overnight-holding-method"].contract)
-    pullback = str(skills["trend-pullback-continuation"].contract)
     sector = str(skills["sector-relative-strength-leader"].contract)
 
     assert "is_shortline_leader_candidate" in chen
@@ -216,8 +208,6 @@ def test_strategies_use_shared_factors_with_different_contract_boundaries():
     assert "capital_resonance_score >= 45" in overnight
     assert "experiment_high_range_breakout" in breakout
     assert "off_high60_pct" in breakout
-    # trend-pullback 已下线（L-161），不再声明 experiment_trend_pullback 预设组；契约字段仍要求独立。
-    assert "volume_shrink_pullback" in pullback
     assert "experiment_sector_relative_strength" in sector
     assert "industry_positive_excess20_count" in sector
 
@@ -582,74 +572,6 @@ def test_high_range_60d_breakout_accepts_high_pct_breakout():
     )
 
 
-def test_trend_pullback_prefilter_accepts_moderate_volume_pullback():
-    """回归测试：trend-pullback-continuation prefilter.include_any 第三选项放宽。
-
-    第 141 轮 T1：原 vol5_20<=0.9 过严，07-07 formal run 仅 1 只通过 prefilter。
-    放宽到 vol5_20<=1.0（与 include 规则 1.05 对齐），让"均量未放大+MA5支撑+窄幅"
-    的趋势内回踩候选能进 prefilter。vol5_20∈(0.9,1.0] 应通过，>1.05 仍被 include 拒。
-    """
-    from app.engine.strategy_runner import evaluate_skill_prefilter
-
-    skills = _skills_by_id()
-    skill = skills["trend-pullback-continuation"]
-
-    # vol5_20=0.95 + support_ma5 + pct 窄幅：原<=0.9 拒，新<=1.0 过
-    moderate_pullback = _stock(
-        "000098",
-        pct=0.3,  # 在 [-1.5, 1] 窄幅
-        vol5_20=0.95,  # 在 (0.9, 1.0]
-        support_ma5=True,
-        volume_shrink_pullback=False,
-        # 其他 prefilter include 必需
-        max_dd20=-5, upper_shadow_count20=1,
-    )
-    passed, reason = evaluate_skill_prefilter(skill, moderate_pullback, stage="market", )
-    assert passed, f"vol5_20=0.95 + MA5 支撑应通过放宽后的 prefilter: {reason}"
-
-    # vol5_20=0.85 仍应通过（原阈值内）
-    tight_pullback = dict(moderate_pullback, code="000099", vol5_20=0.85)
-    passed2, _ = evaluate_skill_prefilter(skill, tight_pullback, stage="market")
-    assert passed2, "vol5_20=0.85 应通过 prefilter"
-
-    # vol5_20=1.08 仍应被 include 规则 <=1.05 拒（未放宽 include，只放宽 include_any）
-    high_vol = dict(moderate_pullback, code="000100", vol5_20=1.08)
-    passed3, reason3 = evaluate_skill_prefilter(skill, high_vol, stage="market")
-    assert not passed3, "vol5_20=1.08 应被 include 规则拒"
-
-
-def test_trend_pullback_phase_and_setup_match_moderate_volume():
-    """回归测试：trend-pullback phase 趋势内轻回踩 + setup 强趋势轻分歧 放宽 vol5_20<=0.9→<=1.0。
-
-    第 142 轮 T2：上轮放宽 prefilter 让候选进 skill_gate，但 phase/setup 仍 <=0.9
-    导致 vol5_20∈(0.9,1.0] 候选不命中 setup、无 score_delta。放宽后应命中。
-    回测：301086 vol5_20=0.987 命中 setup 强趋势轻分歧（+7），历史 outcome success +7.93%。
-    """
-    skills = _skills_by_id()
-    skill = skills["trend-pullback-continuation"]
-
-    # 301086 真实快照特征（vol5_20=0.987, 多头排列, dist20>10, eff20>0.5, 窄幅, support_ma5）
-    stock = _stock(
-        "301086",
-        ma5=10.2, ma10=10.0, ma20=9.8,  # 多头排列
-        dist20=14.0, eff20=0.828,  # 趋势强度
-        pct=-0.568,  # 窄幅 [-1.5, 0.8]
-        vol5_20=0.987,  # (0.9, 1.0] —— 旧 <=0.9 不命中，新 <=1.0 命中
-        support_ma5=True,
-        volume_shrink_pullback=False,
-        dsa_trend_score=26, max_dd20=-5, off_high_pct=-3,
-        upper_shadow_count20=1, rsi_12=55,
-        capital_resonance_score=65,
-        turnover_rate=3, amount_yi=5, chg20=8, pos60=70, pos120=75,
-        twenty_cm_risk_gate="pass", news_risk_count=0, announcement_negative_count=0,
-        is_st=False, limit_up_overheat_score=10,
-    )
-    signal = run_strategy(skill, stock, ["半导体"], skip_universe_check=True)
-    # phase 应命中"趋势内轻回踩"（旧 <=0.9 不命中）
-    assert signal["phase"] == "趋势内轻回踩", f"phase 应命中趋势内轻回踩: {signal['phase']}"
-    # setup 应命中"强趋势轻分歧"（+7 score_delta）
-    assert signal["setup_match"] == "强趋势轻分歧", f"setup 应命中强趋势轻分歧: {signal['setup_match']}"
-    assert "强趋势轻分歧" in "；".join(signal["evidence"])
 
 
 def test_all_skill_md_have_agent_output_constraints():

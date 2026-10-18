@@ -31,24 +31,24 @@ def _stub_providers(monkeypatch, names):
 
 
 def test_set_provider_enabled_creates_row_and_returns_entry(db_session, monkeypatch):
-    _stub_providers(monkeypatch, ["xiaodefa"])
+    _stub_providers(monkeypatch, ["gw_b"])
     monkeypatch.setattr(
         ds, "_provider_health_rows",
-        lambda: [{"provider_name": "xiaodefa", "enabled": False, "status": "disabled"}],
+        lambda: [{"provider_name": "gw_b", "enabled": False, "status": "disabled"}],
     )
     # 避免触碰真实 provider 缓存
     import app.services.tushare_client as tc
     monkeypatch.setattr(tc, "invalidate_provider_enabled_override", lambda: None)
 
-    out = ds.set_provider_enabled(db_session, "xiaodefa", False)
-    assert out is not None and out["provider_name"] == "xiaodefa"
+    out = ds.set_provider_enabled(db_session, "gw_b", False)
+    assert out is not None and out["provider_name"] == "gw_b"
 
-    row = db_session.get(DataSourceConfig, {"source": "xiaodefa", "source_type": "tushare_provider"})
+    row = db_session.get(DataSourceConfig, {"source": "gw_b", "source_type": "tushare_provider"})
     assert row is not None and row.enabled is False
 
 
 def test_set_provider_enabled_unknown_returns_none(db_session, monkeypatch):
-    _stub_providers(monkeypatch, ["fastapic"])
+    _stub_providers(monkeypatch, ["gw_a"])
     out = ds.set_provider_enabled(db_session, "nonexist", True)
     assert out is None
     # 未接入不应落库
@@ -56,15 +56,15 @@ def test_set_provider_enabled_unknown_returns_none(db_session, monkeypatch):
 
 
 def test_set_provider_enabled_toggles_existing_row(db_session, monkeypatch):
-    _stub_providers(monkeypatch, ["fastapic"])
+    _stub_providers(monkeypatch, ["gw_a"])
     import app.services.tushare_client as tc
     monkeypatch.setattr(tc, "invalidate_provider_enabled_override", lambda: None)
-    monkeypatch.setattr(ds, "_provider_health_rows", lambda: [{"provider_name": "fastapic", "enabled": True}])
+    monkeypatch.setattr(ds, "_provider_health_rows", lambda: [{"provider_name": "gw_a", "enabled": True}])
 
-    db_session.add(DataSourceConfig(source="fastapic", source_type="tushare_provider", enabled=True, priority=0))
+    db_session.add(DataSourceConfig(source="gw_a", source_type="tushare_provider", enabled=True, priority=0))
     db_session.commit()
-    ds.set_provider_enabled(db_session, "fastapic", False)
-    row = db_session.get(DataSourceConfig, {"source": "fastapic", "source_type": "tushare_provider"})
+    ds.set_provider_enabled(db_session, "gw_a", False)
+    row = db_session.get(DataSourceConfig, {"source": "gw_a", "source_type": "tushare_provider"})
     assert row.enabled is False
 
 
@@ -96,7 +96,7 @@ def test_test_provider_realtime_quote_empty_is_degraded(db_session, monkeypatch)
 
 
 def test_test_provider_unknown_raises_keyerror(db_session, monkeypatch):
-    _stub_providers(monkeypatch, ["fastapic"])
+    _stub_providers(monkeypatch, ["gw_a"])
 
     class _Router:
         _providers = {}
@@ -217,15 +217,15 @@ def test_sync_orphan_cleanup_spares_tushare_provider_rows(db_session, monkeypatc
     """
     _empty_sources(monkeypatch)
 
-    # 预置：一个 provider 覆盖行（模拟 set_provider_enabled 禁用 fastapic）+ 一个孤儿 config
-    db_session.add(DataSourceConfig(source="fastapic", source_type="tushare_provider", enabled=False, priority=100))
+    # 预置：一个 provider 覆盖行（模拟 set_provider_enabled 禁用 gw_a）+ 一个孤儿 config
+    db_session.add(DataSourceConfig(source="gw_a", source_type="tushare_provider", enabled=False, priority=100))
     db_session.add(DataSourceConfig(source="ghost", source_type="quote", enabled=True, priority=99))
     db_session.commit()
 
     ds.sync_data_source_configs(db_session)
 
     # provider 覆盖行保留（豁免）；非 provider 孤儿行被删
-    provider_row = db_session.get(DataSourceConfig, {"source": "fastapic", "source_type": "tushare_provider"})
+    provider_row = db_session.get(DataSourceConfig, {"source": "gw_a", "source_type": "tushare_provider"})
     assert provider_row is not None
     assert provider_row.enabled is False  # 禁用状态未被回滚
     assert db_session.get(DataSourceConfig, {"source": "ghost", "source_type": "quote"}) is None
@@ -255,7 +255,7 @@ def test_realtime_quote_health_reads_disabled_override(monkeypatch):
     import app.services.realtime_quote_client as rq
 
     class _S:
-        tushare_fastapic_token = "fake-token"  # token 在 → configured=True，但运行时禁用
+        tushare_realtime_quote_token = "fake-token"  # token 在 → configured=True，但运行时禁用
     monkeypatch.setattr(rq, "get_settings", lambda: _S())
     monkeypatch.setattr(rq, "_enabled_override", lambda: False)
 
@@ -274,15 +274,7 @@ def test_provider_health_only_projects_configured_sources(monkeypatch):
         tushare_promax_api_key = "promax-key"
         tushare_promax_rate_limit_per_minute = 180
         tushare_promax_max_concurrency = 4
-        tushare_ai_tool_api_key = ""
-        tushare_ai_tool_rate_limit_per_minute = 90
-        tushare_ai_tool_rt_min_rate_limit_per_minute = 72
-        tushare_ai_tool_stk_mins_rate_limit_per_minute = 48
-        tushare_fastapic_token = ""
-        tushare_fastapic_rate_limit_per_minute = 30
-        tushare_fastapic_max_concurrency = 1
-        tushare_xiaodefa_token = ""
-        tushare_xiaodefa_rate_limit_per_minute = 60
+        tushare_realtime_quote_token = ""
         tushare_quantdata_token = "quantdata"
         tushare_quantdata_rate_limit_per_minute = 120
 
@@ -309,8 +301,8 @@ def test_provider_health_only_projects_configured_sources(monkeypatch):
 def test_list_data_sources_excludes_provider_history(db_session, monkeypatch):
     """历史 tushare_provider 配置/健康行不应污染逻辑数据源列表。"""
     _empty_sources(monkeypatch)
-    db_session.add(DataSourceConfig(source="fastapic", source_type="tushare_provider", enabled=False, priority=0))
-    db_session.add(DataSourceHealth(source="fastapic", source_type="tushare_provider"))
+    db_session.add(DataSourceConfig(source="gw_a", source_type="tushare_provider", enabled=False, priority=0))
+    db_session.add(DataSourceHealth(source="gw_a", source_type="tushare_provider"))
     db_session.commit()
 
     import app.services.tushare_client as tc
@@ -318,7 +310,7 @@ def test_list_data_sources_excludes_provider_history(db_session, monkeypatch):
 
     rows = ds.list_data_sources(db_session)
     assert all(row["source_type"] != "tushare_provider" for row in rows)
-    assert all(row["source"] != "fastapic" for row in rows)
+    assert all(row["source"] != "gw_a" for row in rows)
 
 
 def test_management_sources_include_xiaoshi_market_source(db_session, monkeypatch):
