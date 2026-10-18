@@ -865,7 +865,7 @@ function CandidateEmptyState({
           </button>
         ) : (
           <button className="btn btn--primary" onClick={onViewAll}>
-            去候选池
+            去今日记录
           </button>
         )
       }

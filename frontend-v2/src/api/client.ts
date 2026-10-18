@@ -38,6 +38,7 @@ import type {
   RunResult,
   RunSummary,
   MatrixRecordsResponse,
+  RuntimeMetricsSnapshot,
   MatrixRecordDetail,
   ScheduledTask,
   ScheduledTaskRun,
@@ -217,9 +218,6 @@ export const api = {
   runRecommendations: (runId: string) => request<RecommendationCard[]>(`/api/runs/${runId}/recommendations`),
   runFunnelAudit: (runId: string) => request<RunFunnelAudit>(`/api/runs/${runId}/funnel`),
   createRun: (payload: Record<string, unknown>) => requestWithTimeout<RunResult>("/api/runs", 300_000, json("POST", payload)),
-  startMatrixRun: (payload?: Record<string, unknown>) =>
-    request<{ started: boolean; task_run: ScheduledTaskRun | null }>("/api/runs/matrix", json("POST", payload ?? {})),
-  matrixRunStatus: () => request<{ task_run: ScheduledTaskRun | null }>("/api/runs/matrix/status"),
 
   recommendationDetail: (id: string) => request<RecommendationDetail>(`/api/recommendations/${id}`),
   recommendationRealtimePnl: (refresh = false) =>
@@ -439,6 +437,7 @@ export const api = {
       signal: options?.signal,
     }),
   /** 资金流因子预测力分析（T1 新因子，待前瞻验证候选） */
+  runtimeMetrics: () => request<RuntimeMetricsSnapshot>(`/api/metrics/runtime`),
   capitalFlowFactor: () => request<CapitalFlowFactorResponse>(`/api/metrics/capital-flow-factor`),
   /** D 项净成本 + 板块(20cm/10cm)分解（指标页透出，与 self_check 板块拆分同源口径） */
   dNetBreakdown: (windowDays?: number, sampleScope: MetricsSampleScope = "live_forward", options?: RequestOptions) =>

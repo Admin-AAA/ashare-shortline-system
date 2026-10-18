@@ -377,7 +377,7 @@ export function candidateEmptyState(data: DashboardOverview) {
     return {
       title: "推荐仍在运行",
       reason: runStatusLabel(run.status),
-      detail: run.message || "候选池还在生成，暂不能把 0 只解读成无机会。",
+      detail: run.message || "今日记录还在生成，暂不能把 0 只解读成无机会。",
     };
   }
   return {

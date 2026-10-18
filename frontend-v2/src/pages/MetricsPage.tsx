@@ -18,6 +18,8 @@ import type {
   StrategyStatsRow,
   SetupStatsRow,
   TemporalConsistency,
+  RuntimeMetricsSnapshot,
+  RuntimeMetricTiming,
 } from "../types";
 import type { ReactNode, CSSProperties } from "react";
 import { PageSkeleton, ErrorPage, EmptyState, CardSkeleton } from "../components/StateViews";
@@ -144,6 +146,7 @@ export function MetricsPage() {
         historicalCohort={overview?.historical_reconstruction_cohort}
       />
       <SystemHealthPanel />
+      <RuntimeMetricsPanel />
       {loading ? (
         <PageSkeleton title="指标分析" hint="加载推荐质量数据" rowCount={6} />
       ) : error ? (
@@ -248,10 +251,10 @@ function SystemHealthPanel() {
   return (
     <MetricCard
       kicker="系统可信度"
-      title="审查层 · 一致性 · D 项毒区 · phase"
+      title="AI 审查 · 模型路由 · 时态一致性 · D 项毒区 · 资金流因子 · phase"
       actions={
         <span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-          北极星 B/C/D 可观测
+          各诊断项独立加载
         </span>
       }
     >
@@ -269,6 +272,97 @@ function SystemHealthPanel() {
         <CapitalFlowFactorBlock data={capFactor} loading={lCF} error={eCF} />
         <PhaseInformationBlock data={dDiag} loading={lD} error={eD} />
       </div>
+    </MetricCard>
+  );
+}
+
+const fmtSec = (s: number) => (s >= 1 ? `${s.toFixed(2)}s` : `${(s * 1000).toFixed(0)}ms`);
+
+function groupSum<T>(items: T[], key: (t: T) => string, val: (t: T) => number): Array<[string, number]> {
+  const m = new Map<string, number>();
+  for (const it of items) m.set(key(it), (m.get(key(it)) ?? 0) + val(it));
+  return [...m.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function TimingTable({ rows, labelOf }: { rows: RuntimeMetricTiming[]; labelOf: (r: RuntimeMetricTiming) => string }) {
+  if (rows.length === 0) return <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>本进程启动以来暂无记录</div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+      {rows.map((r) => (
+        <HealthRow
+          key={labelOf(r)}
+          label={labelOf(r)}
+          value={`${r.count} 次 · 均 ${fmtSec(r.avg_seconds)} · 最长 ${fmtSec(r.max_seconds)}`}
+        />
+      ))}
+    </div>
+  );
+}
+
+/** 运行时指标面板 —— GET /api/metrics/runtime（进程内计数，后端重启后清零）：
+ *  数据源成功/失败、备用源切换、限速等待、LLM 耗时、盘后各阶段耗时。 */
+function RuntimeMetricsPanel() {
+  const { data, loading, error } = useApi<RuntimeMetricsSnapshot>(() => api.runtimeMetrics(), []);
+  const block: CSSProperties = { padding: "var(--space-3)", border: "1px solid var(--border)", borderRadius: "var(--radius-md, 8px)" };
+  const head: CSSProperties = { fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--ink)", marginBottom: "var(--space-2)" };
+  let body: ReactNode;
+  if (loading) body = <CardSkeleton />;
+  else if (error || !data) body = <div style={{ fontSize: "var(--text-xs)", color: "var(--market-up)" }}>运行时指标加载失败：{error ?? "无数据"}</div>;
+  else {
+    const counters = data.counters ?? [];
+    const timings = data.timings ?? [];
+    const req = counters.filter((c) => c.name === "provider_requests");
+    const providers = [...new Set(req.map((c) => c.labels.provider))].sort();
+    const fallbacks = groupSum(counters.filter((c) => c.name === "provider_fallback"), (c) => `${c.labels.fallback_from ?? "?"} → ${c.labels.provider ?? "?"}`, (c) => c.value);
+    const waits = timings.filter((t) => t.name === "provider_ratelimit_wait");
+    const llm = timings.filter((t) => t.name === "llm_latency");
+    const stages = timings.filter((t) => t.name === "postclose_stage_duration");
+    body = (
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: "var(--space-4)" }}>
+        <div style={block}>
+          <div style={head}>数据源请求 · 成功率</div>
+          {providers.length === 0 ? (
+            <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>本进程启动以来暂无请求</div>
+          ) : providers.map((p) => {
+            const rows = req.filter((c) => c.labels.provider === p);
+            const ok = rows.filter((c) => c.labels.outcome === "success").reduce((a, c) => a + c.value, 0);
+            const total = rows.reduce((a, c) => a + c.value, 0);
+            const fails = rows.filter((c) => c.labels.outcome !== "success").map((c) => `${c.labels.outcome} ${c.value}`).join(" / ");
+            const rate = total ? (ok / total) * 100 : 0;
+            return (
+              <HealthRow key={p} label={p} value={`${rate.toFixed(1)}% (${ok}/${total})${fails ? ` · 失败 ${fails}` : ""}`}
+                color={rate >= 95 ? "var(--market-down)" : rate >= 80 ? "var(--warning)" : "var(--market-up)"} />
+            );
+          })}
+        </div>
+        <div style={block}>
+          <div style={head}>备用源切换</div>
+          {fallbacks.length === 0 ? (
+            <div style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>暂无切换</div>
+          ) : fallbacks.map(([k, v]) => <HealthRow key={k} label={k} value={`${v} 次`} />)}
+        </div>
+        <div style={block}>
+          <div style={head}>限速等待</div>
+          <TimingTable rows={waits} labelOf={(r) => r.labels.provider ?? "—"} />
+        </div>
+        <div style={block}>
+          <div style={head}>LLM 耗时</div>
+          <TimingTable rows={llm} labelOf={(r) => [r.labels.client, r.labels.model].filter(Boolean).join(" · ") || "—"} />
+        </div>
+        <div style={{ ...block, gridColumn: "1 / -1" }}>
+          <div style={head}>盘后各阶段耗时</div>
+          <TimingTable rows={stages} labelOf={(r) => r.labels.stage ?? "—"} />
+        </div>
+      </div>
+    );
+  }
+  return (
+    <MetricCard
+      kicker="运行时"
+      title="数据源 · 限速 · LLM · 盘后阶段"
+      actions={<span style={{ fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>进程内统计，后端重启后清零</span>}
+    >
+      {body}
     </MetricCard>
   );
 }

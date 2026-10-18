@@ -2785,6 +2785,18 @@ export type RunRecordDetail = {
 };
 
 /** 记录中心：矩阵历史列表（跨所有 code，按 created_at 倒序） */
+export type RuntimeMetricCounter = { name: string; labels: Record<string, string>; value: number };
+export type RuntimeMetricTiming = {
+  name: string;
+  labels: Record<string, string>;
+  count: number;
+  sum_seconds: number;
+  avg_seconds: number;
+  max_seconds: number;
+};
+/** GET /api/metrics/runtime：进程内运行时指标快照（重启后清零） */
+export type RuntimeMetricsSnapshot = { counters: RuntimeMetricCounter[]; timings: RuntimeMetricTiming[] };
+
 export type MatrixRecordsResponse = {
   page: number;
   page_size: number;

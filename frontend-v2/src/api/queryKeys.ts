@@ -6,7 +6,6 @@ export const queryKeys = {
   run: (id: string) => ["runs", id] as const,
   runFunnel: (id: string) => ["runs", id, "funnel"] as const,
   records: (kind: "run" | "matrix", filters: object = {}) => ["records", kind, filters] as const,
-  matrix: () => ["matrix", "active"] as const,
   dataHealth: () => ["data-health"] as const,
   dataHealthRemediation: () => ["data-health", "remediation"] as const,
   scheduler: () => ["scheduler"] as const,

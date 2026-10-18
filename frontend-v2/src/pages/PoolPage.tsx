@@ -27,7 +27,7 @@ import { queryParam } from "../app/nav";
 import { describePoolRun, formatPoolRunTime, poolRunDate, summarizePoolRuns, type PoolRunKind } from "./poolRunView";
 
 /**
- * 候选池 —— 日期运行日志 → 运行抽屉 → 股票二级展开。
+ * 今日记录（原候选池）—— 日期运行日志 → 运行抽屉 → 股票二级展开。
  *
  * 运行记录是页面骨架；推荐股票是某次运行的结果。这样即使推荐数为 0，
  * 页面仍能明确展示本次运行的时间、预设、完成状态和筛空信息。

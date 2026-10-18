@@ -23,11 +23,11 @@ export function HomePage() {
           <button
             type="button"
             className="blank-entry"
-            onClick={() => navigateSection("matrix")}
-            aria-label="进入矩阵推荐"
+            onClick={() => navigateSection("pool")}
+            aria-label="进入今日记录"
           >
-            <span className="blank-entry__label">矩阵推荐</span>
-            <span className="blank-entry__hint">单条 · 全市场</span>
+            <span className="blank-entry__label">今日记录</span>
+            <span className="blank-entry__hint">当日运行 · 推荐股票</span>
             <ArrowUpRight size={16} className="blank-entry__arrow" />
           </button>
 

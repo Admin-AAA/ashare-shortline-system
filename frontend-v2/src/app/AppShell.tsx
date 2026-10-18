@@ -11,7 +11,6 @@ const HomePage = lazy(() => import("../pages/HomePage").then((m) => ({ default: 
 const PoolPage = lazy(() => import("../pages/PoolPage").then((m) => ({ default: m.PoolPage })));
 const HistoryPage = lazy(() => import("../pages/HistoryPage").then((m) => ({ default: m.HistoryPage })));
 const RecordsPage = lazy(() => import("../pages/RecordsPage").then((m) => ({ default: m.RecordsPage })));
-const MatrixPage = lazy(() => import("../pages/MatrixPage").then((m) => ({ default: m.MatrixPage })));
 const MetricsPage = lazy(() => import("../pages/MetricsPage").then((m) => ({ default: m.MetricsPage })));
 const StrategiesPage = lazy(() => import("../pages/StrategiesPage").then((m) => ({ default: m.StrategiesPage })));
 const StrategyDetailPage = lazy(() => import("../pages/StrategyDetailPage").then((m) => ({ default: m.StrategyDetailPage })));
@@ -31,8 +30,6 @@ function SectionView({ section }: { section: Section }) {
       return <HistoryPage />;
     case "records":
       return <RecordsPage />;
-    case "matrix":
-      return <MatrixPage />;
     case "metrics":
       return <MetricsPage />;
     case "strategies":

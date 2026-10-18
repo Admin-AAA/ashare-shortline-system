@@ -3,7 +3,6 @@ import {
   Flame,
   History,
   Layers,
-  LayoutGrid,
   LineChart,
   ListChecks,
 } from "lucide-react";
@@ -225,13 +224,12 @@ function RunStat({ label, value }: { label: string; value: string }) {
 }
 
 // ─── 工作区快捷入口（合并自着陆页 NavGrid） ─────────────────────
-type QuickNavSection = "pool" | "history" | "records" | "matrix" | "metrics" | "strategies";
+type QuickNavSection = "pool" | "history" | "records" | "metrics" | "strategies";
 
 const QUICK_NAV: { section: QuickNavSection; label: string; icon: typeof BarChart3 }[] = [
-  { section: "pool", label: "候选池", icon: BarChart3 },
+  { section: "pool", label: "今日记录", icon: BarChart3 },
   { section: "history", label: "复盘", icon: History },
   { section: "records", label: "记录", icon: ListChecks },
-  { section: "matrix", label: "矩阵", icon: LayoutGrid },
   { section: "metrics", label: "指标", icon: LineChart },
   { section: "strategies", label: "策略", icon: Layers },
 ];

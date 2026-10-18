@@ -3,7 +3,6 @@ import {
   Compass,
   History,
   Layers,
-  LayoutGrid,
   LineChart,
   ListChecks,
   type LucideIcon,
@@ -15,10 +14,9 @@ import {
 export type Section =
   | "home" // 空白首页（大留白起始页）
   | "dashboard" // 🏠 驾驶舱
-  | "pool" // 🎯 候选池
+  | "pool" // 🎯 今日记录
   | "history" // 📊 复盘
   | "records" // 📋 记录中心（运行/矩阵记录 + 收益复盘）
-  | "matrix" // 📈 矩阵
   | "metrics" // 📐 指标分析
   | "strategies" // 🧩 策略清单（8 策略 + 简介 + 回测胜率）
   | "config" // ⚙️ 配置
@@ -47,10 +45,9 @@ export type NavItem = {
 
 export const NAV_ITEMS: NavItem[] = [
   { section: "dashboard", label: "驾驶舱", icon: Compass },
-  { section: "pool", label: "候选池", icon: BarChart3 },
+  { section: "pool", label: "今日记录", icon: BarChart3 },
   { section: "history", label: "复盘", icon: History },
   { section: "records", label: "记录", icon: ListChecks },
-  { section: "matrix", label: "矩阵", icon: LayoutGrid },
   { section: "metrics", label: "指标", icon: LineChart },
   { section: "strategies", label: "策略", icon: Layers },
   { section: "config", label: "配置", icon: Settings2 },
@@ -60,8 +57,6 @@ export const NAV_ITEMS: NavItem[] = [
 export type RoutePath =
   | `/${Section}`
   | "/run"
-  | "/stock-matrix"
-  | "/preset-matrix"
   | "/backtest"
   | "/data-health";
 
@@ -71,7 +66,6 @@ export const SECTION_PATHS: Record<Section, string> = {
   pool: "/pool",
   history: "/history",
   records: "/records",
-  matrix: "/matrix",
   metrics: "/metrics",
   strategies: "/strategies",
   config: "/config",
@@ -97,11 +91,8 @@ export function sectionFromPath(pathname: string): Section {
 export function navMatches(section: Section, pathname: string): boolean {
   const normalized = pathname.replace(/\/+$/, "") || "/";
   if (normalized === SECTION_PATHS[section]) return true;
-  // /run、/stock-matrix 等子路由归到对应主导航
+  // /run 等子路由归到对应主导航
   if (section === "config" && (normalized === "/backtest" || normalized === "/data-health")) {
-    return true;
-  }
-  if (section === "matrix" && (normalized === "/stock-matrix" || normalized === "/preset-matrix")) {
     return true;
   }
   if (section === "dashboard" && normalized === "/run") {
