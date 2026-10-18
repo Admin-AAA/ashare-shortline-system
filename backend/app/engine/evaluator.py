@@ -102,6 +102,9 @@ ALLOWED_NAMES = {
     "market_sentiment_phase",
     "market_regime",
     "market_sample_count",
+    # Sprint4 §84：全市场等权指数 收盘/MA20、收盘/MA60（app/services/market_trend.py）
+    "mkt_eqw_ma20_ratio",
+    "mkt_eqw_ma60_ratio",
     # S2 §57：high-range 震荡停出需用与卡片 _market_base 同口径的上涨比（up_count/market_sample_count）。
     "up_count",
     "is_st",

@@ -80,6 +80,14 @@ ma_break_exit:
   window: 5
 
 phases:
+  # 等权指数 MA60 下方停出（Sprint4 §84，2026-10-18，预注册 3 版闸门×5 策略，唯二 4/4 窗通过）：
+  # 线上闸门+当前出场逐票重模拟（前3/线72）每笔：12m n115 +1.77 PF2.66 → n67 +1.83 PF2.97 MDD−11.6→−7.0；
+  # EXT +0.88→+1.12；W0 +0.47→+1.41（n23）；W00 −1.80→−0.76（n12，MDD −23.8→−4.4）。字段见 app/services/market_trend.py。
+  - name: 等权指数MA60下方停出
+    when: "mkt_eqw_ma60_ratio > 0 and mkt_eqw_ma60_ratio < 1"
+    score_cap: 20
+    hard_veto: true
+    risk_flags: ["全市场等权指数收于60日均线下方，主线相对强度难延续，停出"]
   # 涨跌停差不足停出（Sprint3 §67，2026-10-16）：limit_up_count − limit_down_count < 40 = 赚钱效应不足，主线强度不延续。
   # 单策略面板（前3/线72）：近12月 n238 +1.12% PF1.67 MDD−58.5 → n115 +1.54% PF2.41 MDD−13.6；
   # 2025-01~10 +0.62→+0.84（MDD −32→−12）；W0(TDX) −0.15→+0.09（MDD −83→−17）；W00 −1.66→−1.92（MDD −108→−27）。

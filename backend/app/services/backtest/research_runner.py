@@ -69,6 +69,7 @@ from app.engine.strategy import (
     build_registry_from_skills,
     validate_backtest_parameter_set,
 )
+from app.services.market_trend import trend_by_dates
 from app.models.tables import (
     CapitalFlow,
     DailyKbar,
@@ -138,7 +139,7 @@ MIN_LOOKBACK_CALENDAR_DAYS = 120
 # 注入逻辑发生向后不兼容变化时递增；strategy_profile._compatible_snapshot_id
 # 用同一常量校验候选快照是否由当前契约生成，避免复用旧字段面快照导致策略
 # prefilter 拿到缺失字段（0 信号）。
-RESEARCH_INPUT_SCHEMA_VERSION = 8
+RESEARCH_INPUT_SCHEMA_VERSION = 9  # v9 (2026-10-18): mkt_eqw_ma20/60_ratio 等权指数趋势字段
 RESEARCH_SOURCE_VERSION = f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}"
 RESEARCH_STOCK_METADATA_TEMPORALITY = CURRENT_STATIC
 
@@ -569,6 +570,10 @@ class LocalResearchSnapshotBuilder:
             signal_date: _historical_market_context(rows)
             for signal_date, rows in _rows_by_trade_date(market_signal_rows).items()
         }
+        # Sprint4 §84：等权指数趋势（与实盘 feature_builder 同口径 market_trend）
+        _trend = trend_by_dates(self._session, dates)
+        for _d, _ctx in market_context_by_date.items():
+            _ctx.update(_trend.get(_d, {}))
         # 信号行与历史/结果行共享同一 21 列消费契约。这里曾遗漏
         # load_only，导致长窗全市场快照读取约 80 列大宽表；下游实际不会
         # 访问其余列，收窄后也避免 SQLAlchemy 逐行 lazy-load。
@@ -1952,6 +1957,8 @@ def _stock_as_of(
         "sector_ladder_completeness_score": 0.0,
         "is_main_theme": False,
         "market_sample_count": int((market_context or {}).get("sample_count") or 0),
+        "mkt_eqw_ma20_ratio": float((market_context or {}).get("mkt_eqw_ma20_ratio") or 0.0),
+        "mkt_eqw_ma60_ratio": float((market_context or {}).get("mkt_eqw_ma60_ratio") or 0.0),
         "data_completeness_score": 100.0,
         "evidence_quality_score": 100.0,
         # 供因子管线复刻生产聚合（_apply_relative_features / build_features）

@@ -45,6 +45,12 @@ def build_features(
 ) -> list[dict[str, Any]]:
     main_industries = set(snapshot.get("main_industries", []))
     enriched = []
+    # Sprint4 §84：全市场等权指数趋势（与回测 research_runner 同口径）
+    if db is not None:
+        from app.services.market_trend import trend_for_live
+        mkt_trend = trend_for_live(db, str(snapshot.get("trade_date") or ""), stocks)
+    else:
+        mkt_trend = {"mkt_eqw_ma20_ratio": 0.0, "mkt_eqw_ma60_ratio": 0.0}
     for stock in stocks:
         item = dict(stock)
         item["is_main_theme"] = item.get("industry") in main_industries and item.get("industry") != "未分类"
@@ -56,6 +62,7 @@ def build_features(
         item["down_count"] = int(snapshot.get("down_count") or 0)
         item["limit_up_count"] = int(snapshot.get("limit_up_count") or 0)
         item["limit_down_count"] = int(snapshot.get("limit_down_count") or 0)
+        item.update(mkt_trend)
         enriched.append(item)
 
     # 从本地辅助数据池丰富特征（涨停板/龙虎榜/新闻/资金流/概念板块）
