@@ -6,7 +6,7 @@ import pytest
 from app.db.alembic_runtime import get_alembic_health, upgrade_database
 
 
-HEAD_REVISION = "0022_drop_dead_providers"
+HEAD_REVISION = "0023_drop_realtime_quote_prov"
 
 
 def test_upgrade_database_creates_schema_and_is_idempotent() -> None:

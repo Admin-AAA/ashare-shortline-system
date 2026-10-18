@@ -67,16 +67,14 @@ class Settings(BaseSettings):
     xiaoshi_skill_version: str = "2026-08-14.1"
     xiaoshi_skill_sha256: str = "a6683e89da671b78ec04456f12b18a463cf9874707f81ee26f65c64ca043b1f7"
     xiaoshi_minute_cache_dir: str = ""
-    # 实时报价爬虫接口（tushare realtime_quote，走 realtime.stockai888.top）。
-    # 独立 pro HTTP 协议：多代码批量、含现价/最高/最低/昨收，用于未结算推荐的盘中实时浮盈。
-    # 使用独立凭据，未配置时实时浮盈降级为空。
-    tushare_realtime_quote_token: str = Field(default="", repr=False)
-    tushare_realtime_quote_url: str = "https://realtime.stockai888.top"
-    tushare_realtime_quote_batch_size: int = 60
-    tushare_realtime_quote_ttl_seconds: float = 20.0
     # 同质量档内按剩余限速额度×实时健康度加权分流（档位见 datasource/routing_table.json，
     # 单个 api 可用 "balance": false 关闭）；False = 全局关闭，退回纯链序。
     tushare_load_balancing: bool = True
+    # 数据网关按 dataset 切换（逗号分隔，如 "quote.realtime,bar.minute"）；默认空 = 全部走旧路径。
+    datasource_cutover: str = ""
+    # 影子比对：旧路径照常返回，同时抽样跑网关并比对（逗号分隔 dataset）。
+    datasource_shadow: str = ""
+    datasource_shadow_sample_rate: float = 0.1
     tushare_provider_failure_threshold: int = 3
     tushare_provider_recovery_seconds: float = 60.0
     tushare_provider_max_attempts: int = 2

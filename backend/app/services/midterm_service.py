@@ -42,6 +42,17 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §95 新权重复评（scripts/midterm/lt_research15.py EA_h20，即 §93 G_h20 原条件，未调参）
+    "mid-earnings-accel": {
+        "name": "财报业绩加速（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（年报/季报，同一报告期只取第一次公告）：扣非净利同比≥50%、营收同比≥20%、扣非净利为正、且扣非同比高于上一期报告（加速）。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按扣非同比（封顶300%）从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。",
+        "kind": "earnings_accel",
+        "k_slots": 20,
+        "max_new": 5,
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     "long-repurchase-big": {
         "name": "大额回购预案（持60日）",
         "horizon": "long",
@@ -231,6 +242,91 @@ def repurchase_plan_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return sorted(out, key=lambda x: (-x["ratio"], x["code"]))
 
 
+def _quarter_ends(as_of: str, n: int = 3) -> list[str]:
+    d = _dt.date.fromisoformat(as_of)
+    out, y, q = [], d.year, (d.month - 1) // 3  # q = number of quarters fully ended this year
+    while len(out) < n:
+        if q == 0:
+            y, q = y - 1, 4
+        out.append(f"{y}{['0331', '0630', '0930', '1231'][q - 1]}")
+        q -= 1
+    return out
+
+
+def _fetch_fina_period(period: str):
+    from app.services.tushare_client import get_pro
+    try:
+        return get_pro().fina_indicator_vip(period=period, fields="ts_code,ann_date,end_date,dt_netprofit_yoy,or_yoy,profit_dedt")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("fina_indicator_vip %s failed: %s", period, exc)
+        return None
+
+
+def _liq_ok(db, as_of: str, dates: list[str], codes: list[str]) -> dict[str, dict[str, Any]]:
+    """lt_research liq 口径：非ST、上市>250交易日、20日均成交额>5000万、当日有成交。"""
+    q = text("""
+        SELECT b.code, b.total_mv, a.amt20 FROM daily_basic b
+        JOIN (SELECT code, AVG(amount) amt20 FROM daily_kbars
+              WHERE trade_date>:d20x AND trade_date<=:d AND code IN :codes GROUP BY code) a ON a.code=b.code
+        JOIN (SELECT code FROM daily_kbars WHERE trade_date=:d250 AND code IN :codes) old ON old.code=b.code
+        JOIN (SELECT code FROM daily_kbars WHERE trade_date=:d AND close>0 AND code IN :codes) t ON t.code=b.code
+        WHERE b.trade_date=(SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d) AND b.code IN :codes
+    """).bindparams(bindparam("codes", expanding=True))
+    rows = db.execute(q, {"d20x": dates[20], "d": as_of, "d250": dates[250], "codes": codes}).mappings().all()
+    st = {r[0] for r in db.execute(text(
+        "SELECT code FROM stock_metadata_history WHERE name LIKE '%ST%' AND effective_from<=:d "
+        "AND (effective_to IS NULL OR effective_to>:d)"), {"d": as_of})}
+    return {r["code"]: dict(r) for r in rows if r["code"] not in st and r["amt20"] and float(r["amt20"]) > 5e7}
+
+
+def earnings_accel_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """as_of 收盘后可见的首次定期报告公告（公告日在 (上一交易日, as_of]），条件同 lt_research14 G。数据失败返回 None。"""
+    import pandas as pd
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 251"), {"d": as_of})]
+    if len(dates) < 251 or dates[0] != as_of:
+        return None
+    start = (_dt.date.fromisoformat(dates[1]) + _dt.timedelta(days=1)).strftime("%Y%m%d")
+    end = as_of.replace("-", "")
+    periods = _quarter_ends(as_of, 3)  # 最近两个报告期 + 上一期（算加速）
+    frames = {}
+    for per in periods:
+        f = _fetch_fina_period(per)
+        if f is None:
+            return None
+        f = f.copy()
+        f["ann_date"] = f["ann_date"].astype(str).str.strip()
+        frames[per] = f.sort_values("ann_date").drop_duplicates("ts_code", keep="first")
+    out: dict[str, dict[str, Any]] = {}
+    for cur, prev in ((periods[0], periods[1]), (periods[1], periods[2])):
+        f = frames[cur]
+        today = f[(f["ann_date"] >= start) & (f["ann_date"] <= end)]
+        if today.empty:
+            continue
+        pv = dict(zip(frames[prev]["ts_code"], pd.to_numeric(frames[prev]["dt_netprofit_yoy"], errors="coerce")))
+        for _, r in today.iterrows():
+            code = str(r["ts_code"])[:6]
+            if code[0] in "489":
+                continue
+            dtp = pd.to_numeric(r["dt_netprofit_yoy"], errors="coerce")
+            orv = pd.to_numeric(r["or_yoy"], errors="coerce")
+            pdd = pd.to_numeric(r["profit_dedt"], errors="coerce")
+            prev_dtp = pv.get(r["ts_code"])
+            if any(pd.isna(x) for x in (dtp, orv, pdd)) or prev_dtp is None or pd.isna(prev_dtp):
+                continue
+            if dtp >= 50 and orv >= 20 and pdd > 0 and dtp > prev_dtp:
+                out[code] = {"code": code, "ann_date": str(r["ann_date"]), "end_date": cur, "dt_netprofit_yoy": float(dtp),
+                             "or_yoy": float(orv), "prev_dt_netprofit_yoy": float(prev_dtp), "score": min(float(dtp), 300.0)}
+    if not out:
+        return []
+    ok = _liq_ok(db, as_of, dates, sorted(out))
+    names = dict(db.execute(text("SELECT code,name FROM stocks WHERE code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"codes": sorted(ok) or ["-"]}).all())
+    res = [{**out[c], "name": names.get(c, ""), "total_mv": float(ok[c]["total_mv"] or 0), "amt20": float(ok[c]["amt20"])} for c in ok]
+    return sorted(res, key=lambda x: (-x["score"], x["code"]))
+
+
 def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
     """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。"""
     d = _dt.date.fromisoformat(as_of)
@@ -238,6 +334,25 @@ def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
     rp_cands: list[dict[str, Any]] | None | str = "unset"
     for sid, meta in STRATEGIES.items():
         if not force and not is_signal_day(sid, d):
+            continue
+        if meta.get("kind") == "earnings_accel":
+            held = _held_codes(db, sid, as_of)
+            free = int(meta["k_slots"]) - len(held)
+            if free <= 0:
+                result[sid] = {"skipped": "slots_full", "held": len(held)}
+                continue
+            ea = earnings_accel_candidates(db, as_of)
+            if ea is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in ea if p["code"] not in held][:min(int(meta["max_new"]), free)]
+            if not picks:
+                result[sid] = 0
+                continue
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
+                {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
+            result[sid] = len(picks)
             continue
         if meta.get("kind") == "repurchase":
             held = _held_codes(db, sid, as_of)

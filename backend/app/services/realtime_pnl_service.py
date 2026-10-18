@@ -5,7 +5,7 @@
 outcome 结算同款的 ``_resolve_entry`` 判定入场价。**纯展示，不落库、不改真实结算**——
 盘后 ``label_pending_outcomes`` 口径不受影响。
 
-数据源：rt_k 经统一 Router（首选 promax），见 ``TushareProviderRouter.DEFAULT_API_ROUTES``。
+数据源：dataset quote.realtime（rt_k → rt_min → xiaoshi），见 ``app/services/datasource/quote_realtime.py``。
 """
 
 from __future__ import annotations
@@ -157,55 +157,33 @@ def _fetch_rtk_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
     """批量拉当日实时 OHLC；rt_k 缺失时用 realtime_quote 补齐。"""
     if not codes:
         return {}
-    from app.services.tushare_client import get_pro
+    return _quotes_via_gateway(codes)
 
-    ts_codes = [f"{c}.{_exchange_from_code(c)}" for c in codes]
+
+def _quotes_via_gateway(codes: list[str]) -> dict[str, dict[str, Any]]:
+    """Gateway path; output mapping identical to the legacy rt_k / realtime_quote branches."""
+    from app.services.realtime_quote_client import fetch_realtime_quotes
+
     quotes: dict[str, dict[str, Any]] = {}
-    try:
-        df = get_pro().rt_k(ts_code=",".join(ts_codes))
-    except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
-        logger.warning("rt_k 实时盈亏拉取失败: %s", str(exc)[:200])
-        df = None
-    if df is not None and not df.empty:
-        quote_date = latest_allowed_quote_date(date.today())
-        for _, row in df.iterrows():
-            code6 = str(row.get("ts_code") or "").split(".")[0]
-            if not code6:
-                continue
+    for code6, row in fetch_realtime_quotes(codes, use_cache=False).items():
+        if row.get("source") == "tushare_rt_k":
             quotes[code6] = {
-                "open": _f(row.get("open")),
-                "high": _f(row.get("high")),
-                "low": _f(row.get("low")),
-                "close": _f(row.get("close")),  # rt_k close = 现价
-                "pre_close": _f(row.get("pre_close")),
-                "vol": _f(row.get("vol")),
-                "amount": _f(row.get("amount")),
-                "name": str(row.get("name") or "").strip(),
-                # rt_k 不返回行情日期；按本地最新可用报价日标记，避免周末把周五
-                # 收盘快照合成为周六行情。
-                "trade_date": quote_date,
+                "open": _f(row.get("open")), "high": _f(row.get("high")), "low": _f(row.get("low")),
+                "close": _f(row.get("price")), "pre_close": _f(row.get("pre_close")),
+                "vol": _f(row.get("volume")), "amount": _f(row.get("amount")),
+                "name": str(row.get("name") or "").strip(), "trade_date": row.get("trade_date"),
             }
-
-    missing_codes = [code for code in codes if code not in quotes]
-    if missing_codes:
-        from app.services.realtime_quote_client import fetch_realtime_quotes
-
-        fallback_rows = fetch_realtime_quotes(missing_codes, use_cache=False)
-        for code6, row in fallback_rows.items():
-            close = _f(row.get("price") or row.get("close"))
-            if close <= 0:
-                continue
-            quotes[code6] = {
-                "open": _f(row.get("open")),
-                "high": _f(row.get("high")),
-                "low": _f(row.get("low")),
-                "close": close,
-                "pre_close": _f(row.get("pre_close")),
-                "vol": _f(row.get("volume") or row.get("vol")),
-                "amount": _f(row.get("amount")),
-                "name": str(row.get("name") or "").strip(),
-                "trade_date": normalize_trade_date(row.get("trade_date")),
-            }
+            continue
+        close = _f(row.get("price") or row.get("close"))
+        if close <= 0:
+            continue
+        quotes[code6] = {
+            "open": _f(row.get("open")), "high": _f(row.get("high")), "low": _f(row.get("low")),
+            "close": close, "pre_close": _f(row.get("pre_close")),
+            "vol": _f(row.get("volume") or row.get("vol")), "amount": _f(row.get("amount")),
+            "name": str(row.get("name") or "").strip(),
+            "trade_date": normalize_trade_date(row.get("trade_date")),
+        }
     return quotes
 
 

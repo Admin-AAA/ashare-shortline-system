@@ -61,10 +61,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# 实时行情代理地址（realtime_quote 是爬虫接口，不走 Pro API 代理）
-_REALTIME_PROXY_URL = "https://realtime.stockai888.top"
-
-
 def _patch_tushare_verify_token() -> None:
     """绕过 Tushare 库 verify_token 装饰器 bug。
 
@@ -527,10 +523,9 @@ def _load_tushare_daily_basic_map(pro: Any, settings: Any, trade_date: str) -> d
 
 def _fetch_tushare_realtime_frame(ts_codes: list[str], settings: Any):
     import tushare as ts
-    from tushare.stock import cons as ct
 
+    # sina 实时快照（tushare SDK 爬虫）；verify_token 已被 _patch_tushare_verify_token 本地短路，无需 token。
     _throttle_tushare(settings)
-    ct.verify_token_url = _REALTIME_PROXY_URL
     return ts.realtime_quote(ts_code=",".join(ts_codes))
 
 

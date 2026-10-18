@@ -46,7 +46,7 @@
 | `rt_k` 单股/小批量实时价 | 旧网关B（pro）✅ / 旧网关A 无权限 / 旧网关C 504 | 需指定 ts_code，不支持全市场 |
 | `rt_min` 实时分钟 | 旧网关B ✅ / 旧网关C 504 | 需 freq 参数 |
 | `stk_mins` 历史分钟K | 旧网关C（504 中）/ 旧网关B ✅ | 已配 旧网关C 优先 |
-| realtime_quote 爬虫（批量实时快照） | realtime.stockai888.top ✅ | 独立爬虫协议，绕开 Router |
+| realtime_quote 爬虫（批量实时快照） | （已删除的 token 报价网关） ✅ | 独立爬虫协议，绕开 Router |
 | `daily`/`stk_factor`/`cyq_perf` 等 | 旧网关A 主 / 旧网关B / 旧网关C 备 | 现状 |
 
 ## 架构：能力路由层（Capability Gateway）

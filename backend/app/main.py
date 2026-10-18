@@ -85,6 +85,11 @@ _LOCAL_ORIGINS = [
     "http://127.0.0.1:8765",
 ]
 
+from starlette.middleware.gzip import GZipMiddleware  # noqa: E402
+
+# 大 JSON（/api/runs、/api/records/runs 数百 KB~MB）压缩传输；内容不变。
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_LOCAL_ORIGINS,
