@@ -33,7 +33,6 @@ from app.services.runs.stages.review import ReviewStage
 from app.services.runs.state_machine import RunStateMachine
 
 
-NOW = datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 def _repository() -> tuple[Session, SQLAlchemyRunRepository]:
@@ -44,6 +43,10 @@ def _repository() -> tuple[Session, SQLAlchemyRunRepository]:
 
 
 def _start_and_lease(repo: SQLAlchemyRunRepository, session: Session, run_id: str):
+    # Per-call clock: production code renews the lease against the real clock, so a
+    # module-level NOW (collection time) made the 1200s lease expire when the full
+    # suite took >20 minutes before reaching this test.
+    NOW = datetime.now(timezone.utc).replace(tzinfo=None)
     created = repo.create_queued_run(
         CreateQueuedRun(
             run_id=run_id,
