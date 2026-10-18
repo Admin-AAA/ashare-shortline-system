@@ -37,6 +37,9 @@ RETIRED_STRATEGY_IDS: frozenset[str] = frozenset(
         "sector-laggard-catchup",
         # 2026-10-15 删除：真单策略回放近12月 117 张 -0.59%（近期 59 张 -1.37%），4 季度网格唯一 4/4 组合仍 -0.52%（L-184）
         "low-max-steady-trend",
+        # 2026-10-18 删除：§93 选股无超额——与「同一合格池内随机选 3 只」对照 4 窗只赢 1 窗（12m +0.86 vs 随机中位 +0.70；
+        # EXT +0.26 vs +0.26；W0 +0.46 vs +0.51；W00 -1.51 vs -1.46），4 窗每笔均值约 +0.02%，最大回撤 -30.5%（L-189）
+        "chen-xiaoqun-skill",
     }
 )
 

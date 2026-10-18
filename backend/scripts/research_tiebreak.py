@@ -43,6 +43,13 @@ def keyfn(name, date):
     return None
 
 def tiebreak(cs, name, date):
+    if name.startswith("pool"):  # §93: random pick among cards already passing the score line (pool control)
+        sd = name[4:]
+        for c in cs:
+            if float(c.get("final_score") or 0) >= 72.0:
+                h = int(hashlib.md5(f"{sd}|{date}|{c.get('code')}".encode()).hexdigest()[:8], 16) / 0xFFFFFFFF
+                c["final_score"] = 72.0 + 20.0 * h
+        return cs
     k = keyfn(name, date)
     if k is None: return cs
     groups = defaultdict(list)
@@ -63,7 +70,8 @@ def main():
     ap.add_argument("--out", default="output/research/sprint4/tiebreak.json")
     a = ap.parse_args(); base_pol = load_production_selection_policy(); res = {}
     ep = variant(); lim = ep.entry_lookahead_days + ep.horizon_days + 2
-    names = ["base"] + a.variants.split(",") + [f"rnd{i}" for i in range(a.nrand)]
+    ap_pool = os.environ.get("TIEBREAK_POOL") == "1"
+    names = ["base"] + [v for v in a.variants.split(",") if v] + [f"{'pool' if ap_pool else 'rnd'}{i}" for i in range(a.nrand)]
     with SessionLocal() as db:
         for sid in a.sids.split(","):
             pol = standalone_selection_policy(base_pol, sid, 3); res[sid] = {}
@@ -94,10 +102,10 @@ def main():
                     nrows = [{"dt": r["dt"], "code": r["code"], "net": x} for r in rows if (x := net(r["dt"], r["code"])) is not None]
                     m = _metrics(nrows, days)
                     out[v] = {"n": m["n"], "wr": round(m["wr"] * 100, 1), "avg": round(m["avg"], 3), "pf": round(m["pf"], 2), "mdd": round(m["mdd"], 1)} if m else {"n": 0, "avg": 0}
-                rnd = [out[f"rnd{i}"]["avg"] for i in range(a.nrand)]
+                rnd = [out[f"{'pool' if ap_pool else 'rnd'}{i}"]["avg"] for i in range(a.nrand)]
                 out["_rnd"] = {"median": round(statistics.median(rnd), 3), "p10": round(sorted(rnd)[int(0.1 * len(rnd))], 3), "p90": round(sorted(rnd)[int(0.9 * len(rnd)) - 1], 3), "min": min(rnd), "max": max(rnd)}
                 res[sid][w] = out
-                print(sid, w, {k: out[k] for k in ["base"] + a.variants.split(",") + ["_rnd"]}, flush=True)
+                print(sid, w, {k: out[k] for k in ["base"] + [v for v in a.variants.split(",") if v] + ["_rnd"]}, flush=True)
                 Path(a.out).write_text(json.dumps(res, ensure_ascii=False, indent=1))
 if __name__ == "__main__":
     main()
