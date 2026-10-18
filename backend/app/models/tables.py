@@ -33,6 +33,7 @@ from app.db.session import Base
 
 # Split by domain; this module re-exports everything so existing imports keep working.
 from app.models.market import (  # noqa: F401,E402
+    TradeCalendar,
     Stock,
     StockMetadataHistory,
     DailyBasic,

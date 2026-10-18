@@ -1510,17 +1510,10 @@ def fetch_top_inst(trade_date: str | None = None) -> list[dict[str, Any]]:
 
 
 def fetch_latest_trade_date() -> str:
-    """获取最新交易日。"""
-    pro = get_pro()
-    today = date.today().strftime("%Y%m%d")
-    start = (date.today() - timedelta(days=14)).strftime("%Y%m%d")
-    try:
-        cal = pro.trade_cal(exchange="SSE", start_date=start, end_date=today, is_open="1")
-        if cal is not None and not cal.empty:
-            return str(cal.sort_values("cal_date").iloc[-1]["cal_date"])
-    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_latest_trade_date: ignored non-fatal error: %s", exc)
-    return today
+    """获取最新交易日（本地交易日历；拿不到时抛 TradeCalendarUnavailable，绝不猜成今天）。"""
+    from app.services.trade_calendar import latest_trade_date
+
+    return latest_trade_date()
 
 
 def fetch_recent_trade_dates(lookback_days: int = 30) -> list[str]:
@@ -1528,23 +1521,13 @@ def fetch_recent_trade_dates(lookback_days: int = 30) -> list[str]:
 
     只返回交易所日历里 is_open=1 的日期。调用方要判定「最新已收盘交易日」时必须用
     这份清单，而不能用工作日算术——休市的工作日（如 2026-09-25）会被算成交易日，
-    使下游把所有表都判成缺那一天（L-147）。
+    使下游把所有表都判成缺那一天（L-147）。读本地交易日历；拿不到时抛
+    TradeCalendarUnavailable，而不是返回空列表。
     """
-    pro = get_pro()
+    from app.services.trade_calendar import open_dates_between
+
     today = date.today()
-    start = (today - timedelta(days=max(1, int(lookback_days)))).strftime("%Y%m%d")
-    try:
-        cal = pro.trade_cal(
-            exchange="SSE",
-            start_date=start,
-            end_date=today.strftime("%Y%m%d"),
-            is_open="1",
-        )
-        if cal is not None and not cal.empty:
-            return [str(value) for value in cal.sort_values("cal_date")["cal_date"].tolist()]
-    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_recent_trade_dates: ignored non-fatal error: %s", exc)
-    return []
+    return open_dates_between(today - timedelta(days=max(1, int(lookback_days))), today)
 
 
 def is_open_trade_date(day: date) -> bool:
@@ -1554,11 +1537,12 @@ def is_open_trade_date(day: date) -> bool:
     日历拿不到时直接抛错：把休市日当交易日会让盘后作业误报失败，把交易日当休市日
     会漏跑整天推荐，两种猜测都不可接受。
     """
-    compact = day.strftime("%Y%m%d")
-    cal = get_pro().trade_cal(exchange="SSE", start_date=compact, end_date=compact)
-    if cal is None or cal.empty:
-        raise RuntimeError(f"Tushare 交易日历未返回 {compact}，无法判定是否交易日")
-    return int(cal.iloc[0]["is_open"]) == 1
+    from app.services.trade_calendar import TradeCalendarUnavailable, is_open
+
+    try:
+        return is_open(day)
+    except TradeCalendarUnavailable as exc:
+        raise RuntimeError(f"Tushare 交易日历未返回 {day.strftime('%Y%m%d')}，无法判定是否交易日: {exc}") from exc
 
 
 # ═════════════════════════════════════════════════════════════════════════════

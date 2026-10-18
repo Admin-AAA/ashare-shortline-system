@@ -836,6 +836,8 @@ class TushareProviderRouter:
         # does not prevent valid financial/member data from reaching fallback.
         "fina_indicator": ("promax", "tushare_official", "quantdata"),
         "ths_member": ("promax", "tushare_official", "quantdata"),
+        # official 无 trade_cal 权限、promax 常被限速：quantdata 作为兜底（2026-10 复查）。
+        "trade_cal": ("promax", "quantdata", "tushare_official"),
     }
 
     def __init__(

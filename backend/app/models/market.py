@@ -694,3 +694,14 @@ class StockMatrixHistory(Base):
     result_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
     elapsed_ms: Mapped[float | None] = mapped_column(Float)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
+
+
+class TradeCalendar(Base):
+    """Local exchange trading calendar (SSE). Readers use this instead of live trade_cal."""
+
+    __tablename__ = "trade_calendar"
+
+    exchange: Mapped[str] = mapped_column(String(8), primary_key=True, default="SSE")
+    cal_date: Mapped[str] = mapped_column(String(8), primary_key=True)  # YYYYMMDD
+    is_open: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, nullable=False)

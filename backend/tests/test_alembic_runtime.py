@@ -6,7 +6,7 @@ import pytest
 from app.db.alembic_runtime import get_alembic_health, upgrade_database
 
 
-HEAD_REVISION = "0020_holder_number_ann_date"
+HEAD_REVISION = "0021_trade_calendar"
 
 
 def test_upgrade_database_creates_schema_and_is_idempotent() -> None:
