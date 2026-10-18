@@ -124,13 +124,19 @@ def _sina():
     return SinaProvider()
 
 
+def _tencent():
+    from app.services.datasource.web_backups import TencentQuoteProvider
+
+    return TencentQuoteProvider()  # flag quote.realtime.tencent (default off => skipped)
+
+
 _GATEWAY: DatasetGateway | None = None
 
 
 def gateway() -> DatasetGateway:
     global _GATEWAY
     if _GATEWAY is None:
-        _GATEWAY = DatasetGateway([RtkProvider(), _sina(), RtMinProvider(), XiaoshiSnapshotProvider()])
+        _GATEWAY = DatasetGateway([RtkProvider(), _sina(), _tencent(), RtMinProvider(), XiaoshiSnapshotProvider()])
     return _GATEWAY
 
 

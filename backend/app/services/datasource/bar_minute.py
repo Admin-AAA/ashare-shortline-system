@@ -81,13 +81,22 @@ class TushareStkMinsProvider:
         )
 
 
+def _web_backups() -> list:
+    from app.services.datasource.web_backups import SinaKlineProvider, TencentMinuteProvider
+
+    return [SinaKlineProvider(), TencentMinuteProvider()]
+
+
 _GATEWAY: DatasetGateway | None = None
 
 
 def gateway() -> DatasetGateway:
     global _GATEWAY
     if _GATEWAY is None:
-        _GATEWAY = DatasetGateway([XiaoshiMinuteProvider(), BaostockMinuteProvider(), TushareStkMinsProvider()])
+        _GATEWAY = DatasetGateway([
+            XiaoshiMinuteProvider(), BaostockMinuteProvider(), TushareStkMinsProvider(),
+            *_web_backups(),  # flags bar.minute.sina / bar.minute.tencent (default off)
+        ])
     return _GATEWAY
 
 
