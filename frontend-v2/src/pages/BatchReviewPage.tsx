@@ -44,7 +44,16 @@ export function BatchReviewPage() {
 
   const q = useQuery({
     queryKey: ["batch-review", code, strategy],
-    queryFn: () => api.recommendationHistory({ code: code || undefined, strategy_id: strategy || undefined, limit: 200 }),
+    // 接口单页上限 200：按 offset 翻页拉全（上限 2000 条），summary 取首页
+    queryFn: async () => {
+      const base = { code: code || undefined, strategy_id: strategy || undefined, limit: 200 };
+      const first = await api.recommendationHistory({ ...base, offset: 0 });
+      const total = Math.min(first.total ?? first.items.length, 2000);
+      const offsets: number[] = [];
+      for (let o = 200; o < total; o += 200) offsets.push(o);
+      const rest = await Promise.all(offsets.map((offset) => api.recommendationHistory({ ...base, offset })));
+      return { ...first, items: [...first.items, ...rest.flatMap((r) => r.items)] };
+    },
   });
 
   const batches = useMemo(() => {
