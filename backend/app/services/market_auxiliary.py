@@ -47,6 +47,16 @@ def _em_td(trade_date: str | None) -> str:
     return _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
 
 
+def _em_shadow(kind: str, legacy: list[dict[str, Any]], fn) -> None:
+    """Shadow (flag datasource_shadow contains aux.eastmoney): compare (code, limit_type) key sets."""
+    from app.services.datasource.gateway import is_shadow, shadow_compare
+
+    if not legacy or not is_shadow("aux.eastmoney"):
+        return
+    key = lambda rows: sorted({(r.get("code"), r.get("limit_type", "")) for r in rows})  # noqa: E731
+    shadow_compare(f"aux.eastmoney.{kind}", key(legacy), lambda: key(fn()))
+
+
 # ── Dispatch ────────────────────────────────────────────────────────────
 
 def _compact_trade_date(value: Any) -> str:
@@ -56,6 +66,7 @@ def _compact_trade_date(value: Any) -> str:
 def _fetch_limit_up_board(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
         rows = _fetch_tushare_limit_up_board(settings, trade_date=trade_date)
+        _em_shadow("limit_up", rows, lambda: _em().fetch_limit_up_board(_em_td(trade_date)))
         if rows:
             return rows
         # Tushare 限速/失败时回退本地 limit_up_board 表（已同步的涨停事实数据）
@@ -133,7 +144,9 @@ def _fetch_capital_flow(source: str, code: str, settings: Any, trade_date: str |
 
 def _fetch_dragon_tiger(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
-        return _fetch_tushare_dragon_tiger(settings, trade_date=trade_date)
+        rows = _fetch_tushare_dragon_tiger(settings, trade_date=trade_date)
+        _em_shadow("dragon_tiger", rows, lambda: _em().fetch_dragon_tiger(_em_td(trade_date)))
+        return rows
     if source == "eastmoney" and _em().aux_enabled():
         return _em().dragon_tiger(_em_td(trade_date))
     return []

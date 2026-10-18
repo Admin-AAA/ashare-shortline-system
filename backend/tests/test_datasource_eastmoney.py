@@ -54,3 +54,15 @@ def test_block_opens_breaker(monkeypatch):
         em.dragon_tiger("20261016")
     with pytest.raises(gw.DataSourceError):
         em.dragon_tiger("20261016")
+
+
+def test_shadow_compares_keysets(monkeypatch):
+    from app.services import market_auxiliary as ma
+
+    seen = []
+    monkeypatch.setattr(gw, "is_shadow", lambda d: d == "aux.eastmoney")
+    monkeypatch.setattr(gw, "shadow_compare", lambda d, a, f: seen.append((d, a, f())))
+    monkeypatch.setattr(ma, "_fetch_tushare_dragon_tiger", lambda s, trade_date=None: [{"code": "000001"}])
+    monkeypatch.setattr(em, "fetch_dragon_tiger", lambda td: [{"code": "000001"}, {"code": "000002"}])
+    assert ma._fetch_dragon_tiger("tushare", None, "2026-10-16") == [{"code": "000001"}]
+    assert seen == [("aux.eastmoney.dragon_tiger", [("000001", "")], [("000001", ""), ("000002", "")])]
