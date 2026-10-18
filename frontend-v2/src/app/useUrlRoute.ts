@@ -63,8 +63,9 @@ export function useUrlRoute() {
   );
 
   const navigateSection = useCallback(
-    (section: Section, opts?: NavigateOptions) => {
-      const path = section === "dashboard" ? "/dashboard" : `/${section}`;
+    (section: Section | string, opts?: NavigateOptions) => {
+      const map: Record<string, string> = { today: "/", dashboard: "/dashboard", pool: "/pool", history: "/history", records: "/records", metrics: "/metrics", strategies: "/strategies", config: "/config", review: "/review", system: "/config" };
+      const path = map[section] ?? `/${section}`;
       navigate(path, opts);
     },
     [navigate],

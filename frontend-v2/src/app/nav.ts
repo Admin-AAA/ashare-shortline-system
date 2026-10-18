@@ -1,115 +1,75 @@
-import {
-  BarChart3,
-  Compass,
-  History,
-  Layers,
-  LineChart,
-  ListChecks,
-  type LucideIcon,
-  Settings2,
-} from "lucide-react";
+import { ClipboardList, type LucideIcon, Layers, Settings2, Sun } from "lucide-react";
 
-/** 频率驱动的六入口导航 — 见 UX-architecture-full-report.md §5.2
- * home 是空白起始页（大留白），不计入主导航频率分组 */
-export type Section =
-  | "home" // 空白首页（大留白起始页）
-  | "dashboard" // 🏠 驾驶舱
-  | "pool" // 🎯 今日记录
-  | "history" // 📊 复盘
-  | "records" // 📋 记录中心（运行/矩阵记录 + 收益复盘）
-  | "metrics" // 📐 指标分析
-  | "strategies" // 🧩 策略清单（启用策略 + 简介 + 回测胜率）
-  | "config" // ⚙️ 配置
-  | "mid" // 中线
-  | "long"; // 长线
+/** v4 信息架构：4 个一级入口 + 全局周期切换（短/中/长）。
+ * 旧路由全部保留为合法 URL，归属到新的一级入口下（见 SECTION_OF_PATH），
+ * 页面内部的旧链接（/records?tab=…、/history?strategy_id=…）因此无需改动。 */
+export type Section = "today" | "review" | "strategies" | "system";
 
-/** 策略周期：短线沿用原有导航；中线/长线各自一页（策略画像 + 选股 + 持仓复盘） */
 export type Horizon = "short" | "mid" | "long";
-export const HORIZONS: { id: Horizon; label: string; path: string }[] = [
-  { id: "short", label: "短线", path: "/dashboard" },
-  { id: "mid", label: "中线", path: "/mid" },
-  { id: "long", label: "长线", path: "/long" },
+export const HORIZONS: { id: Horizon; label: string }[] = [
+  { id: "short", label: "短线" },
+  { id: "mid", label: "中线" },
+  { id: "long", label: "长线" },
 ];
-export function horizonFromPath(pathname: string): Horizon {
-  const n = pathname.replace(/\/+$/, "");
-  if (n === "/mid" || n.startsWith("/mid/")) return "mid";
-  if (n === "/long" || n.startsWith("/long/")) return "long";
-  return "short";
-}
 
-export type NavItem = {
-  section: Section;
-  label: string;
-  icon: LucideIcon;
-};
-
+export type NavItem = { section: Section; label: string; icon: LucideIcon; path: string };
 export const NAV_ITEMS: NavItem[] = [
-  { section: "dashboard", label: "驾驶舱", icon: Compass },
-  { section: "pool", label: "今日记录", icon: BarChart3 },
-  { section: "history", label: "复盘", icon: History },
-  { section: "records", label: "记录", icon: ListChecks },
-  { section: "metrics", label: "指标", icon: LineChart },
-  { section: "strategies", label: "策略", icon: Layers },
-  { section: "config", label: "配置", icon: Settings2 },
+  { section: "today", label: "今日", icon: Sun, path: "/" },
+  { section: "review", label: "复盘", icon: ClipboardList, path: "/review" },
+  { section: "strategies", label: "策略", icon: Layers, path: "/strategies" },
+  { section: "system", label: "系统", icon: Settings2, path: "/config" },
 ];
 
-/** 运行详情通过 /run 访问，但不作为主导航入口 */
-export type RoutePath =
-  | `/${Section}`
-  | "/run"
-  | "/backtest"
-  | "/data-health";
-
-export const SECTION_PATHS: Record<Section, string> = {
-  home: "/",
-  dashboard: "/dashboard",
-  pool: "/pool",
-  history: "/history",
-  records: "/records",
-  metrics: "/metrics",
-  strategies: "/strategies",
-  config: "/config",
-  mid: "/mid",
-  long: "/long",
+/** 一级入口内的子视图（tab）。path 即旧路由，保证旧书签/内部跳转可用。 */
+export const SUB_TABS: Record<Section, { path: string; label: string; shortOnly?: boolean }[]> = {
+  today: [
+    { path: "/pool", label: "今日出票" },
+    { path: "/dashboard", label: "驾驶舱" },
+    { path: "/run", label: "运行详情" },
+  ],
+  review: [
+    { path: "/review", label: "按批次" },
+    { path: "/history", label: "交易明细" },
+    { path: "/records", label: "运行记录" },
+  ],
+  strategies: [],
+  system: [
+    { path: "/config", label: "配置" },
+    { path: "/metrics", label: "诊断 / 研究" },
+  ],
 };
 
-/** 从 URL pathname 反向解析 section（不含 run 等子路由） */
+export function normalizePath(pathname: string): string {
+  return pathname.replace(/\/+$/, "") || "/";
+}
+
 export function sectionFromPath(pathname: string): Section {
-  const normalized = pathname.replace(/\/+$/, "") || "/";
-  if (normalized === "/") return "home";
-  for (const [section, path] of Object.entries(SECTION_PATHS)) {
-    if (section === "home") continue;
-    if (normalized === path) return section as Section;
-  }
-  // /run → 不属于主导航，但默认回到驾驶舱
-  if (normalized === "/run") return "dashboard";
-  if (normalized.startsWith("/strategies/")) return "strategies";
-  return "home";
+  const p = normalizePath(pathname);
+  if (p === "/review" || p === "/history" || p === "/records") return "review";
+  if (p === "/strategies" || p.startsWith("/strategies/")) return "strategies";
+  if (p === "/config" || p === "/system" || p === "/metrics" || p === "/data-health" || p === "/backtest") return "system";
+  return "today";
 }
 
-/** 主导航是否匹配当前 path（用于高亮） */
+/** 需要重定向的旧路由 → 新路由（保留查询参数） */
+export function redirectFor(pathname: string, search: string): { to: string; horizon?: Horizon } | null {
+  const p = normalizePath(pathname);
+  if (p === "/mid") return { to: "/", horizon: "mid" };
+  if (p === "/long") return { to: "/", horizon: "long" };
+  if (p === "/system" || p === "/backtest") return { to: `/config${search}` };
+  if (p === "/data-health") return { to: "/config?tab=data-health" };
+  if (p === "/today") return { to: `/${search}` };
+  return null;
+}
+
 export function navMatches(section: Section, pathname: string): boolean {
-  const normalized = pathname.replace(/\/+$/, "") || "/";
-  if (normalized === SECTION_PATHS[section]) return true;
-  // /run 等子路由归到对应主导航
-  if (section === "config" && (normalized === "/backtest" || normalized === "/data-health")) {
-    return true;
-  }
-  if (section === "dashboard" && normalized === "/run") {
-    return true;
-  }
-  if (section === "strategies" && normalized.startsWith("/strategies/")) {
-    return true;
-  }
-  return false;
+  return sectionFromPath(pathname) === section;
 }
 
-/** 读取 URL 查询参数 */
 export function queryParam(key: string): string | null {
   return new URLSearchParams(window.location.search).get(key);
 }
 
-/** 构造带查询参数的 URL */
 export function buildPath(base: string, params?: Record<string, string | number | null | undefined>): string {
   if (!params) return base;
   const qs = new URLSearchParams();
