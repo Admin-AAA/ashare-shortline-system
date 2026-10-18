@@ -137,7 +137,7 @@ async function requestNetwork<T>(path: string, init?: RequestInit, options?: Req
         if (!path.startsWith("/api/auth/")) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
         throw new Error("UNAUTHORIZED");
       }
-      throw new Error(userFacingErrorMessage(text || `Request failed: ${res.status}`, res.status));
+      throw Object.assign(new Error(userFacingErrorMessage(text || `Request failed: ${res.status}`, res.status)), { status: res.status });
     }
     return (await res.json()) as T;
   } catch (err) {
@@ -152,6 +152,7 @@ async function requestNetwork<T>(path: string, init?: RequestInit, options?: Req
     }
     if ((err as Error).message === "UNAUTHORIZED") throw err;
     logger.error("api", `${method} ${path} failed`, { duration, error: String(err) });
+    if (typeof (err as { status?: number }).status === "number") throw err; // HTTP 错误已整理过文案，保留 status 供调用方判断
     throw new Error(userFacingErrorMessage(err));
   } finally {
     if (timer !== null) {

@@ -276,7 +276,7 @@ function RunRecordsList() {
         // 旧后端会静默忽略未知参数（不报 422）：按返回页自检是否真的生效
         return { ...r, degraded: !newParamsHonored(r.items, extra) };
       } catch (e) {
-        if (!/422|Unprocessable|less_than|literal_error|enum|Input should/i.test((e as Error).message)) throw e;
+        if ((e as { status?: number }).status !== 422) throw e;
         return { ...(await api.runRecordsPage(filters)), degraded: true };
       }
     },
