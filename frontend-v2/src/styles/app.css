@@ -2,8 +2,9 @@
 @import "./themes.css";
 @import "./shell.css";
 @import "./auth.css";
-@import "./cosmic.css";
+
 @import "./strategy-center.css";
+@import "./v4.css";
 
 /* ── 运行进度条（RunDetailPage 实时轮询进度）── */
 @keyframes run-progress-indeterminate {
@@ -158,8 +159,8 @@ a {
   box-shadow: var(--shadow-md);
 }
 
-.hdemo-kpi--up::before { background: var(--market-down); }
-.hdemo-kpi--down::before { background: var(--market-up); }
+.hdemo-kpi--up::before { background: var(--market-up); }
+.hdemo-kpi--down::before { background: var(--market-down); }
 .hdemo-kpi--warn::before { background: var(--warning); }
 .hdemo-kpi--neutral::before { background: var(--accent); }
 
@@ -1449,3 +1450,4 @@ a {
   border-color: var(--line-strong);
   color: var(--muted);
 }
+

@@ -1,145 +1,44 @@
 /* ═══════════════════════════════════════════════════════════════
-   THEME SYSTEM — 极地海洋 · 克制专业
-   基于单一强调色（极光青绿）的冷暖双主题系统
-   所有中性色均带有细微冷色倾向，确保浅色模式不发黄
+   THEME SYSTEM v4 — 专业、克制、实色面板（无玻璃、无动态背景）
+   规则：红/绿只表示 涨跌/盈亏；系统状态用 品牌蓝 / 琥珀 / 灰 + 图标。
    ═══════════════════════════════════════════════════════════════ */
-
 :root[data-theme="dark"] {
-  /* 画布：深海极暗，非纯黑 */
-  --canvas: #020617;
-  --canvas-soft: #0b1221;
-
-  /* 表面：上浮的卡片/面板，由暗到亮代表海拔升高 */
-  --surface: #0f172a;
-  --surface-soft: #1e293b;
-  --surface-strong: #334155;
-  --surface-elevated: #1e293b;
-
-  /* 线条：冷灰蓝，保持克制 */
-  --line: #1e293b;
-  --line-strong: #334155;
-  --line-subtle: #0f172a;
-
-  /* 文字 */
-  --ink: #f8fafc;
-  --ink-secondary: #e2e8f0;
-  --muted: #94a3b8;
-  --muted-strong: #64748b;
-
-  /* 强调：品牌蓝，与左上角 logo 同系 */
-  --accent: #60a5fa;
-  --accent-strong: #93c5fd;
-  --accent-soft: #1e3a8a;
-  --accent-glow: rgba(96, 165, 250, 0.20);
-  --accent-gradient: linear-gradient(135deg, #60a5fa 0%, #2dd4bf 100%);
-
-  /* 语义 */
-  --danger: #f87171;
-  --danger-soft: #7f1d1d;
-  --warning: #fbbf24;
-  --warning-soft: #78350f;
-  --positive: #60a5fa;
-  --positive-soft: #1e3a8a;
-  --negative: #f87171;
-  --negative-soft: #7f1d1d;
-  --info: #60a5fa;
-  --info-soft: #1e3a8a;
-
-  /* A股市场色：涨红跌绿 */
-  --market-up: #f87171;
-  --market-down: #4ade80;
-  --market-flat: #94a3b8;
-
-  /* 品牌蓝：辅助信息链接 */
-  --blue: #60a5fa;
-  --blue-soft: #1e3a8a;
-
-  /* 阴影：深色模式用浅色表面代替阴影制造层次 */
-  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.20);
-  --shadow-md: 0 4px 16px rgb(0 0 0 / 0.28);
-  --shadow-lg: 0 12px 40px rgb(0 0 0 / 0.36);
-  --shadow-glow: 0 0 24px color-mix(in srgb, var(--accent) 16%, transparent);
-
-  /* 玻璃 */
-  --glass-surface: rgba(15, 23, 42, 0.72);
-  --glass-surface-soft: rgba(30, 41, 59, 0.56);
-  --glass-surface-strong: rgba(51, 65, 85, 0.72);
-  --glass-border: rgba(148, 163, 184, 0.16);
-  --glass-border-strong: rgba(148, 163, 184, 0.32);
+  --canvas: #0b0e14; --canvas-soft: #0f131b;
+  --surface: #12161f; --surface-soft: #1a1f2b; --surface-strong: #232937; --surface-elevated: #161b25;
+  --line: #252b38; --line-strong: #323a4a; --line-subtle: #1a1f2b;
+  --ink: #e6e8ec; --ink-secondary: #c4c9d2; --muted: #9aa3b2; --muted-strong: #5f6878;
+  --accent: #3b82f6; --accent-strong: #60a5fa; --accent-soft: #172554; --accent-glow: rgba(59,130,246,.18);
+  --accent-gradient: #3b82f6;
+  --danger: #f23645; --danger-soft: #3b1418; --warning: #f5a524; --warning-soft: #3a2a0c;
+  --positive: #3b82f6; --positive-soft: #172554; --negative: #f5a524; --negative-soft: #3a2a0c;
+  --info: #3b82f6; --info-soft: #172554;
+  --market-up: #f23645; --market-down: #12b76a; --market-flat: #8a93a0; --market-gold: #f5a524;
+  --blue: #3b82f6; --blue-soft: #172554;
+  --hz-short: #3b82f6; --hz-mid: #8b5cf6; --hz-long: #06b6d4;
+  --shadow-sm: none; --shadow-md: 0 8px 24px rgb(0 0 0 / .35); --shadow-lg: 0 24px 64px rgb(0 0 0 / .45); --shadow-glow: none;
+  --glass-surface: var(--surface); --glass-surface-soft: var(--surface-soft); --glass-surface-strong: var(--surface-strong);
+  --glass-border: var(--line); --glass-border-strong: var(--line-strong);
+  --border: var(--line); --text: var(--ink);
 }
-
 :root[data-theme="light"] {
-  /* 画布：极地雾蓝，冷色不发黄 */
-  --canvas: #f1f5f9;
-  --canvas-soft: #e2e8f0;
-
-  /* 表面：白色至浅灰，海拔越高越亮 */
-  --surface: #ffffff;
-  --surface-soft: #f8fafc;
-  --surface-strong: #f1f5f9;
-  --surface-elevated: #ffffff;
-
-  /* 线条：冷灰，柔和不刺眼 */
-  --line: #e2e8f0;
-  --line-strong: #cbd5e1;
-  --line-subtle: #f1f5f9;
-
-  /* 文字 */
-  --ink: #0f172a;
-  --ink-secondary: #334155;
-  --muted: #64748b;
-  --muted-strong: #94a3b8;
-
-  /* 强调：品牌蓝，与左上角 logo 同系 */
-  --accent: #3b82f6;
-  --accent-strong: #2563eb;
-  --accent-soft: #dbeafe;
-  --accent-glow: rgba(59, 130, 246, 0.20);
-  --accent-gradient: linear-gradient(135deg, #3b82f6 0%, #0d9488 100%);
-
-  /* 语义 */
-  --danger: #dc2626;
-  --danger-soft: #fee2e2;
-  --warning: #d97706;
-  --warning-soft: #fef3c7;
-  --positive: #2563eb;
-  --positive-soft: #dbeafe;
-  --negative: #dc2626;
-  --negative-soft: #fee2e2;
-  --info: #2563eb;
-  --info-soft: #dbeafe;
-
-  /* A股：涨红跌绿 */
-  --market-up: #ef4444;
-  --market-down: #22c55e;
-  --market-flat: #94a3b8;
-
-  --blue: #2563eb;
-  --blue-soft: #dbeafe;
-
-  /* 阴影：浅色模式用柔和投影 */
-  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.04);
-  --shadow-md: 0 4px 16px rgb(15 23 42 / 0.06);
-  --shadow-lg: 0 12px 40px rgb(15 23 42 / 0.10);
-  --shadow-glow: 0 0 24px color-mix(in srgb, var(--accent) 14%, transparent);
-
-  /* 玻璃：与背景同冷的半透明色，彻底消除米黄条 */
-  --glass-surface: rgba(255, 255, 255, 0.76);
-  --glass-surface-soft: rgba(248, 250, 252, 0.62);
-  --glass-surface-strong: rgba(241, 245, 249, 0.82);
-  --glass-border: rgba(100, 116, 139, 0.14);
-  --glass-border-strong: rgba(100, 116, 139, 0.26);
+  --canvas: #f5f6f8; --canvas-soft: #eef0f3;
+  --surface: #ffffff; --surface-soft: #f0f2f5; --surface-strong: #e7eaef; --surface-elevated: #ffffff;
+  --line: #e3e6eb; --line-strong: #cfd4dc; --line-subtle: #f0f2f5;
+  --ink: #1a1d23; --ink-secondary: #3a404b; --muted: #5b6472; --muted-strong: #8a93a0;
+  --accent: #2563eb; --accent-strong: #1d4ed8; --accent-soft: #dbeafe; --accent-glow: rgba(37,99,235,.15);
+  --accent-gradient: #2563eb;
+  --danger: #d9363e; --danger-soft: #fde8e9; --warning: #d97706; --warning-soft: #fef3c7;
+  --positive: #2563eb; --positive-soft: #dbeafe; --negative: #d97706; --negative-soft: #fef3c7;
+  --info: #2563eb; --info-soft: #dbeafe;
+  --market-up: #d9363e; --market-down: #0e9f5a; --market-flat: #8a93a0; --market-gold: #d97706;
+  --blue: #2563eb; --blue-soft: #dbeafe;
+  --hz-short: #2563eb; --hz-mid: #7c3aed; --hz-long: #0891b2;
+  --shadow-sm: 0 1px 2px rgb(16 24 40 / .06); --shadow-md: 0 4px 16px rgb(16 24 40 / .08); --shadow-lg: 0 16px 48px rgb(16 24 40 / .14); --shadow-glow: none;
+  --glass-surface: var(--surface); --glass-surface-soft: var(--surface-soft); --glass-surface-strong: var(--surface-strong);
+  --glass-border: var(--line); --glass-border-strong: var(--line-strong);
+  --border: var(--line); --text: var(--ink);
 }
-
-/* 主题切换平滑过渡 */
-html {
-  transition: color var(--motion-slow), background-color var(--motion-slow);
-}
-
-*,
-*::before,
-*::after {
-  transition-property: background-color, border-color, color, fill, stroke, box-shadow;
-  transition-duration: var(--motion-fast);
-  transition-timing-function: var(--ease-out-quart);
-}
+:root[data-h="short"] { --hz: var(--hz-short); }
+:root[data-h="mid"] { --hz: var(--hz-mid); }
+:root[data-h="long"] { --hz: var(--hz-long); }
+html { background: var(--canvas); }
