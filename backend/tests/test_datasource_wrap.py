@@ -58,3 +58,13 @@ def test_market_data_step4_identical_under_cutover(monkeypatch):
     monkeypatch.setattr(gw, "_db_disabled_keys", lambda: {("xiaoshi", "kline")})
     got = md._fetch_first_kline({"code": "000001"}, ["xiaoshi"], None)
     assert got[0] == [] and "disabled" in got[2][0]  # explicit missing, never stale
+
+
+def test_xiaoshi_ann_rows_filter_codes():
+    import json
+
+    from app.services.datasource.xiaoshi_ann import rows_from_payloads
+    p = json.dumps({"title": "关于减持的公告", "event_id": "e1", "event_time": "2026-10-16 18:00",
+                    "stocks": [{"code": "000001"}, "600000"]}, ensure_ascii=False)
+    rows = rows_from_payloads([p], {"600000"})
+    assert [(r["code"], r["article_id"], r["is_risk_warning"], r["announce_date"]) for r in rows] == [("600000", "e1:600000", True, "2026-10-16")]

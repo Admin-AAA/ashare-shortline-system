@@ -271,6 +271,25 @@ def _backfill_news_announcements(
                 payload_by_id[row["article_id"]] = row
         remaining_for_tushare = still_need
 
+    # 第三源：xiaoshi event-timeline 公告分区（全市场按日，巨潮口径），默认关闭。
+    if remaining_for_tushare:
+        from app.services.datasource.gateway import is_cutover
+        if is_cutover("ann.list.xiaoshi"):
+            from app.services.datasource.xiaoshi_ann import fetch_range as fetch_xiaoshi_ann
+            try:
+                xrows = fetch_xiaoshi_ann(target_start, target_end, set(remaining_for_tushare))
+            except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback
+                logger.debug("_backfill_news_announcements: xiaoshi fallback failed %r", _ble_exc)
+                xrows = []
+            got = {r["code"] for r in xrows}
+            provider_row_count += len(xrows)
+            for row in xrows:
+                payload_by_id[row["article_id"]] = row
+            for code in got:
+                if code in failed_codes:
+                    failed_codes.remove(code)
+            remaining_for_tushare = [c for c in remaining_for_tushare if c not in got]
+
     # Tushare anns_d 可选回退：仅当东方财富/巨潮都漏掉时尝试；无权限时静默跳过。
     if remaining_for_tushare:
         pro = None
