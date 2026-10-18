@@ -158,6 +158,7 @@ def _backfill_news_announcements(
     东方财富接口可用，但 HTTP 567 表示反爬封禁——必须退避并中止，不能继续刷。
     仍保留 L-044 的连续失败上限，避免把盘后流水线卡死数小时。
     """
+    from app.services.datasource.wrap import gw_call
     from app.services.eastmoney_news import (
         EastmoneyBlockedError,
         fetch_announcements_for_code,
@@ -206,7 +207,8 @@ def _backfill_news_announcements(
             break
         time.sleep(NEWS_BACKFILL_SLEEP)
         try:
-            rows = fetch_announcements_for_code(
+            rows = gw_call(
+                "ann.list", "eastmoney", fetch_announcements_for_code,
                 code,
                 start_date=target_start,
                 end_date=target_end,
@@ -250,7 +252,8 @@ def _backfill_news_announcements(
                 continue
             time.sleep(NEWS_BACKFILL_SLEEP)
             try:
-                rows = fetch_cninfo(
+                rows = gw_call(
+                    "ann.list", "cninfo", fetch_cninfo,
                     code, start_date=target_start, end_date=end_today, page_size=30, max_pages=2,
                 )
             except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
