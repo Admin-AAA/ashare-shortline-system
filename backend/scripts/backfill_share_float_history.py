@@ -1,6 +1,6 @@
 """Backfill full-market unlock history (share_float) from quantdata into share_floats.
 
-* Monthly float_date windows 2019-01..today (window split in halves if a response
+* Monthly windows (quantdata filters start/end by ann_date) 2019-01..today (window split in halves if a response
   looks capped), streamed: one month in memory at a time.
 * Goes through the data gateway (dataset ``tushare.share_float``) pinned to the
   quantdata provider -> shared cross-process limiter, breaker, metrics.
@@ -22,6 +22,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 CAP_SUSPECT = 5000
+
+
+def _fk(v) -> str:
+    # share_floats.float_share is MySQL FLOAT (single precision, read back with ~6
+    # significant digits): compare at that precision or reruns re-insert everything.
+    return f"{float(v or 0):.6g}"
 
 
 def _router():
@@ -67,7 +73,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
-    from sqlalchemy import text
+    from sqlalchemy import bindparam, text
 
     from app.db.session import SessionLocal
     from app.services.datasource.gateway import DatasetGateway, TushareApiProvider
@@ -97,16 +103,21 @@ def main() -> int:
                     "holder_name": str(r.get("holder_name", "")),
                 })
             fetched_year[lo.year] += len(rows)
-            lo_s, hi_s = _fmt_date(lo.strftime("%Y%m%d")), _fmt_date(hi.strftime("%Y%m%d"))
-            existing = {
-                (c, ad, fd, hn, round(float(fs or 0), 2))
+            # quantdata windows by ann_date, so float_date spans other months: dedupe
+            # against the full float_date range actually returned, not the window.
+            fds = [r["float_date"] for r in rows if r["float_date"]]
+            lo_s, hi_s = (min(fds), max(fds)) if fds else ("", "")
+            existing = set() if not fds else {
+                (c, ad, fd, hn, _fk(fs))
                 for c, ad, fd, hn, fs in db.execute(text(
                     "SELECT code, ann_date, float_date, holder_name, float_share FROM share_floats "
-                    "WHERE float_date BETWEEN :lo AND :hi"), {"lo": lo_s, "hi": hi_s}).all()
+                    "WHERE float_date BETWEEN :lo AND :hi AND code IN :codes").bindparams(
+                        bindparam("codes", expanding=True)),
+                    {"lo": lo_s, "hi": hi_s, "codes": sorted({r["code"] for r in rows})}).all()
             }
             new, seen = [], set()
             for r in rows:
-                key = (r["code"], r["ann_date"], r["float_date"], r["holder_name"], round(float(r["float_share"] or 0), 2))
+                key = (r["code"], r["ann_date"], r["float_date"], r["holder_name"], _fk(r["float_share"]))
                 if key in existing or key in seen:
                     continue
                 seen.add(key)
