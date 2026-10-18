@@ -15,6 +15,7 @@ import { RISK_TEMPLATE_MAP, DATA_SOURCE_MAP } from "../utils/riskTemplates";
 import type { Preset, ScheduledTask, ScheduledTaskType } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "./StateViews";
 import { Panel } from "./Panel";
+import { formatBj } from "../utils/time";
 
 /**
  * 调度任务管理 —— 配置页「调度任务」Tab。
@@ -1122,7 +1123,5 @@ function StatusField({ label, value, mono }: { label: string; value: string; mon
 
 function formatTime(s?: string | null): string {
   if (!s) return "—";
-  const d = new Date(s.endsWith("Z") ? s : s.replace(" ", "T") + "Z");
-  if (isNaN(d.getTime())) return s;
-  return d.toLocaleString("zh-CN", { hour12: false });
+  return formatBj(s, "datetime-sec");
 }

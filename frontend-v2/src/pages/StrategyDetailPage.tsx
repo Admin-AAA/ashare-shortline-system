@@ -19,6 +19,7 @@ import type {
   StrategyVersionChange,
   StrategyVersionUsage,
 } from "../types";
+import { formatBj } from "../utils/time";
 
 type DetailTab = "rules" | "changes" | "snapshot";
 
@@ -127,7 +128,7 @@ export function StrategyDetailPage({ refreshSignal = 0 }: { refreshSignal?: numb
           {data.performance ? (
             <div style={{ marginTop: 12, padding: 12, border: "1px solid var(--border)", borderRadius: 10 }}>
               <div style={{ color: "var(--muted)", fontSize: 12, marginBottom: 8 }} title={data.performance.strategy_version}>
-                当前版本 canonical 回测 · 每日评分 Top {data.performance.daily_selection_limit} · 不含仓位/资金模型 · {data.performance.date_from} ~ {data.performance.date_to} · 更新 {data.performance.generated_at?.slice(0, 16).replace("T", " ") || "—"}
+                当前版本 canonical 回测 · 每日评分 Top {data.performance.daily_selection_limit} · 不含仓位/资金模型 · {data.performance.date_from} ~ {data.performance.date_to} · 更新 {formatBj(data.performance.generated_at)}
               </div>
               <div style={{ display: "grid", gridTemplateColumns: "repeat(6, minmax(80px, 1fr))", gap: 8 }}>
                 {data.performance.monthly_metrics.map((month) => (
@@ -438,5 +439,5 @@ function formatValue(value: unknown): string {
 
 const formatScalar = (value: unknown) => value == null ? "—" : typeof value === "object" ? JSON.stringify(value) : String(value);
 const shortId = (value: string, length: number) => value.length <= length ? value : `${value.slice(0, length)}…`;
-const formatDateTime = (value: string | null) => value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "时间未知";
+const formatDateTime = (value: string | null) => formatBj(value, "datetime-sec", "时间未知");
 const humanizePath = (path: string) => path.split(".").map((part) => FIELD_LABELS[part] || part).join(" › ");

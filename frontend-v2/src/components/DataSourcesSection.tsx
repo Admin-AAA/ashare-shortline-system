@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Loader2, Plug, RefreshCw, Server } from "lucide-react";
 import { api } from "../api/client";
 import type { DataSourceProvider, ProviderTestResult } from "../types";
+import { formatBj } from "../utils/time";
 
 // 参与路由调序的 pro provider（不在路由链的条目不调序）。
 const ROUTABLE = new Set(["promax", "quantdata"]);
@@ -252,8 +253,8 @@ export function DataSourcesSection() {
                 )}
 
                 <div style={{ marginTop: "var(--space-2)", display: "flex", gap: "var(--space-4)", flexWrap: "wrap", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-                  {p.last_success_at && <span>最近成功 {p.last_success_at}</span>}
-                  {p.last_failure_at && <span>最近失败 {p.last_failure_at}</span>}
+                  {p.last_success_at && <span>最近成功 {formatBj(p.last_success_at)}</span>}
+                  {p.last_failure_at && <span>最近失败 {formatBj(p.last_failure_at)}</span>}
                   {p.latency_ms != null && <span>延迟 {p.latency_ms} ms</span>}
                   {p.last_api && <span>last_api {p.last_api}</span>}
                 </div>

@@ -14,6 +14,7 @@ import { Panel } from "../components/Panel";
 import { ScopedStrategyStats } from "../ui/ScopedStrategyStats";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
+import { formatBj } from "../utils/time";
 
 type StrategyWindowDays = 30 | 180;
 
@@ -185,7 +186,7 @@ function PresetTable({ rows }: { rows: PresetStatsRow[] }) {
                   {r.avg_score == null ? "—" : r.avg_score.toFixed(1)}
                 </td>
                 <td style={{ textAlign: "left", padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>
-                  {r.last_run_at ?? "—"}
+                  {formatBj(r.last_run_at)}
                 </td>
               </tr>
             );
@@ -252,7 +253,7 @@ function CalledCard({ item, windowDays }: { item: StrategyListItem; windowDays: 
         </div>
       )}
       <div style={{ marginTop: 4, fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" }} title={perf.strategy_version}>
-        当前版本 {perf.strategy_version.slice(0, 18)} · 更新 {perf.generated_at?.slice(0, 16).replace("T", " ") || "—"}
+        当前版本 {perf.strategy_version.slice(0, 18)} · 更新 {formatBj(perf.generated_at)}
       </div>
 
         {lowSample && (
@@ -516,7 +517,7 @@ function BacktestReturnsBlock({ item }: { item: StrategyListItem }) {
           })
           .join(" / ")}
         {" · "}
-        {bt.generated_at?.slice(0, 10) ?? "—"}
+        {formatBj(bt.generated_at, "date")}
       </div>
     </div>
   );
@@ -645,7 +646,7 @@ function StandaloneMetricsSection() {
       <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
         <strong>每日独立运行策略（{d.strategies.length}）</strong>
         <span style={{ opacity: 0.7, fontSize: 12 }}>
-          近12月 {d.window?.start} ~ {d.window?.end}；近期自 {d.window?.recent_start}；更新于 {d.generated_at ?? "—"}
+          近12月 {d.window?.start} ~ {d.window?.end}；近期自 {d.window?.recent_start}；更新于 {formatBj(d.generated_at)}
         </span>
       </div>
       <div style={{ overflowX: "auto" }}>

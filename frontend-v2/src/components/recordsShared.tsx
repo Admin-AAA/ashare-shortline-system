@@ -1,5 +1,6 @@
 import type { CSSProperties, ReactNode } from "react";
 import { fmtPrice } from "./Shared";
+import { formatBj } from "../utils/time";
 
 /** RecordsPage 共享的小组件与工具函数 —— 从 RecordsPage.tsx 抽离，消除重复。 */
 // fmtPrice 已统一到 Shared.tsx，此处 re-export 保持 RecordsPage import 兼容
@@ -46,13 +47,7 @@ export function ReturnStat({ label, value, suffix }: { label: string; value: num
 
 export const formatTime = (iso: string | null | undefined) => {
   if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
-  const mm = String(d.getMonth() + 1).padStart(2, "0");
-  const dd = String(d.getDate()).padStart(2, "0");
-  const hh = String(d.getHours()).padStart(2, "0");
-  const mi = String(d.getMinutes()).padStart(2, "0");
-  return `${mm}-${dd} ${hh}:${mi}`;
+  return formatBj(iso, "short");
 };
 
 export const tableStyle: CSSProperties = {

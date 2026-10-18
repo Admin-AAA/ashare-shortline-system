@@ -27,6 +27,7 @@ import { PageSkeleton, ErrorPage, EmptyState, CardSkeleton } from "../components
 import { SkillsCatalogPanel } from "../components/SkillsCatalogPanel";
 import { Panel } from "../components/Panel";
 import { LineChart, Info } from "lucide-react";
+import { utcMs } from "../utils/time";
 
 /** 时间窗口选项：null=全部历史累计，N=最近 N 天且已结算。 */
 const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
@@ -219,8 +220,8 @@ function MetricCard({
 /** 把 ISO 时间转成「X 分钟/小时/天前」，null/无效返回「从未」。 */
 function relTime(iso: string | null | undefined): string {
   if (!iso) return "从未";
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return "未知";
+  const t = utcMs(iso);
+  if (t == null) return "未知";
   const diffMs = Date.now() - t;
   const min = Math.floor(diffMs / 60000);
   if (min < 1) return "刚刚";

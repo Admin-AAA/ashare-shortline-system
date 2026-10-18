@@ -26,6 +26,7 @@ import { useRunsQuery } from "../api/queries/useRunQueries";
 import { useApi } from "../app/useApi";
 import { queryParam } from "../app/nav";
 import { describePoolRun, formatPoolRunTime, poolRunDate, summarizePoolRuns, type PoolRunKind } from "./poolRunView";
+import { formatBj } from "../utils/time";
 
 /**
  * 今日记录（原候选池）—— 日期运行日志 → 运行抽屉 → 股票二级展开。
@@ -500,11 +501,7 @@ function RecommendationResults({ run }: { run: RunSummary }) {
 }
 
 function localDateKey() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return formatBj(new Date().toISOString(), "date");
 }
 
 function runSortTime(run: RunSummary) {

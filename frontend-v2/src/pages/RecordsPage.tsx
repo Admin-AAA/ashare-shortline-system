@@ -44,6 +44,7 @@ import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 import { bucketLabel, exitReasonLabel } from "../utils/display";
+import { utcMs } from "../utils/time";
 
 /**
  * 记录中心 —— 两类历史记录的统一复盘入口：
@@ -192,7 +193,7 @@ const FULL_REPLAY_RUN_NAME = "REPLAY-全量重放";
 function newParamsHonored(items: RunSummary[], extra: { min_picks?: number; sort?: string; order?: string }) {
   if (extra.min_picks !== undefined && items.some((r) => (r.recommended_count ?? 0) < extra.min_picks!)) return false;
   if (!extra.sort || items.length < 2) return true;
-  const dur = (r: RunSummary) => (r.started_at && r.finished_at ? new Date(r.finished_at).getTime() - new Date(r.started_at).getTime() : null);
+  const dur = (r: RunSummary) => (r.started_at && r.finished_at ? (utcMs(r.finished_at) ?? 0) - (utcMs(r.started_at) ?? 0) : null);
   const val = (r: RunSummary): number | string | null =>
     extra.sort === "picks" ? r.recommended_count : extra.sort === "duration" ? dur(r) : extra.sort === "status" ? r.status : r.started_at ?? "";
   const vals = items.map(val);
@@ -208,7 +209,7 @@ function newParamsHonored(items: RunSummary[], extra: { min_picks?: number; sort
 type RunPageSort = "started_at" | "picks" | "duration" | "status";
 function fmtDuration(start?: string | null, end?: string | null) {
   if (!start || !end) return "—";
-  const s = Math.round((new Date(end).getTime() - new Date(start).getTime()) / 1000);
+  const s = Math.round(((utcMs(end) ?? 0) - (utcMs(start) ?? 0)) / 1000);
   if (!Number.isFinite(s) || s < 0) return "—";
   return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m${String(s % 60).padStart(2, "0")}s` : `${Math.floor(s / 3600)}h${Math.floor((s % 3600) / 60)}m`;
 }

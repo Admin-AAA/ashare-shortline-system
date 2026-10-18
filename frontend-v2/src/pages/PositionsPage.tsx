@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import type { ExecutionConfirmationItem, ExecutionConfirmationResponse, RealtimePnlItem } from "../types";
 import { PageSkeleton, ErrorPage, EmptyState } from "../components/StateViews";
 import { useUrlRoute } from "../app/useUrlRoute";
+import { formatBj } from "../utils/time";
 
 /**
  * 今日 · 持仓 / 待卖 —— 实时盈亏（/api/recommendations/realtime-pnl）+ 盘中确认（批量 execution-confirmations，不调用 LLM）。
@@ -63,12 +64,12 @@ export function PositionsPage() {
   return (
     <div className="page">
       <div className="ph">
-        <div><h1>持仓 / 待卖</h1><p>实时盈亏每分钟刷新；盘中确认实时校验买点与持仓条件，不调用 LLM。{pnl.data?.computed_at && ` 行情时间 ${pnl.data.computed_at.slice(11, 19)}`}</p></div>
+        <div><h1>持仓 / 待卖</h1><p>实时盈亏每分钟刷新；盘中确认实时校验买点与持仓条件，不调用 LLM。{pnl.data?.computed_at && ` 行情时间 ${formatBj(pnl.data.computed_at, "time-sec")}`}</p></div>
         <button className="btn btn--primary" disabled={confirm.isPending || items.length === 0} onClick={() => confirm.mutate(items.map((i) => i.recommendation_id))}>
           {confirm.isPending ? "确认中…" : `盘中确认（${items.length}）`}
         </button>
       </div>
-      {conf && <div className="note">盘中确认完成 {conf.computed_at?.slice(11, 19)}：成功 {conf.summary.success_count} · 失败 {conf.summary.error_count} · 已过期 {conf.summary.expired_count}{conf.errors.length ? `；${conf.errors.slice(0, 3).map((e) => `${e.code} ${e.message}`).join("；")}` : ""}</div>}
+      {conf && <div className="note">盘中确认完成 {formatBj(conf.computed_at, "time-sec")}：成功 {conf.summary.success_count} · 失败 {conf.summary.error_count} · 已过期 {conf.summary.expired_count}{conf.errors.length ? `；${conf.errors.slice(0, 3).map((e) => `${e.code} ${e.message}`).join("；")}` : ""}</div>}
       {confirm.error && <div className="note">盘中确认失败：{(confirm.error as Error).message}</div>}
       <div className="grid g4">
         <div className="card stat"><div className="l">持仓</div><div className="v">{holding.length}</div><div className="d">已入场未离场</div></div>
