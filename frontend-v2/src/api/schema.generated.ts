@@ -131,7 +131,7 @@ export interface paths {
          * Reorder Providers Api
          * @description 重排当前 Tushare Pro Provider 的路由优先级（运行时即时生效，不动 config）。
          *
-         *     payload: {"provider_names": ["promax", "quantdata", "tushare_official"]}（主源在前）。
+         *     payload: {"provider_names": ["promax", "quantdata"]}（主源在前）。
          *     realtime_quote 是独立爬虫、不在路由链里，传入会被忽略。
          */
         post: operations["reorder_providers_api_api_admin_data_sources_reorder_post"];

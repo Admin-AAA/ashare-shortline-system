@@ -283,8 +283,6 @@ def test_provider_health_only_projects_configured_sources(monkeypatch):
         tushare_fastapic_max_concurrency = 1
         tushare_xiaodefa_token = ""
         tushare_xiaodefa_rate_limit_per_minute = 60
-        tushare_official_token = "official"
-        tushare_official_rate_limit_per_minute = 120
         tushare_quantdata_token = "quantdata"
         tushare_quantdata_rate_limit_per_minute = 120
 
@@ -303,7 +301,7 @@ def test_provider_health_only_projects_configured_sources(monkeypatch):
     rows = tc.get_tushare_provider_health()
     by_name = {row["provider_name"]: row for row in rows}
 
-    assert set(by_name) == {"promax", "tushare_official", "quantdata"}
+    assert set(by_name) == {"promax", "quantdata"}
     assert by_name["promax"]["configured"] is True
     assert by_name["promax"]["enabled"] is False
 

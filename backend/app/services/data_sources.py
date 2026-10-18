@@ -892,7 +892,6 @@ _ROUTABLE_PROVIDERS = (
     "xiaodefa",
     "quantdata",
     "ai_tool",
-    "tushare_official",
 )
 
 

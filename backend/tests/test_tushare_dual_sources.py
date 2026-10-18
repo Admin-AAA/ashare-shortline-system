@@ -244,7 +244,7 @@ def test_promax_minute_contract_rejection_falls_back_to_next_provider(monkeypatc
 def _business_envelope_category(code: str, msg: str) -> FailureCategory:
     provider = TushareHttpProvider(
         ProviderConfig(
-            name="tushare_official",
+            name="quantdata",
             base_url="https://api.tushare.pro",
             credential="token",
             auth_mode=AuthMode.JSON_TOKEN,
@@ -397,7 +397,7 @@ def test_unreadable_failure_body_does_not_break_failure_handling() -> None:
 
 def test_business_failure_keeps_upstream_code_and_message() -> None:
     """HTTP 200 但 code≠0 的业务错误也要保留上游原文，否则 40203 的「没有接口访问权限」只剩 permission 标签。"""
-    provider = _provider_for_status_case(name="tushare_official")
+    provider = _provider_for_status_case(name="quantdata")
     failure = provider._business_failure(
         "cyq_perf",
         {"code": 40203, "msg": "抱歉，您没有接口(cyq_perf)访问权限"},
@@ -413,7 +413,7 @@ def test_all_providers_failed_message_carries_each_upstream_detail() -> None:
         "cyq_perf",
         [
             ProviderFailure(
-                provider="tushare_official",
+                provider="quantdata",
                 api_name="cyq_perf",
                 category=FailureCategory.PERMISSION,
                 retryable=False,
@@ -433,5 +433,5 @@ def test_all_providers_failed_message_carries_each_upstream_detail() -> None:
     )
 
     message = str(error)
-    assert "tushare_official:permission(40203: 抱歉，您没有接口(cyq_perf)访问权限)" in message
+    assert "quantdata:permission(40203: 抱歉，您没有接口(cyq_perf)访问权限)" in message
     assert "promax:http_rate_limit(upstream_pool_exhausted)" in message

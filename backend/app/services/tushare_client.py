@@ -347,7 +347,6 @@ class _TushareSession:
 # fina_indicator 逐股走 promax；period 批量只有 quantdata 的 fina_indicator_vip 可用；
 # broker_recommend 只有 quantdata 可用；anns_d 无可用源（公告走东财/巨潮/xiaoshi）。
 QUANTDATA_ALLOWED_APIS = frozenset({"fina_indicator_vip", "broker_recommend", "trade_cal"})
-_OFFICIAL_NO_PERMISSION_APIS = frozenset({"anns_d", "fina_indicator", "fina_indicator_vip", "broker_recommend"})
 
 
 def _build_provider_router() -> tuple[TushareProviderRouter, str]:
@@ -479,39 +478,9 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
             )
         )
 
-    official_token = settings.tushare_official_token.strip()
-    if official_token:
-        providers.append(
-            TushareHttpProvider(
-                ProviderConfig(
-                    name="tushare_official",
-                    base_url=settings.tushare_official_url,
-                    credential=official_token,
-                    auth_mode=AuthMode.JSON_TOKEN,
-                    rate_limit_per_minute=max(
-                        0, int(settings.tushare_official_rate_limit_per_minute)
-                    ),
-                    append_api_path=False,
-                    # 官方账号对这些接口 40203 无权限（2026-10-18 实测），不参与路由。
-                    excluded_apis=_OFFICIAL_NO_PERMISSION_APIS,
-                    priority=3,
-                    **common,
-                )
-            )
-        )
-
     if not providers:
         raise RuntimeError(
             "Tushare 上游未配置：请至少设置一个 Provider 凭据。"
-        )
-    if not official_token:
-        from app.core.alerts import emit_alert
-
-        emit_alert(
-            "datasource_no_official_fallback",
-            "tushare_official",
-            "未配置 ASHARE_TUSHARE_OFFICIAL_TOKEN：第三方代理全部失效时没有官方兜底",
-            cooldown=86400.0,
         )
     return (
         TushareProviderRouter(
@@ -672,19 +641,6 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
                     0, int(settings.tushare_ai_tool_stk_mins_rate_limit_per_minute)
                 ),
             },
-            "max_concurrency": 0,
-        },
-        {
-            "name": "tushare_official",
-            "source": "tushare-official",
-            "configured": bool(settings.tushare_official_token.strip()),
-            "priority": 3,
-            "note": "Tushare 官方 api.tushare.pro；日K/资金流/复权主源（stk_factor/cyq_perf/rt_k 无权限自动 fallback）",
-            "auth_mode": AuthMode.JSON_TOKEN.value,
-            "rate_limit_per_minute": max(
-                0, int(settings.tushare_official_rate_limit_per_minute)
-            ),
-            "api_rate_limits": {},
             "max_concurrency": 0,
         },
         {

@@ -1,7 +1,7 @@
 """耐心版集合竞价回填：多轮重试 + 熔断冷却。
 
-为什么需要：`stk_auction` 实际只有 promax 一个可用源（tushare_official 恒
-business_rate_limit → circuit_open），而 promax 间歇 `http_server` 失败。
+为什么需要：`stk_auction` 实际只有 promax 一个可用源（官方源已删除）
+，而 promax 间歇 `http_server` 失败。
 传输层的熔断是「3 次失败 → 打开 60s → half-open 放一个探针」，在紧凑循环里
 会不断自我重开（每轮都撞熔断又记一次失败），于是单次运行跑到某天之后
 **永远 circuit_open**（实测 2025-06-19 起连续 300 天全失败）。

@@ -25,7 +25,7 @@ class ProviderSettings:
     api_rate_limits: dict = field(default_factory=dict)
 
 
-_PROVIDER_PREFIXES = ("fastapic", "ai_tool", "promax", "xiaodefa", "official", "quantdata")
+_PROVIDER_PREFIXES = ("fastapic", "ai_tool", "promax", "xiaodefa", "quantdata")
 
 
 class Settings(BaseSettings):
@@ -64,12 +64,6 @@ class Settings(BaseSettings):
     tushare_xiaodefa_url: str = "https://t.xiaodefa.top/"
     tushare_xiaodefa_token: str = Field(default="", repr=False)
     tushare_xiaodefa_rate_limit_per_minute: int = 60
-    # tushare_official：Tushare 官方 api.tushare.pro。核心批量接口（daily/daily_basic/
-    # moneyflow/adj_factor/top_list）有权限且低延迟；stk_factor/cyq_perf/rt_k/stk_mins/
-    # anns_d 无权限（40203 权限错误会自动 fallback 到下一源）。
-    tushare_official_url: str = "https://api.tushare.pro"
-    tushare_official_token: str = Field(default="", repr=False)
-    tushare_official_rate_limit_per_minute: int = 120
     # quantdata：第三方 tushare pro 协议数据源（JSON token，POST 根路径不带 api 路径）。
     # 探测权限：日线/基本面/筹码/资金流/涨跌停/龙虎榜/同花顺概念全量可用（数据到当天）；
     # anns_d/rt_k/stk_mins 未购买（走 per-API 路由链自动 fallback）。平滑限速，稳态 6rps 无限制。
@@ -214,7 +208,6 @@ class Settings(BaseSettings):
                 self.tushare_ai_tool_api_key,
                 self.tushare_promax_api_key,
                 self.tushare_xiaodefa_token,
-                self.tushare_official_token,
                 self.tushare_quantdata_token,
             )
         ):
