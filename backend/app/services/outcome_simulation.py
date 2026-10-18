@@ -366,29 +366,41 @@ def _simulate_outcome(
     # 把创业板（300/301）当 10cm，致 300065 这类 20cm 创业板涨停日 pct_chg=20.0% 被误判为
     # 「pct_chg 字段未除权」，触发 pct_chg 链重算把 take_profit_hit +4.79% 覆盖成 -19.28%。
     limit_pct = limit_pct_for_code(str(rec.code or ""))
+    # 2026-10-19 根因修复（300953 05-21 推荐：05-25 trailing_stop 退出，但 05-28 除权日在 horizon 内）：
+    # 除权检测与收益重算只能看 entry→exit 的实际持仓 bar。旧实现扫描整个 horizon，把退出日之后的
+    # 除权跳变和涨跌幅也链进收益，并用 entry*(1+链式收益) 反推出一个合成退出价（226.1 < 当日最低 247.6）。
+    held_bars = holding_bars[:exit_bar_count]
     has_ex_right_day = False
     pct_chg_unreliable = False
-    for i in range(1, len(holding_bars)):
-        prev_close = _as_float(holding_bars[i - 1].close)
-        cur_open = _as_float(holding_bars[i].open)
-        cur_pct = _as_float(holding_bars[i].pct_chg)
+    for i in range(1, len(held_bars)):
+        prev_close = _as_float(held_bars[i - 1].close)
+        cur_open = _as_float(held_bars[i].open)
+        cur_pct = _as_float(held_bars[i].pct_chg)
         if prev_close > 0 and cur_open > 0:
             price_jump = (cur_open / prev_close - 1) * 100
             # 价格跳变 > 20% 但 pct_chg 字段 < limit*0.6 → 除权日（pct_chg 已调整，价格序列有跳变）
             if abs(price_jump) > 20 and abs(cur_pct) < limit_pct * 0.6:
                 has_ex_right_day = True
             # 价格跳变正常但 pct_chg 远超板块涨停幅度 → pct_chg 字段未除权（数据错误）。
-            # 用 limit_pct + 容差：涨停日 pct_chg 因四舍五入略超 limit_pct（如 20cm 板 20.0083%），
-            # 这是正常涨停而非数据错误；只有 pct_chg 大幅超过涨停幅度（+2pp 容差）才算未除权。
             if abs(cur_pct) > limit_pct + 2.0 and abs(price_jump) < limit_pct * 0.6:
                 pct_chg_unreliable = True
-    max_daily_pct = max(abs(_as_float(bar.pct_chg)) for bar in holding_bars) if holding_bars else 0
+    max_daily_pct = max(abs(_as_float(bar.pct_chg)) for bar in held_bars) if held_bars else 0
     if has_ex_right_day or pct_chg_unreliable or (abs(executed_return) > 20 and max_daily_pct < limit_pct * 0.6):
-        cum = 1.0
-        for bar in holding_bars:
-            cum *= (1 + _as_float(bar.pct_chg) / 100.0)
-        executed_return = round((cum - 1) * 100, 2)
-        executed_exit_price = round(executed_entry_price * (1 + executed_return / 100.0), 4)
+        entry_adj = _as_float(getattr(held_bars[0], "adj_factor", None)) if held_bars else 0.0
+        exit_adj = _as_float(getattr(held_bars[-1], "adj_factor", None)) if held_bars else 0.0
+        if has_ex_right_day and entry_adj > 0 and exit_adj > 0:
+            # 首选复权因子：退出价折算到入场价同一口径（后复权比值），退出价本身保持当日真实成交价。
+            executed_return = round(
+                ((executed_exit_price * exit_adj / entry_adj - executed_entry_price) / executed_entry_price) * 100, 2
+            )
+        else:
+            cum = 1.0
+            for bar in held_bars:
+                cum *= (1 + _as_float(bar.pct_chg) / 100.0)
+            executed_return = round((cum - 1) * 100, 2)
+        # 退出价保持退出日真实（含滑点）成交价，不再用链式收益反推合成价——
+        # 收益口径已在 executed_return 中完成复权。
+    _validate_exit_price_in_bar(rec, holding_bars, exit_date, exit_price)
 
     weighted_return = round(executed_return * position_size, 2)
     net_return_pct = net_return_after_cost(executed_return)
@@ -443,6 +455,31 @@ def _simulate_outcome(
         ),
     }
 
+
+
+class ExitPriceOutOfRangeError(ValueError):
+    """退出原始成交价不在退出日 [low, high] 内——结算硬错误，拒绝落库。"""
+
+
+_EXIT_RANGE_TOLERANCE = 1e-6
+
+
+def _validate_exit_price_in_bar(
+    rec: Recommendation, holding_bars: list[DailyKbar], exit_date: str | None, raw_exit_price: float
+) -> None:
+    if not exit_date:
+        return
+    bar = next((b for b in holding_bars if str(b.trade_date) == str(exit_date)), None)
+    if bar is None:
+        raise ExitPriceOutOfRangeError(f"{rec.code} exit_date {exit_date} not in holding bars")
+    low, high = _as_float(bar.low), _as_float(bar.high)
+    if low <= 0 or high <= 0:
+        return
+    tol = max(high, 1.0) * _EXIT_RANGE_TOLERANCE + 0.005
+    if not (low - tol <= float(raw_exit_price) <= high + tol):
+        raise ExitPriceOutOfRangeError(
+            f"{rec.code} {rec.trade_date}: exit {raw_exit_price} outside {exit_date} [{low}, {high}]"
+        )
 
 def _bar_tradeable(bar: DailyKbar) -> bool:
     """bar 是否为真实交易日（OHLC 均 > 0）。

@@ -447,6 +447,71 @@ def _current_projection(outcome: RecommendationOutcome | None) -> CurrentProject
     )
 
 
+# 2026-10-19 owner ruling: outcomes are final only once every holding bar up to the exit day
+# has been written by the post-close daily update (17:35 CST = 09:35 UTC). Bars written earlier
+# (intraday/realtime pre-fill) can be revised later, so such outcomes stay provisional and are
+# re-settled by label_pending_outcomes on the next run.
+OUTCOME_RULE_VERSION = f"{OUTCOME_CALCULATION_VERSION}+r20261019"
+DAILY_BAR_FINAL_UTC_OFFSET = timedelta(hours=9, minutes=30)
+SETTLEMENT_GATE_REASON = "exit_bar_not_final"
+
+
+def _bar_is_final(bar: DailyKbar) -> bool:
+    updated_at = getattr(bar, "updated_at", None)
+    if updated_at is None:
+        return True  # legacy rows without timestamps: treat as final (no evidence of pre-fill)
+    if updated_at.tzinfo is not None:
+        updated_at = updated_at.astimezone(timezone.utc).replace(tzinfo=None)
+    try:
+        trade_day = datetime.strptime(str(bar.trade_date), "%Y-%m-%d")
+    except ValueError:
+        return True
+    return updated_at >= trade_day + DAILY_BAR_FINAL_UTC_OFFSET
+
+
+def _apply_settlement_gate(simulation: dict[str, Any], bars: list[DailyKbar] | None) -> dict[str, Any]:
+    """Downgrade a closed outcome to provisional when any bar up to the exit day is not final."""
+    if not bars or str(simulation.get("outcome_label") or "") not in EXECUTED_OUTCOME_LABELS:
+        return simulation
+    exit_date = str(simulation.get("exit_date") or "")
+    if not exit_date:
+        return simulation
+    if not any(str(b.trade_date) == exit_date for b in bars):
+        unfinal = True
+    else:
+        unfinal = any(not _bar_is_final(b) for b in bars if str(b.trade_date) <= exit_date)
+    if not unfinal:
+        return simulation
+    return {
+        **simulation,
+        "outcome_label": OUTCOME_PROVISIONAL,
+        "outcome_label_legacy": OUTCOME_PROVISIONAL,
+        "net_return_pct": None,
+        "canonical_exit_evidence": False,
+        "intraday_exit_evidence": None,
+        "settlement_gate": SETTLEMENT_GATE_REASON,
+    }
+
+
+_SETTLED_LABELS = EXECUTED_OUTCOME_LABELS | {OUTCOME_MISSED}
+
+
+def _preserve_original_settlement(outcome: RecommendationOutcome | None) -> None:
+    """First re-projection under a new rule keeps the original settlement (write-once)."""
+    if outcome is None or getattr(outcome, "original_outcome_label", None) is not None:
+        return
+    if str(outcome.outcome_label or "") not in _SETTLED_LABELS:
+        return
+    if getattr(outcome, "rule_version", None) == OUTCOME_RULE_VERSION:
+        return
+    outcome.original_outcome_label = outcome.outcome_label
+    outcome.original_exit_date = outcome.exit_date
+    outcome.original_exit_price = outcome.exit_price
+    outcome.original_exit_reason = outcome.exit_reason
+    outcome.original_executed_return = outcome.executed_return
+    outcome.original_rule_version = getattr(outcome, "rule_version", None) or "legacy"
+
+
 def _project_outcome_fields(
     outcome: RecommendationOutcome,
     rec: Recommendation,
@@ -503,13 +568,16 @@ def _apply_outcome_simulation(
             .with_for_update()
         )
         result = _validated_outcome_result(
-            apply_execution_outcome_policy(simulation, execution_state)
+            _apply_settlement_gate(
+                apply_execution_outcome_policy(simulation, execution_state), market_bars
+            )
         )
         outcome = db.scalar(
             select(RecommendationOutcome)
             .where(RecommendationOutcome.recommendation_id == rec.recommendation_id)
             .with_for_update()
         )
+        _preserve_original_settlement(outcome)
         run = db.get(RecommendationRun, rec.run_id)
         if _complete_outcome_provenance(run, rec):
             if market_bars is None:
@@ -566,6 +634,8 @@ def _apply_outcome_simulation(
             outcome.current_calculation_fingerprint = None
             outcome.projection_revision = None
             outcome.projected_at = None
+        outcome.rule_version = OUTCOME_RULE_VERSION
+        outcome.bars_verified_at = utcnow_naive()
         savepoint.commit()
         return True
     except Exception:
@@ -609,13 +679,10 @@ def label_pending_outcomes(
             )
         )
         recs = db.scalars(stmt.order_by(Recommendation.trade_date.asc())).unique().all()
-        if not recs:
-            return {"labeled": 0}
-
-        bars_by_code, dates_by_code = _load_outcome_bars(db, recs)
-        execution_states = _load_execution_states(db, recs)
         labeled = 0
         errors = 0
+        bars_by_code, dates_by_code = _load_outcome_bars(db, recs) if recs else ({}, {})
+        execution_states = _load_execution_states(db, recs)
         for rec in recs:
             bounded_bars = bounded_outcome_bars(
                 rec,
@@ -648,7 +715,63 @@ def label_pending_outcomes(
         db.commit()
         if labeled:
             invalidate_outcome_metrics_cache()
-        return {"labeled": labeled, "errors": errors}
+    # K 线修订（回补改写）/ 规则版本变更后自动重投影已结算 outcome
+    try:
+        reprojection = reproject_revised_outcomes(db, horizon_days=horizon_days)
+    except Exception:
+        db.rollback()
+        logger.warning("outcome re-projection failed", exc_info=True)
+        reprojection = {"error": True}
+    return {"labeled": labeled, "errors": errors, "reprojection": reprojection}
+
+
+def find_outcomes_needing_reprojection(db: Session, horizon_days: int = DEFAULT_OUTCOME_HORIZON_DAYS) -> list[str]:
+    """Settled outcomes whose rule_version is stale, never bar-verified, or whose window bars
+    (signal day .. bounded horizon) were rewritten after the last verification (e.g. backfill)."""
+    recs = db.scalars(
+        select(Recommendation)
+        .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
+        .where(RecommendationOutcome.outcome_label.in_(_SETTLED_LABELS))
+    ).unique().all()
+    if not recs:
+        return []
+    outcomes = {
+        str(o.recommendation_id): o
+        for o in db.scalars(
+            select(RecommendationOutcome).where(
+                RecommendationOutcome.recommendation_id.in_([r.recommendation_id for r in recs])
+            )
+        ).all()
+    }
+    bars_by_code, _ = _load_outcome_bars(db, recs)
+    selected: list[str] = []
+    for rec in recs:
+        outcome = outcomes.get(str(rec.recommendation_id))
+        if outcome is None:
+            continue
+        verified = outcome.bars_verified_at
+        if outcome.rule_version != OUTCOME_RULE_VERSION or verified is None:
+            selected.append(str(rec.recommendation_id))
+            continue
+        window = bounded_outcome_bars(
+            rec,
+            bars_by_code.get(str(rec.code), []),
+            int(outcome.horizon_days or horizon_days),
+            entry_lookahead_days=ENTRY_LOOKAHEAD_DAYS,
+        )
+        if any(b.updated_at is not None and b.updated_at > verified for b in window):
+            selected.append(str(rec.recommendation_id))
+    return selected
+
+
+def reproject_revised_outcomes(db: Session, horizon_days: int = DEFAULT_OUTCOME_HORIZON_DAYS) -> dict[str, Any]:
+    ids = find_outcomes_needing_reprojection(db, horizon_days)
+    if not ids:
+        return {"candidates": 0, "recomputed": 0, "errors": 0, "flipped": {}}
+    result = recompute_stale_outcomes(
+        db, horizon_days=horizon_days, recommendation_ids=ids, label_source="reproject"
+    )
+    return {"candidates": len(ids), **result}
 
 
 def _load_outcome_bars(
@@ -693,6 +816,8 @@ def recompute_stale_outcomes(
     limit: int | None = None,
     official_only: bool = False,
     batch_size: int = 50,
+    recommendation_ids: list[str] | None = None,
+    label_source: str = "recompute",
 ) -> dict[str, Any]:
     """重算所有已标注 outcome（simulation 逻辑变更后的数据一致性维护）。
 
@@ -720,6 +845,10 @@ def recompute_stale_outcomes(
         stmt = stmt.join(RecommendationRun, RecommendationRun.run_id == Recommendation.run_id).where(
             *official_sample_conditions()
         )
+    if recommendation_ids is not None:
+        if not recommendation_ids:
+            return {"recomputed": 0, "errors": 0, "flipped": {}}
+        stmt = stmt.where(Recommendation.recommendation_id.in_(list(recommendation_ids)))
     stmt = stmt.order_by(Recommendation.trade_date.asc())
     if limit:
         stmt = stmt.limit(limit)
@@ -735,22 +864,24 @@ def recompute_stale_outcomes(
     batch = max(1, int(batch_size))
     pending_in_batch = 0
     for rec in recs:
-        bounded_bars = bounded_outcome_bars(
-            rec,
-            bars_by_code.get(str(rec.code), []),
-            horizon_days,
-            entry_lookahead_days=ENTRY_LOOKAHEAD_DAYS,
-        )
-        bounded_dates = [str(bar.trade_date) for bar in bounded_bars]
         before_label = None
         existing = db.get(RecommendationOutcome, rec.recommendation_id)
         if existing is not None:
             before_label = str(existing.outcome_label)
+        # 重投影沿用该 outcome 自身的 horizon（不同入口用 5/20 日结算），避免被调用方 horizon 改写
+        rec_horizon = int(existing.horizon_days) if existing is not None and existing.horizon_days else horizon_days
+        bounded_bars = bounded_outcome_bars(
+            rec,
+            bars_by_code.get(str(rec.code), []),
+            rec_horizon,
+            entry_lookahead_days=ENTRY_LOOKAHEAD_DAYS,
+        )
+        bounded_dates = [str(bar.trade_date) for bar in bounded_bars]
         simulation = _simulate_outcome(
             rec,
             bounded_bars,
             bounded_dates,
-            horizon_days=horizon_days,
+            horizon_days=rec_horizon,
         )
         if simulation is None:
             continue
@@ -758,8 +889,8 @@ def recompute_stale_outcomes(
             db,
             rec,
             simulation,
-            horizon_days,
-            label_source="recompute",
+            rec_horizon,
+            label_source=label_source,
             execution_state=execution_states.get(str(rec.recommendation_id)),
             market_bars=bounded_bars,
         ):

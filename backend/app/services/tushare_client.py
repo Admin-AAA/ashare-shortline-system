@@ -861,6 +861,20 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
         logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
 
+    # 2026-10-19：17:35 盘后写入时 stk_factor 常未发布 → factor_map 为空 → adj_factor 被 _f 写成 0.0
+    # （214 个交易日全市场 adj_factor=0）。adj_factor 改从专用 adj_factor 接口补（盘前即发布），
+    # 两者取不到时写 NULL 而非 0。
+    adj_map: dict[str, float] = {}
+    try:
+        adj = pro.adj_factor(trade_date=target)
+        if adj is not None and not adj.empty:
+            for _, row in adj.iterrows():
+                value = _f(row.get("adj_factor"))
+                if value > 0:
+                    adj_map[str(row.get("ts_code") or "")] = value
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_daily_kbars_for_trade_date: adj_factor fetch failed: %s", exc)
+
     factor_map: dict[str, dict[str, Any]] = {}
     try:
         factor = pro.stk_factor(trade_date=target)
@@ -931,7 +945,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
                 "boll_mid": _f(fac.get("boll_mid")),
                 "boll_lower": _f(fac.get("boll_lower")),
                 "cci": _f(fac.get("cci")),
-                "adj_factor": _f(fac.get("adj_factor")),
+                "adj_factor": (_f(fac.get("adj_factor")) or adj_map.get(raw_ts_code)) or None,
                 "chip_cost_15": _f(chp.get("cost_15pct")),
                 "chip_cost_50": _f(chp.get("cost_50pct")),
                 "chip_cost_85": _f(chp.get("cost_85pct")),
