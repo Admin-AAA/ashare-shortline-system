@@ -32,6 +32,21 @@ function PageFallback() {
   );
 }
 
+const KNOWN_PATHS = new Set(["/", "/pool", "/today", "/dashboard", "/positions", "/review", "/history", "/records", "/metrics", "/strategies", "/config", "/run", "/mid", "/long", "/system", "/backtest", "/data-health"]);
+
+function NotFoundPage({ path, onHome }: { path: string; onHome: () => void }) {
+  return (
+    <section className="panel" style={{ maxWidth: 560, margin: "var(--space-8, 64px) auto", textAlign: "center", padding: "var(--space-6, 32px)" }}>
+      <div className="text-mono" style={{ fontSize: 40, fontWeight: 700, color: "var(--muted)" }}>404</div>
+      <h2 style={{ margin: "var(--space-2) 0" }}>页面不存在</h2>
+      <p className="text-muted" style={{ fontSize: "var(--text-sm)" }}>
+        没有找到 <span className="text-mono">{path}</span>，可能是旧链接或地址输入有误。
+      </p>
+      <button className="btn" style={{ marginTop: "var(--space-3)" }} onClick={onHome}>回到今日</button>
+    </section>
+  );
+}
+
 export function AppShell() {
   const { pathname, navigate } = useUrlRoute();
   const { theme, toggleTheme } = useThemePreference();
@@ -63,8 +78,11 @@ export function AppShell() {
   const tabs = SUB_TABS[section].filter((t) => !(horizon !== "short" && section !== "system"));
   const activeTab = (tp: string) => (tp === "/pool" ? p === "/" || p === "/pool" : p === tp);
 
+  const redirecting = redirectFor(pathname, window.location.search) != null;
+  const known = redirecting || KNOWN_PATHS.has(p) || p.startsWith("/strategies/");
   let content: React.ReactNode;
-  if (horizon !== "short" && section !== "system") {
+  if (!known) content = <NotFoundPage path={pathname} onHome={() => navigate("/")} />;
+  else if (horizon !== "short" && section !== "system") {
     content = section === "strategies" || section === "review" || section === "today"
       ? <HorizonPage horizon={horizon} />
       : null;
