@@ -76,6 +76,18 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §114 大宗交易溢价成交后漂移（scripts/midterm/lt_research25.py BT_prem_h20，预注册 3 版中采纳的一版，未调参；实盘候选 app/services/midterm_block_trade.py）
+    # Tushare 大宗交易约 21:00 发布：17:35 盘后流水线通常 no_data，需 21:00 后 / 次日开盘前调用 generate_block_trade_picks(db, T) 出票
+    "mid-block-trade-premium": {
+        "name": "大宗交易溢价成交（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日晚间（交易所/Tushare 约21:00 发布当日大宗交易后），汇总每只股票当天全部大宗成交：成交量加权的大宗成交价不低于当日收盘价（溢价或平价成交），且大宗成交总额≥流通市值0.5%。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按大宗成交额占流通市值比例从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。",
+        "kind": "block_trade_premium",
+        "k_slots": 20,
+        "max_new": 5,
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     "long-repurchase-big": {
         "name": "大额回购预案（持60日）",
         "horizon": "long",
@@ -630,6 +642,9 @@ def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
                 {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
             result[sid] = len(picks)
             continue
+        if meta.get("kind") == "block_trade_premium":
+            result[sid] = _block_trade_picks(db, sid, meta, as_of)
+            continue
         if meta.get("kind") == "repurchase":
             held = _held_codes(db, sid, as_of)
             free = int(meta["k_slots"]) - len(held)
@@ -669,6 +684,31 @@ def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
             {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
         result[sid] = len(picks)
     return result
+
+
+def _block_trade_picks(db, sid: str, meta: dict[str, Any], as_of: str) -> Any:
+    """mid-block-trade-premium 出票（幂等：同一 as_of 重跑覆盖同一文件）。大宗数据未发布 -> "no_data"、不落盘。"""
+    from app.services.midterm_block_trade import block_trade_candidates
+    held = _held_codes(db, sid, as_of)
+    free = int(meta["k_slots"]) - len(held)
+    if free <= 0:
+        return {"skipped": "slots_full", "held": len(held)}
+    bt = block_trade_candidates(db, as_of)
+    if bt is None:
+        return "no_data"
+    picks = [p for p in bt if p["code"] not in held][:min(int(meta["max_new"]), free)]
+    if not picks:
+        return 0
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
+        {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
+    return len(picks)
+
+
+def generate_block_trade_picks(db, as_of: str) -> dict[str, Any]:
+    """只跑 mid-block-trade-premium（as_of = 大宗交易日 T，YYYY-MM-DD）。供 21:00 后 / T+1 开盘前的晚间任务调用。"""
+    sid = "mid-block-trade-premium"
+    return {sid: _block_trade_picks(db, sid, STRATEGIES[sid], as_of)}
 
 
 def _realize(db, code: str, signal_date: str, hold: int = HOLD_DAYS) -> dict[str, Any]:
