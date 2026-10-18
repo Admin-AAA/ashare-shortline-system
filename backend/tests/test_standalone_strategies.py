@@ -39,6 +39,15 @@ def test_strategy_ids_exclude_retired_disabled_and_warning():
     assert ss.standalone_strategy_ids(skills) == ["chen-xiaoqun-skill", "oversold-capital-reversal", "sector-relative-strength-leader"]
 
 
+def test_high_range_breakout_retired_s107():
+    """§107（2026-10-19）：high-range-breakout-momentum 修复 3 版全部未过 → 退役，不再观察、不独立运行。"""
+    assert "high-range-breakout-momentum" in ss.RETIRED_STRATEGY_IDS
+    assert "high-range-breakout-momentum" not in ss.WATCH_STRATEGY_IDS
+    assert not (ss.RETIRED_STRATEGY_IDS & ss.WATCH_STRATEGY_IDS)
+    skills = [_skill("high-range-breakout-momentum"), _skill("chao-gu-yang-jia-skill")]
+    assert ss.standalone_strategy_ids(skills) == ["chao-gu-yang-jia-skill"]
+
+
 def test_run_settings_respect_formal_floor(monkeypatch):
     monkeypatch.setitem(ss.STRATEGY_RUN_OVERRIDES, "x", {"score_line": 50, "output_count": 5})
     assert ss.standalone_run_settings("x") == (72.0, 5)
