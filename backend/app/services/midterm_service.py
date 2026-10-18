@@ -54,6 +54,17 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §103 业绩预告正向漂移（scripts/midterm/lt_research20.py F_any_h20，预注册 3 版中采纳的一版，未调参；实盘候选 app/services/midterm_forecast.py）
+    "mid-forecast-beat": {
+        "name": "业绩预告首次预喜（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的业绩预告，同一报告期只认公司第一次预告（修正公告不算）：类型为预增/扭亏/略增、预告净利同比增幅下限>0、预告净利润下限>0。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按预告增幅下限（封顶300%）从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。信号集中在1/4/7/10月预告季。",
+        "kind": "forecast_beat",
+        "k_slots": 20,
+        "max_new": 5,
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     "long-repurchase-big": {
         "name": "大额回购预案（持60日）",
         "horizon": "long",
@@ -560,6 +571,26 @@ def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
                 result[sid] = "no_data"
                 continue
             picks = [p for p in ea if p["code"] not in held][:min(int(meta["max_new"]), free)]
+            if not picks:
+                result[sid] = 0
+                continue
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
+                {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
+            result[sid] = len(picks)
+            continue
+        if meta.get("kind") == "forecast_beat":
+            from app.services.midterm_forecast import forecast_beat_candidates
+            held = _held_codes(db, sid, as_of)
+            free = int(meta["k_slots"]) - len(held)
+            if free <= 0:
+                result[sid] = {"skipped": "slots_full", "held": len(held)}
+                continue
+            fb = forecast_beat_candidates(db, as_of)
+            if fb is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in fb if p["code"] not in held][:min(int(meta["max_new"]), free)]
             if not picks:
                 result[sid] = 0
                 continue
