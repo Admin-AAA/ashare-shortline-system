@@ -837,13 +837,11 @@ class TushareProviderRouter:
         "stk_mins": ("promax", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
         "rt_min": ("promax", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
         "anns_d": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
-        # Promax supports the batch contracts used by the standard auxiliary
-        # state adapters; put it first so an official-provider validation error
-        # does not prevent valid financial/member data from reaching fallback.
-        "fina_indicator": ("promax", "tushare_official", "quantdata"),
-        "ths_member": ("promax", "tushare_official", "quantdata"),
-        # official 无 trade_cal 权限、promax 常被限速：quantdata 作为兜底（2026-10 复查）。
-        "trade_cal": ("promax", "quantdata", "tushare_official"),
+        # Promax 支持标准辅助状态适配器所用的批量契约，排第一；quantdata 兜底。
+        "fina_indicator": ("promax", "quantdata"),
+        "ths_member": ("promax", "quantdata"),
+        # promax 常被限速：quantdata 作为 trade_cal 兜底（2026-10 复查）。
+        "trade_cal": ("promax", "quantdata"),
     }
 
     def __init__(
