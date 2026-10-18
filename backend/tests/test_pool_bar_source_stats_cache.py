@@ -4,6 +4,7 @@ import app.services.data_sources as ds
 
 
 def test_same_bar_date_reads_precomputed_without_query(tmp_path, monkeypatch):
+    monkeypatch.delenv("ASHARE_POOL_STATS_CACHE", raising=False)
     path = tmp_path / "stats.json"
     monkeypatch.setattr(ds, "_bar_source_stats_path", lambda: path)
     monkeypatch.setattr(ds, "_latest_allowed_bar_date", lambda: "2026-10-16")

@@ -557,6 +557,8 @@ def _raw_bar_source_rows(db: Session) -> list[dict[str, Any]]:
     import threading
 
     latest_allowed_bar_date = str(_latest_allowed_bar_date())
+    if __import__("os").environ.get("ASHARE_POOL_STATS_CACHE", "").strip().lower() in {"off", "0", "false"}:
+        return _compute_raw_bar_source_rows(db, latest_allowed_bar_date)
     path = _bar_source_stats_path()
     try:
         cached = json.loads(path.read_text(encoding="utf-8"))

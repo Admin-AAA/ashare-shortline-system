@@ -7,6 +7,8 @@ from pathlib import Path
 # 历史事故：test_recover_interrupted_runs_marks_active_runs 把事务内假 queued run
 # 重新派发到生产 Prefect，worker 看不到未提交行 → 每天数条 recommendation-run FAILED。
 os.environ["PREFECT_API_URL"] = "http://127.0.0.1:9/api"
+# 事务内造数的测试需要现算数据池统计，不能读生产落盘的预计算缓存。
+os.environ.setdefault("ASHARE_POOL_STATS_CACHE", "off")
 
 import pytest
 from sqlalchemy import text
