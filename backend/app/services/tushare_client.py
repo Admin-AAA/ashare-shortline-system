@@ -343,6 +343,12 @@ class _TushareSession:
         return caller
 
 
+# 官方 Tushare 账号无权限的接口（40203，2026-10-18 实测）。
+# fina_indicator 逐股走 promax；period 批量只有 quantdata 的 fina_indicator_vip 可用；
+# broker_recommend 只有 quantdata 可用；anns_d 无可用源（公告走东财/巨潮/xiaoshi）。
+_OFFICIAL_NO_PERMISSION_APIS = frozenset({"anns_d", "fina_indicator", "fina_indicator_vip", "broker_recommend"})
+
+
 def _build_provider_router() -> tuple[TushareProviderRouter, str]:
     settings = get_settings()
     timeout = (
@@ -374,7 +380,9 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                     append_api_path=True,
                     # anns_d 只接受 ann_date，而项目使用日期区间，暂不参与路由。
                     # stk_mins 由 _PromaxHttpProvider 门禁，只接受标准分钟响应。
-                    excluded_apis=frozenset({"anns_d"}),
+                    # fina_indicator_vip=unknown_api、broker_recommend=invalid_params（2026-10-18 实测），
+                    # 排除避免每次先失败再回退。fina_indicator 逐股 ts_code= 可用（长线回补靠它），保留。
+                    excluded_apis=frozenset({"anns_d", "fina_indicator_vip", "broker_recommend"}),
                     source="promax",
                     priority=4,
                     **common,
@@ -434,6 +442,8 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                         0, int(settings.tushare_quantdata_rate_limit_per_minute)
                     ),
                     append_api_path=False,
+                    # anns_d: 2003 api not purchased（2026-10-18 实测）
+                    excluded_apis=frozenset({"anns_d"}),
                     priority=1,
                     **common,
                 )
@@ -479,6 +489,8 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                         0, int(settings.tushare_official_rate_limit_per_minute)
                     ),
                     append_api_path=False,
+                    # 官方账号对这些接口 40203 无权限（2026-10-18 实测），不参与路由。
+                    excluded_apis=_OFFICIAL_NO_PERMISSION_APIS,
                     priority=3,
                     **common,
                 )

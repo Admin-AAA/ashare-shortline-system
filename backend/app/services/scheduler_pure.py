@@ -352,7 +352,7 @@ _KNOWN_AUX_SOURCE_GAPS: dict[str, str] = {
     "news_announcement": "Tushare anns_d 40203 无权限；公告改由东方财富/巨潮/xiaoshi 补数链覆盖",
     "share_float": "promax share_float invalid_params、官方无权限；改由 xiaoshi restricted_unlock 兜底",
     "holder_trade": "promax stk_holdertrade invalid_params / unknown_schema，长期不可用",
-    "broker_recommend": "promax broker_recommend invalid_params，长期不可用（未被任何策略使用）",
+    "broker_recommend": "promax invalid_params、官方无权限，已从这两源路由排除；仅 quantdata 可用但该源在数据源管理中停用（未被任何策略使用）",
 }
 
 

@@ -89,10 +89,10 @@ def test_fina_indicator_period_batch_single_call():
         {"ts_code": "000001.SZ", "end_date": "20260630", "ann_date": "20260720", "roe": 12.0, "eps": 1.5, "bps": 9.0},
         {"ts_code": "600000.SH", "end_date": "20260630", "ann_date": "20260721", "roe": 8.0, "eps": 0.7, "bps": 5.0},
     ])
-    client = _RecordingClient({"fina_indicator": frame})
+    client = _RecordingClient({"fina_indicator_vip": frame})
     provider = TushareStateProvider(client, session=None)
     rows = provider.fina_indicator(_request(("000001",), date(2026, 7, 16)))
-    assert client.calls == [("fina_indicator", {"period": "20260630"})]
+    assert client.calls == [("fina_indicator_vip", {"period": "20260630"})]
     # ann_date 20260720 / 20260721 都晚于 trade_date 20260716 → 全部被剔除 → 空
     assert rows == []
 
@@ -102,7 +102,7 @@ def test_fina_indicator_keeps_pre_trade_date_announcements():
         {"ts_code": "000001.SZ", "end_date": "20260630", "ann_date": "20260710", "roe": 12.0, "eps": 1.5, "bps": 9.0},
         {"ts_code": "600000.SH", "end_date": "20260630", "ann_date": "20260721", "roe": 8.0, "eps": 0.7, "bps": 5.0},
     ])
-    client = _RecordingClient({"fina_indicator": frame})
+    client = _RecordingClient({"fina_indicator_vip": frame})
     provider = TushareStateProvider(client, session=None)
     rows = provider.fina_indicator(_request(("000001", "600000"), date(2026, 7, 16)))
     # 只保留 ann_date <= 20260716 的（即 000001）
@@ -197,6 +197,10 @@ def test_fina_indicator_batch_failure_does_not_fan_out_to_per_stock_calls():
                 raise RuntimeError("500 Server Error")  # 代理不支持批量
             calls["per_stock"] += 1
             return stock_frame
+
+        def fina_indicator_vip(self, **kwargs):
+            calls["batch"] += 1
+            raise RuntimeError("500 Server Error")
 
     # 请求 250 只股也只能有一次批量调用。
     codes = tuple(f"{i:06d}" for i in range(250))

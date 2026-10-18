@@ -603,7 +603,8 @@ class TushareStateProvider:
         rows: list[dict[str, Any]] = []
 
         try:
-            frame = self._client.fina_indicator(period=period)
+            # period 批量只有 fina_indicator_vip 支持（quantdata）；普通 fina_indicator 需 ts_code。
+            frame = self._client.fina_indicator_vip(period=period)
         except Exception:
             return ()
         if frame is None or frame.empty:
