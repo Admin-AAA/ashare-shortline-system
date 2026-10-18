@@ -348,7 +348,7 @@ function AgentReviewSection({ agentLogs }: { agentLogs?: AgentLog[] }) {
 
   return (
     <div style={{ marginBottom: "var(--space-3)", fontSize: "var(--text-xs)", lineHeight: 1.6 }}>
-      <div className="panel__kicker" style={{ marginBottom: "var(--space-1)" }}>LLM 审查</div>
+      <div className="panel__kicker" style={{ marginBottom: "var(--space-1)" }}>LLM 提示 · 仅供参考，不影响出票</div>
       <div style={{ marginBottom: "var(--space-1)", color: "var(--ink-secondary)" }}>
         {stance && (
           <span style={{ fontWeight: 600, color: stanceColor }}>{stanceLabel(stance)}</span>
@@ -358,11 +358,11 @@ function AgentReviewSection({ agentLogs }: { agentLogs?: AgentLog[] }) {
             style={{
               fontFamily: "var(--font-mono)",
               fontWeight: 600,
-              color: scoreDelta >= 0 ? "var(--market-up)" : "var(--market-down)",
+              color: "var(--muted)",
               marginLeft: "var(--space-2)",
             }}
           >
-            {scoreDelta >= 0 ? "+" : ""}{scoreDelta.toFixed(1)}
+            建议 {scoreDelta >= 0 ? "+" : ""}{scoreDelta.toFixed(1)}（未计入）
           </span>
         )}
         {positionRange && (

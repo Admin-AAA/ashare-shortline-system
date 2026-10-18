@@ -571,7 +571,7 @@ function SingleStockScoreResult({ result }: { result: SingleStockAnalysis }) {
           <span className="tag">{result.trade_date}</span>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)" }}>
-          <ScoreMetric label="管线最终分" value={result.final_score} />
+          <ScoreMetric label="规则分（出票依据）" value={result.final_score} />
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>推荐结果</span>
             <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: result.recommended ? "var(--market-up)" : "var(--ink-secondary)" }}>
@@ -658,7 +658,7 @@ function SingleStockLlmSection({ llm }: { llm: NonNullable<SingleStockAnalysis["
   if (llm.status === "error") {
     return (
       <section className="panel" style={{ margin: 0, padding: "var(--space-3)" }}>
-        <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>LLM 深度分析</div>
+        <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>LLM 提示 · 仅供参考，不影响出票</div>
         <div style={{ color: "var(--market-down)", fontSize: "var(--text-sm)" }}>分析失败：{llm.error || "未知错误"}</div>
       </section>
     );
@@ -677,17 +677,16 @@ function SingleStockLlmSection({ llm }: { llm: NonNullable<SingleStockAnalysis["
   return (
     <section className="panel" style={{ margin: 0, padding: "var(--space-3)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-2)" }}>
-        <div className="panel__kicker">LLM 深度分析</div>
+        <div className="panel__kicker">LLM 提示 · 仅供参考，不影响出票</div>
         {llm.elapsed_ms != null && (
           <span className="text-muted text-mono" style={{ fontSize: "var(--text-xs)" }}>{llm.elapsed_ms}ms</span>
         )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)", marginBottom: "var(--space-3)" }}>
-        <ScoreMetric label="最终评分" value={llm.final_score} />
-        <ScoreMetric label="LLM评分" value={llm.score} />
-        <ScoreMetric label="规则基线" value={llm.rule_score} />
-        <ScoreMetric label="LLM调整" value={llm.llm_adjustment} />
+        <ScoreMetric label="规则分（出票依据）" value={llm.rule_score ?? llm.final_score} />
+        <ScoreMetric label="LLM 参考分" value={llm.score} />
+        <ScoreMetric label="LLM 建议调整（未生效）" value={llm.llm_adjustment} />
         <ScoreMetric label="置信度" value={llm.confidence != null ? llm.confidence * 100 : null} suffix="%" />
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>立场</span>
@@ -753,8 +752,8 @@ function PresetLlmSection({ llm }: { llm: NonNullable<SingleStockAnalysis["llm_a
           )}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)" }}>
-          <ScoreMetric label="最终评分" value={llm.final_score} />
-          <ScoreMetric label="Agent审查分" value={llm.agent_review_score} />
+          <ScoreMetric label="规则分（出票依据）" value={llm.final_score} />
+          <ScoreMetric label="Agent审查分（参考）" value={llm.agent_review_score} />
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>风险模板</span>
             <span style={{ fontSize: "var(--text-sm)" }}>{llm.risk_template || "—"}</span>

@@ -208,7 +208,7 @@ export function PoolExpandedRow({
 
       {/* 右：LLM 可信度 + 操作 */}
       <div>
-        <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>LLM 解释可信度</div>
+        <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>LLM 解释可信度 · 仅供参考，不影响出票</div>
         <ConfidenceMeter
           confidence={confidence}
           validatedRatio={effectiveValidated}

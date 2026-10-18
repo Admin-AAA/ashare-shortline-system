@@ -11,7 +11,7 @@ body { background: var(--canvas) !important; font-size: 14px; }
 .hzseg button { border: 0; background: none; color: var(--muted); padding: 4px 12px; border-radius: 4px; font: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
 .hzseg button.on { background: var(--hz); color: #fff; }
 .topbar__nav { height: 100%; }
-.topbar__nav-item { border-radius: 0 !important; border-bottom: 2px solid transparent !important; height: 100%; background: none !important; }
+.topbar__nav-item { border-radius: 0 !important; border: 0 !important; border-bottom: 2px solid transparent !important; height: 100%; background: none !important; }
 .topbar__nav-item--active { border-bottom-color: var(--accent) !important; color: var(--ink) !important; }
 .search-btn { display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 8px 0 10px; background: var(--surface-soft); border: 1px solid var(--line); border-radius: 6px; color: var(--muted-strong); font: inherit; font-size: 13px; cursor: pointer; }
 kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; color: var(--muted); background: var(--surface); }
