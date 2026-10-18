@@ -64,6 +64,16 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 60,
         "schedule": "daily",
     },
+    # §98 防御型异象（scripts/midterm/lt_research16.py LTV_h60，预注册 3 版中唯一达标，未调参）
+    "long-lowturn-lowvol": {
+        "name": "低换手+低波动月度组合（持60日）",
+        "horizon": "long",
+        "summary": "每月最后一个交易日收盘后，在全A（剔除北交所）总市值排名第200–1500的股票里，剔除ST、上市不足250个交易日、股价<3元；按近60日平均换手率排名 + 近60日日收益波动率排名（都越低越好）相加，取得分最低的10只，次日开盘等权买入、各持有60个交易日。仍在持有期内的不重复买、也不顺延补位（与回测一致）。",
+        "kind": "lowturn_lowvol",
+        "top_n": 10,
+        "hold_days": 60,
+        "schedule": "month_end",
+    },
 }
 
 
@@ -75,6 +85,9 @@ def is_signal_day(strategy_id: str, d: _dt.date) -> bool:
     schedule = STRATEGIES[strategy_id]["schedule"]
     if schedule == "daily":
         return True
+    if schedule == "month_end":  # 无交易日历时的近似：下一个工作日已是下个月（generate_picks 用 trade_calendar 精确判断）
+        nxt = d + _dt.timedelta(days=3 if d.weekday() == 4 else 1)
+        return d.weekday() < 5 and nxt.month != d.month
     if d.weekday() != 4:
         return False
     return schedule == "weekly" or d.day <= 7
@@ -327,13 +340,98 @@ def earnings_accel_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return sorted(res, key=lambda x: (-x["score"], x["code"]))
 
 
+def _is_month_end(db, as_of: str) -> bool:
+    """as_of 是否为当月最后一个交易日（trade_calendar SSE；日历缺失时退回工作日近似）。"""
+    nxt = db.execute(text(
+        "SELECT MIN(cal_date) FROM trade_calendar WHERE exchange='SSE' AND is_open=1 AND cal_date>:d"),
+        {"d": as_of.replace("-", "")}).scalar()
+    if not nxt:
+        d = _dt.date.fromisoformat(as_of)
+        nd = d + _dt.timedelta(days=3 if d.weekday() == 4 else 1)
+        return nd.month != d.month
+    return str(nxt)[4:6] != as_of[5:7]
+
+
+def lowturn_lowvol_candidates(db, as_of: str, top_n: int = 10) -> list[dict[str, Any]] | None:
+    """§98 lt_research16 LTV 口径：非北交所按折算总市值从大到小排名第 200–1500、非ST、上市≥250交易日、收盘≥3；
+    近60日均换手率秩 + 近60日日收益标准差秩（都低好，平均秩；同分按波动率低者优先）之和最低的 top_n 只。数据不足返回 None。"""
+    import pandas as pd
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 300"), {"d": as_of})]
+    if len(dates) < 251 or dates[0] != as_of:
+        return None
+    bd = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
+    if not bd:
+        return None
+    mv = pd.DataFrame(db.execute(text("""
+        SELECT b.code, b.total_mv, kb.close AS close_bd, kt.close AS close_t
+        FROM daily_basic b
+        JOIN daily_kbars kt ON kt.code=b.code AND kt.trade_date=:d
+        LEFT JOIN daily_kbars kb ON kb.code=b.code AND kb.trade_date=:bd
+        WHERE b.trade_date=:bd AND b.total_mv>0 AND kt.close>0 AND LEFT(b.code,1) NOT IN ('4','8','9')
+    """), {"bd": bd, "d": as_of}).mappings().all())
+    if mv.empty:
+        return None
+    mv["close_bd"] = pd.to_numeric(mv["close_bd"], errors="coerce")
+    ratio = (mv["close_t"].astype(float) / mv["close_bd"]).where(mv["close_bd"] > 0, 1.0)
+    mv["mvd"] = mv["total_mv"].astype(float) * ratio  # = 总股本 × 当日收盘（研究口径）
+    mv["rk_mv"] = mv["mvd"].rank(ascending=False, method="first")
+    st = {r[0] for r in db.execute(text(
+        "SELECT code FROM stock_metadata_history WHERE name LIKE '%ST%' AND effective_from<=:d "
+        "AND (effective_to IS NULL OR effective_to>:d)"), {"d": as_of})}
+    mv = mv[(mv["rk_mv"] >= 200) & (mv["rk_mv"] <= 1500) & (mv["close_t"].astype(float) >= 3) & ~mv["code"].isin(st)]
+    if mv.empty:
+        return []
+    k = pd.DataFrame(db.execute(text(
+        "SELECT code, trade_date, turnover_rate, pct_chg FROM daily_kbars "
+        "WHERE trade_date>=:d0 AND trade_date<=:d AND close>0 AND code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"d0": dates[-1], "d": as_of, "codes": mv["code"].tolist()}).mappings().all())
+    if k.empty:
+        return None
+    k = k.sort_values(["code", "trade_date"])
+    age = k.groupby("code").size()
+    k = k[k["code"].isin(age[age >= 251].index)].groupby("code").tail(60)
+    g = k.groupby("code").agg(n=("pct_chg", "size"), turn60=("turnover_rate", "mean"),
+                              vol60=("pct_chg", lambda x: (x.astype(float) / 100).clip(-0.35, 0.35).std(ddof=1)))
+    g = g[(g["n"] >= 60) & g["turn60"].notna() & g["vol60"].notna()].reset_index()
+    if g.empty:
+        return []
+    g["score"] = (g["turn60"].rank(method="average") + g["vol60"].rank(method="average")
+                  + g["vol60"].rank(method="first") * 1e-6)
+    g = g.sort_values(["score", "code"]).head(int(top_n)).merge(mv[["code", "mvd", "rk_mv"]], on="code")
+    names = dict(db.execute(text("SELECT code,name FROM stocks WHERE code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"codes": g["code"].tolist()}).all())
+    return [{"code": r.code, "name": names.get(r.code, ""), "total_mv": round(float(r.mvd), 1), "mv_rank": int(r.rk_mv),
+             "turn60": round(float(r.turn60), 4), "vol60": round(float(r.vol60) * 100, 3), "score": round(float(r.score), 1)}
+            for r in g.sort_values("score").itertuples()]
+
+
 def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
     """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。"""
     d = _dt.date.fromisoformat(as_of)
     result: dict[str, Any] = {}
     rp_cands: list[dict[str, Any]] | None | str = "unset"
     for sid, meta in STRATEGIES.items():
-        if not force and not is_signal_day(sid, d):
+        if meta.get("schedule") == "month_end":
+            if not force and not _is_month_end(db, as_of):
+                continue
+        elif not force and not is_signal_day(sid, d):
+            continue
+        if meta.get("kind") == "lowturn_lowvol":
+            cands = lowturn_lowvol_candidates(db, as_of, int(meta["top_n"]))
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            held = _held_codes(db, sid, as_of)
+            picks = [p for p in cands if p["code"] not in held]  # 已持有不重复买、也不顺延补位（与回测一致）
+            if not picks:
+                result[sid] = {"skipped": "all_held"} if cands else 0
+                continue
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
+                {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
+            result[sid] = len(picks)
             continue
         if meta.get("kind") == "earnings_accel":
             held = _held_codes(db, sid, as_of)
