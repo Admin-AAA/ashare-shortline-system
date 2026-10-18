@@ -113,7 +113,7 @@ def _normalize_rows(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
     return rows
 
 
-def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[str, dict[str, Any]]:
+def _legacy_fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[str, dict[str, Any]]:
     """批量拉实时报价，返回 {code6: quote}。
 
     - 多代码一次调用（realtime_quote 支持逗号分隔 ts_code 列表）。
@@ -122,8 +122,6 @@ def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[s
       （缓存以「整批」为粒度，因为 realtime_quote 本身就是批量接口）。
     - 上游失败/超时 → 返回 {}，不抛异常（调用方据此降级显示）。
     """
-    import tushare as ts
-
     settings = get_settings()
     ttl = max(0.0, float(settings.tushare_realtime_quote_ttl_seconds))
     batch_size = max(1, int(settings.tushare_realtime_quote_batch_size))
@@ -160,6 +158,24 @@ def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[s
         logger.warning("realtime_quote 配置失败: %s", exc)
         return {}
 
+    rows = _fetch_stockai888_rows(ts_codes, batch_size=batch_size)
+
+    if rows:
+        with _cache_lock:
+            _cache["fetched_at"] = time.time()
+            _cache["rows"] = rows
+    return rows
+
+
+def _fetch_stockai888_rows(codes: list[str], *, batch_size: int | None = None) -> dict[str, dict[str, Any]]:
+    """Legacy stockai888 batch fetch + normalization (session must already be configured)."""
+    import tushare as ts
+
+    from app.services.tushare_client import ts_code as _to_ts_code
+
+    if batch_size is None:
+        batch_size = max(1, int(get_settings().tushare_realtime_quote_batch_size))
+    ts_codes = [c if "." in str(c) else _to_ts_code(str(c)) for c in codes]
     frames: list[pd.DataFrame] = []
     for i in range(0, len(ts_codes), batch_size):
         chunk = ts_codes[i : i + batch_size]
@@ -177,8 +193,55 @@ def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[s
     except MarketFrameContractError:
         logger.exception("realtime_quote contract violation")
         raise
-    rows = _normalize_rows(merged)
+    return _normalize_rows(merged)
 
+
+def fetch_realtime_quotes(codes: list[str], *, use_cache: bool = True) -> dict[str, dict[str, Any]]:
+    """Dataset ``quote.realtime`` entry point (signature unchanged).
+
+    Default = legacy stockai888-only path.  ``ASHARE_DATASOURCE_CUTOVER`` containing
+    ``quote.realtime`` routes through the gateway (stockai888 → rt_k → rt_min → xiaoshi);
+    ``ASHARE_DATASOURCE_SHADOW`` runs the gateway beside legacy and compares.
+    """
+    from app.services.datasource import gateway as _gw
+
+    if _gw.is_cutover("quote.realtime"):
+        return _fetch_via_gateway(codes, use_cache=use_cache)
+    rows = _legacy_fetch_realtime_quotes(codes, use_cache=use_cache)
+    if _gw.is_shadow("quote.realtime"):
+        _gw.shadow_compare("quote.realtime", rows, lambda: _gateway_rows(codes))
+    return rows
+
+
+def _codes6(codes: list[str]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for c in codes:
+        code6 = str(c).split(".")[0].strip()
+        if len(code6) != 6 or not code6.isdigit() or code6 in seen:
+            continue
+        seen.add(code6)
+        out.append(code6)
+    return out
+
+
+def _gateway_rows(codes: list[str]) -> dict[str, dict[str, Any]]:
+    from app.services.datasource import quote_realtime
+
+    wanted = _codes6(codes)
+    return quote_realtime.fetch(wanted) if wanted else {}
+
+
+def _fetch_via_gateway(codes: list[str], *, use_cache: bool) -> dict[str, dict[str, Any]]:
+    settings = get_settings()
+    ttl = max(0.0, float(settings.tushare_realtime_quote_ttl_seconds))
+    wanted = set(_codes6(codes))
+    if use_cache and ttl > 0:
+        with _cache_lock:
+            age = time.time() - _cache["fetched_at"]
+            if _cache["rows"] and age < ttl and wanted <= set(_cache["rows"]):
+                return {c: q for c, q in _cache["rows"].items() if c in wanted}
+    rows = _gateway_rows(codes)
     if rows:
         with _cache_lock:
             _cache["fetched_at"] = time.time()

@@ -157,6 +157,44 @@ def _fetch_rtk_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
     """批量拉当日实时 OHLC；rt_k 缺失时用 realtime_quote 补齐。"""
     if not codes:
         return {}
+    from app.services.datasource import gateway as _gw
+
+    if _gw.is_cutover("quote.realtime"):
+        return _quotes_via_gateway(codes)
+    legacy = _legacy_fetch_rtk_quotes(codes)
+    if _gw.is_shadow("quote.realtime"):
+        _gw.shadow_compare("quote.realtime.pnl", legacy, lambda: _quotes_via_gateway(codes))
+    return legacy
+
+
+def _quotes_via_gateway(codes: list[str]) -> dict[str, dict[str, Any]]:
+    """Gateway path; output mapping identical to the legacy rt_k / realtime_quote branches."""
+    from app.services.realtime_quote_client import fetch_realtime_quotes
+
+    quotes: dict[str, dict[str, Any]] = {}
+    for code6, row in fetch_realtime_quotes(codes, use_cache=False).items():
+        if row.get("source") == "tushare_rt_k":
+            quotes[code6] = {
+                "open": _f(row.get("open")), "high": _f(row.get("high")), "low": _f(row.get("low")),
+                "close": _f(row.get("price")), "pre_close": _f(row.get("pre_close")),
+                "vol": _f(row.get("volume")), "amount": _f(row.get("amount")),
+                "name": str(row.get("name") or "").strip(), "trade_date": row.get("trade_date"),
+            }
+            continue
+        close = _f(row.get("price") or row.get("close"))
+        if close <= 0:
+            continue
+        quotes[code6] = {
+            "open": _f(row.get("open")), "high": _f(row.get("high")), "low": _f(row.get("low")),
+            "close": close, "pre_close": _f(row.get("pre_close")),
+            "vol": _f(row.get("volume") or row.get("vol")), "amount": _f(row.get("amount")),
+            "name": str(row.get("name") or "").strip(),
+            "trade_date": normalize_trade_date(row.get("trade_date")),
+        }
+    return quotes
+
+
+def _legacy_fetch_rtk_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
     from app.services.tushare_client import get_pro
 
     ts_codes = [f"{c}.{_exchange_from_code(c)}" for c in codes]
