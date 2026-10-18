@@ -115,7 +115,8 @@ def analyze_stock(
         preset_id=preset_id,
     )
     run_id = f"single-stock-{code}-{uuid.uuid4().hex[:10]}"
-    data = asyncio.run(_execute_single_stock_scoring_pipeline(db, code, run_id, request))
+    universe = _SingleStockMarketUniverse(db, code)
+    data = asyncio.run(_execute_single_stock_scoring_pipeline(db, code, run_id, request, universe))
 
     source_stock = next((dict(item) for item in data.stocks if item.get("code") == code), {})
     feature = next((dict(item) for item in data.features if item.get("code") == code), source_stock)
@@ -141,7 +142,8 @@ def analyze_stock(
         "final_score": final_score,
         "recommended": recommended_card is not None,
         "pipeline_decision": pipeline_decision,
-        "market_snapshot_source": "recommendation_pipeline",
+        # formal_run_snapshot | historical_replay_snapshot | pipeline_full_universe
+        "market_snapshot_source": universe.snapshot_source,
         "market_snapshot_summary": {
             "sample_count": snapshot.get("sample_count"),
             "limit_up_count": snapshot.get("limit_up_count"),
@@ -219,7 +221,9 @@ class _SingleStockMarketUniverse:
         from app.services.runs.stages.adapters import ProductionMarketUniverse
 
         self._delegate = ProductionMarketUniverse(db)
+        self._db = db
         self._code = code
+        self.snapshot_source = "pipeline_full_universe"
 
     def load_universe(
         self,
@@ -237,7 +241,19 @@ class _SingleStockMarketUniverse:
         scoped_audit = dict(audit)
         scoped_audit["single_stock_code"] = self._code
         scoped_audit["full_universe_count"] = len(stocks)
-        return selected, dict(snapshot), scoped_audit
+        live_snapshot = dict(snapshot)
+        trade_date = str(live_snapshot.get("trade_date") or as_of_date or "")
+        resolved, source = _resolve_analysis_market_snapshot(self._db, trade_date, dict(selected[0]))
+        if source == "minimal_fallback":
+            # 没有同日正式 run 快照：保留管线按全市场 Universe 现算的快照（不是单股最小快照）。
+            self.snapshot_source = "pipeline_full_universe"
+            out_snapshot = live_snapshot
+        else:
+            # 优先当日正式 run 的 market_snapshot_json，保证单股评分与当日正式出票同一市场口径。
+            self.snapshot_source = source
+            out_snapshot = resolved
+        scoped_audit["market_snapshot_source"] = self.snapshot_source
+        return selected, out_snapshot, scoped_audit
 
 
 class _DrainOnlyCostRecording:
@@ -249,7 +265,13 @@ class _DrainOnlyCostRecording:
         return tuple(drain_api_costs())
 
 
-def _single_stock_scoring_stages(db: Session, *, code: str, run_id: str) -> tuple[Any, ...]:
+def _single_stock_scoring_stages(
+    db: Session,
+    *,
+    code: str,
+    run_id: str,
+    market_universe: "_SingleStockMarketUniverse | None" = None,
+) -> tuple[Any, ...]:
     """通过正式管线的唯一组装入口生成同一组评分 Stage。"""
     from app.services.runs.stages.adapters import (
         ProductionAuxiliaryApplication,
@@ -266,7 +288,7 @@ def _single_stock_scoring_stages(db: Session, *, code: str, run_id: str) -> tupl
     return assemble_scoring_pipeline_stages(
         skill_resolution=ProductionSkillResolution(db),
         execution_version=ProductionExecutionVersion(),
-        market_universe=_SingleStockMarketUniverse(db, code),
+        market_universe=market_universe or _SingleStockMarketUniverse(db, code),
         market_scope=ProductionMarketScope(db),
         auxiliary_application=ProductionAuxiliaryApplication(db),
         feature_build=ProductionFeatureBuild(db),
@@ -309,6 +331,7 @@ async def _execute_single_stock_scoring_pipeline(
     code: str,
     run_id: str,
     request: Any,
+    market_universe: "_SingleStockMarketUniverse | None" = None,
 ) -> Any:
     from app.agents.session_registry import AgentSessionRegistry
     from app.db.session import SessionLocal
@@ -323,8 +346,9 @@ async def _execute_single_stock_scoring_pipeline(
     )
     data = StageData()
     registered = False
+    universe = market_universe or _SingleStockMarketUniverse(db, code)
     try:
-        for stage in _single_stock_scoring_stages(db, code=code, run_id=run_id):
+        for stage in _single_stock_scoring_stages(db, code=code, run_id=run_id, market_universe=universe):
             if isinstance(stage, ReviewStage) and not registered:
                 AgentSessionRegistry.register(
                     session_id=f"sess_{run_id}",
