@@ -1,47 +1,56 @@
-"""[中线] §92 与小盘不相关的第二中线策略 — 预注册（不调参），周度信号（每周最后交易日收盘），次日开盘买，realistic 引擎，K=10，max_new=10，持 20 日。
-  ztg_pb_h20 : 涨停基因回调。池 liq；近 20 日 >=2 个涨停收盘；收盘在 m60 之上；距 20 日最高收盘回撤 -20%~-5%；按回撤浅优先。
-  ctrl_ztg   : 对照，同一涨停基因池（liq & 近20日>=2涨停）内 hash 随机 10 只。
-  hi52_big_h20 : 52 周新高邻近（George-Hwang）。池 liq 且总市值前 800；按 ac/250日最高 降序取前 10。
-  ctrl_big   : 对照，同池（liq & 市值前800）hash 随机 10 只。
-追加（§92b，hi52/ztg 结果出来后预注册，同一标准）：A 股短期反转在大市值池。
-  rev5_big_h10 : 池同 B（liq & 市值前800），按近 5 日收益最低取 10 只，持 10 日；ctrl_big_h10 为同池随机持 10 日。
-  rev20_big_h20: 同池按近 20 日收益最低取 10 只，持 20 日；对照 ctrl_big。
-采纳标准（预先写定）：8 阶段 >=6 正，R12 与 W00 每笔非负，且每笔优于同池随机对照 >=5/8。"""
-import sys, json
+"""[中线/长线] §92 事件型信号：现金分红预案（高单次股息率）— 预注册 3 版 + 同市值五分位对照（§91 lt_research12 口径）。
+数据：data/midterm/dividend/<code>.parquet（tushare dividend，2018+ 覆盖完整，2018 偏少）。只用 div_proc == "预案" 且 cash_div_tax > 0；
+同一 (code, end_date) 只取最早一次预案公告。PIT：ann_date -> >= ann_date 的第一个交易日 sd，sd 收盘出信号，次日开盘买（run_real）。
+单次股息率 y = cash_div_tax(元/股, 税前) / sd 收盘价(不复权，与每股分红同口径)。收益用 pct_chg 复利（含除息还原）。
+  Y2_h20 : y >= 2%，持 20 日 -> /mid
+  Y2_h60 : y >= 2%，持 60 日 -> /long
+  Y4_h60 : y >= 4%，持 60 日 -> /long
+通用：liq（成交额20日>5000万、上市>250日、非ST、非北交所），k_slots=20, max_new=5，按 y 降序。
+对照：同入场/出场日、信号日同市值五分位流动性合格全体等权（cohort_bench），每笔超额 = 策略 − 基准。
+采纳标准（结果出来前写定，同 §91，不调参）：8 阶段每笔超额 > 0 至少 6 个，且 R12 与 W00 超额 > 0，每笔均值 > 0 至少 5/8，
+各阶段 n 中位数 >= 15。送转预案 2024 后每年 < 20 例，无法实盘，不检验。"""
+import sys, json, glob
 import polars as pl
 from lt_research import build, fixed, PH
+from lt_research2 import regime
 from realistic import run_real, metrics_real
+from lt_research6_ctrl import cohort_bench
+import lt_data as L
+from lt_research12 import _pit
 c = pl.col
-df = build()
-d = c("trade_date").str.to_date()
-df = df.with_columns(d.dt.strftime("%G-%V").alias("wk"))
-lw = df.group_by("wk").agg(c("trade_date").max().alias("lw"))
-df = df.join(lw, on="wk").with_columns((c("trade_date") == c("lw")).alias("wkd"))
-df = df.sort("code", "trade_date").with_columns(
-    (c("close") >= pl.coalesce(c("up_limit"), (c("close").shift(1).over("code") * pl.when(c("code").str.starts_with("3") | c("code").str.starts_with("688")).then(1.2).otherwise(1.1)).round(2)) - 0.005).fill_null(False).cast(pl.Int32).alias("zt"),
-    c("total_mv").cast(pl.Float64, strict=False).alias("mv"))
-df = df.with_columns(c("zt").rolling_sum(20).over("code").alias("zt20"),
-                     c("ac").rolling_max(20).over("code").alias("hi20"), c("ac").rolling_max(250).over("code").alias("hi250"))
-df = df.with_columns((c("ac") / c("hi20") - 1).alias("dd20"), (c("ac") / c("hi250")).alias("p52"),
-                     pl.concat_str([c("code"), c("trade_date")]).hash(7).cast(pl.Float64).alias("hr"))
-base = c("wkd") & c("liq")
-gene = (base & (c("zt20") >= 2)).fill_null(False)
-mvr = pl.when(base & c("mv").is_not_null()).then(-c("mv")).rank("ordinal").over("trade_date")
-df = df.with_columns(mvr.alias("mvr"))
-big = (base & (c("mvr") <= 800)).fill_null(False)
-df = df.with_columns(gene.alias("G"), big.alias("B"),
-    (gene & (c("ac") > c("m60")) & c("dd20").is_between(-0.20, -0.05)).fill_null(False).alias("S_ztg"),
-    (-(c("ac") / c("ac").shift(5).over("code") - 1)).fill_null(-9).alias("sc_rev5"), (-c("r20")).fill_null(-9).alias("sc_rev20"),
-    c("dd20").alias("sc_ztg"), c("p52").fill_null(-1).alias("sc_hi"), c("hr").alias("sc_r"))
-print(df.filter(c("wkd")).group_by(c("trade_date").str.slice(0,4)).agg(c("liq").sum(), c("G").sum(), c("S_ztg").sum(), c("B").sum()).sort("trade_date"), flush=True)
-C = {"ztg_pb_h20": ("S_ztg", "sc_ztg"), "ctrl_ztg": ("G", "sc_r"), "hi52_big_h20": ("B", "sc_hi"), "ctrl_big": ("B", "sc_r"),
-     "rev5_big_h10": ("B", "sc_rev5", 10), "ctrl_big_h10": ("B", "sc_r", 10), "rev20_big_h20": ("B", "sc_rev20")}
-res = {}
-for n in (sys.argv[1:] or C):
-    sig, sc, *hh = C[n]; H = hh[0] if hh else 20; print(f"## {n}", flush=True)
-    for ph, (s, e) in PH.items():
-        t, cur = run_real(df, sig, sc, fixed(H), s, e, k_slots=10, max_new=10, max_hold=H)
-        mm = metrics_real(t, cur); res.setdefault(n, {})[ph] = {a: float(v) for a, v in mm.items()}
-        print(f"  {ph:22s} " + " ".join(f"{a}={float(v):g}" for a, v in mm.items()), flush=True)
-    json.dump(res, open("/tmp/lt13.json", "w"), indent=1)
-print("all done", flush=True)
+
+def div_sig(td):
+    fs = sorted(glob.glob(str(L.D / "dividend" / "*.parquet")))
+    d = pl.concat([pl.read_parquet(f, columns=["ts_code", "end_date", "ann_date", "div_proc", "cash_div_tax"]) for f in fs], how="diagonal_relaxed")
+    d = d.filter((c("div_proc") == "预案") & (c("cash_div_tax").cast(pl.Float64, strict=False) > 0))
+    d = d.with_columns(c("cash_div_tax").cast(pl.Float64, strict=False).alias("cd")).sort("ann_date").unique(["ts_code", "end_date"], keep="first")
+    d = _pit(d, td)
+    return d.group_by("code", "sd").agg(c("cd").sum()).rename({"sd": "trade_date"})
+
+if __name__ == "__main__":
+    out = sys.argv[1] if len(sys.argv) > 1 else "/tmp/lt13.json"
+    df = build()
+    td = df.select("trade_date").unique().sort("trade_date")
+    df = regime(df.join(div_sig(td), on=["code", "trade_date"], how="left"))
+    y = c("cd") / c("close")
+    df = df.with_columns((c("liq") & (y >= 0.02)).fill_null(False).alias("Y2"), (c("liq") & (y >= 0.04)).fill_null(False).alias("Y4"),
+                         y.fill_null(0).alias("sc_y"))
+    print("signals per year:", df.filter(c("Y2")).group_by(c("trade_date").str.slice(0, 4).alias("y"))
+          .agg(c("Y2").sum(), c("Y4").sum()).sort("y").to_dicts(), flush=True)
+    C = {"Y2_h20": ("Y2", 20), "Y2_h60": ("Y2", 60), "Y4_h60": ("Y4", 60)}
+    res = {}
+    for n, (sig, h) in C.items():
+        print(f"## {n}", flush=True)
+        for ph, (s, e) in PH.items():
+            t, cur = run_real(df, sig, "sc_y", fixed(h), s, e, k_slots=20, max_new=5, max_hold=h)
+            m = metrics_real(t, cur)
+            if t is not None and t.height:
+                b = cohort_bench(df, t)
+                m["bench"] = round(100 * float(b["bench"].mean()), 2); m["excess"] = round(m["avg"] - m["bench"], 2)
+                m["ex_win"] = round(100 * float(((b["ret"] - b["bench"]) > 0).mean()), 1)
+            res.setdefault(n, {})[ph] = {a: float(v) for a, v in m.items()}
+            print(" ", ph, m, flush=True)
+        v = res[n].values()
+        print("  pos", sum(x.get("avg", -1) > 0 for x in v), "/8  excess+", sum(x.get("excess", -1) > 0 for x in v), "/8", flush=True)
+        json.dump(res, open(out, "w"), indent=1)
+    print("all done", flush=True)
