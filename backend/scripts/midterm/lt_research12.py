@@ -1,8 +1,8 @@
 """[中线/长线] §91 事件型信号：重要股东增持 + 股票回购预案 — 预注册 6 版 + 同市值五分位对照（lt_research6_ctrl 口径）。
-数据：backfill_longterm.py events 阶段 -> data/midterm/events/{holdertrade,repurchase}_<year>.parquet（2017-07 起，公告日 PIT）。
+数据：backfill_longterm.py events 阶段 -> data/midterm/events/{holdertrade_in,repurchase}_<year>.parquet（2017-07 起，公告日 PIT）。
 PIT：公告日 ann_date 映射到 >= ann_date 的第一个交易日 sd 作为信号日，sd 收盘后出信号，次日开盘买（run_real 规则：一字涨停不买、
 跌停锁死顺延卖出、0.3% 成本）。若公告在 sd 盘前发布，这只会让买入晚一天（保守）。
-增持（holdertrade，change_ratio 为占总股本 %）：按 (code, sd) 汇总 net = sum(IN 比例) − sum(DE 比例)
+增持（holdertrade trade_type=IN，change_ratio 为占总股本 %）：按 (code, sd) 汇总 net = sum(IN 比例)（只回补增持，同日减持不抵扣；结果出来前改定）
   H_any_h20 : net > 0，持 20 日
   H_big_h20 : net >= 0.5%，持 20 日
   H_big_h60 : net >= 0.5%，持 60 日
@@ -31,7 +31,7 @@ def _pit(e, td):
                        strategy="forward").drop_nulls("sd")
 
 def holder_sig(td):
-    h = pl.concat([pl.read_parquet(f) for f in sorted(glob.glob(str(EV / "holdertrade_*.parquet")))], how="diagonal_relaxed")
+    h = pl.concat([pl.read_parquet(f) for f in sorted(glob.glob(str(EV / "holdertrade_in_*.parquet")))], how="diagonal_relaxed")
     h = h.unique(["ts_code", "ann_date", "holder_name", "in_de", "change_vol"])
     h = _pit(h, td).with_columns(c("change_ratio").cast(pl.Float64, strict=False).fill_null(0))
     return (h.group_by("code", "sd").agg(

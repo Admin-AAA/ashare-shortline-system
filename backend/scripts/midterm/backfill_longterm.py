@@ -10,8 +10,8 @@ Stages (each resumable via data/midterm/backfill_state.json):
   dividend     : pro.dividend per stock -> data/midterm/dividend/<code>.parquet
   hk_hold      : pro.hk_hold weekly (Fridays) SH+SZ since 2018 -> MySQL hk_holdings (upsert)
   holdernum    : pro.stk_holdernumber per stock (full history, ann_date PIT) -> data/midterm/holdernum/<code>.parquet
-  events       : pro.stk_holdertrade (7-day ann_date windows, auto-split near the row cap) + pro.repurchase (monthly)
-                 2017-07..today -> data/midterm/events/{holdertrade,repurchase}_<year>.parquet
+  events       : pro.stk_holdertrade trade_type=IN (monthly ann_date windows, auto-split near the row cap) + pro.repurchase (monthly)
+                 2017-07..today -> data/midterm/events/{holdertrade_in,repurchase}_<year>.parquet
 """
 from __future__ import annotations
 import json, logging, sys, time, datetime as dt
@@ -143,15 +143,15 @@ def _per_code_pass(pro, db, s, key, api, outdir, to_mysql):
     s[key] = sorted(done)
     return len([c for c in todo if c not in done])
 
-def _range_fetch(pro, api, a, b, cap):
+def _range_fetch(pro, api, a, b, cap, **extra):
     """fetch [a,b] by ann_date range; bisect the window when the result is at/near the provider row cap."""
-    df = call(pro, api, start_date=a, end_date=b)
+    df = call(pro, api, start_date=a, end_date=b, **extra)
     if df is None: return None
     if len(df) >= cap and a != b:
         da, db_ = dt.datetime.strptime(a, "%Y%m%d"), dt.datetime.strptime(b, "%Y%m%d")
         mid = da + (db_ - da) / 2
         m1, m2 = mid.strftime("%Y%m%d"), (mid + dt.timedelta(days=1)).strftime("%Y%m%d")
-        l, r = _range_fetch(pro, api, a, m1, cap), _range_fetch(pro, api, m2, b, cap)
+        l, r = _range_fetch(pro, api, a, m1, cap, **extra), _range_fetch(pro, api, m2, b, cap, **extra)
         if l is None or r is None: return None
         df = pd.concat([l, r])
     return df
@@ -159,7 +159,8 @@ def _range_fetch(pro, api, a, b, cap):
 def events_stage(pro, s, start="20170701"):
     out = D / "events"; out.mkdir(exist_ok=True)
     today = dt.date.today()
-    for api, name, step, cap in (("repurchase", "repurchase", 31, 1900), ("stk_holdertrade", "holdertrade", 7, 2900)):
+    # holdertrade: increases only (trade_type=IN) -- far fewer rows than DE, so monthly windows fit under the row cap
+    for api, name, step, cap, extra in (("repurchase", "repurchase", 31, 1900, {}), ("stk_holdertrade", "holdertrade_in", 31, 2900, {"trade_type": "IN"})):
         key = f"events_{name}"; done = set(s.get(key, []))
         a = dt.datetime.strptime(start, "%Y%m%d").date(); wins = []
         while a <= today:
@@ -167,7 +168,7 @@ def events_stage(pro, s, start="20170701"):
         todo = [w for w in wins if f"{w[0]}-{w[1]}" not in done]
         buf: dict[str, list] = {}
         for n, (wa, wb) in enumerate(todo):
-            df = _range_fetch(pro, api, wa, wb, cap)
+            df = _range_fetch(pro, api, wa, wb, cap, **extra)
             if df is not None:
                 if len(df): buf.setdefault(wa[:4], []).append(df)
                 done.add(f"{wa}-{wb}")
