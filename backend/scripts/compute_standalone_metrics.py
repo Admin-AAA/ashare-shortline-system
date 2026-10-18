@@ -39,7 +39,7 @@ def main():
         a.panel = str(cands[-1])
     from app.db.session import SessionLocal
     from app.services.workbench_service import sync_skills
-    from app.services.standalone_strategies import standalone_strategy_ids
+    from app.services.standalone_strategies import WATCH_STRATEGY_IDS, standalone_strategy_ids
     with SessionLocal() as db:
         skills = sync_skills(db)
         ids = standalone_strategy_ids(skills)
@@ -73,6 +73,7 @@ def main():
                     "pf": round(r["pf"], 2) if r["pf"] is not None else None, "max_drawdown_pct": round(r["mdd"], 1)}
         w12, wr = m("0", "9"), m(a.split, "9")
         status = "positive" if (w12.get("avg_return_pct") or 0) > 0 and (wr.get("avg_return_pct") or 0) > 0 else "watch"
+        if sid in WATCH_STRATEGY_IDS: status = "watch"
         out.append({"strategy_id": sid, "name": names.get(sid, sid), "status": status, "last_12m": w12, "recent": wr,
                     "tuned_filter_emulated": ex is not None, "panel": sources[sid]})
     OUT.parent.mkdir(parents=True, exist_ok=True)

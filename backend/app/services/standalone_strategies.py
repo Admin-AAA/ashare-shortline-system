@@ -37,14 +37,12 @@ RETIRED_STRATEGY_IDS: frozenset[str] = frozenset(
         "sector-laggard-catchup",
         # 2026-10-15 删除：真单策略回放近12月 117 张 -0.59%（近期 59 张 -1.37%），4 季度网格唯一 4/4 组合仍 -0.52%（L-184）
         "low-max-steady-trend",
-        # 2026-10-18 删除：§93 选股无超额——与「同一合格池内随机选 3 只」对照 4 窗只赢 1 窗（12m +0.86 vs 随机中位 +0.70；
-        # EXT +0.26 vs +0.26；W0 +0.46 vs +0.51；W00 -1.51 vs -1.46），4 窗每笔均值约 +0.02%，最大回撤 -30.5%（L-189）
-        "chen-xiaoqun-skill",
-        # 2026-10-18 删除：真单策略 4 窗只有近12月为正（20 张 +1.89%），EXT -2.08% / W0 -0.73% / W00 -0.79%，
-        # 4 窗 124 张加权每笔 -0.60%；排序与同池随机无差别（L-190）
-        "high-range-breakout-momentum",
     }
 )
+
+# 观察名单：照常每日独立运行，/strategies 标「运行中·观察」。删除只看绝对收益（近12月每笔均值/总收益/MDD），
+# 同池随机对照仅作诊断（2026-10-18 恢复，L-191）。陈小群 MDD -30.5% 偏大；高位突破近12月仅 20 张。
+WATCH_STRATEGY_IDS: frozenset[str] = frozenset({"chen-xiaoqun-skill", "high-range-breakout-momentum"})
 
 # 纯风险提示 / 非选股技能（没有可执行选股合约），不单独出票。
 NON_PICKING_SKILL_IDS: frozenset[str] = frozenset({"high-position-volume-stall-warning"})
