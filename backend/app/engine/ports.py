@@ -12,6 +12,13 @@ _ports: dict[str, Callable[..., Any]] = {}
 
 ACTIVE_MODEL_ROUTES = "active_model_routes"
 RECORD_TASK_RUN = "record_task_run"
+# SkillReviewPort: LLM skill review (Agno agent). Engine must not import app.agents
+# (which imports app.services); services wire the concrete Agno adapter.
+#   SKILL_AGENT_CREATE(skill, session_id) -> agent
+#   SKILL_AGENT_RUN(agent=..., stock=..., snapshot=..., rule_signal=..., session_id=..., skill_id=...)
+#       -> awaitable[SkillReviewOutput-like: score/stance/confidence/summary/evidence/risks/...]
+SKILL_AGENT_CREATE = "skill_agent_create"
+SKILL_AGENT_RUN = "skill_agent_run"
 
 
 def register(name: str, fn: Callable[..., Any]) -> None:

@@ -9,7 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from app.agents.agno_skill_agent import SkillReviewOutput, create_skill_agent, run_skill_agent
+from app.engine import ports as _ports
 from app.core.config import get_settings
 from app.engine.skill_loader import StrategySkill
 from app.engine import ports as _ports
@@ -278,6 +278,16 @@ def extract_principles(skill_body: str) -> list[str]:
 # ── Agno Agent 审查执行（带重试 + 指数退避） ──────────────────────────
 
 
+def create_skill_agent(skill: Any, session_id: str) -> Any:
+    """SkillReviewPort: 由 services 注入的 Agno 适配器创建 agent（engine 不直接依赖 app.agents）。"""
+    return _ports.call(_ports.SKILL_AGENT_CREATE, skill, session_id)
+
+
+def run_skill_agent(**kwargs: Any) -> Any:
+    """SkillReviewPort: 返回 awaitable[SkillReviewOutput]。"""
+    return _ports.call(_ports.SKILL_AGENT_RUN, **kwargs)
+
+
 def _run_llm_review(invocation: AgentSkillInvocation) -> dict[str, Any]:
     """通过 Agno Agent 执行 Skill 审查。
 
@@ -298,7 +308,7 @@ def _run_llm_review(invocation: AgentSkillInvocation) -> dict[str, Any]:
 
     # run_skill_agent 是 async，使用 asyncio.run() 桥接同步调用
     try:
-        output: SkillReviewOutput = asyncio.run(
+        output = asyncio.run(
             run_skill_agent(
                 agent=agent,
                 stock=stock,
