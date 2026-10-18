@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, History, Loader2, PlayCircle, RotateCw, Search, Sparkles } from "lucide-react";
 import { api } from "../api/client";
 import type { Preset, RunDetail, SingleStockAnalysis, SingleStockSkillReview, ReplayAnalysisResult, StockMatrixHistoryItem } from "../types";
@@ -130,7 +130,7 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
           )}
         </Panel>
 
-        <SingleStockScorePanel presets={presets} />
+        <SingleStockScorePanel key={queryParam("score_code") || "manual"} presets={presets} initialCode={queryParam("score_code") || ""} />
       </div>
 
       {error && <ErrorPage title="运行详情加载失败" message={error} onRetry={() => window.location.reload()} />}
@@ -270,8 +270,9 @@ function ReplayStatusTag({ label, tone }: { label: string; tone: "up" | "down" |
 // 单股票评分面板
 // ============================================================
 
-function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
-  const [code, setCode] = useState("");
+function SingleStockScorePanel({ presets, initialCode = "" }: { presets: Preset[]; initialCode?: string }) {
+  const [code, setCode] = useState(initialCode);
+  const autoScored = useRef(false);
   const [selectedPreset, setSelectedPreset] = useState<string>("");
   const [includeLlm, setIncludeLlm] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -314,6 +315,14 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
     void loadHistory(code);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 来自 ⌘K「立即评分」：/run?score_code=xxxxxx —— 预设就绪后自动评分一次
+  useEffect(() => {
+    if (autoScored.current || !/^\d{6}$/.test(initialCode) || !selectedPreset) return;
+    autoScored.current = true;
+    void runScore();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCode, selectedPreset]);
 
   async function runScore() {
     const trimmed = code.trim();

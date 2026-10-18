@@ -8,6 +8,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { api } from "../api/client";
+import { ResumeRunButton } from "../ui/ResumeRunButton";
 import type {
   MatrixRecordsResponse,
   RecommendationDetail,
@@ -458,8 +459,9 @@ function RunRecordsList() {
                   <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
                     {run.finished_at ? formatTime(run.finished_at) : "—"}
                   </td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>
-                    <ChevronRight size={14} style={{ color: "var(--muted)" }} />
+                  <td style={{ ...tdStyle, textAlign: "right", whiteSpace: "nowrap" }}>
+                    {["failed", "interrupted", "error", "cancelled"].includes(String(run.status).toLowerCase()) && <ResumeRunButton runId={run.run_id} />}
+                    <ChevronRight size={14} style={{ color: "var(--muted)", verticalAlign: "middle" }} />
                   </td>
                 </tr>
               ))}
