@@ -4,7 +4,8 @@ Natural key (no share_type column exists in this table):
   code, IFNULL(ann_date,''), float_date, IFNULL(holder_name,''), ROUND(IFNULL(float_share,0))
 float_share is MySQL FLOAT (~7 significant digits) so it is keyed via a stored generated
 BIGINT column (whole shares).  ann_date is kept (point-in-time backtests).
-Only rows identical on that key are removed (lowest id kept); count is logged.
+Key text columns use utf8mb4_bin so only byte-identical rows collide (e.g. 全角/半角 brackets
+in holder_name stay distinct). Only rows identical on that key are removed (lowest id kept); count is logged.
 Indexes (code, float_date) and (float_date) are created only if missing.
 """
 from __future__ import annotations
@@ -58,8 +59,8 @@ def upgrade() -> None:
     idx = _indexes(bind)
     op.execute(
         "ALTER TABLE share_floats "
-        "ADD COLUMN ann_key VARCHAR(10) AS (IFNULL(ann_date,'')) STORED, "
-        "ADD COLUMN holder_key VARCHAR(120) AS (IFNULL(holder_name,'')) STORED, "
+        "ADD COLUMN ann_key VARCHAR(10) COLLATE utf8mb4_bin AS (IFNULL(ann_date,'')) STORED, "
+        "ADD COLUMN holder_key VARCHAR(120) COLLATE utf8mb4_bin AS (IFNULL(holder_name,'')) STORED, "
         "ADD COLUMN float_share_key BIGINT AS (ROUND(IFNULL(float_share,0))) STORED, "
         "ADD UNIQUE KEY uq_share_floats_natural (code, ann_key, float_date, holder_key, float_share_key)"
         + ("" if any(v == ["code", "float_date"] for v in idx.values()) else ", ADD INDEX ix_share_floats_code_float_date (code, float_date)")
