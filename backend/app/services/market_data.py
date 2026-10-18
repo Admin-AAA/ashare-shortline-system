@@ -522,6 +522,27 @@ def _load_tushare_daily_basic_map(pro: Any, settings: Any, trade_date: str) -> d
 
 
 def _fetch_tushare_realtime_frame(ts_codes: list[str], settings: Any):
+    """One ≤50-code sina snapshot chunk. Cutover flag ``quote.snapshot`` routes via the gateway."""
+    from app.services.datasource import gateway as _gw
+
+    if _gw.is_cutover("quote.snapshot"):
+        from app.services.datasource.sina_realtime import fetch_frame
+
+        _throttle_tushare(settings)
+        return fetch_frame(ts_codes)
+    frame = _legacy_fetch_tushare_realtime_frame(ts_codes, settings)
+    if _gw.is_shadow("quote.snapshot"):
+        from app.services.datasource.sina_realtime import fetch_frame
+
+        _gw.shadow_compare(
+            "quote.snapshot",
+            frame.to_dict("records") if frame is not None else None,
+            lambda: fetch_frame(ts_codes).to_dict("records"),
+        )
+    return frame
+
+
+def _legacy_fetch_tushare_realtime_frame(ts_codes: list[str], settings: Any):
     import tushare as ts
 
     # sina 实时快照（tushare SDK 爬虫）；verify_token 已被 _patch_tushare_verify_token 本地短路，无需 token。
