@@ -130,6 +130,31 @@ def _set_db_running(task_id: str, running: bool) -> None:
         logger.exception("更新 is_running 失败: %s", task_id)
 
 
+BLOCK_TRADE_HOOK_TASK_IDS = frozenset({POSTCLOSE_LATE_DATA_REPAIR_TASK_ID, EXPOSURE_TASK_ID})
+
+
+def _run_block_trade_picks_hook(db, task_id: str) -> dict[str, Any]:
+    """Call midterm_service.generate_block_trade_picks(db, T); never raises into the parent job.
+
+    T = latest_allowed_bar_date(): at 21:00 this is the same trading day, at 08:03 the previous one.
+    """
+    trade_date = ""
+    try:
+        trade_date = _latest_allowed_bar_date()
+        from app.services.midterm_service import generate_block_trade_picks
+
+        out = generate_block_trade_picks(db, trade_date)
+        logger.info("midterm block-trade picks (%s, T=%s): %s", task_id, trade_date, out)
+        return {"trade_date": trade_date, "trigger": task_id, "result": out}
+    except Exception as exc:  # noqa: BLE001 - must not break the parent job
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning("midterm block-trade picks failed (%s, T=%s): %s", task_id, trade_date, exc, exc_info=True)
+        return {"trade_date": trade_date, "trigger": task_id, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+
 def _configure_late_data_repair_task(db) -> None:
     task = db.get(ScheduledTask, POSTCLOSE_LATE_DATA_REPAIR_TASK_ID)
     existing_payload: dict[str, Any] = {}
@@ -399,6 +424,11 @@ def _execute_task(
             result = _run_data_sync(db, payload, task_type=task_type)
         else:
             raise RuntimeError(f"未知任务类型: {task_type}")
+
+        # [中线] mid-block-trade-premium：Tushare 大宗交易约 21:00 发布。
+        # 主：21:00 晚间全域数据补数完成后跑当日；备：08:03 盘前任务补跑上一交易日（幂等）。
+        if task_id in BLOCK_TRADE_HOOK_TASK_IDS and isinstance(result, dict):
+            result["midterm_block_trade"] = _run_block_trade_picks_hook(db, task_id)
 
         finish_task_run(
             db,
