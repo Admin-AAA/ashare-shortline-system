@@ -8,7 +8,7 @@ import { useMarketState } from "./useMarketState";
 /** 运行推荐确认面板（POST /api/runs）。文案按 v4 §10。 */
 export function RunConfirmPanel({ onClose }: { onClose: () => void }) {
   const presets = usePresetsQuery();
-  const runs = useRunsQuery(100); // 与「今日出票」共用 limit=100 缓存，免一次 /api/runs 请求
+  const runs = useRunsQuery(100, true); // 与「今日出票」共用 limit=100&fields=slim 缓存
   const { market, tradeDate } = useMarketState();
   const create = useCreateRunMutation();
   const { navigate } = useUrlRoute();

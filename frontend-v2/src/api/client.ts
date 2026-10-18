@@ -225,9 +225,11 @@ export const api = {
   updatePreset: (presetId: string, payload: PresetPayload) =>
     request<Preset>(`/api/presets/${presetId}`, json("PATCH", payload)),
 
-  runs: (limit?: number) => {
+  // fields=slim：后端去掉 result_summary（仍为数组），列表场景用
+  runs: (limit?: number, fields?: "slim") => {
     const params = new URLSearchParams();
     if (limit) params.set("limit", String(limit));
+    if (fields) params.set("fields", fields);
     const qs = params.toString();
     return request<RunSummary[]>(`/api/runs${qs ? `?${qs}` : ""}`);
   },
@@ -469,6 +471,12 @@ export const api = {
     if (params?.limit) qs.set("limit", String(params.limit));
     const str = qs.toString();
     return request<RunSummary[]>(`/api/records/runs${str ? `?${str}` : ""}`);
+  },
+  // 服务端分页：按 started_at 倒序，覆盖最近 500 次运行
+  runRecordsPage: (params: { page: number; page_size: number; run_mode?: string; status?: string; preset_id?: string; trade_date_from?: string; trade_date_to?: string; fields?: "slim" | "full" }) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
+    return request<{ items: RunSummary[]; total: number; page: number; page_size: number }>(`/api/records/runs?${qs.toString()}`);
   },
   runRecordDetail: (runId: string) => request<RunRecordDetail>(`/api/records/runs/${runId}`),
   matrixRecords: (params?: { page?: number; page_size?: number; code?: string; analysis_type?: string; exclude_analysis_type?: string }) => {

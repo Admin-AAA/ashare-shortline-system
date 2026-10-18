@@ -8,6 +8,8 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { api } from "../api/client";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { usePresetsQuery } from "../api/queries/useRunQueries";
 import { ResumeRunButton } from "../ui/ResumeRunButton";
 import type {
   MatrixRecordsResponse,
@@ -188,146 +190,59 @@ const FULL_REPLAY_RUN_NAME = "REPLAY-全量重放";
 
 function RunRecordsList() {
   const { navigate } = useUrlRoute();
-  const { data, loading, error } = useApi<RunSummary[]>(
-    (_signal) => api.runRecords({ limit: 500 }),
-    [],
-  );
-
-  // —— 筛选条件（默认近30天内已完成的 formal 运行，推荐数不限）——
-  // 推荐数默认不限：弱势市下自动正式推荐经常 0 出票，按推荐数>0 过滤会让这些真实执行过的运行从列表消失。
-  // datePreset：近7天/近30天/本月/全部/自定义；自定义时用 dateFrom/dateTo 手选
-  const [datePreset, setDatePreset] = useState<"7d" | "30d" | "month" | "all" | "custom">("30d");
+  // 服务端分页 + 筛选（/api/records/runs?page=&page_size=），按 started_at 倒序，后端只覆盖最近 500 次运行。
+  // 默认不过滤：第 1 页即最新的定时与手动运行。
+  const [datePreset, setDatePreset] = useState<"7d" | "30d" | "month" | "all" | "custom">("all");
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("completed");
+  const [statusFilter, setStatusFilter] = useState<string>("__all__");
   const [presetFilter, setPresetFilter] = useState<string>("__all__");
-  const [modeFilter, setModeFilter] = useState<string>("formal");
-  // 推荐数下限：空 = 不筛选（任意推荐数）；填数字 = recommended_count > N。
-  // 手动填 N=0 时，保留全量重放的零推荐记录，便于复盘完整筛选过程。
-  const [minRecsFilter, setMinRecsFilter] = useState<string>("");
-
-  // —— 排序 ——
-  const [sortKey, setSortKey] = useState<RunSortKey>("trade_date");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-
-  // —— 分页 ——
-  const [page, setPage] = useState(0);
+  const [modeFilter, setModeFilter] = useState<string>("__all__");
+  const [page, setPage] = useState(1);
   const pageSize = 20;
+  const resetPage = () => setPage(1);
 
-  const resetPage = () => setPage(0);
-
-  // 日期预设 → 实际 dateFrom/dateTo（基于今天，trade_date 是 YYYY-MM-DD）。
-  // custom 时用用户手选的 dateFrom/dateTo。
   const effectiveDateRange = useMemo(() => {
     if (datePreset === "custom") return { from: dateFrom, to: dateTo };
     if (datePreset === "all") return { from: "", to: "" };
     const today = new Date();
-    const to = today.toISOString().slice(0, 10);
+    const fmt = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
     const from = new Date(today);
     if (datePreset === "7d") from.setDate(from.getDate() - 6);
     else if (datePreset === "30d") from.setDate(from.getDate() - 29);
-    else if (datePreset === "month") {
-      // 本月：从月初到今天
-      from.setDate(1);
-    }
-    return { from: from.toISOString().slice(0, 10), to };
+    else from.setDate(1);
+    return { from: fmt(from), to: fmt(today) };
   }, [datePreset, dateFrom, dateTo]);
 
-  // 策略选项：从数据里动态去重（按 preset_name），按频次倒序
-  const presetOptions = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const r of data ?? []) {
-      const name = r.preset_name || "(未命名)";
-      counts.set(name, (counts.get(name) ?? 0) + 1);
-    }
-    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([name]) => name);
-  }, [data]);
-
-  if (loading) return <PageSkeleton title="运行推荐记录" hint="加载历史运行" rowCount={8} />;
-  if (error) return <ErrorPage title="记录加载失败" message={error} onRetry={() => window.location.reload()} />;
-  if (!data || data.length === 0) {
-    return <EmptyState icon={<PlayCircle size={32} />} title="暂无运行记录" reason="还没有跑过推荐管线" />;
-  }
-
-  const filtered = data.filter((r) => {
-    if (effectiveDateRange.from && r.trade_date < effectiveDateRange.from) return false;
-    if (effectiveDateRange.to && r.trade_date > effectiveDateRange.to) return false;
-    if (statusFilter !== "__all__" && r.status !== statusFilter) return false;
-    if (presetFilter !== "__all__" && (r.preset_name || "(未命名)") !== presetFilter) return false;
-    if (modeFilter !== "__all__" && r.run_mode !== modeFilter) return false;
-    // 推荐数：空 = 不筛选；否则 recommended_count > N。默认 N=0 时全量重放例外保留。
-    if (minRecsFilter.trim() !== "") {
-      const min = Number(minRecsFilter);
-      const keepsFullReplay = min === 0 && r.run_name === FULL_REPLAY_RUN_NAME;
-      if (!Number.isNaN(min) && !(r.recommended_count > min) && !keepsFullReplay) return false;
-    }
-    return true;
-  });
-
-  // 排序
-  const getSortVal = (r: RunSummary): number | string => {
-    if (sortKey === "trade_date") return r.trade_date;
-    if (sortKey === "recommended_count") return r.recommended_count;
-    if (sortKey === "score_line") return r.score_line;
-    if (sortKey === "return_1d") return r.returns?.return_1d ?? -Infinity;
-    if (sortKey === "return_3d") return r.returns?.return_3d ?? -Infinity;
-    if (sortKey === "return_5d") return r.returns?.return_5d ?? -Infinity;
-    if (sortKey === "finished_at") return r.finished_at ?? "";
-    return "";
+  const presetsQ = usePresetsQuery();
+  const filters = {
+    page,
+    page_size: pageSize,
+    fields: "slim" as const,
+    run_mode: modeFilter === "__all__" ? undefined : modeFilter,
+    status: statusFilter === "__all__" ? undefined : statusFilter,
+    preset_id: presetFilter === "__all__" ? undefined : presetFilter,
+    trade_date_from: effectiveDateRange.from || undefined,
+    trade_date_to: effectiveDateRange.to || undefined,
   };
-  const sorted = [...filtered].sort((a, b) => {
-    const va = getSortVal(a);
-    const vb = getSortVal(b);
-    const cmp = va < vb ? -1 : va > vb ? 1 : 0;
-    return sortDir === "asc" ? cmp : -cmp;
+  const q = useQuery({
+    queryKey: ["records", "run-page", filters],
+    queryFn: () => api.runRecordsPage(filters),
+    placeholderData: keepPreviousData,
   });
-
-  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
-  const safePage = Math.min(page, totalPages - 1);
-  const pageItems = sorted.slice(safePage * pageSize, (safePage + 1) * pageSize);
-
-  const handleSort = (key: RunSortKey) => {
-    if (key === sortKey) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    } else {
-      setSortKey(key);
-      setSortDir("desc");
-    }
-    resetPage();
-  };
 
   const resetFilters = () => {
-    setDatePreset("30d");
-    setDateFrom("");
-    setDateTo("");
-    setStatusFilter("completed");
-    setPresetFilter("__all__");
-    setModeFilter("formal");
-    setMinRecsFilter("");
+    setDatePreset("all"); setDateFrom(""); setDateTo("");
+    setStatusFilter("__all__"); setPresetFilter("__all__"); setModeFilter("__all__");
     resetPage();
   };
 
-  const SortTh = ({
-    col,
-    align = "left",
-    children,
-  }: {
-    col: RunSortKey;
-    align?: "left" | "right";
-    children: React.ReactNode;
-  }) => {
-    const active = sortKey === col;
-    const arrow = active ? (sortDir === "asc" ? " ↑" : " ↓") : "";
-    return (
-      <th
-        style={{ ...thStyle, textAlign: align, cursor: "pointer", userSelect: "none", color: active ? "var(--text)" : "var(--muted)" }}
-        onClick={() => handleSort(col)}
-        title={`按${String(children)}排序`}
-      >
-        {children}{arrow}
-      </th>
-    );
-  };
+  if (q.isLoading) return <PageSkeleton title="运行推荐记录" hint="加载历史运行" rowCount={8} />;
+  if (q.error) return <ErrorPage title="记录加载失败" message={(q.error as Error).message} onRetry={() => q.refetch()} />;
+  const data = q.data!;
+  const total = data.total;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const filtered = [statusFilter, presetFilter, modeFilter].some((v) => v !== "__all__") || datePreset !== "all";
 
   return (
     <>
@@ -336,17 +251,13 @@ function RunRecordsList() {
           <label className="records-filterbar__label">日期</label>
           <div className="records-filterbar__preset">
             {([
+              { key: "all", label: "全部" },
               { key: "7d", label: "近7天" },
               { key: "30d", label: "近30天" },
               { key: "month", label: "本月" },
-              { key: "all", label: "全部" },
               { key: "custom", label: "自定义" },
             ] as const).map((opt) => (
-              <button
-                key={opt.key}
-                className={`records-filterbar__chip ${datePreset === opt.key ? "records-filterbar__chip--active" : ""}`}
-                onClick={() => { setDatePreset(opt.key); resetPage(); }}
-              >
+              <button key={opt.key} className={`records-filterbar__chip ${datePreset === opt.key ? "records-filterbar__chip--active" : ""}`} onClick={() => { setDatePreset(opt.key); resetPage(); }}>
                 {opt.label}
               </button>
             ))}
@@ -359,7 +270,6 @@ function RunRecordsList() {
             </>
           )}
         </div>
-
         <div className="records-filterbar__group">
           <label className="records-filterbar__label">模式</label>
           <select className="cfg-input records-filterbar__select" value={modeFilter} onChange={(e) => { setModeFilter(e.target.value); resetPage(); }}>
@@ -369,7 +279,6 @@ function RunRecordsList() {
             <option value="backtest">回测</option>
           </select>
         </div>
-
         <div className="records-filterbar__group">
           <label className="records-filterbar__label">状态</label>
           <select className="cfg-input records-filterbar__select" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); resetPage(); }}>
@@ -379,66 +288,43 @@ function RunRecordsList() {
             <option value="interrupted">interrupted</option>
           </select>
         </div>
-
         <div className="records-filterbar__group">
-          <label className="records-filterbar__label">策略</label>
+          <label className="records-filterbar__label">预设</label>
           <select className="cfg-input records-filterbar__select" value={presetFilter} onChange={(e) => { setPresetFilter(e.target.value); resetPage(); }}>
             <option value="__all__">全部</option>
-            {presetOptions.map((name) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
+            {(presetsQ.data ?? []).map((p) => <option key={p.preset_id} value={p.preset_id}>{p.name}</option>)}
           </select>
         </div>
-
-        <div className="records-filterbar__group">
-          <label className="records-filterbar__label">推荐数 &gt;</label>
-          <input
-            className="cfg-input records-filterbar__select"
-            type="number"
-            min={0}
-            value={minRecsFilter}
-            onChange={(e) => { setMinRecsFilter(e.target.value); resetPage(); }}
-            placeholder="不限"
-            style={{ width: 80 }}
-          />
-        </div>
-
-        <button className="btn btn--ghost records-filterbar__reset" onClick={resetFilters} title="重置为默认筛选">
+        <button className="btn btn--ghost records-filterbar__reset" onClick={resetFilters} title="重置筛选">
           <RotateCcw size={13} /> 重置
         </button>
-
-        <span className="records-filterbar__count">
-          {filtered.length} / {data.length} 条
+        <span className="records-filterbar__count" title="统计口径：后端只覆盖最近 500 次运行，按开始时间倒序">
+          {filtered ? "筛选后" : ""}共 {total} 条（最近 500 次运行内）{q.isFetching ? " · 更新中…" : ""}
         </span>
       </div>
 
-      {filtered.length === 0 ? (
-        <EmptyState icon={<PlayCircle size={32} />} title="当前筛选无记录" reason="调整筛选条件后再试" />
+      {data.items.length === 0 ? (
+        <EmptyState icon={<PlayCircle size={32} />} title="当前筛选无记录" reason="调整筛选条件后再试（统计范围：最近 500 次运行）" />
       ) : (
         <>
           <table style={tableStyle}>
             <thead>
               <tr>
-                <SortTh col="trade_date">日期</SortTh>
+                <th style={thStyle}>日期</th>
                 <th style={thStyle}>运行名</th>
-                <SortTh col="recommended_count" align="right">推荐数</SortTh>
-                <SortTh col="score_line" align="right">分数线</SortTh>
-                <SortTh col="return_1d" align="right">一日收益</SortTh>
-                <SortTh col="return_3d" align="right">三日收益</SortTh>
-                <SortTh col="return_5d" align="right">五日收益</SortTh>
+                <th style={{ ...thStyle, textAlign: "right" }}>推荐数</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>分数线</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>一日收益</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>三日收益</th>
+                <th style={{ ...thStyle, textAlign: "right" }}>五日收益</th>
                 <th style={thStyle}>状态</th>
-                <SortTh col="finished_at">完成时间</SortTh>
+                <th style={thStyle}>开始时间 ↓</th>
                 <th style={thStyle}></th>
               </tr>
             </thead>
             <tbody>
-              {pageItems.map((run) => (
-                <tr
-                  key={run.run_id}
-                  onClick={() => navigate("/records", { params: { tab: "run", run_id: run.run_id } })}
-                  style={{ ...rowStyle, cursor: "pointer" }}
-                  title="点击查看当次推荐的股票"
-                >
+              {data.items.map((run) => (
+                <tr key={run.run_id} onClick={() => navigate("/records", { params: { tab: "run", run_id: run.run_id } })} style={{ ...rowStyle, cursor: "pointer" }} title="点击查看当次推荐的股票">
                   <td style={tdStyle} className="text-mono">
                     <span style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)" }}>
                       {run.trade_date}
@@ -447,18 +333,12 @@ function RunRecordsList() {
                   </td>
                   <td style={tdStyle}>{run.run_name || run.run_id.slice(0, 12)}</td>
                   <td style={{ ...tdStyle, textAlign: "right", fontFamily: "var(--font-mono)" }}>{run.recommended_count}</td>
-                  <td style={{ ...tdStyle, textAlign: "right" }}>
-                    <ScoreLineCell scoreLine={run.score_line} runMode={run.run_mode} />
-                  </td>
+                  <td style={{ ...tdStyle, textAlign: "right" }}><ScoreLineCell scoreLine={run.score_line} runMode={run.run_mode} /></td>
                   <ReturnCell value={run.returns?.return_1d ?? null} />
                   <ReturnCell value={run.returns?.return_3d ?? null} />
                   <ReturnCell value={run.returns?.return_5d ?? null} />
-                  <td style={tdStyle}>
-                    <StatusBadge status={run.status} />
-                  </td>
-                  <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>
-                    {run.finished_at ? formatTime(run.finished_at) : "—"}
-                  </td>
+                  <td style={tdStyle}><StatusBadge status={run.status} /></td>
+                  <td style={{ ...tdStyle, color: "var(--muted)", fontSize: "var(--text-sm)" }}>{run.started_at ? formatTime(run.started_at) : "—"}</td>
                   <td style={{ ...tdStyle, textAlign: "right", whiteSpace: "nowrap" }}>
                     {["failed", "interrupted", "error", "cancelled"].includes(String(run.status).toLowerCase()) && <ResumeRunButton runId={run.run_id} />}
                     <ChevronRight size={14} style={{ color: "var(--muted)", verticalAlign: "middle" }} />
@@ -467,17 +347,12 @@ function RunRecordsList() {
               ))}
             </tbody>
           </table>
-
           <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", padding: "var(--space-3) 0", borderTop: "1px solid var(--border)" }}>
-            <button onClick={() => setPage((p) => Math.max(0, p - 1))} disabled={safePage === 0} style={pageBtnStyle(safePage === 0)}>
-              上一页
-            </button>
+            <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1} style={pageBtnStyle(page <= 1)}>上一页</button>
             <span style={{ fontSize: "var(--text-base)", color: "var(--muted)", fontFamily: "var(--font-mono)" }}>
-              {safePage + 1} / {totalPages} · 共 {filtered.length} 条
+              {page} / {totalPages} · 共 {total} 条（最近 500 次运行内）
             </span>
-            <button onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))} disabled={safePage >= totalPages - 1} style={pageBtnStyle(safePage >= totalPages - 1)}>
-              下一页
-            </button>
+            <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages} style={pageBtnStyle(page >= totalPages)}>下一页</button>
           </div>
         </>
       )}
