@@ -1,10 +1,12 @@
+> 2026-10-18：旧网关A/B/C（三个无凭据的第三方 Tushare 网关）及 tushare_official 已从代码中删除，现役 Tushare 兼容源为 promax、quantdata；路由见 backend/app/services/datasource/routing_table.json。下文为历史设计记录。
+
 # 实时浮盈展示（未结算推荐）
 
 日期：2026-07-27 · 状态：**已落地** · 端口：frontend-v2 (5174)
 
 > **2026-07-27 落地实现**：
 > - **统一路由**：`TushareProviderRouter` 改为 per-API 链序配置（`DEFAULT_API_ROUTES`），
->   `rt_k` 首选 xiaodefa（fastapic 无权限、ai_tool 504）。新数据源/调链序只改 Router 一处。
+>   `rt_k` 首选 旧网关B（旧网关A 无权限、旧网关C 504）。新数据源/调链序只改 Router 一处。
 > - **后端** `GET /api/recommendations/realtime-pnl`（`realtime_pnl_service.py`）：
 >   用 rt_k 当日实时 OHLC 合成当日临时日K，复用 outcome 结算同款 `_resolve_entry` 判入场价，
 >   以 rt_k 现价（close）算浮盈。20s TTL 缓存 + `?refresh=true` 强刷。纯展示，不落库。
@@ -12,7 +14,7 @@
 >   （holding 显示浮盈%、watching 显示距买点、已结算显示 —）。
 > - 实测：24 号 11 笔 pending 全部 holding，浮盈正常（002498 +10.94% / 605028 +9.57% 领涨）。
 >
-> **子 agent 评审修正的事实**：rt_k 原本因 `ai_tool_primary_apis` 被路由到 504 的 ai_tool
+> **子 agent 评审修正的事实**：rt_k 原本因 `旧网关C_primary_apis` 被路由到 504 的 旧网关C
 > （链序与可用性逆序），已通过 per-API 链序配置修正；rt_k 实测支持逗号分隔批量（1.7s 返回）。
 > 「实时盈亏」是从零新建（realtime_quote_client 生产零调用方），非迁移。
 
@@ -20,7 +22,7 @@
 
 `/history` 推荐历史页里，**未结算（pending）的推荐看不到任何盈亏**——只能看到推荐价，盈亏要等盘后 outcome 结算（依赖 T+N 日K同步 + `label_pending_outcomes`）才出现。这导致盘后到结算前有一段「盲区」，用户无法知道手里 pending 推荐现在浮盈浮亏。
 
-**目标**：对未结算推荐，基于 AI-tool 实时行情（`rt_k` 快照 / `rt_min` 分钟）**实时计算并展示浮盈浮亏**。
+**目标**：对未结算推荐，基于 旧网关C 实时行情（`rt_k` 快照 / `rt_min` 分钟）**实时计算并展示浮盈浮亏**。
 
 **边界（关键约束）：**
 
@@ -70,7 +72,7 @@
 ```
 
 - 数据源不可达 / 该票无实时价 → `status=unavailable`，前端降级显示「—」，不报错。
-- 入口加 30s 左右短缓存，避免前端频繁刷新打爆 AI-tool 限速。
+- 入口加 30s 左右短缓存，避免前端频繁刷新打爆 旧网关C 限速。
 
 ### 2. 前端：HistoryPage 增加「实时盈亏」列 + 顶部刷新按钮
 
@@ -97,5 +99,5 @@
 
 ## 风险
 
-- **AI-tool 限速**：pending 多时逐股 `rt_k` 可能触发限速 → 用短缓存 + 限制单次最多 N 只（如 50）缓解。
+- **旧网关C 限速**：pending 多时逐股 `rt_k` 可能触发限速 → 用短缓存 + 限制单次最多 N 只（如 50）缓解。
 - **entry 解析依赖日K**：`_resolve_entry` 的候选窗口吃 `future_bars`（日K）。若 T+1 日K未同步，买点触发判断可能滞后 → 实时浮盈对「今日刚推荐、明日才入场」的票会显示 `watching`，属预期。

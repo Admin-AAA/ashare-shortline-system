@@ -278,7 +278,7 @@ def test_fetch_recent_minute_kbars_permission_from_structured_router_error(monke
     class FakePro:
         def stk_mins(self, **kwargs):
             failure = ProviderFailure(
-                provider="ai_tool",
+                provider="gw_c",
                 api_name="stk_mins",
                 category=FailureCategory.PERMISSION,
                 retryable=False,
@@ -310,7 +310,7 @@ def test_fetch_recent_minute_kbars_network_error_is_not_permission(monkeypatch):
     class FakePro:
         def stk_mins(self, **kwargs):
             failure = ProviderFailure(
-                provider="ai_tool",
+                provider="gw_c",
                 api_name="stk_mins",
                 category=FailureCategory.NETWORK,
                 retryable=True,

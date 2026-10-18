@@ -5,7 +5,7 @@
 outcome 结算同款的 ``_resolve_entry`` 判定入场价。**纯展示，不落库、不改真实结算**——
 盘后 ``label_pending_outcomes`` 口径不受影响。
 
-数据源：rt_k 经统一 Router（首选 xiaodefa），见 ``TushareProviderRouter.DEFAULT_API_ROUTES``。
+数据源：rt_k 经统一 Router（首选 promax），见 ``TushareProviderRouter.DEFAULT_API_ROUTES``。
 """
 
 from __future__ import annotations

@@ -1,3 +1,5 @@
+> 2026-10-18：旧网关A/B/C（三个无凭据的第三方 Tushare 网关）及 tushare_official 已从代码中删除，现役 Tushare 兼容源为 promax、quantdata；路由见 backend/app/services/datasource/routing_table.json。下文为历史设计记录。
+
 # 统一数据源路由器（Unified Data Source Gateway）
 
 日期：2026-07-27 · 状态：待子 agent 评审 · 目标：所有数据源访问收敛到唯一 Router
@@ -6,7 +8,7 @@
 
 当前数据源访问是「多点直连」的乱象，每加一个数据源都要在多处接线：
 
-- **推荐流程 / 数据落库**：走 `get_pro()` → `TushareProviderRouter`（pro_http：fastapic/xiaodefa/ai_tool）。
+- **推荐流程 / 数据落库**：走 `get_pro()` → `TushareProviderRouter`（pro_http：旧网关A/旧网关B/旧网关C）。
 - **盘中实时模式**（`market_pool/core.py:get_market_universe_from_pool_with_realtime`、
   `market_data.py:_fetch_tushare_realtime_frame`）：直连 `ts.realtime_quote` 爬虫，**绕过 Router**。
 - **实时盈亏**（`realtime_quote_client.py`）：又一条独立的 realtime_quote 爬虫线，与 market_data.py 重复。
@@ -32,7 +34,7 @@
 | 场景 | 标的规模 | 最合适数据源 |
 |---|---|---|
 | 盘中实时模式候选股补当日快照 | 数百只 | realtime_quote 爬虫（批量 50/次） |
-| **/history pending 推荐实时盈亏** | **几十只特定股票** | **`rt_k`（pro 协议，走 Router，xiaodefa 支持）** |
+| **/history pending 推荐实时盈亏** | **几十只特定股票** | **`rt_k`（pro 协议，走 Router，旧网关B 支持）** |
 
 **关键结论**：实时盈亏是「几十只特定股票」，用 `rt_k`（pro 协议）走现有 Router 即可，
 **不需要 realtime_quote 爬虫**。爬虫只服务于盘中实时模式那一路。
@@ -41,11 +43,11 @@
 
 | 能力 | 可用源 | 说明 |
 |---|---|---|
-| `rt_k` 单股/小批量实时价 | xiaodefa（pro）✅ / fastapic 无权限 / ai_tool 504 | 需指定 ts_code，不支持全市场 |
-| `rt_min` 实时分钟 | xiaodefa ✅ / ai_tool 504 | 需 freq 参数 |
-| `stk_mins` 历史分钟K | ai_tool（504 中）/ xiaodefa ✅ | 已配 ai_tool 优先 |
+| `rt_k` 单股/小批量实时价 | 旧网关B（pro）✅ / 旧网关A 无权限 / 旧网关C 504 | 需指定 ts_code，不支持全市场 |
+| `rt_min` 实时分钟 | 旧网关B ✅ / 旧网关C 504 | 需 freq 参数 |
+| `stk_mins` 历史分钟K | 旧网关C（504 中）/ 旧网关B ✅ | 已配 旧网关C 优先 |
 | realtime_quote 爬虫（批量实时快照） | realtime.stockai888.top ✅ | 独立爬虫协议，绕开 Router |
-| `daily`/`stk_factor`/`cyq_perf` 等 | fastapic 主 / xiaodefa / ai_tool 备 | 现状 |
+| `daily`/`stk_factor`/`cyq_perf` 等 | 旧网关A 主 / 旧网关B / 旧网关C 备 | 现状 |
 
 ## 架构：能力路由层（Capability Gateway）
 
@@ -57,10 +59,10 @@
 ```
 capability            数据源链（按优先级，故障自动降级）          协议
 ──────────────────────────────────────────────────────────────────────
-daily_bar / factor / chip / ...   fastapic → xiaodefa → ai_tool   pro_http
-realtime_price（单股/小批量实时价）  xiaodefa(rt_k) → realtime_quote爬虫  pro + 爬虫兜底
+daily_bar / factor / chip / ...   旧网关A → 旧网关B → 旧网关C   pro_http
+realtime_price（单股/小批量实时价）  旧网关B(rt_k) → realtime_quote爬虫  pro + 爬虫兜底
 batch_realtime（候选股批量实时快照） realtime_quote爬虫               爬虫（唯一可行）
-minute_bar（历史分钟K）             ai_tool(stk_mins) → xiaodefa     pro_http
+minute_bar（历史分钟K）             旧网关C(stk_mins) → 旧网关B     pro_http
 news（公告）                       tushare(anns_d) → eastmoney爬虫   pro + 爬虫
 ```
 
@@ -77,7 +79,7 @@ news（公告）                       tushare(anns_d) → eastmoney爬虫   pro
 ### Phase 1（本次）：统一实时行情入口 + /history 实时盈亏
 
 1. 建 capability + Source adapter 架子（`app/services/datasrc/`）。
-2. `realtime_price` 能力：首选 `rt_k`（经 pro Router，xiaodefa），爬虫兜底。
+2. `realtime_price` 能力：首选 `rt_k`（经 pro Router，旧网关B），爬虫兜底。
 3. `batch_realtime` 能力：收敛 `market_data.py` + `realtime_quote_client.py` 两条重复爬虫线为
    一个 `realtime_quote_source` adapter，market_pool 盘中实时模式改调它。
 4. **/history 实时盈亏**：复用 `_resolve_entry` + `gateway.fetch("realtime_price", codes)` +
@@ -113,5 +115,5 @@ news（公告）                       tushare(anns_d) → eastmoney爬虫   pro
 ## 待子 agent 评审的开放问题
 
 1. capability 抽象放在 `tushare_transport` 层扩展，还是新建 `datasrc/` 独立包？
-2. `realtime_price` 用 rt_k 为主、爬虫为兜底，这个链序是否合理（rt_k 是 pro 更干净但依赖 xiaodefa）？
+2. `realtime_price` 用 rt_k 为主、爬虫为兜底，这个链序是否合理（rt_k 是 pro 更干净但依赖 旧网关B）？
 3. Phase 1 一次性切 market_pool 盘中实时模式，还是先只接 /history、market_pool 留到 Phase 2？

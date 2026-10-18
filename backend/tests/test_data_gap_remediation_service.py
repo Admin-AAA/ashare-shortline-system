@@ -35,8 +35,6 @@ def test_provider_activity_route_policy_does_not_claim_hard_coded_primary_provid
     activity = _provider_activity_delta({}, {})
 
     assert activity["route_policy"] == "通用接口按数据源配置优先级路由；特殊 API 按能力路由；失败时安全 fallback。"
-    assert "Fastapic" not in activity["route_policy"]
-    assert "ai-tool" not in activity["route_policy"]
 
 
 def test_chip_target_dates_cover_field_gaps_after_daily_rows_exist():

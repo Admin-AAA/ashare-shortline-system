@@ -105,8 +105,8 @@ def test_success_trace_requires_selected_provider():
 
 def test_router_success_first_provider_no_fallback():
     sink = svc.InMemoryTraceSink()
-    p1 = _FakeProvider("fastapic", 1, ("success", [[1, 2]]))
-    p2 = _FakeProvider("xiaodefa", 2, ("failure", FailureCategory.NETWORK, True, True))
+    p1 = _FakeProvider("gw_a", 1, ("success", [[1, 2]]))
+    p2 = _FakeProvider("gw_b", 2, ("failure", FailureCategory.NETWORK, True, True))
     r = _router([p1, p2], sink=sink)
     env = r.request("daily")
     assert env["code"] == 0
@@ -114,15 +114,15 @@ def test_router_success_first_provider_no_fallback():
     assert len(sink.traces) == 1
     t = sink.traces[0]
     assert t.final_outcome == FinalOutcome.SUCCESS
-    assert t.selected_provider == "fastapic"
+    assert t.selected_provider == "gw_a"
     assert t.attempt_count == 1
     assert t.fallback_count == 0
 
 
 def test_router_valid_empty_does_not_fallback():
     sink = svc.InMemoryTraceSink()
-    p1 = _FakeProvider("fastapic", 1, ("success", []))  # 合法空
-    p2 = _FakeProvider("xiaodefa", 2, ("success", [[9]]))
+    p1 = _FakeProvider("gw_a", 1, ("success", []))  # 合法空
+    p2 = _FakeProvider("gw_b", 2, ("success", [[9]]))
     r = _router([p1, p2], sink=sink)
     r.request("daily")
     assert p1.calls == 1 and p2.calls == 0  # 合法空不 fallback
@@ -133,8 +133,8 @@ def test_router_valid_empty_does_not_fallback():
 
 def test_router_fallback_chain_recorded():
     sink = svc.InMemoryTraceSink()
-    p1 = _FakeProvider("fastapic", 1, ("failure", FailureCategory.HTTP_SERVER, True, True))
-    p2 = _FakeProvider("xiaodefa", 2, ("failure", FailureCategory.CIRCUIT_OPEN, False, True))
+    p1 = _FakeProvider("gw_a", 1, ("failure", FailureCategory.HTTP_SERVER, True, True))
+    p2 = _FakeProvider("gw_b", 2, ("failure", FailureCategory.CIRCUIT_OPEN, False, True))
     p3 = _FakeProvider("quantdata", 3, ("success", [[5]]))
     r = _router([p1, p2, p3], sink=sink)
     env = r.request("daily")
@@ -147,15 +147,15 @@ def test_router_fallback_chain_recorded():
     assert t.attempts[1].outcome == DataSourceAttemptOutcome.SKIPPED_BREAKER
     assert t.attempts[1].failure_category == FailureCategory.CIRCUIT_OPEN.value
     # fallback 链
-    assert t.attempts[0].fallback_to == "xiaodefa"
+    assert t.attempts[0].fallback_to == "gw_b"
     assert t.attempts[1].fallback_to == "quantdata"
     assert t.fallback_count == 2
 
 
 def test_router_non_retryable_failure_stops_chain():
     sink = svc.InMemoryTraceSink()
-    p1 = _FakeProvider("fastapic", 1, ("failure", FailureCategory.INVALID_REQUEST, False, False))
-    p2 = _FakeProvider("xiaodefa", 2, ("success", [[1]]))
+    p1 = _FakeProvider("gw_a", 1, ("failure", FailureCategory.INVALID_REQUEST, False, False))
+    p2 = _FakeProvider("gw_b", 2, ("success", [[1]]))
     r = _router([p1, p2], sink=sink)
     with pytest.raises(TushareProviderError):
         r.request("daily")
@@ -168,7 +168,7 @@ def test_router_non_retryable_failure_stops_chain():
 
 def test_router_no_sink_behavior_unchanged():
     # 无 sink：不发 trace，行为与改动前一致
-    p1 = _FakeProvider("fastapic", 1, ("success", [[1]]))
+    p1 = _FakeProvider("gw_a", 1, ("success", [[1]]))
     r = _router([p1], sink=None)
     env = r.request("daily")
     assert env["code"] == 0  # 不抛、不依赖 sink
@@ -178,7 +178,7 @@ def test_router_trace_persist_failure_does_not_break_data():
     class _BadSink:
         def persist(self, trace):
             raise RuntimeError("db down")
-    p1 = _FakeProvider("fastapic", 1, ("success", [[1]]))
+    p1 = _FakeProvider("gw_a", 1, ("success", [[1]]))
     r = _router([p1], sink=_BadSink())
     env = r.request("daily")  # 持久化失败不影响取数
     assert env["code"] == 0
@@ -205,7 +205,7 @@ def _db():
 
 def _trace(tid="t1", corr="c1", final=FinalOutcome.SUCCESS, attempts=None):
     attempts = attempts or (
-        AttemptContract(ordinal=1, provider="fastapic", outcome=DataSourceAttemptOutcome.SUCCESS, duration_ms=10),
+        AttemptContract(ordinal=1, provider="gw_a", outcome=DataSourceAttemptOutcome.SUCCESS, duration_ms=10),
     )
     return DataSourceRequestTrace(
         trace_id=tid, correlation_id=corr, operation_name="daily",

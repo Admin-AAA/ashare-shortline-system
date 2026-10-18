@@ -142,7 +142,7 @@ class ProviderConfig:
     # the provider name so legacy DB overrides remain compatible while two
     # credentials can be exposed as two independent data sources.
     source: str = ""
-    # 路由优先级：数值越小越优先。ai_tool_primary_apis 命中的 API 会整体偏向 ai_tool，
+    # 路由优先级：数值越小越优先。per-API 链见 DEFAULT_API_ROUTES / routing_table.json，
     # 其余按 priority 升序尝试；同优先级按注册顺序。enabled 覆盖见 TushareProviderRouter。
     priority: int = 100
 
@@ -833,10 +833,10 @@ class TushareProviderRouter:
     # 默认 per-API 选路链：{api_name: [provider 名按尝试顺序]}。
     # 未列出的 API 回落到按 provider priority 升序。
     DEFAULT_API_ROUTES: Mapping[str, tuple[str, ...]] = {
-        "rt_k": ("promax", "ai_tool", "xiaodefa", "fastapic", "quantdata"),
-        "stk_mins": ("promax", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
-        "rt_min": ("promax", "ai_tool", "fastapic", "quantdata", "xiaodefa"),
-        "anns_d": ("ai_tool", "fastapic", "quantdata", "xiaodefa"),
+        "rt_k": ("promax", "quantdata"),
+        "stk_mins": ("promax", "quantdata"),
+        "rt_min": ("promax", "quantdata"),
+        "anns_d": ("quantdata",),
         # Promax 支持标准辅助状态适配器所用的批量契约，排第一；quantdata 兜底。
         "fina_indicator": ("promax", "quantdata"),
         "ths_member": ("promax", "quantdata"),

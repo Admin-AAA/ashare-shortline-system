@@ -888,10 +888,7 @@ def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict
 # 参与路由调序的 tushare pro provider（realtime_quote 是独立爬虫，不在 Router 链里，不调序）。
 _ROUTABLE_PROVIDERS = (
     "promax",
-    "fastapic",
-    "xiaodefa",
     "quantdata",
-    "ai_tool",
 )
 
 
@@ -940,7 +937,7 @@ def _provider_health_rows() -> list[dict[str, Any]]:
 def test_provider(db: Session, provider_name: str) -> dict[str, Any]:
     """探针测试某 provider 当前是否可用，结果写入 data_source_health。
 
-    - pro_http 源（promax/fastapic/xiaodefa/ai_tool）：直连该 provider 调单股票 stock_basic，
+    - pro_http 源（promax/quantdata）：直连该 provider 调单股票 stock_basic，
       绕过 Router 选路，专测这一源的连通 + 鉴权。
     - realtime_quote：调 fetch_realtime_quotes(["000001"]) 测爬虫端点。
     返回 {ok, latency_ms, status, error}；provider 未接入抛 KeyError。

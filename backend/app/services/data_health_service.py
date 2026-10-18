@@ -681,7 +681,7 @@ def _data_source_health(db: Session) -> dict[str, Any]:
 
     # 评分只扣明确失败。未测试代表“尚无观测证据”，继续展示但不扣分；
     # 数据是否真的缺失已由 data_domains / recent_coverage 单独计分，避免重复惩罚。
-    # Fastapic 与 ai-tool 属于同一逻辑 Tushare 源下的两个独立故障域：只要其中
+    # promax 与 quantdata 属于同一逻辑 Tushare 源下的两个独立故障域：只要其中
     # 一个健康，Router 仍有可用路径，单个 Provider 降级不再重复扣分。
     all_entries = working + broken + untested + disabled
     provider_entries = [

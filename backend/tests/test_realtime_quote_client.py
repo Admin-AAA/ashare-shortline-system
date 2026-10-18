@@ -32,7 +32,7 @@ def _fake_df() -> pd.DataFrame:
 def _force_enabled(monkeypatch):
     # 单测与本机管理面开关（DB override）解耦
     monkeypatch.setattr(rq, "_enabled_override", lambda: True)
-    monkeypatch.setattr(rq.get_settings(), "tushare_fastapic_token", "test-token")
+    monkeypatch.setattr(rq.get_settings(), "tushare_realtime_quote_token", "test-token")
 
 
 @pytest.fixture(autouse=True)

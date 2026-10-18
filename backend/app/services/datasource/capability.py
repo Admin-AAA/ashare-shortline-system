@@ -3,7 +3,7 @@
 The routing table (``routing_table.json`` next to this file) is the single source
 of truth for which provider serves which API and in what order:
 
-    {"apis": {"daily": {"order": ["promax", "fastapic"], "unsupported": ["quantdata"]}}}
+    {"apis": {"daily": {"order": ["promax", "quantdata"], "unsupported": ["newgw"]}}}
 
 * ``order``       providers tried first, in order.
 * ``unsupported`` providers never tried for that API (probe showed no permission/error).
