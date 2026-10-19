@@ -7,13 +7,6 @@ import "../styles/horizon.css";
 import { RunPanel, PickDrawer, PickStatusLine } from "./HorizonExtras";
 
 type Target = { sid: string; date: string; code: string };
-/** owner 提供的首批出票说明（接口暂无该字段） */
-const FIRST_BATCH: Record<string, string> = {
-  "mid-incentive-option": "首批：10-19 收盘后出票",
-  "mid-block-trade-premium": "每晚约 21:00 大宗数据发布后选股，次日开盘买",
-  "long-lowturn-lowvol": "首批：10-30 月末出票",
-  "long-dividend-lowvol": "首批：10-30 月末出票",
-};
 const SCHEDULE_OVERRIDE: Record<string, string> = { "mid-block-trade-premium": "每晚约 21:00 大宗数据发布后选股" };
 
 type H = "mid" | "long";
@@ -194,7 +187,7 @@ function TodayView({ batches, list, onPick }: { batches: HorizonBatch[]; list: H
           <div className="hz-sechead"><b>还没有出票的策略</b><span className="hz-muted">{noPicks.length} 个</span></div>
           <div className="hz-rej">{noPicks.map((s) => (
             <div key={s.id} className="hz-rej__item hz-rej__item--wait"><div className="hz-rej__name">{s.name}</div>
-              <div className="hz-rej__why">{s.next_batch_note ?? FIRST_BATCH[s.id] ?? `${SCHEDULE_OVERRIDE[s.id] ?? SCHEDULE[s.schedule] ?? s.schedule}出票，暂无批次`}</div></div>))}</div>
+              <div className="hz-rej__why">{s.next_batch_note ?? `${SCHEDULE_OVERRIDE[s.id] ?? SCHEDULE[s.schedule] ?? s.schedule}出票，暂无批次`}</div></div>))}</div>
         </section>)}
     </>
   );
