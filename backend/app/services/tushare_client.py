@@ -1625,7 +1625,8 @@ def fetch_index_daily(
             "open": _f(row.get("open")),
             "high": _f(row.get("high")),
             "low": _f(row.get("low")),
-            "volume": _f(row.get("volume")),
+            # Tushare index_daily 的成交量字段叫 vol（手），不是 volume；只读 volume 会恒写 0。
+            "volume": _f(row.get("vol") if row.get("vol") is not None else row.get("volume")),
         })
     return result
 
