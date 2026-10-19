@@ -59,3 +59,34 @@
 .hz-filters { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
 .hz-filters .hz-select { margin-left: 0; }
 .hz-hl td { background: color-mix(in srgb, var(--info) 10%, transparent); }
+.hz-iconbtn { all: unset; cursor: pointer; margin-left: auto; color: var(--muted); display: inline-flex; }
+.hz-btn { background: var(--accent); color: #fff; border: 0; border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+.hz-btn:disabled { opacity: .5; cursor: default; }
+.hz-btn--ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+.hz-run__form { display: grid; gap: var(--space-3); margin-bottom: var(--space-3); }
+.hz-run__strats { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.hz-chk { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; border: 1px solid var(--border); border-radius: 999px; padding: 3px 10px; cursor: pointer; }
+.hz-chk.on { border-color: var(--accent); color: var(--accent); }
+.hz-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--warning); font-size: 13px; }
+.hz-err { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); border-radius: 8px; padding: 8px 12px; margin-top: 8px; font-size: 13px; }
+.hz-run__res { margin-top: var(--space-3); font-size: 13px; } .hz-run__res ul { margin: 6px 0 0; padding-left: 18px; line-height: 1.8; }
+.hz-warnline { color: var(--warning); font-size: 13px; }
+.hz-row { cursor: pointer; } .hz-row:hover td { background: var(--surface-soft); }
+.hz-row--cancel td { color: var(--muted); }
+.hz-drawer-mask { position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 60; display: flex; justify-content: flex-end; }
+.hz-drawer { width: min(720px, 100vw); height: 100%; overflow-y: auto; background: var(--surface-elevated, var(--surface)); border-left: 1px solid var(--border); padding: var(--space-5); box-sizing: border-box; font-size: 14px; }
+.hz-drawer__head { display: flex; align-items: flex-start; } .hz-drawer__head h3 { margin: 2px 0 0; font-size: 18px; }
+.hz-drawer__body { display: grid; gap: var(--space-3); margin-top: var(--space-3); }
+.hz-dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; } .hz-dl > div { background: var(--surface-soft); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; display: grid; gap: 2px; } .hz-dl span { color: var(--muted); font-size: 12px; }
+.hz-k { width: 100%; height: auto; background: var(--surface-soft); border-radius: 8px; }
+.hz-k line { stroke-width: 1; } .hz-k__up line, .hz-k__up rect { stroke: var(--market-up); fill: var(--market-up); } .hz-k__dn line, .hz-k__dn rect { stroke: var(--market-down); fill: var(--market-down); }
+.hz-k__hold { fill: color-mix(in srgb, var(--info) 10%, transparent); }
+.hz-k__axis { fill: var(--muted); font-size: 11px; }
+.hz-k__m circle { stroke: var(--surface); stroke-width: 2; } .hz-k__m text { font-size: 12px; font-weight: 600; }
+.hz-k__m--buy circle { fill: var(--info); } .hz-k__m--buy text { fill: var(--info); }
+.hz-k__m--sell circle { fill: var(--warning); } .hz-k__m--sell text { fill: var(--warning); }
+.hz-other { margin: 0; padding-left: 18px; } .hz-other .hz-link { margin-top: 0; }
+.hz-pager { display: flex; align-items: center; gap: 8px; justify-content: center; font-size: 13px; }
+.hz-bar--sum { border-top: 1px dashed var(--border); padding-top: 6px; margin-top: 2px; grid-template-columns: 128px 1fr 64px 56px; }
+.hz-reason { white-space: normal !important; min-width: 280px; font-size: 12px; }
+.hz-rej__item--wait { border-left-color: var(--info); }
