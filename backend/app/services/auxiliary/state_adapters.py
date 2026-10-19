@@ -53,6 +53,47 @@ from app.services.auxiliary.production import (
 )
 
 
+
+logger = logging.getLogger(__name__)
+
+
+def _margin_fill_missing_exchanges(frame: Any, target: str) -> Any:
+    """2026-10-19：promax margin_detail 实测只回 SH+BJ（无 SZ，10-16 仅 2001 行），quantdata 日限时整日缺深市。
+
+    主源缺 SH 或 SZ 任一交易所时，经统一网关 akshare 备源（交易所官方明细，7f4c394）补齐缺失交易所
+    的代码；主源已有的代码保持主源值（字段更全）。备源也失败则原样返回，由覆盖率闸门判定不完整。
+    """
+    import pandas as pd
+
+    have = set()
+    if frame is not None and not frame.empty and "ts_code" in frame.columns:
+        have = set(frame["ts_code"].astype(str).str[-2:])
+    if {"SH", "SZ"} <= have:
+        return frame
+    try:
+        from app.services.datasource.akshare_backup import backup_gateway
+
+        res = backup_gateway().fetch_first(
+            "tushare.margin_detail", {"params": {"trade_date": target}, "fields": ""}, allow_stale=False
+        )
+        rows = list(res.rows or []) if res.provider is not None else []
+    except Exception:  # noqa: BLE001 - backup is best-effort; coverage gate decides completeness
+        logger.warning("margin_detail %s backup fill failed", target, exc_info=True)
+        return frame
+    if not rows:
+        logger.warning("margin_detail %s primary missing %s, backup returned nothing", target, {"SH", "SZ"} - have)
+        return frame
+    backup = pd.DataFrame.from_records(rows)
+    existing = set(frame["ts_code"].astype(str)) if frame is not None and not frame.empty else set()
+    add = backup[~backup["ts_code"].astype(str).isin(existing)]
+    logger.warning(
+        "margin_detail %s primary exchanges=%s; filled %d rows from backup %s",
+        target, sorted(have), len(add), res.provider,
+    )
+    if frame is None or frame.empty:
+        return add.reset_index(drop=True)
+    return pd.concat([frame, add], ignore_index=True)
+
 class TushareStateClientPort(Protocol):
     """Subset of the Tushare client used by injected state providers."""
 
@@ -523,6 +564,7 @@ class TushareStateProvider:
     def margin_detail(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         target = _compact_day(request.trade_date)
         frame = self._client.margin_detail(trade_date=target)
+        frame = _margin_fill_missing_exchanges(frame, target)
         if frame is None or frame.empty:
             return ()
         return tuple(
@@ -683,11 +725,13 @@ class TushareStateProvider:
             return ()
         if frame is None or frame.empty:
             return ()
-        wanted = set(request.requested_codes)
+        # 2026-10-19：以前按 requested_codes 过滤后只写请求的几只（10-16 某次 4 只候选的请求只写 4 行），
+        # 之后全市场刷新因“当日已有行=新鲜”被跳过。上游本就是一次拉全市场，这里全量落库；
+        # 读侧 _StateViews 仍按 requested_codes 取。另见 production.py auction minimum_record_count。
         rows: list[dict[str, Any]] = []
         for _, item in frame.iterrows():
             code = str(item.get("ts_code") or "").split(".")[0]
-            if len(code) != 6 or (wanted and code not in wanted):
+            if len(code) != 6:
                 continue
             rows.append({
                 "code": code,

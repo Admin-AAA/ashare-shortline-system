@@ -355,16 +355,16 @@ def _to_float(value: str | None) -> float | None:
 # 这些数据集失败只告警（status=known_gap），不再把整次补数任务记为 partial_failed；
 # 其余数据集失败（含可重试的覆盖不足）仍按 failed 处理。
 _KNOWN_AUX_SOURCE_GAPS: dict[str, str] = {
-    "news_announcement": "Tushare anns_d 40203 无权限；公告改由东方财富/巨潮/xiaoshi 补数链覆盖",
     "share_float": "promax share_float invalid_params、官方无权限；改由 xiaoshi restricted_unlock 兜底",
-    "holder_trade": "promax stk_holdertrade invalid_params / unknown_schema，长期不可用",
     "broker_recommend": "promax invalid_params、官方无权限，已从这两源路由排除；仅 quantdata 可用但该源在数据源管理中停用（未被任何策略使用）",
 }
 
 
 # 已知长期缺口中耗时显著的数据集（实测 2026-10-15：holder_trade 单独约 17.5s，结果恒为 0 行失败）。
 # 非周一跳过（DB 输出不变：失败时本就 0 行写入）；周一照常请求，用于发现上游恢复。
-_SLOW_KNOWN_GAPS: frozenset[str] = frozenset({"holder_trade"})
+# 2026-10-19：holder_trade 修复（contract 接受上游 11 字段 schema）后移出已知缺口，每日照常请求、失败如实计失败；
+# news_announcement 同日修复（raw 快照路径接 akshare 备源），也移出。
+_SLOW_KNOWN_GAPS: frozenset[str] = frozenset()
 
 
 def _skip_slow_known_gaps(datasets: tuple[str, ...], trade_date: str) -> tuple[tuple[str, ...], list[str]]:

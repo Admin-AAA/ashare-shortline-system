@@ -53,6 +53,7 @@ EVENT_TABLES: list[tuple[str, str, int]] = [
 # 事件类数据的线上真源是 auxiliary_snapshot_batches（block_trades/holder_trades 旧表已不再写入，设计如此），
 # 按数据集看最近一次 complete 批次的年龄
 SNAPSHOT_MAX_AGE_DAYS = {"block_trade": 4, "holder_trade": 4, "share_float": 4, "news_announcement": 4}
+# 注意：以上按 fetched_at（抓取时间）计龄；回补旧分区也会刷新它，但日更若当日失败会被下面的 24h 全失败规则抓到。
 
 
 def _norm(v: Any) -> str | None:
@@ -113,16 +114,22 @@ def check_snapshot_datasets(db) -> list[dict[str, Any]]:
     rows = db.execute(text(
         "SELECT dataset, MAX(CASE WHEN status='complete' THEN fetched_at END), "
         "SUM(status<>'complete' AND fetched_at >= NOW() - INTERVAL 3 DAY), "
-        "MAX(CASE WHEN status<>'complete' THEN failure_code END) "
+        "MAX(CASE WHEN status<>'complete' THEN failure_code END), "
+        "SUM(status<>'complete' AND fetched_at >= UTC_TIMESTAMP() - INTERVAL 1 DAY), "
+        "SUM(status='complete' AND fetched_at >= UTC_TIMESTAMP() - INTERVAL 1 DAY) "
         "FROM auxiliary_snapshot_batches GROUP BY dataset")).all()
     out = []
     now = datetime.now()
-    for ds, last_ok, recent_fail, code in rows:
+    for ds, last_ok, recent_fail, code, fail_1d, ok_1d in rows:
         limit = SNAPSHOT_MAX_AGE_DAYS.get(str(ds), 4)
         age = (now - last_ok).days if last_ok else None
         issues = []
         if age is None or age > limit:
             issues.append(f"最近成功快照 {last_ok}（{age} 天前），近 3 天失败 {int(recent_fail or 0)} 次，失败码 {code}")
+        elif int(fail_1d or 0) and not int(ok_1d or 0):
+            # 2026-10-19：holder_trade 10-12 起每天 unknown_schema 0 行，但 10-09 的成功批次让年龄阈值晚几天才报；
+            # 近 24h 只有失败、没有任何成功批次即告警，不等年龄超阈值。
+            issues.append(f"近 24 小时快照全部失败 {int(fail_1d)} 次（0 次成功），失败码 {code}")
         out.append({"table": f"snapshot:{ds}", "latest": str(last_ok)[:19] if last_ok else None,
                     "age_days": age, "issues": issues})
     return out

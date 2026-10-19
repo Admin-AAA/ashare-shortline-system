@@ -78,6 +78,12 @@ EVENT_SNAPSHOT_CONTRACTS: Mapping[str, TushareSinglePageEventContract] = {
             "ts_code", "ann_date", "holder_name", "holder_type", "in_de", "change_vol", "change_ratio",
             "after_share", "after_ratio", "avg_price", "total_share", "begin_date", "close_date",
         ),
+        # promax/quantdata 实测（2026-10-19，start/end 30 天窗 2301 行）只回 11 字段，无 begin_date/close_date；
+        # 旧 contract 只认 13 字段 → 10-09 后每日 event_provider_unknown_schema、0 行。
+        alternate_field_schemas=((
+            "ts_code", "ann_date", "holder_name", "holder_type", "in_de", "change_vol", "change_ratio",
+            "after_share", "after_ratio", "avg_price", "total_share",
+        ),),
         documented_single_request_cap=3000,
         documentation_url="https://tushare.pro/document/2?doc_id=175",
     ),
@@ -94,6 +100,14 @@ EVENT_SNAPSHOT_CONTRACTS: Mapping[str, TushareSinglePageEventContract] = {
             "ts_code", "symbol", "name", "title", "ann_type",
             "ann_date", "ann_time", "url",
         ),
+        # akshare 备源（stock_notice_report，7f4c394）同 8 字段 + source 列（2026-10-19 实测）。
+        alternate_field_schemas=((
+            "ts_code", "symbol", "name", "title", "ann_type", "ann_date", "ann_time", "url", "source",
+        ),),
+        # akshare 按页取尽整日全市场（09-01 实测 68 页 6722 行），2000 单次上限只约束 Tushare 本体。
+        exhaustive_field_schemas=((
+            "ts_code", "symbol", "name", "title", "ann_type", "ann_date", "ann_time", "url", "source",
+        ),),
         documented_single_request_cap=2000,
         documentation_url="https://tushare.pro/document/2?doc_id=176",
     ),

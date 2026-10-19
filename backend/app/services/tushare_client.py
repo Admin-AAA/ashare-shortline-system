@@ -303,16 +303,58 @@ class _TushareSession:
             raise TushareRawEnvelopeError(
                 "tushare_raw_invalid_request", "raw fields request must be a string"
             )
-        envelope = self._router.request(
-            api_name,
-            params=dict(params or {}),
-            fields=fields,
-        )
+        if api_name in _akshare_backup_apis():
+            envelope = self._raw_envelope_with_akshare_backup(api_name, fields=fields, params=dict(params or {}))
+        else:
+            envelope = self._router.request(
+                api_name,
+                params=dict(params or {}),
+                fields=fields,
+            )
         return TushareRawEnvelope.from_envelope(
             api_name=api_name,
             requested_fields=fields,
             envelope=envelope,
         )
+
+    def _raw_envelope_with_akshare_backup(
+        self, api_name: str, *, fields: str, params: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Raw 快照路径也走 akshare 备源（与 _call_with_akshare_backup 同一网关/熔断/限速）。
+
+        2026-08-17 起 anns_d 在 promax/quantdata 均 unsupported，fetch_raw 只走 router → 每天
+        event_provider_request_failed，公告快照停更。备源行原样带 ``source`` 列，由事件 contract
+        的 alternate_field_schemas 显式核准。
+        """
+        primary_exc: BaseException | None = None
+        try:
+            envelope = self._router.request(api_name, params=params, fields=fields)
+            data = envelope.get("data") if isinstance(envelope, Mapping) else None
+            if isinstance(data, Mapping) and data.get("items"):
+                return envelope
+        except Exception as exc:  # noqa: BLE001 - fall through to backup; re-raised if backup also fails
+            primary_exc = exc
+            envelope = None
+        from app.services.datasource.akshare_backup import backup_gateway
+
+        res = backup_gateway().fetch_first(
+            f"tushare.{api_name}", {"params": dict(params), "fields": fields}, allow_stale=False
+        )
+        if res.provider is not None and res.rows:
+            rows = [dict(r) for r in res.rows]
+            cols = list(rows[0].keys())
+            for r in rows[1:]:
+                for k in r:
+                    if k not in cols:
+                        cols.append(k)
+            logger.warning(
+                "tushare raw %s %s; served by backup %s (%d rows)", api_name,
+                f"failed ({type(primary_exc).__name__})" if primary_exc else "empty", res.provider, len(rows),
+            )
+            return {"code": 0, "msg": "", "data": {"fields": cols, "items": [[r.get(c) for c in cols] for r in rows]}}
+        if primary_exc is not None:
+            raise primary_exc
+        return envelope
 
     def _call(self, api_name: str, *, fields: str = "", params: Mapping[str, Any]) -> pd.DataFrame:
         if api_name == "fina_indicator_vip" and params.get("period"):
