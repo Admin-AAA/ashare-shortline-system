@@ -123,6 +123,9 @@ def _reap_orphan_running_flow_runs() -> None:
 
 
 def main() -> None:
+    from app.core.shared_breaker import mark_live_process
+
+    mark_live_process()  # live breaker namespace; inherited by spawned flow-run subprocesses
     _pin_application_revision()
     subprocess.run(
         [sys.executable, "-m", "prefect", "work-pool", "create", "--type", "process", "ashare-local"],

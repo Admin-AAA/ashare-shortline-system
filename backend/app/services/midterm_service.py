@@ -30,13 +30,14 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "weekly",
     },
-    # §91 事件型（scripts/midterm/lt_research12.py 预注册 6 版中达标的 2 版；同市值五分位对照算超额）
+    # §91 事件型（scripts/midterm/lt_research12.py 预注册 6 版中达标的 2 版；同市值五分位对照算超额；mid 版 §100 加金额≥0.5%）
     "mid-repurchase-plan": {
-        "name": "回购预案事件（持20日）",
+        # §100 预注册 RP_r05（scripts/midterm/lt_research18.py，未调参）：在 §91 R_plan_h20 基础上只保留金额上限≥总市值0.5%的预案
+        "name": "回购预案事件（金额≥市值0.5%，持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的股票回购「预案」公告（同一股票365天内只取第一次），剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按回购金额上限占总市值比例从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的股票回购「预案」公告（同一股票365天内只取第一次），只保留回购金额上限≥总市值0.5%的（剔除象征性小额回购），剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按回购金额上限占总市值比例从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。",
         "kind": "repurchase",
-        "min_ratio": 0.0,
+        "min_ratio": 0.005,
         "k_slots": 20,
         "max_new": 5,
         "hold_days": 20,
@@ -53,6 +54,40 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §103 业绩预告正向漂移（scripts/midterm/lt_research20.py F_any_h20，预注册 3 版中采纳的一版，未调参；实盘候选 app/services/midterm_forecast.py）
+    "mid-forecast-beat": {
+        "name": "业绩预告首次预喜（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的业绩预告，同一报告期只认公司第一次预告（修正公告不算）：类型为预增/扭亏/略增、预告净利同比增幅下限>0、预告净利润下限>0。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按预告增幅下限（封顶300%）从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。信号集中在1/4/7/10月预告季。",
+        "kind": "forecast_beat",
+        "k_slots": 20,
+        "max_new": 5,
+        "hold_days": 20,
+        "schedule": "daily",
+    },
+    # §109 股权激励草案（含股票期权）公告后漂移（scripts/midterm/lt_research23.py INC_opt_h20，预注册 3 版中采纳的一版，未调参；实盘候选 app/services/midterm_incentive.py）
+    "mid-incentive-option": {
+        "name": "股票期权激励草案首次公告（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今巨潮资讯新披露的股权激励计划「草案」（修订/更正/调整/终止类不算），只认公司180天内第一次披露、且计划含股票期权（期权或期权+限制性股票）的。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按公告前20日涨幅从低到高（优先还没提前大涨的），次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。",
+        "kind": "incentive_option",
+        "k_slots": 20,
+        "max_new": 5,
+        "hold_days": 20,
+        "schedule": "daily",
+    },
+    # §114 大宗交易溢价成交后漂移（scripts/midterm/lt_research25.py BT_prem_h20，预注册 3 版中采纳的一版，未调参；实盘候选 app/services/midterm_block_trade.py）
+    # Tushare 大宗交易约 21:00 发布：17:35 盘后流水线通常 no_data，需 21:00 后 / 次日开盘前调用 generate_block_trade_picks(db, T) 出票
+    "mid-block-trade-premium": {
+        "name": "大宗交易溢价成交（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日晚间（交易所/Tushare 约21:00 发布当日大宗交易后），汇总每只股票当天全部大宗成交：成交量加权的大宗成交价不低于当日收盘价（溢价或平价成交），且大宗成交总额≥流通市值0.5%。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按大宗成交额占流通市值比例从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。",
+        "kind": "block_trade_premium",
+        "k_slots": 20,
+        "max_new": 5,
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     "long-repurchase-big": {
         "name": "大额回购预案（持60日）",
         "horizon": "long",
@@ -63,6 +98,26 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "max_new": 5,
         "hold_days": 60,
         "schedule": "daily",
+    },
+    # §98 防御型异象（scripts/midterm/lt_research16.py LTV_h60，预注册 3 版中唯一达标，未调参）
+    "long-lowturn-lowvol": {
+        "name": "低换手+低波动月度组合（持60日）",
+        "horizon": "long",
+        "summary": "每月最后一个交易日收盘后，在全A（剔除北交所）总市值排名第200–1500的股票里，剔除ST、上市不足250个交易日、股价<3元；按近60日平均换手率排名 + 近60日日收益波动率排名（都越低越好）相加，取得分最低的10只，次日开盘等权买入、各持有60个交易日。仍在持有期内的不重复买、也不顺延补位（与回测一致）。",
+        "kind": "lowturn_lowvol",
+        "top_n": 10,
+        "hold_days": 60,
+        "schedule": "month_end",
+    },
+    # §102 红利低波（scripts/midterm/lt_research19.py DVLV_h60，预注册 3 版中唯一达标，未调参）
+    "long-dividend-lowvol": {
+        "name": "红利低波月度组合（股息率+低波动，持60日）",
+        "horizon": "long",
+        "summary": "每月最后一个交易日收盘后，在全A（剔除北交所）总市值前1500名里，剔除ST、上市不足250个交易日、股价<3元，只看近12个月股息率（dv_ttm，取当周或上周最近一期周度快照）>0 的股票；按股息率排名（越高越好）+ 近60日日收益波动率排名（越低越好）相加，取得分最低的10只，次日开盘等权买入、各持有60个交易日。仍在持有期内的不重复买、也不顺延补位（与回测一致）。",
+        "kind": "dividend_lowvol",
+        "top_n": 10,
+        "hold_days": 60,
+        "schedule": "month_end",
     },
 }
 
@@ -75,6 +130,9 @@ def is_signal_day(strategy_id: str, d: _dt.date) -> bool:
     schedule = STRATEGIES[strategy_id]["schedule"]
     if schedule == "daily":
         return True
+    if schedule == "month_end":  # 无交易日历时的近似：下一个工作日已是下个月（generate_picks 用 trade_calendar 精确判断）
+        nxt = d + _dt.timedelta(days=3 if d.weekday() == 4 else 1)
+        return d.weekday() < 5 and nxt.month != d.month
     if d.weekday() != 4:
         return False
     return schedule == "weekly" or d.day <= 7
@@ -327,13 +385,211 @@ def earnings_accel_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return sorted(res, key=lambda x: (-x["score"], x["code"]))
 
 
-def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
-    """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。"""
+def _is_month_end(db, as_of: str) -> bool:
+    """as_of 是否为当月最后一个交易日（trade_calendar SSE；日历缺失时退回工作日近似）。"""
+    nxt = db.execute(text(
+        "SELECT MIN(cal_date) FROM trade_calendar WHERE exchange='SSE' AND is_open=1 AND cal_date>:d"),
+        {"d": as_of.replace("-", "")}).scalar()
+    if not nxt:
+        d = _dt.date.fromisoformat(as_of)
+        nd = d + _dt.timedelta(days=3 if d.weekday() == 4 else 1)
+        return nd.month != d.month
+    return str(nxt)[4:6] != as_of[5:7]
+
+
+def lowturn_lowvol_candidates(db, as_of: str, top_n: int = 10) -> list[dict[str, Any]] | None:
+    """§98 lt_research16 LTV 口径：非北交所按折算总市值从大到小排名第 200–1500、非ST、上市≥250交易日、收盘≥3；
+    近60日均换手率秩 + 近60日日收益标准差秩（都低好，平均秩；同分按波动率低者优先）之和最低的 top_n 只。数据不足返回 None。"""
+    import pandas as pd
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 300"), {"d": as_of})]
+    if len(dates) < 251 or dates[0] != as_of:
+        return None
+    bd = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
+    if not bd:
+        return None
+    mv = pd.DataFrame(db.execute(text("""
+        SELECT b.code, b.total_mv, kb.close AS close_bd, kt.close AS close_t
+        FROM daily_basic b
+        JOIN daily_kbars kt ON kt.code=b.code AND kt.trade_date=:d
+        LEFT JOIN daily_kbars kb ON kb.code=b.code AND kb.trade_date=:bd
+        WHERE b.trade_date=:bd AND b.total_mv>0 AND kt.close>0 AND LEFT(b.code,1) NOT IN ('4','8','9')
+    """), {"bd": bd, "d": as_of}).mappings().all())
+    if mv.empty:
+        return None
+    mv["close_bd"] = pd.to_numeric(mv["close_bd"], errors="coerce")
+    ratio = (mv["close_t"].astype(float) / mv["close_bd"]).where(mv["close_bd"] > 0, 1.0)
+    mv["mvd"] = mv["total_mv"].astype(float) * ratio  # = 总股本 × 当日收盘（研究口径）
+    mv["rk_mv"] = mv["mvd"].rank(ascending=False, method="first")
+    st = {r[0] for r in db.execute(text(
+        "SELECT code FROM stock_metadata_history WHERE name LIKE '%ST%' AND effective_from<=:d "
+        "AND (effective_to IS NULL OR effective_to>:d)"), {"d": as_of})}
+    mv = mv[(mv["rk_mv"] >= 200) & (mv["rk_mv"] <= 1500) & (mv["close_t"].astype(float) >= 3) & ~mv["code"].isin(st)]
+    if mv.empty:
+        return []
+    k = pd.DataFrame(db.execute(text(
+        "SELECT code, trade_date, turnover_rate, pct_chg FROM daily_kbars "
+        "WHERE trade_date>=:d0 AND trade_date<=:d AND close>0 AND code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"d0": dates[-1], "d": as_of, "codes": mv["code"].tolist()}).mappings().all())
+    if k.empty:
+        return None
+    k = k.sort_values(["code", "trade_date"])
+    age = k.groupby("code").size()
+    k = k[k["code"].isin(age[age >= 251].index)].groupby("code").tail(60)
+    g = k.groupby("code").agg(n=("pct_chg", "size"), turn60=("turnover_rate", "mean"),
+                              vol60=("pct_chg", lambda x: (x.astype(float) / 100).clip(-0.35, 0.35).std(ddof=1)))
+    g = g[(g["n"] >= 60) & g["turn60"].notna() & g["vol60"].notna()].reset_index()
+    if g.empty:
+        return []
+    g["score"] = (g["turn60"].rank(method="average") + g["vol60"].rank(method="average")
+                  + g["vol60"].rank(method="first") * 1e-6)
+    g = g.sort_values(["score", "code"]).head(int(top_n)).merge(mv[["code", "mvd", "rk_mv"]], on="code")
+    names = dict(db.execute(text("SELECT code,name FROM stocks WHERE code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"codes": g["code"].tolist()}).all())
+    return [{"code": r.code, "name": names.get(r.code, ""), "total_mv": round(float(r.mvd), 1), "mv_rank": int(r.rk_mv),
+             "turn60": round(float(r.turn60), 4), "vol60": round(float(r.vol60) * 100, 3), "score": round(float(r.score), 1)}
+            for r in g.sort_values("score").itertuples()]
+
+
+BASIC_DIR = Path(__file__).resolve().parents[2] / "data" / "midterm"
+
+
+def _weekly_snapshot_date(db, as_of: str, dates: list[str]) -> str | None:
+    """§102 研究口径的周度 daily_basic 快照日：as_of 若是当周（ISO 周）最后一个交易日则取 as_of，否则取上一周最后一个交易日。
+    dates = daily_kbars 交易日（降序，dates[0]==as_of）。"""
+    d = _dt.date.fromisoformat(as_of)
+    nxt = db.execute(text(
+        "SELECT MIN(cal_date) FROM trade_calendar WHERE exchange='SSE' AND is_open=1 AND cal_date>:d"),
+        {"d": as_of.replace("-", "")}).scalar()
+    if nxt:
+        nd = _dt.datetime.strptime(str(nxt).replace("-", "")[:8], "%Y%m%d").date()
+    else:
+        nd = d + _dt.timedelta(days=3 if d.weekday() == 4 else 1)
+    wk = d.isocalendar()[:2]
+    if nd.isocalendar()[:2] != wk:
+        return as_of
+    for x in dates:
+        if _dt.date.fromisoformat(x).isocalendar()[:2] != wk:
+            return x
+    return None
+
+
+def _weekly_basic(snap: str):
+    """周度 daily_basic 快照（ts_code,total_share,dv_ttm）：先读研究用 data/midterm/basic_<year>.parquet，
+    没有该日再经统一数据网关（tushare_client.get_pro 的 provider router，只读）拉 daily_basic。失败返回 None。"""
+    import pandas as pd
+    key = snap.replace("-", "")
+    f = BASIC_DIR / f"basic_{key[:4]}.parquet"
+    if f.exists():
+        try:
+            b = pd.read_parquet(f, columns=["ts_code", "trade_date", "total_share", "dv_ttm"])
+            b = b[b["trade_date"].astype(str) == key]
+            if not b.empty:
+                return b
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("weekly basic parquet %s read failed: %s", f.name, exc)
+    try:
+        from app.services.tushare_client import get_pro
+        b = get_pro().daily_basic(trade_date=key, fields="ts_code,trade_date,total_share,dv_ttm")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("daily_basic %s via gateway failed: %s", key, exc)
+        return None
+    return b if b is not None and not b.empty else None
+
+
+def dividend_lowvol_candidates(db, as_of: str, top_n: int = 10) -> list[dict[str, Any]] | None:
+    """§102 lt_research19 DVLV_h60 口径：非北交所按 周度 total_share × 当日收盘 从大到小排名第 1–1500、非ST、上市≥250交易日、收盘≥3；
+    dv_ttm（周度快照：当周最后交易日=as_of 时取 as_of，否则上周最后交易日）>0 的子集内，dv_ttm 秩（高好，平均秩）+ 近60日日收益标准差秩
+    （低好，平均秩；同分按波动率低者、再按代码）之和最低的 top_n 只。数据不足返回 None。"""
+    import pandas as pd
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 300"), {"d": as_of})]
+    if len(dates) < 251 or dates[0] != as_of:
+        return None
+    snap = _weekly_snapshot_date(db, as_of, dates)
+    b = _weekly_basic(snap) if snap else None
+    if b is None:
+        return None
+    b = pd.DataFrame({"code": b["ts_code"].astype(str).str[:6],
+                      "total_share": pd.to_numeric(b["total_share"], errors="coerce"),
+                      "dv_ttm": pd.to_numeric(b["dv_ttm"], errors="coerce")})
+    b = b[~b["code"].str[0].isin(["4", "8", "9"]) & b["total_share"].notna()].drop_duplicates("code")
+    px = pd.DataFrame(db.execute(text(
+        "SELECT code, close FROM daily_kbars WHERE trade_date=:d AND close>0"), {"d": as_of}).mappings().all())
+    if px.empty:
+        return None
+    mv = b.merge(px, on="code")
+    mv["close"] = mv["close"].astype(float)
+    mv["mvd"] = mv["total_share"] * mv["close"]  # 万股 × 元 = 万元（研究口径）
+    mv["rk_mv"] = mv["mvd"].rank(ascending=False, method="first")
+    st = {r[0] for r in db.execute(text(
+        "SELECT code FROM stock_metadata_history WHERE name LIKE '%ST%' AND effective_from<=:d "
+        "AND (effective_to IS NULL OR effective_to>:d)"), {"d": as_of})}
+    mv = mv[(mv["rk_mv"] <= 1500) & (mv["close"] >= 3) & ~mv["code"].isin(st)]
+    if mv.empty:
+        return []
+    k = pd.DataFrame(db.execute(text(
+        "SELECT code, trade_date, pct_chg FROM daily_kbars "
+        "WHERE trade_date>=:d0 AND trade_date<=:d AND close>0 AND code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"d0": dates[-1], "d": as_of, "codes": mv["code"].tolist()}).mappings().all())
+    if k.empty:
+        return None
+    k = k.sort_values(["code", "trade_date"])
+    age = k.groupby("code").size()
+    k = k[k["code"].isin(age[age >= 251].index)].groupby("code").tail(60)
+    g = k.groupby("code").agg(n=("pct_chg", "size"),
+                              vol60=("pct_chg", lambda x: (x.astype(float) / 100).clip(-0.35, 0.35).std(ddof=1)))
+    g = g[(g["n"] >= 60) & g["vol60"].notna()].reset_index().merge(mv[["code", "mvd", "rk_mv", "dv_ttm"]], on="code")
+    g = g[g["dv_ttm"] > 0].sort_values("code").reset_index(drop=True)
+    if g.empty:
+        return []
+    g["score"] = ((-g["dv_ttm"]).rank(method="average") + g["vol60"].rank(method="average")
+                  + g["vol60"].rank(method="first") * 1e-6)
+    g = g.sort_values(["score", "code"]).head(int(top_n))
+    names = dict(db.execute(text("SELECT code,name FROM stocks WHERE code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"codes": g["code"].tolist()}).all())
+    return [{"code": r.code, "name": names.get(r.code, ""), "total_mv": round(float(r.mvd), 1), "mv_rank": int(r.rk_mv),
+             "dv_ttm": round(float(r.dv_ttm), 2), "vol60": round(float(r.vol60) * 100, 3), "score": round(float(r.score), 1),
+             "basic_date": snap}
+            for r in g.itertuples()]
+
+
+def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = None,
+                   strategy_ids: list[str] | None = None) -> dict[str, Any]:
+    """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。
+
+    horizon / strategy_ids 只用于手动补跑（POST /api/horizons/{mid,long}/run），默认 None = 17:35 全部策略。
+    幂等：同一 as_of 重跑覆盖同一文件；_held_codes 只看 as_of 之前的批次。"""
     d = _dt.date.fromisoformat(as_of)
     result: dict[str, Any] = {}
     rp_cands: list[dict[str, Any]] | None | str = "unset"
     for sid, meta in STRATEGIES.items():
-        if not force and not is_signal_day(sid, d):
+        if horizon and meta.get("horizon") != horizon:
+            continue
+        if strategy_ids and sid not in strategy_ids:
+            continue
+        if meta.get("schedule") == "month_end":
+            if not force and not _is_month_end(db, as_of):
+                continue
+        elif not force and not is_signal_day(sid, d):
+            continue
+        if meta.get("kind") in ("lowturn_lowvol", "dividend_lowvol"):
+            cand_fn = lowturn_lowvol_candidates if meta["kind"] == "lowturn_lowvol" else dividend_lowvol_candidates
+            cands = cand_fn(db, as_of, int(meta["top_n"]))
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            held = _held_codes(db, sid, as_of)
+            picks = [p for p in cands if p["code"] not in held]  # 已持有不重复买、也不顺延补位（与回测一致）
+            if not picks:
+                result[sid] = {"skipped": "all_held"} if cands else 0
+                continue
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
+                {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
+            result[sid] = len(picks)
             continue
         if meta.get("kind") == "earnings_accel":
             held = _held_codes(db, sid, as_of)
@@ -353,6 +609,49 @@ def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
             (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
                 {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
             result[sid] = len(picks)
+            continue
+        if meta.get("kind") == "forecast_beat":
+            from app.services.midterm_forecast import forecast_beat_candidates
+            held = _held_codes(db, sid, as_of)
+            free = int(meta["k_slots"]) - len(held)
+            if free <= 0:
+                result[sid] = {"skipped": "slots_full", "held": len(held)}
+                continue
+            fb = forecast_beat_candidates(db, as_of)
+            if fb is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in fb if p["code"] not in held][:min(int(meta["max_new"]), free)]
+            if not picks:
+                result[sid] = 0
+                continue
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
+                {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
+            result[sid] = len(picks)
+            continue
+        if meta.get("kind") == "incentive_option":
+            from app.services.midterm_incentive import incentive_candidates
+            held = _held_codes(db, sid, as_of)
+            free = int(meta["k_slots"]) - len(held)
+            if free <= 0:
+                result[sid] = {"skipped": "slots_full", "held": len(held)}
+                continue
+            ic = incentive_candidates(db, as_of)
+            if ic is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in ic if p["code"] not in held][:min(int(meta["max_new"]), free)]
+            if not picks:
+                result[sid] = 0
+                continue
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
+                {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
+            result[sid] = len(picks)
+            continue
+        if meta.get("kind") == "block_trade_premium":
+            result[sid] = _block_trade_picks(db, sid, meta, as_of)
             continue
         if meta.get("kind") == "repurchase":
             held = _held_codes(db, sid, as_of)
@@ -395,6 +694,31 @@ def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
     return result
 
 
+def _block_trade_picks(db, sid: str, meta: dict[str, Any], as_of: str) -> Any:
+    """mid-block-trade-premium 出票（幂等：同一 as_of 重跑覆盖同一文件）。大宗数据未发布 -> "no_data"、不落盘。"""
+    from app.services.midterm_block_trade import block_trade_candidates
+    held = _held_codes(db, sid, as_of)
+    free = int(meta["k_slots"]) - len(held)
+    if free <= 0:
+        return {"skipped": "slots_full", "held": len(held)}
+    bt = block_trade_candidates(db, as_of)
+    if bt is None:
+        return "no_data"
+    picks = [p for p in bt if p["code"] not in held][:min(int(meta["max_new"]), free)]
+    if not picks:
+        return 0
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
+    (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
+        {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
+    return len(picks)
+
+
+def generate_block_trade_picks(db, as_of: str) -> dict[str, Any]:
+    """只跑 mid-block-trade-premium（as_of = 大宗交易日 T，YYYY-MM-DD）。供 21:00 后 / T+1 开盘前的晚间任务调用。"""
+    sid = "mid-block-trade-premium"
+    return {sid: _block_trade_picks(db, sid, STRATEGIES[sid], as_of)}
+
+
 def _realize(db, code: str, signal_date: str, hold: int = HOLD_DAYS) -> dict[str, Any]:
     """次日开盘买入（一字/开盘涨停买不进 -> skipped）；第 hold 个交易日开盘卖出，跌停封死顺延；0.3% 成本。"""
     rows = db.execute(text(
@@ -406,7 +730,8 @@ def _realize(db, code: str, signal_date: str, hold: int = HOLD_DAYS) -> dict[str
         return {"status": "pending"}
     e = rows[0]
     if e.up_limit and e.open >= e.up_limit - 0.005:
-        return {"status": "skipped", "entry_date": e.trade_date, "reason": "开盘涨停买不进"}
+        return {"status": "skipped", "entry_date": e.trade_date, "reason": "开盘涨停买不进",
+                "cancel_code": "limit_up_open", "entry_open": e.open}
     tri = 1.0
     for i, r in enumerate(rows):
         if i > 0:
@@ -414,41 +739,238 @@ def _realize(db, code: str, signal_date: str, hold: int = HOLD_DAYS) -> dict[str
         if i >= hold and not (r.down_limit and r.high <= r.down_limit + 0.005):
             ret = (r.open / r.close * tri) / (e.open / e.close) - 1 - 0.003
             return {"status": "closed", "entry_date": e.trade_date, "exit_date": r.trade_date,
-                    "ret": round(ret * 100, 2), "days": i}
+                    "ret": round(ret * 100, 2), "days": i, "entry_price": e.open, "exit_price": r.open,
+                    "exit_delayed_days": i - hold}
     last = rows[-1]
     ret = tri / (e.open / e.close) - 1
     return {"status": "holding", "entry_date": e.trade_date, "mark_date": last.trade_date,
-            "ret": round(ret * 100, 2), "days": len(rows) - 1}
+            "ret": round(ret * 100, 2), "days": len(rows) - 1, "entry_price": e.open, "mark_price": last.close}
+
+
+# 统一 rule_score：各策略自己的排序指标（原单位，见 label / better），selection_reason 为中文入选依据
+def _f(x: Any, nd: int = 2) -> str:
+    try:
+        return f"{float(x):.{nd}f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[str, Any]:
+    kind = STRATEGIES.get(sid, {}).get("kind", "small_cap" if sid == "mid-small-cap-weekly" else None)
+    score = label = better = reason = None
+    try:
+        if kind == "small_cap":
+            score, label, better = round(float(p["total_mv"]) / 1e4, 2), "总市值(亿元)", "lower"
+            reason = f"总市值 {_f(score)} 亿，合格股（非ST/北交所、PE>0、上市≥1年、20日均额>3000万）里最小的10只之一；PE_ttm {_f(p.get('pe_ttm'), 1)}"
+        elif kind == "repurchase":
+            score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
+            reason = f"{p.get('ann_date', '')} 回购预案，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，占总市值 {_f(score)}%"
+        elif kind == "earnings_accel":
+            score, label, better = float(p["score"]), "扣非净利同比(%)，封顶300", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
+                      f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%")
+        elif kind == "forecast_beat":
+            score, label, better = float(p["score"]), "预告净利增幅下限(%)，封顶300", "higher"
+            reason = (f"{p.get('ann_date', '')} 首次业绩预告（{p.get('forecast_type', '')}，{p.get('end_date', '')}）："
+                      f"增幅下限 {_f(p.get('p_change_min'), 1)}%，净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e4)} 亿元")
+        elif kind == "incentive_option":
+            score, label, better = round(float(p["r20"]) * 100, 2), "公告前20日涨幅(%)", "lower"
+            reason = f"{p.get('ann_date', '')} 首次披露含股票期权的激励草案：{p.get('title', '')}；公告前20日涨幅 {_f(score)}%"
+        elif kind == "block_trade_premium":
+            score, label, better = round(float(p["ratio"]) * 100, 3), "大宗成交额/流通市值(%)", "higher"
+            reason = (f"大宗成交 {p.get('n_trades', '')} 笔，量加权价相对收盘溢价 {_f(float(p.get('premium') or 0) * 100)}%，"
+                      f"成交额占流通市值 {_f(score)}%")
+        elif kind == "lowturn_lowvol":
+            score, label, better = float(p["score"]), "60日换手排名+60日波动排名(越低越好)", "lower"
+            reason = f"市值第 {p.get('mv_rank', '')} 名；60日均换手 {_f(p.get('turn60'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"
+        elif kind == "dividend_lowvol":
+            score, label, better = float(p["score"]), "股息率排名+60日波动排名(越低越好)", "lower"
+            reason = f"市值第 {p.get('mv_rank', '')} 名；股息率(TTM) {_f(p.get('dv_ttm'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"
+    except (KeyError, TypeError, ValueError):
+        score = label = better = reason = None
+    p["rule_score"], p["rule_score_label"], p["rule_score_better"] = score, label, better
+    p["selection_reason"] = reason
+    if rank is not None:
+        p["selection_rank"] = rank
+    st = p.get("status")
+    p.setdefault("cancel_code", None)
+    p["cancel_reason"] = p.get("reason") if st == "skipped" else None
+    p["ret_includes_cost"] = True if st == "closed" else (False if st == "holding" else None)
+    return p
+
+
+def _pick_files(strategy_id: str | None, horizon: str | None) -> list[Path]:
+    if not OUT_DIR.exists():
+        return []
+    out = []
+    for f in sorted(OUT_DIR.glob("*.json"), reverse=True):
+        sid = f.stem.split("_", 1)[1] if "_" in f.stem else ""
+        if strategy_id and sid != strategy_id:
+            continue
+        if horizon and STRATEGIES.get(sid, {}).get("horizon", "mid") != horizon:
+            continue
+        out.append(f)
+    return out
+
+
+def _load_batch(db, f: Path) -> dict[str, Any]:
+    data = json.loads(f.read_text())
+    sid = data["strategy_id"]
+    for i, p in enumerate(data["picks"], 1):
+        p.update(_realize(db, p["code"], data["signal_date"], _hold(sid)))
+        annotate_pick(sid, p, i)
+    closed = [p["ret"] for p in data["picks"] if p.get("status") in ("closed", "holding")]
+    data["strategy_name"] = STRATEGIES.get(sid, {}).get("name", sid)
+    data["horizon"] = STRATEGIES.get(sid, {}).get("horizon", "mid")
+    data["hold_days"] = _hold(sid)
+    data["avg_ret"] = round(sum(closed) / len(closed), 2) if closed else None
+    data["status"] = ("closed" if all(p.get("status") in ("closed", "skipped") for p in data["picks"])
+                      else "pending" if all(p.get("status") == "pending" for p in data["picks"]) else "holding")
+    return data
 
 
 def list_picks(db, strategy_id: str | None = None, limit_batches: int = 30,
                horizon: str | None = None) -> list[dict[str, Any]]:
+    return [_load_batch(db, f) for f in _pick_files(strategy_id, horizon)[:limit_batches]]
+
+
+def list_picks_page(db, strategy_id: str | None = None, horizon: str | None = None,
+                    page: int = 1, page_size: int = 30) -> dict[str, Any]:
+    """批次分页：total=批次总数、total_picks=全部只数（不算收益，便宜）、has_more。"""
+    files = _pick_files(strategy_id, horizon)
+    start = (max(page, 1) - 1) * page_size
+    total_picks = sum(len(json.loads(f.read_text()).get("picks", [])) for f in files)
+    batches = [_load_batch(db, f) for f in files[start:start + page_size]]
+    return {"batches": batches, "total": len(files), "total_picks": total_picks, "page": page,
+            "page_size": page_size, "has_more": start + len(batches) < len(files)}
+
+
+def pick_detail(db, horizon: str, strategy_id: str, signal_date: str, code: str,
+                before: int = 20, after: int = 80) -> dict[str, Any] | None:
+    """单股详情：该批次里这只票的全部字段 + 信号日前 before / 后 after 根日K + 同股其它中长线信号。"""
+    meta = STRATEGIES.get(strategy_id)
+    if meta is None or meta.get("horizon") != horizon:
+        return None
+    f = OUT_DIR / f"{signal_date}_{strategy_id}.json"
+    if not f.exists():
+        return None
+    batch = _load_batch(db, f)
+    pick = next((p for p in batch["picks"] if p["code"] == code), None)
+    if pick is None:
+        return None
+    cols = "trade_date, open, high, low, close, pct_chg, volume, amount"
+    pre = db.execute(text(f"SELECT {cols} FROM daily_kbars WHERE code=:c AND trade_date<:d AND close>0 "
+                          "ORDER BY trade_date DESC LIMIT :n"), {"c": code, "d": signal_date, "n": before}).mappings().all()
+    post = db.execute(text(f"SELECT {cols} FROM daily_kbars WHERE code=:c AND trade_date>=:d AND close>0 "
+                           "ORDER BY trade_date LIMIT :n"), {"c": code, "d": signal_date, "n": after}).mappings().all()
+    bars = [{k: (str(v)[:10] if k == "trade_date" else (float(v) if v is not None else None)) for k, v in r.items()}
+            for r in [*reversed(pre), *post]]
+    others = []
+    for g in sorted(OUT_DIR.glob("*.json"), reverse=True):
+        sd, _, sid = g.stem.partition("_")
+        if (sd, sid) == (signal_date, strategy_id):
+            continue
+        if any(q.get("code") == code for q in json.loads(g.read_text()).get("picks", [])):
+            others.append({"signal_date": sd, "strategy_id": sid,
+                           "strategy_name": STRATEGIES.get(sid, {}).get("name", sid),
+                           "horizon": STRATEGIES.get(sid, {}).get("horizon", "mid")})
+    return {"horizon": horizon, "strategy_id": strategy_id, "strategy_name": meta.get("name"),
+            "strategy_summary": meta.get("summary"), "hold_days": _hold(strategy_id),
+            "signal_date": signal_date, "code": code, "name": pick.get("name"),
+            "batch_size": len(batch["picks"]), "batch_status": batch["status"], "pick": pick,
+            "bars": bars, "other_signals": others}
+
+
+def _next_month_end_trade_date(db, today: _dt.date | None = None) -> str | None:
+    """下一（含今日）月末交易日 YYYY-MM-DD；优先 trade_calendar SSE，日历不足时用工作日近似。"""
+    today = today or _dt.date.today()
+    key = today.strftime("%Y%m%d")
+    rows: list[str] = []
+    if db is not None:
+        try:
+            rows = [str(r).replace("-", "")[:8] for r in db.execute(text(
+                "SELECT cal_date FROM trade_calendar WHERE exchange='SSE' AND is_open=1 AND cal_date>=:d "
+                "ORDER BY cal_date LIMIT 80"), {"d": key}).scalars().all()]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("next month-end trade_calendar lookup failed: %s", exc)
+            rows = []
+    for i, d in enumerate(rows):
+        dd = _dt.datetime.strptime(d, "%Y%m%d").date()
+        if i + 1 < len(rows):
+            nxt_m = rows[i + 1][4:6]
+        else:
+            nd = dd + _dt.timedelta(days=3 if dd.weekday() == 4 else 1)
+            nxt_m = f"{nd.month:02d}"
+        if nxt_m != d[4:6]:
+            return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+    # 日历缺失：从 today 起找「下一工作日跨月」的工作日
+    d = today
+    for _ in range(62):
+        if d.weekday() < 5:
+            nd = d + _dt.timedelta(days=3 if d.weekday() == 4 else 1)
+            while nd.weekday() >= 5:
+                nd += _dt.timedelta(days=1)
+            if nd.month != d.month:
+                return d.isoformat()
+        d += _dt.timedelta(days=1)
+    return None
+
+
+def _strategy_has_batch(strategy_id: str) -> bool:
     if not OUT_DIR.exists():
-        return []
-    files = sorted(OUT_DIR.glob("*.json"), reverse=True)
-    batches = []
-    for f in files:
-        data = json.loads(f.read_text())
-        if strategy_id and data["strategy_id"] != strategy_id:
-            continue
-        if horizon and STRATEGIES.get(data["strategy_id"], {}).get("horizon", "mid") != horizon:
-            continue
-        for p in data["picks"]:
-            p.update(_realize(db, p["code"], data["signal_date"], _hold(data["strategy_id"])))
-        closed = [p["ret"] for p in data["picks"] if p.get("status") in ("closed", "holding")]
-        data["picks"] = [p for p in data["picks"]]
-        data["strategy_name"] = STRATEGIES.get(data["strategy_id"], {}).get("name", data["strategy_id"])
-        data["avg_ret"] = round(sum(closed) / len(closed), 2) if closed else None
-        data["status"] = ("closed" if all(p.get("status") in ("closed", "skipped") for p in data["picks"])
-                          else "pending" if all(p.get("status") == "pending" for p in data["picks"]) else "holding")
-        batches.append(data)
-        if len(batches) >= limit_batches:
-            break
-    return batches
+        return False
+    return any(OUT_DIR.glob(f"*_{strategy_id}.json"))
 
 
-def strategies_overview(horizon: str | None = None) -> list[dict[str, Any]]:
+def next_batch_note(strategy_id: str, db=None, *, today: _dt.date | None = None) -> str:
+    """策略下次出票说明（前端策略卡用）。无历史批次时前缀「尚未出票；」。"""
+    meta = STRATEGIES.get(strategy_id) or {}
+    kind = meta.get("kind")
+    schedule = meta.get("schedule")
+    if kind == "block_trade_premium" or strategy_id == "mid-block-trade-premium":
+        base = "每晚约 21:00 大宗数据发布后选股，次日开盘买"
+    elif schedule == "weekly" or strategy_id == "mid-small-cap-weekly":
+        # is_signal_day：仅周五（weekday==4）收盘后出票
+        base = "每个周五收盘后选股，次日开盘买"
+    elif schedule == "month_end":
+        nxt = _next_month_end_trade_date(db, today=today)
+        if nxt:
+            base = f"每月最后一个交易日收盘后选股，下一批：{nxt}，次日开盘买"
+        else:
+            base = "每月最后一个交易日收盘后选股，次日开盘买"
+    else:
+        # daily 及默认
+        base = "每个交易日盘后（17:35）选股，次日开盘买"
+    if not _strategy_has_batch(strategy_id):
+        return f"尚未出票；{base}"
+    return base
+
+
+def strategies_overview(horizon: str | None = None, db=None) -> list[dict[str, Any]]:
     metrics = json.loads(METRICS_FILE.read_text()) if METRICS_FILE.exists() else {}
-    return [{"id": sid, **{k: v for k, v in meta.items() if k not in ("top_n", "guard", "hold_days")},
-             "hold_days": _hold(sid), "top_n": meta.get("top_n", meta.get("max_new")), "metrics": metrics.get(sid, {})}
-            for sid, meta in STRATEGIES.items() if horizon is None or meta.get("horizon") == horizon]
+    own_db = False
+    if db is None and any(m.get("schedule") == "month_end" for m in STRATEGIES.values()
+                          if horizon is None or m.get("horizon") == horizon):
+        try:
+            from app.db.session import SessionLocal
+            db = SessionLocal()
+            own_db = True
+        except Exception:  # noqa: BLE001
+            db = None
+    try:
+        out = []
+        for sid, meta in STRATEGIES.items():
+            if horizon is not None and meta.get("horizon") != horizon:
+                continue
+            out.append({
+                "id": sid,
+                **{k: v for k, v in meta.items() if k not in ("top_n", "guard", "hold_days")},
+                "hold_days": _hold(sid),
+                "top_n": meta.get("top_n", meta.get("max_new")),
+                "metrics": metrics.get(sid, {}),
+                "next_batch_note": next_batch_note(sid, db),
+            })
+        return out
+    finally:
+        if own_db and db is not None:
+            db.close()

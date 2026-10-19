@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import bindparam, text
@@ -44,7 +44,7 @@ def _in(sql: str, name: str) -> "text":
 
 
 def plan(conn, keep_days: int, extra_protect: set[str]) -> dict:
-    cutoff = datetime.utcnow() - timedelta(days=keep_days)
+    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=keep_days)
     runs = conn.execute(
         text("SELECT backtest_id, parent_backtest_id, experiment_id, snapshot_id, created_at FROM backtest_runs_v2")
     ).fetchall()

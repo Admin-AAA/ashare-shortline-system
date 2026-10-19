@@ -2906,6 +2906,7 @@ export type SingleStockAnalysis = {
   };
   /** 单股评分口径说明：按当前数据重算 */
   score_basis_note?: string;
+  market_snapshot_source?: string;
   pipeline?: {
     decision: string;
     recommended: boolean;

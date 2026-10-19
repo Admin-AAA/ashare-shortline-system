@@ -244,7 +244,6 @@ def test_prefect_payload_flows_deny_brokerage_before_dispatch():
     for flow_obj in (
         flows.manual_preset_matrix_flow,
         flows.manual_data_health_remediation_flow,
-        flows.manual_strategy_exposure_flow,
     ):
         with pytest.raises(ScopeViolation) as excinfo:
             flow_obj.fn("task_run_scope_guard_probe", {"brokerAccount": "acct-1"})

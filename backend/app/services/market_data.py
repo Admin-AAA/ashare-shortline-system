@@ -265,10 +265,14 @@ def _fetch_first_kline(
 
 
 def _fetch_quotes(source: str, settings: Any) -> list[dict[str, Any]]:
+    from app.services.datasource.wrap import gw_call
+
+    # Step 4: per-source fetch via gateway when cutover "quote.daily" (switch/breaker/metrics);
+    # result and fallback order unchanged, total failure still raises MarketDataError upstream.
     if source == "tushare":
-        return _fetch_tushare_quotes(settings)
+        return gw_call("quote.daily", "tushare_quote", _fetch_tushare_quotes, settings)
     if source == "xiaoshi":
-        return _fetch_xiaoshi_quotes(settings)
+        return gw_call("quote.daily", "xiaoshi_quote", _fetch_xiaoshi_quotes, settings)
     raise MarketDataError(f"未知行情源: {source}")
 
 
@@ -279,9 +283,12 @@ def _fetch_kline(
     start_date: str | None = None,
     end_date: str | None = None,
 ) -> list[dict[str, Any]]:
+    from app.services.datasource.wrap import gw_call
+
+    # Step 4: bar.daily via gateway when cut over; parquet cache/adjustment/readiness untouched.
     if source == "xiaoshi":
-        return _fetch_xiaoshi_kline(quote, settings, start_date=start_date, end_date=end_date)
-    return _fetch_tushare_kline(quote, settings, start_date=start_date, end_date=end_date)
+        return gw_call("bar.daily", "xiaoshi_kline", _fetch_xiaoshi_kline, quote, settings, start_date=start_date, end_date=end_date)
+    return gw_call("bar.daily", "tushare_kline", _fetch_tushare_kline, quote, settings, start_date=start_date, end_date=end_date)
 
 
 def _fetch_xiaoshi_quotes(settings: Any) -> list[dict[str, Any]]:
@@ -522,6 +529,27 @@ def _load_tushare_daily_basic_map(pro: Any, settings: Any, trade_date: str) -> d
 
 
 def _fetch_tushare_realtime_frame(ts_codes: list[str], settings: Any):
+    """One ≤50-code sina snapshot chunk. Cutover flag ``quote.snapshot`` routes via the gateway."""
+    from app.services.datasource import gateway as _gw
+
+    if _gw.is_cutover("quote.snapshot"):
+        from app.services.datasource.sina_realtime import fetch_frame
+
+        _throttle_tushare(settings)
+        return fetch_frame(ts_codes)
+    frame = _legacy_fetch_tushare_realtime_frame(ts_codes, settings)
+    if _gw.is_shadow("quote.snapshot"):
+        from app.services.datasource.sina_realtime import fetch_frame
+
+        _gw.shadow_compare(
+            "quote.snapshot",
+            frame.to_dict("records") if frame is not None else None,
+            lambda: fetch_frame(ts_codes).to_dict("records"),
+        )
+    return frame
+
+
+def _legacy_fetch_tushare_realtime_frame(ts_codes: list[str], settings: Any):
     import tushare as ts
 
     # sina 实时快照（tushare SDK 爬虫）；verify_token 已被 _patch_tushare_verify_token 本地短路，无需 token。

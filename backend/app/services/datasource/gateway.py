@@ -84,6 +84,8 @@ SCHEMAS: dict[str, tuple[str, ...]] = {
                        "pre_close", "high", "low", "volume", "amount", "source"),
     "bar.minute": ("code", "trade_date", "trade_time", "open", "high", "low", "close",
                    "volume", "amount", "source"),
+    "ann.search.cninfo": ("secCode", "secName", "announcementTitle", "announcementTime",
+                          "announcementId", "raw"),
 }
 
 
@@ -244,8 +246,12 @@ def _flag_set(attr: str) -> set[str]:
     return {x.strip() for x in raw.split(",") if x.strip()}
 
 
+# New datasets with no legacy path: always routed through the gateway (no cutover flag needed).
+ALWAYS_GATEWAY: frozenset[str] = frozenset({"ann.search.cninfo"})
+
+
 def is_cutover(dataset: str) -> bool:
-    return dataset in _flag_set("datasource_cutover")
+    return dataset in ALWAYS_GATEWAY or dataset in _flag_set("datasource_cutover")
 
 
 def is_shadow(dataset: str) -> bool:

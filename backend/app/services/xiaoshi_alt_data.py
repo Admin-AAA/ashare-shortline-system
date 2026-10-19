@@ -28,10 +28,12 @@ _MAX_PAGES = 10
 
 
 def _paged(client: Any, dataset: str) -> list[dict[str, Any]]:
+    from app.services.datasource.wrap import gw_call  # step 5: cutover "xiaoshi.alt"
+
     rows: list[dict[str, Any]] = []
     offset = 0
     for _ in range(_MAX_PAGES):
-        resp = client.get_quant_data(dataset, limit=_PAGE, offset=offset)
+        resp = gw_call("xiaoshi.alt", "xiaoshi_alt", client.get_quant_data, dataset, limit=_PAGE, offset=offset)
         items = resp.get("items") or resp.get("data") or resp.get("rows") or []
         rows.extend(i for i in items if isinstance(i, dict))
         total = int(resp.get("total_count") or 0)

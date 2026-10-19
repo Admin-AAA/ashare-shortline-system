@@ -2780,6 +2780,7 @@ def _upsert_daily_bar_rows(db: Session, rows: list[dict[str, Any]]) -> None:
                     close=stmt.inserted.close,
                     volume=stmt.inserted.volume,
                     amount=stmt.inserted.amount,
+                    updated_at=func.utc_timestamp(),  # 2026-10-19: revisions bump updated_at (outcome finality gate / auto re-projection)
                     # pct_chg / turnover_rate 只在当批带回数值时才覆盖：缺失时按 0 覆盖
                     # 会把当日真值抹成恒零，这正是 09-24 全表归零的写入侧成因（L-146）。
                     **group.quote_metric_update(stmt),

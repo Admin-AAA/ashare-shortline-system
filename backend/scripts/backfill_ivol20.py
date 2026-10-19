@@ -73,7 +73,7 @@ def fill_chunk(s, c0: str, c1: str, only_missing: bool, metric: str = "ivol20") 
     panel.to_sql("_ivol_tmp", con=conn, if_exists="append", index=False, chunksize=20000)
     res = conn.execute(text(
         f"UPDATE daily_kbars k JOIN _ivol_tmp t ON k.code=t.code AND k.trade_date=t.trade_date "
-        f"SET k.{col}=t.{col}"))
+        f"SET k.{col}=t.{col}, k.updated_at=UTC_TIMESTAMP()"))
     conn.execute(text("DROP TEMPORARY TABLE IF EXISTS _ivol_tmp"))
     s.commit()
     return int(res.rowcount or 0)

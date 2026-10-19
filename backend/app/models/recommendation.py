@@ -304,6 +304,15 @@ class RecommendationOutcome(Base):
     outcome_reason: Mapped[str | None] = mapped_column(Text)
     label_source: Mapped[str] = mapped_column(String(20), default="auto")
     labeled_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    # 0026：当前投影所用规则版本；original_* 为首次重投影前的原始结算（只写一次，不覆盖）
+    rule_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    bars_verified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    original_outcome_label: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    original_exit_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    original_exit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
+    original_exit_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    original_executed_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    original_rule_version: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
 
 class RecommendationOutcomeVersion(Base):

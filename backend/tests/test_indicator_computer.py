@@ -308,8 +308,8 @@ def test_compute_daily_bar_indicators_single_bar():
     bars = [{"trade_date": "20240101", "close": 10, "volume": 100}]
     out = ic.compute_daily_bar_indicators("000001", bars)
     row = out["20240101"]
-    assert row["ma5"] == pytest.approx(10.0)
-    assert row["ma60"] == pytest.approx(10.0)          # len<60 → 全量均值
+    assert row["ma5"] is None                          # 2026-10-19: 窗口不足 → None（不兜底、不写 0）
+    assert row["ma60"] is None
     assert row["volume_ratio_5d"] == pytest.approx(1.0)  # ma5/ma20 = 100/100
 
 
@@ -321,7 +321,7 @@ def test_compute_daily_bar_indicators_keys_and_count():
     out = ic.compute_daily_bar_indicators("000001", bars)
     assert len(out) == 5
     for row in out.values():
-        assert set(row) == {"ma5", "ma10", "ma20", "ma60", "volume_ratio_5d"}
+        assert set(row) == {"ma5", "ma10", "ma20", "ma60", "ma250", "volume_ratio_5d"}
 
 
 # ── compute_daily_indicators ──────────────────────────────────────────

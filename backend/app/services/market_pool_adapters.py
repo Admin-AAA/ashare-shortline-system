@@ -32,6 +32,7 @@ from app.services.market_source.port import (
     QuoteRequest,
 )
 
+from app.services.datasource.wrap import gw_call  # step 6: aux fetches via gateway (cutover aux.*)
 
 def quote_sources(settings: Any) -> list[str]:
     return _quote_sources(settings)
@@ -104,26 +105,26 @@ def news_sources(settings: Any) -> list[str]:
 
 
 def fetch_limit_up_board_rows(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
-    return _fetch_limit_up_board(source, settings, trade_date=trade_date)
+    return gw_call("aux.limit_up", f"{source}_limit_up", _fetch_limit_up_board, source, settings, trade_date=trade_date)
 
 
 def fetch_concept_sector_rows(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
-    return _fetch_concept_sectors(source, settings, trade_date=trade_date)
+    return gw_call("aux.concept_sector", f"{source}_concept_sector", _fetch_concept_sectors, source, settings, trade_date=trade_date)
 
 
 def fetch_capital_flow_rows(source: str, code: str, settings: Any, trade_date: str | None = None) -> dict[str, Any]:
-    return _fetch_capital_flow(source, code, settings, trade_date=trade_date)
+    return gw_call("aux.capital_flow", f"{source}_capital_flow", _fetch_capital_flow, source, code, settings, trade_date=trade_date)
 
 
 def fetch_capital_flow_batch(source: str, codes: list[str], settings: Any, trade_date: str | None = None) -> dict[str, dict[str, Any]]:
     if source == "tushare":
-        return _fetch_tushare_moneyflow_batch(codes, settings, trade_date=trade_date)
+        return gw_call("aux.capital_flow", "tushare_capital_flow", _fetch_tushare_moneyflow_batch, codes, settings, trade_date=trade_date)
     return {}
 
 
 def fetch_dragon_tiger_rows(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
-    return _fetch_dragon_tiger(source, settings, trade_date=trade_date)
+    return gw_call("aux.dragon_tiger", f"{source}_dragon_tiger", _fetch_dragon_tiger, source, settings, trade_date=trade_date)
 
 
 def fetch_news_rows(source: str, code: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
-    return _fetch_news(source, code, settings, trade_date=trade_date)
+    return gw_call("aux.news", "eastmoney" if source == "eastmoney" else f"{source}_news", _fetch_news, source, code, settings, trade_date=trade_date)

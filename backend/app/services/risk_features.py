@@ -162,30 +162,6 @@ def attach_ivol20_pct(
             card[field] = float(pct)
 
 
-def load_ivol20_pct_map(session, trade_dates: Iterable[str]) -> dict[tuple[str, str], float]:
-    """从 daily_kbars.ivol20 读取给定交易日的全市场特质波动并按日横截面排名。
-
-    返回 {(trade_date, code): pct∈(0,1]}。与生产可交易宇宙一致：剔北交所（8/4/920 开头）。
-    结果进程内可缓存；ivol20 为 T 收盘写入的历史列，只读、无前视。
-    """
-    from sqlalchemy import text as _text
-
-    dates = sorted({str(d) for d in trade_dates})
-    if not dates:
-        return {}
-    stmt = _text(
-        "SELECT trade_date, code, ivol20 FROM daily_kbars "
-        "WHERE trade_date BETWEEN :d0 AND :d1 AND ivol20 IS NOT NULL AND ivol20 > 0 "
-        "AND code NOT LIKE '8%' AND code NOT LIKE '4%' AND code NOT LIKE '920%'"
-    )
-    rows = session.execute(stmt, {"d0": dates[0], "d1": dates[-1]}).mappings().all()
-    if not rows:
-        return {}
-    df = pd.DataFrame(rows)
-    df["pct"] = df.groupby("trade_date")["ivol20"].rank(pct=True, method="average")
-    return {(str(r.trade_date), str(r.code)): float(r.pct) for r in df.itertuples()}
-
-
 def attach_ivol_dn20_pct(
     cards: list[dict[str, Any]],
     trade_date: str,

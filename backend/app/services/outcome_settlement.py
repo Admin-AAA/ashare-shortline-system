@@ -70,6 +70,9 @@ _label_outcome_lock = threading.Lock()
 def invalidate_outcome_metrics_cache() -> None:
     with _metrics_cache_lock:
         _metrics_cache.clear()
+    from app.services.cache_hooks import invalidate as _invalidate_hook
+
+    _invalidate_hook("outcome_metrics")
 
 
 def normalized_outcome_label(outcome: RecommendationOutcome | Any | None) -> str:

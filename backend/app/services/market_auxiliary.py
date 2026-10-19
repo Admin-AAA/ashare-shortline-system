@@ -37,6 +37,26 @@ def _news_sources(settings: Any) -> list[str]:
     return _split_sources(settings.news_sources)
 
 
+def _em():
+    from app.services.datasource import eastmoney
+
+    return eastmoney
+
+
+def _em_td(trade_date: str | None) -> str:
+    return _compact_trade_date(trade_date) or date.today().strftime("%Y%m%d")
+
+
+def _em_shadow(kind: str, legacy: list[dict[str, Any]], fn) -> None:
+    """Shadow (flag datasource_shadow contains aux.eastmoney): compare (code, limit_type) key sets."""
+    from app.services.datasource.gateway import is_shadow, shadow_compare
+
+    if not legacy or not is_shadow("aux.eastmoney"):
+        return
+    key = lambda rows: sorted({(r.get("code"), r.get("limit_type", "")) for r in rows})  # noqa: E731
+    shadow_compare(f"aux.eastmoney.{kind}", key(legacy), lambda: key(fn()))
+
+
 # ── Dispatch ────────────────────────────────────────────────────────────
 
 def _compact_trade_date(value: Any) -> str:
@@ -46,6 +66,7 @@ def _compact_trade_date(value: Any) -> str:
 def _fetch_limit_up_board(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
         rows = _fetch_tushare_limit_up_board(settings, trade_date=trade_date)
+        _em_shadow("limit_up", rows, lambda: _em().fetch_limit_up_board(_em_td(trade_date)))
         if rows:
             return rows
         # Tushare 限速/失败时回退本地 limit_up_board 表（已同步的涨停事实数据）
@@ -53,6 +74,8 @@ def _fetch_limit_up_board(source: str, settings: Any, trade_date: str | None = N
         if local_rows:
             logger.info("涨停板使用本地表 fallback: %d 行 (trade_date=%s)", len(local_rows), trade_date)
         return local_rows
+    if source == "eastmoney" and _em().aux_enabled():
+        return _em().limit_up(_em_td(trade_date))
     return []
 
 
@@ -106,18 +129,26 @@ def _fetch_local_limit_up_board(trade_date: str | None = None) -> list[dict[str,
 def _fetch_concept_sectors(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
         return _fetch_tushare_concept_sectors(settings, trade_date=trade_date)
+    if source == "eastmoney" and _em().aux_enabled():
+        return _em().concept_sectors()
     return []
 
 
 def _fetch_capital_flow(source: str, code: str, settings: Any, trade_date: str | None = None) -> dict[str, Any] | None:
     if source == "tushare":
         return _fetch_tushare_moneyflow(code, settings, trade_date=trade_date)
+    if source == "eastmoney" and _em().aux_enabled():
+        return _em().capital_flow(code, _em_td(trade_date) if trade_date else None)
     return None
 
 
 def _fetch_dragon_tiger(source: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
     if source == "tushare":
-        return _fetch_tushare_dragon_tiger(settings, trade_date=trade_date)
+        rows = _fetch_tushare_dragon_tiger(settings, trade_date=trade_date)
+        _em_shadow("dragon_tiger", rows, lambda: _em().fetch_dragon_tiger(_em_td(trade_date)))
+        return rows
+    if source == "eastmoney" and _em().aux_enabled():
+        return _em().dragon_tiger(_em_td(trade_date))
     return []
 
 
@@ -347,7 +378,20 @@ def _fetch_tushare_concept_sectors(settings: Any, trade_date: str | None = None)
 
 
 def _fetch_tushare_news(code: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
-    """Tushare 个股公告。news 公共新闻不按股票代码稳定映射，正式链路先接 anns_d。"""
+    """个股公告。anns_d 已无任何可用上游（official 删除、promax/quantdata unsupported），
+    改走巨潮 cninfo（按股票代码查询）；巨潮失败才尝试 anns_d（保持旧行为兜底）。"""
+    try:
+        from app.services.cninfo_news import fetch_announcements_for_code as _cninfo_fetch
+
+        _end = _normalize_trade_date(_compact_trade_date(trade_date)) if trade_date else date.today().isoformat()
+        _start = (date.fromisoformat(_end) - timedelta(days=7)).isoformat()
+        _rows = _cninfo_fetch(code, start_date=_start, end_date=_end, max_pages=1)
+        for _row in _rows:
+            _row.setdefault("article_id", _stable_article_id("cninfo", code, _row.get("announce_date"), _row.get("title"), ""))
+            _row.setdefault("source", "cninfo")
+        return _rows
+    except Exception as e:  # noqa: BLE001
+        logger.debug("巨潮公告不可用 (%s): %s，回退 anns_d", code, e)
     try:
         from app.services.tushare_client import get_pro, ts_code
 

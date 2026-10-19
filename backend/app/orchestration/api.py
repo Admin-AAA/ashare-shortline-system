@@ -8,7 +8,6 @@ from prefect.deployments import run_deployment
 
 from app.orchestration.contracts import OrchestrationRunRef, OrchestrationRunView
 from app.orchestration.deployments import (
-    MANUAL_EXPOSURE_DEPLOYMENT_NAME,
     MANUAL_MATRIX_DEPLOYMENT_NAME,
     MANUAL_REMEDIATION_DEPLOYMENT_NAME,
     RECOMMENDATION_DEPLOYMENT_NAME,
@@ -73,10 +72,6 @@ def trigger_manual_matrix(task_run_id: str, payload: dict) -> OrchestrationRunRe
 
 def trigger_manual_remediation(task_run_id: str, payload: dict) -> OrchestrationRunRef:
     return _trigger_manual(MANUAL_REMEDIATION_DEPLOYMENT_NAME, task_run_id, payload)
-
-
-def trigger_manual_exposure(task_run_id: str, payload: dict) -> OrchestrationRunRef:
-    return _trigger_manual(MANUAL_EXPOSURE_DEPLOYMENT_NAME, task_run_id, payload)
 
 
 def get_orchestration_run(run_id: str) -> OrchestrationRunView:

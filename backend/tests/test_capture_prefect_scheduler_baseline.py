@@ -175,7 +175,7 @@ def test_every_current_scheduler_task_type_has_an_explicit_business_identity() -
     current_types = {
         "recommendation_run",
         "formal_safety_net",
-        "strategy_exposure_run",
+        "midterm_block_trade_backup",
         "intraday_lock_shadow",
         "data_sync",
         "data_backfill",

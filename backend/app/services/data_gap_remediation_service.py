@@ -119,6 +119,20 @@ from app.services.data_gap_pure import (  # noqa: F401,E402  re-export (split)
 logger = logging.getLogger(__name__)
 
 
+def _tushare_api_has_supported_provider(api: str) -> bool:
+    """False when datasource/routing_table.json marks every configured provider unsupported for `api`."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    try:
+        table = _json.loads((_Path(__file__).parent / "datasource" / "routing_table.json").read_text())
+        entry = (table.get("apis") or table).get(api) or {}
+    except Exception:  # noqa: BLE001 - unknown -> keep legacy behaviour
+        return True
+    unsupported = set(entry.get("unsupported") or [])
+    return not (unsupported and not (entry.get("order") or []) and unsupported >= {"promax", "quantdata"})
+
+
 def _refresh_auxiliary_dataset(
     db: Session,
     *,
@@ -127,6 +141,17 @@ def _refresh_auxiliary_dataset(
     codes: list[str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Refresh one frozen S4 descriptor through the sole application boundary."""
+    if dataset == "index_daily":
+        # index_daily is NOT an S4 auxiliary descriptor; sending it to the orchestrator
+        # raised KeyError and failed the whole 17:35 formal run (2026-10-15). Route it to
+        # the index backfill here so no caller can ever repeat that mistake.
+        backfill = _backfill_index_daily_dates(db, [trade_date], _index_ts_codes(db))
+        return int(backfill.get("row_count") or 0), dict(backfill)
+    from app.services.auxiliary.production import AUXILIARY_DATASET_INVENTORY
+
+    known = {entry.key for entry in AUXILIARY_DATASET_INVENTORY}
+    if dataset not in known:
+        raise ValueError(f"'{dataset}' 不是 S4 辅助数据集，不能走 orchestrator 刷新")
     result = run_auxiliary_application(
         db,
         instruments=tuple(codes or ()),
@@ -158,6 +183,7 @@ def _backfill_news_announcements(
     东方财富接口可用，但 HTTP 567 表示反爬封禁——必须退避并中止，不能继续刷。
     仍保留 L-044 的连续失败上限，避免把盘后流水线卡死数小时。
     """
+    from app.services.datasource.wrap import gw_call
     from app.services.eastmoney_news import (
         EastmoneyBlockedError,
         fetch_announcements_for_code,
@@ -206,7 +232,8 @@ def _backfill_news_announcements(
             break
         time.sleep(NEWS_BACKFILL_SLEEP)
         try:
-            rows = fetch_announcements_for_code(
+            rows = gw_call(
+                "ann.list", "eastmoney", fetch_announcements_for_code,
                 code,
                 start_date=target_start,
                 end_date=target_end,
@@ -250,7 +277,8 @@ def _backfill_news_announcements(
                 continue
             time.sleep(NEWS_BACKFILL_SLEEP)
             try:
-                rows = fetch_cninfo(
+                rows = gw_call(
+                    "ann.list", "cninfo", fetch_cninfo,
                     code, start_date=target_start, end_date=end_today, page_size=30, max_pages=2,
                 )
             except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
@@ -268,8 +296,29 @@ def _backfill_news_announcements(
                 payload_by_id[row["article_id"]] = row
         remaining_for_tushare = still_need
 
-    # Tushare anns_d 可选回退：仅当东方财富/巨潮都漏掉时尝试；无权限时静默跳过。
+    # 第三源：xiaoshi event-timeline 公告分区（全市场按日，巨潮口径），默认关闭。
     if remaining_for_tushare:
+        from app.services.datasource.gateway import is_cutover
+        if is_cutover("ann.list.xiaoshi"):
+            from app.services.datasource.xiaoshi_ann import fetch_range as fetch_xiaoshi_ann
+            try:
+                xrows = fetch_xiaoshi_ann(target_start, target_end, set(remaining_for_tushare))
+            except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback
+                logger.debug("_backfill_news_announcements: xiaoshi fallback failed %r", _ble_exc)
+                xrows = []
+            got = {r["code"] for r in xrows}
+            provider_row_count += len(xrows)
+            for row in xrows:
+                payload_by_id[row["article_id"]] = row
+            for code in got:
+                if code in failed_codes:
+                    failed_codes.remove(code)
+            remaining_for_tushare = [c for c in remaining_for_tushare if c not in got]
+
+    # Tushare anns_d 可选回退：仅当东方财富/巨潮都漏掉时尝试；无权限时静默跳过。
+    # 2026-10-19：tushare_official 已删除（c41f5e7），promax/quantdata 在 routing_table 里均标为
+    # anns_d unsupported——没有可用上游时整段跳过，不再逐代码空打、刷权限错误和全失败告警。
+    if remaining_for_tushare and _tushare_api_has_supported_provider("anns_d"):
         pro = None
         try:
             pro = get_pro()
@@ -1334,7 +1383,7 @@ def _repair_quote_metric_columns(
 
     assignments = ", ".join(f"{name} = :{name}" for name in targets)
     statement = text(
-        f"UPDATE daily_kbars SET {assignments} WHERE code = :code AND trade_date = :trade_date"
+        f"UPDATE daily_kbars SET {assignments}, updated_at = UTC_TIMESTAMP() WHERE code = :code AND trade_date = :trade_date"
     )
     updated = 0
     for row in rows:
@@ -1586,6 +1635,7 @@ def _backfill_chip_date(db: Session, trade_date: str) -> dict[str, Any]:
         stmt = mysql_insert(DailyKbar).values(chunk)
         db.execute(
             stmt.on_duplicate_key_update(
+                updated_at=func.utc_timestamp(),  # 2026-10-19: revisions bump updated_at (outcome finality gate / auto re-projection)
                 chip_cost_15=stmt.inserted.chip_cost_15,
                 chip_cost_50=stmt.inserted.chip_cost_50,
                 chip_cost_85=stmt.inserted.chip_cost_85,

@@ -285,7 +285,8 @@ def backfill_history(
                   breakout60 = COALESCE(:breakout60, breakout60),
                   max_dd20 = COALESCE(:max_dd20, max_dd20),
                   holder_pct = COALESCE(:holder_pct, holder_pct),
-                  upper_shadow_count20 = COALESCE(:upper_shadow_count20, upper_shadow_count20)
+                  upper_shadow_count20 = COALESCE(:upper_shadow_count20, upper_shadow_count20),
+                  updated_at = UTC_TIMESTAMP()
                 WHERE code = :code AND trade_date = :td
             """)
             for u in updates:

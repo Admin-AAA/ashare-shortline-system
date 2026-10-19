@@ -1,5 +1,6 @@
 [importlinter]
 root_package = app
+include_external_packages = True
 
 [importlinter:contract:layers]
 name = api -> services -> engine
@@ -8,3 +9,29 @@ layers =
     app.api
     app.services
     app.engine
+
+[importlinter:contract:datasource-boundary]
+name = provider SDKs/HTTP only inside app.services.datasource (legacy modules grandfathered, list may only shrink)
+type = forbidden
+source_modules =
+    app.api
+    app.engine
+    app.services
+forbidden_modules =
+    tushare
+    baostock
+    akshare
+    httpx
+    requests
+ignore_imports =
+    app.services.datasource.** -> *
+    app.services.model_router_service -> httpx
+    app.services.cninfo_news -> *
+    app.services.eastmoney_news -> *
+    app.services.market_auxiliary -> *
+    app.services.market_data -> *
+    app.services.tushare_client -> *
+    app.services.tushare_transport -> *
+    app.services.xiaoshi_client -> *
+    app.services.xiaoshi_minute_source -> *
+include_external_packages = True

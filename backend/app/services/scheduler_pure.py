@@ -89,12 +89,16 @@ class RetryablePostcloseReadinessError(RuntimeError):
         super().__init__(str(result.get("summary_text") or "盘后辅助数据暂未就绪"))
 
 
-# 策略曝光补跑调度任务（E 项样本可信前置）：盘前对近30天样本不足的策略单独补跑。
-# 任务 ID 固定，由 Prefect deployments 幂等同步（已存在则不覆盖用户手动调整的 cron/payload）。
+# 已退役：策略曝光补跑（experiment 模式样本补齐，2026-10-19 移除）。保留 ID 仅用于启动时禁用旧行
+# 与识别历史 task_run；17:35 盘后流水线已为每个现役策略独立出 formal 票，正式 KPI 只认 formal。
 EXPOSURE_TASK_ID = "strategy_exposure_run"
 
 
-EXPOSURE_CRON = "3 8 * * mon-fri"  # 周一到周五 08:03（盘前，避免与盘后结算/回填争抢资源）
+# [中线] mid-block-trade-premium 盘前备份出票：主触发是 21:00 晚间补数钩子；
+# 若 Tushare 大宗交易发布延迟/21:00 任务失败，08:03 再对上一交易日补跑一次（幂等）。
+TASK_TYPE_BLOCK_TRADE_BACKUP = "midterm_block_trade_backup"
+BLOCK_TRADE_BACKUP_TASK_ID = "midterm_block_trade_premarket"
+BLOCK_TRADE_BACKUP_CRON = "3 8 * * mon-fri"  # 周一到周五 08:03（开盘前，T=上一交易日）
 
 
 # ── 盘中锁利影子链路（只记录不交易，见 intraday_lock_service）────────────────
@@ -275,7 +279,6 @@ def _default_matrix_payload(payload: dict) -> dict:
     return result
 
 
-MANUAL_STRATEGY_EXPOSURE_TASK_ID = "manual_strategy_exposure_run"
 
 
 # Restored helpers (dropped by 9c308a6 while still referenced -> NameError at runtime).
@@ -437,8 +440,18 @@ def _sync_step_summary(label: str, result: dict) -> str:
         parts.append(f"空结果待重试 {empty}")
     if skipped:
         parts.append(f"跳过 {skipped}")
-    parts.append(f"失败 {failed}")
-    return " / ".join(parts)
+    # batch_sync 数据集级失败（如 margin_detail fetch_failed）不进 action_summary；之前状态
+    # partial_failed 而摘要写"失败 0"。这里把失败/已知缺口数据集如实列出（known_gap 不计失败）。
+    batch = result.get("batch_sync") if isinstance(result.get("batch_sync"), dict) else {}
+    failed_sets = sorted(k for k, v in batch.items() if isinstance(v, dict) and v.get("status") == "failed")
+    known_sets = sorted(k for k, v in batch.items() if isinstance(v, dict) and v.get("status") == "known_gap")
+    parts.append(f"失败 {failed + len(failed_sets)}")
+    text = " / ".join(parts)
+    if failed_sets:
+        text += f"（失败数据集: {','.join(failed_sets)}）"
+    if known_sets:
+        text += f"（已知缺口不计失败: {','.join(known_sets)}）"
+    return text
 
 
 def _action_summary_count(result: object, key: str) -> int:
@@ -557,8 +570,6 @@ def _classify_postclose_blockers(
 STANDALONE_BATCH_SIZE = 4
 
 
-# 串行 enqueue 时每个策略之间的间隔，避免同时拉起多个全市场扫描子进程造成 CPU 尖峰/心跳超时。
-EXPOSURE_ENQUEUE_STAGGER_SECONDS = 8
 
 
 def _update_matrix_progress(db, task_run_id: str, summary: str) -> None:

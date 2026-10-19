@@ -82,6 +82,11 @@ _SCHEDULER_IDENTITY_CONTRACTS: dict[str, dict[str, str]] = {
         "scope": "strategy_id + run_mode=experiment + exposure window",
         "cardinality": "one scheduler attempt may emit multiple strategy/date identities",
     },
+    "midterm_block_trade_backup": {
+        "business_date": "previous trading day T (latest_allowed_bar_date at 08:03)",
+        "scope": "strategy_id=mid-block-trade-premium",
+        "cardinality": "one idempotent pick file per T",
+    },
     "intraday_lock_shadow": {
         "business_date": "Asia/Shanghai market-session date evaluated by the action",
         "scope": "action=create|settle + monitored recommendation cohort",
@@ -143,13 +148,6 @@ _PREFECT_FLOW_IDENTITY_CONTRACTS: tuple[dict[str, str], ...] = (
         "flow_name": "manual-data-health-remediation",
         "business_date": "each remediated market-data date",
         "scope": "target tables + code universe",
-        "durable_identity": "ScheduledTaskRun.task_run_id",
-        "scheduled_for": "manual dispatch time",
-    },
-    {
-        "flow_name": "manual-strategy-exposure",
-        "business_date": "each emitted experiment RecommendationRun.trade_date",
-        "scope": "strategy set + exposure window",
         "durable_identity": "ScheduledTaskRun.task_run_id",
         "scheduled_for": "manual dispatch time",
     },

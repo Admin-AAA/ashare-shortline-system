@@ -483,7 +483,11 @@ class TushareHttpProvider:
         with self._breaker_lock:
             breaker = self._breakers.get(api_name)
             if breaker is None:
-                breaker = CircuitBreaker(
+                from app.core.shared_breaker import SharedCircuitBreaker
+
+                # shared across backend / Prefect worker / scripts (runtime SQLite store)
+                breaker = SharedCircuitBreaker(
+                    f"tushare:{self.config.name}:{api_name}",
                     self.config.failure_threshold,
                     self.config.recovery_seconds,
                 )

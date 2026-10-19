@@ -33,6 +33,9 @@ def run_records(
     trade_date_to: str | None = Query(default=None),
     preset_id: str | None = Query(default=None),
     fields: str | None = Query(default=None, pattern="^(full|slim)$"),
+    min_picks: int | None = Query(default=None, ge=0, description="分页模式：recommended_count >= N"),
+    sort: str = Query(default="started_at", pattern="^(started_at|picks|duration|status)$"),
+    order: str = Query(default="desc", pattern="^(asc|desc)$"),
     db: Session = Depends(get_db),
 ):
     """推荐运行记录列表（轻量摘要，不含推荐股票明细）。
@@ -56,7 +59,11 @@ def run_records(
             and (trade_date_from is None or td >= trade_date_from)
             and (trade_date_to is None or td <= trade_date_to)
         )
-    filtered = [r for r in rows if keep(r)]
+    filtered = [
+        r for r in rows
+        if keep(r) and (min_picks is None or int(r.get("recommended_count") or 0) >= min_picks)
+    ]
+    filtered = _sort_runs(filtered, sort, order)
     page = page or 1
     page_size = page_size or 50
     items = filtered[(page - 1) * page_size: page * page_size]
@@ -97,3 +104,30 @@ def matrix_record_detail(record_id: int, db: Session = Depends(get_db)):
     if detail is None:
         raise HTTPException(status_code=404, detail="matrix record not found")
     return detail
+
+
+def _run_duration_seconds(r: dict) -> float | None:
+    from datetime import datetime
+
+    try:
+        a, b = r.get("started_at"), r.get("finished_at")
+        if not a or not b:
+            return None
+        return (datetime.fromisoformat(str(b)) - datetime.fromisoformat(str(a))).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
+def _sort_runs(rows: list[dict], sort: str, order: str) -> list[dict]:
+    """稳定排序；空值始终排最后（无论升降序）。"""
+    getters = {
+        "started_at": lambda r: r.get("started_at") or None,
+        "picks": lambda r: r.get("recommended_count"),
+        "duration": _run_duration_seconds,
+        "status": lambda r: r.get("status") or None,
+    }
+    get = getters[sort]
+    present = [r for r in rows if get(r) is not None]
+    missing = [r for r in rows if get(r) is None]
+    present.sort(key=lambda r: (str(get(r)) if sort in ("started_at", "status") else float(get(r))), reverse=(order == "desc"))
+    return present + missing

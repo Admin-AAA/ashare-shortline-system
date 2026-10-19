@@ -785,11 +785,11 @@ def fetch_daily_kbars(
             "wr_6": _f(fpr.get("wr_6_bfq")),
             "wr_10": _f(fpr.get("wr_10_bfq")),
             # 筹码分布 (from cyq_perf)
-            "chip_cost_15": _f(chp.get("cost_15pct")),
-            "chip_cost_50": _f(chp.get("cost_50pct")),
-            "chip_cost_85": _f(chp.get("cost_85pct")),
-            "chip_weight_avg": _f(chp.get("weight_avg")),
-            "chip_winner_rate": _f(chp.get("winner_rate")),
+            "chip_cost_15": _f(chp.get("cost_15pct"), None),
+            "chip_cost_50": _f(chp.get("cost_50pct"), None),
+            "chip_cost_85": _f(chp.get("cost_85pct"), None),
+            "chip_weight_avg": _f(chp.get("weight_avg"), None),
+            "chip_winner_rate": _f(chp.get("winner_rate"), None),
             # 来源标记
             "source": "tushare",
         }
@@ -861,6 +861,20 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
         logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
 
+    # 2026-10-19：17:35 盘后写入时 stk_factor 常未发布 → factor_map 为空 → adj_factor 被 _f 写成 0.0
+    # （214 个交易日全市场 adj_factor=0）。adj_factor 改从专用 adj_factor 接口补（盘前即发布），
+    # 两者取不到时写 NULL 而非 0。
+    adj_map: dict[str, float] = {}
+    try:
+        adj = pro.adj_factor(trade_date=target)
+        if adj is not None and not adj.empty:
+            for _, row in adj.iterrows():
+                value = _f(row.get("adj_factor"))
+                if value > 0:
+                    adj_map[str(row.get("ts_code") or "")] = value
+    except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
+        logger.warning("fetch_daily_kbars_for_trade_date: adj_factor fetch failed: %s", exc)
+
     factor_map: dict[str, dict[str, Any]] = {}
     try:
         factor = pro.stk_factor(trade_date=target)
@@ -890,6 +904,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
         logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
 
+    # stk_factor 指标列缺失时写 None（上游 upsert 对 0/NULL 都保留旧值），不再写 0（2026-10-19）
     bars: list[dict[str, Any]] = []
     for _, row in daily.iterrows():
         raw_ts_code = str(row.get("ts_code") or "")
@@ -913,30 +928,30 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
                 "turnover_rate": _f(bas.get("turnover_rate")) or _f(fac.get("turnover_rate")),
                 "pe_ttm": _f(bas.get("pe_ttm")),
                 "total_mv_yi": _f(bas.get("total_mv")) / 1e8 if bas.get("total_mv") is not None else 0.0,
-                "ma5": _f(fac.get("ma5")),
-                "ma10": _f(fac.get("ma10")),
-                "ma20": _f(fac.get("ma20")),
-                "ma60": _f(fac.get("ma60")),
-                "ma250": _f(fac.get("ma250")),
-                "macd_dif": _f(fac.get("macd_dif")),
-                "macd_dea": _f(fac.get("macd_dea")),
-                "macd": _f(fac.get("macd")),
-                "kdj_k": _f(fac.get("kdj_k")),
-                "kdj_d": _f(fac.get("kdj_d")),
-                "kdj_j": _f(fac.get("kdj_j")),
-                "rsi_6": _f(fac.get("rsi_6")),
-                "rsi_12": _f(fac.get("rsi_12")),
-                "rsi_24": _f(fac.get("rsi_24")),
-                "boll_upper": _f(fac.get("boll_upper")),
-                "boll_mid": _f(fac.get("boll_mid")),
-                "boll_lower": _f(fac.get("boll_lower")),
-                "cci": _f(fac.get("cci")),
-                "adj_factor": _f(fac.get("adj_factor")),
-                "chip_cost_15": _f(chp.get("cost_15pct")),
-                "chip_cost_50": _f(chp.get("cost_50pct")),
-                "chip_cost_85": _f(chp.get("cost_85pct")),
-                "chip_weight_avg": _f(chp.get("weight_avg")),
-                "chip_winner_rate": _f(chp.get("winner_rate")),
+                "ma5": _f(fac.get("ma5"), None),
+                "ma10": _f(fac.get("ma10"), None),
+                "ma20": _f(fac.get("ma20"), None),
+                "ma60": _f(fac.get("ma60"), None),
+                "ma250": _f(fac.get("ma250"), None),
+                "macd_dif": _f(fac.get("macd_dif"), None),
+                "macd_dea": _f(fac.get("macd_dea"), None),
+                "macd": _f(fac.get("macd"), None),
+                "kdj_k": _f(fac.get("kdj_k"), None),
+                "kdj_d": _f(fac.get("kdj_d"), None),
+                "kdj_j": _f(fac.get("kdj_j"), None),
+                "rsi_6": _f(fac.get("rsi_6"), None),
+                "rsi_12": _f(fac.get("rsi_12"), None),
+                "rsi_24": _f(fac.get("rsi_24"), None),
+                "boll_upper": _f(fac.get("boll_upper"), None),
+                "boll_mid": _f(fac.get("boll_mid"), None),
+                "boll_lower": _f(fac.get("boll_lower"), None),
+                "cci": _f(fac.get("cci"), None),
+                "adj_factor": (_f(fac.get("adj_factor")) or adj_map.get(raw_ts_code)) or None,
+                "chip_cost_15": _f(chp.get("cost_15pct"), None),
+                "chip_cost_50": _f(chp.get("cost_50pct"), None),
+                "chip_cost_85": _f(chp.get("cost_85pct"), None),
+                "chip_weight_avg": _f(chp.get("weight_avg"), None),
+                "chip_winner_rate": _f(chp.get("winner_rate"), None),
                 "source": "tushare",
             }
         )

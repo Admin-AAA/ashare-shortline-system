@@ -1526,6 +1526,7 @@ def test_local_pool_status_summarizes_unified_quotes_and_bars(db, monkeypatch):
     assert isinstance(status["summary"]["daily_bar_count"], int)
 
 
+@pytest.mark.requires_market_data
 def test_local_pool_status_reports_real_indicator_coverage(db):
     """指标覆盖率必须按 daily_kbars 实际统计，不能恒为 0。
 

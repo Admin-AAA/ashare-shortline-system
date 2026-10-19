@@ -27,6 +27,49 @@ def _extra(sid):
     # 所有调参后的过滤都已写进 strategy.yaml，真单策略面板按新 yaml 重放，无需再模拟（L-186）。
     return None
 
+def _cooldown_rows(db, sid, rows, panel):
+    """§104：已采纳冷却规则的策略（app/services/shortline_cooldown.COOLDOWN_RULES）在页面指标里按线上口径剔除冷却日。
+    影子单 = EXT 面板（若有）+ 本面板的未过滤选股；出场日用 _simulate_card 重模拟；严格 PIT（exit ≤ T）。"""
+    from collections import defaultdict
+    from sqlalchemy import text
+    import app.services.backtest.policy_experiment as PE
+    from app.services.shortline_cooldown import equity_ma_blocked
+    from scripts.research_exit_resim import fetch_bars, variant, Day
+    from scripts.research_stability_gates import panels
+    ep = variant(); lim = ep.entry_lookahead_days + ep.horizon_days + 2
+    hist = []
+    srcs = []
+    ext = panels(sid).get("EXT")
+    if ext is not None:
+        pe = json.loads(ext.read_text()); _register_only(pe)
+        _, er = run_rule(RULES[f"only:{sid}"], pe, standalone_selection_policy_cached(sid), apply_global_weights=False)
+        srcs.append((pe, er))
+    srcs.append((panel, rows))
+    for p, rr in srcs:
+        cards = {(d["signal_date"], c["code"]): c for d in p["days"] for c in d["cards"]}
+        need = defaultdict(set)
+        for r in rr:
+            need[r["dt"]].add(r["code"])
+        bars = fetch_bars(db, need)
+        for r in rr:
+            day = Day(); day.signal_date = r["dt"]; day.outcome_bars = {r["code"]: tuple(bars[r["dt"]].get(r["code"], ())[:lim])}
+            tr = (PE._simulate_card(day, cards[(r["dt"], r["code"])], ep) or {}).get("trade")
+            if tr and tr.executed and tr.exit_date:
+                hist.append((str(tr.exit_date)[:10], float(tr.net_return_pct)))
+    cal = sorted({str(x[0])[:10] for x in db.execute(text("SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001'"))})
+    days = sorted({r["dt"] for r in rows})
+    blocked = {d for d in days if equity_ma_blocked(hist, cal, d)["active"]}
+    return [r for r in rows if r["dt"] not in blocked], len(blocked)
+
+
+_POL_CACHE = {}
+def standalone_selection_policy_cached(sid):
+    from app.services.standalone_strategies import standalone_selection_policy
+    if sid not in _POL_CACHE:
+        _POL_CACHE[sid] = standalone_selection_policy(load_production_selection_policy(), sid, 3)
+    return _POL_CACHE[sid]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--panel", default="", help="默认取 output/research/round*/panel 下最新的面板")
@@ -66,6 +109,12 @@ def main():
         ex = _extra(sid)
         rule = base if ex is None else (lambda cards, d, _b=base, _e=ex: [c for c in _b(cards, d) if _e(c)])
         _, rows = run_rule(rule, p, pol, apply_global_weights=False)
+        cooldown = None
+        from app.services.shortline_cooldown import COOLDOWN_RULES
+        if sid in COOLDOWN_RULES:
+            with SessionLocal() as _db:
+                rows, _nb = _cooldown_rows(_db, sid, rows, p)
+            cooldown = {"rule": COOLDOWN_RULES[sid], "blocked_signal_days": _nb}
         def m(lo, hi):
             r = _metrics([x for x in rows if lo <= x["dt"] < hi], [x for x in days if lo <= x < hi])
             if r is None: return {"n": 0}
@@ -75,7 +124,8 @@ def main():
         status = "positive" if (w12.get("avg_return_pct") or 0) > 0 and (wr.get("avg_return_pct") or 0) > 0 else "watch"
         if sid in WATCH_STRATEGY_IDS: status = "watch"
         out.append({"strategy_id": sid, "name": names.get(sid, sid), "status": status, "last_12m": w12, "recent": wr,
-                    "tuned_filter_emulated": ex is not None, "panel": sources[sid]})
+                    "tuned_filter_emulated": ex is not None, "panel": sources[sid],
+                    **({"cooldown_emulated": cooldown} if cooldown else {})})
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"),
         "window": {"start": shared["days"][0]["signal_date"], "end": shared["days"][-1]["signal_date"], "recent_start": a.split},

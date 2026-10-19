@@ -112,7 +112,6 @@ def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
     monkeypatch.setattr("app.orchestration.deployments.recommendation_flow", _FakeFlow("recommendation_flow"))
     monkeypatch.setattr("app.orchestration.deployments.manual_preset_matrix_flow", _FakeFlow("manual_preset_matrix_flow"))
     monkeypatch.setattr("app.orchestration.deployments.manual_data_health_remediation_flow", _FakeFlow("manual_data_health_remediation_flow"))
-    monkeypatch.setattr("app.orchestration.deployments.manual_strategy_exposure_flow", _FakeFlow("manual_strategy_exposure_flow"))
     monkeypatch.setattr("app.orchestration.deployments.intraday_lock_poll_flow", _FakeFlow("intraday_lock_poll_flow"))
     monkeypatch.setattr("app.orchestration.deployments.stale_run_recovery_flow", _FakeFlow("stale_run_recovery_flow"))
     monkeypatch.setattr("app.orchestration.deployments.SessionLocal", lambda: SimpleNamespace(
@@ -128,8 +127,8 @@ def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
     # 推荐子 run 必须走独立队列，否则父 flow 占满 default 槽会死锁
     assert queues == ["recommendation"]
     assert result.scheduled_task_count == 0
-    # 6 non-DB flows: recommendation + 3 manual + 2 periodic (no enabled DB tasks).
-    assert len(applied) == 6
+    # 5 non-DB flows: recommendation + 2 manual + 2 periodic (no enabled DB tasks).
+    assert len(applied) == 5
     # Every deployment must pin the backend working_dir so the Process worker
     # does not spawn flow-run subprocesses in a throwaway temp directory.
     assert job_vars_list and all(

@@ -72,6 +72,13 @@ def execute_recommendation_run(
             level=logging.DEBUG,
         )
         try:
+            # Orphan guard: a flow run whose run_id has no recommendation_runs row (historically
+            # test fixtures leaking run_queued_* dispatches into the production Prefect, fixed in
+            # 0597d25) must not retry/fail noisily or touch progress state. Skip with a warning.
+            if SQLAlchemyRunRepository(db).get_run(run_id) is None:
+                logger.warning("recommendation-run skipped: run %s not found in recommendation_runs (orphan dispatch)", run_id)
+                db.rollback()
+                return
             if not _mark_run_dispatched(db, run_id):
                 db.rollback()
                 return
@@ -110,14 +117,6 @@ def manual_data_health_remediation_flow(task_run_id: str, payload: dict) -> None
     from app.services.scheduler_service import _execute_manual_data_health_remediation
 
     _execute_manual_data_health_remediation(task_run_id, payload)
-
-
-@flow(name="manual-strategy-exposure", timeout_seconds=7200)
-def manual_strategy_exposure_flow(task_run_id: str, payload: dict) -> None:
-    assert_no_brokerage_access(payload, context="flow:manual-strategy-exposure")  # Scope_Guard 0.10
-    from app.services.scheduler_service import _execute_manual_strategy_exposure
-
-    _execute_manual_strategy_exposure(task_run_id, payload)
 
 
 @task(retries=0)

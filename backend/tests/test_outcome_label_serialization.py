@@ -129,7 +129,7 @@ def test_label_pending_outcomes_is_serialized_by_lock(committed_pending_rec):
     max_active = 0
     state_lock = threading.Lock()
 
-    def _spy_simulate(rec, bars, dates, horizon_days, feature_snapshot=None):
+    def _spy_simulate(rec, bars, dates, horizon_days, feature_snapshot=None, **_kwargs):
         nonlocal active, max_active
         with state_lock:
             active += 1
