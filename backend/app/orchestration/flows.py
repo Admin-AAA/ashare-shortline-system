@@ -119,14 +119,6 @@ def manual_data_health_remediation_flow(task_run_id: str, payload: dict) -> None
     _execute_manual_data_health_remediation(task_run_id, payload)
 
 
-@flow(name="manual-strategy-exposure", timeout_seconds=7200)
-def manual_strategy_exposure_flow(task_run_id: str, payload: dict) -> None:
-    assert_no_brokerage_access(payload, context="flow:manual-strategy-exposure")  # Scope_Guard 0.10
-    from app.services.scheduler_service import _execute_manual_strategy_exposure
-
-    _execute_manual_strategy_exposure(task_run_id, payload)
-
-
 @task(retries=0)
 def poll_intraday_lock(scheduled_at: str) -> dict:
     """Prefect-scheduled intraday lock polling (replaces in-process interval job)."""

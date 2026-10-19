@@ -5,7 +5,7 @@
   - data_sync: 同步行情数据（刷新报价池 + 按日批量日K + 健康补数 + 辅助数据）
   - recommendation_run: 执行推荐流水线
   - preset_matrix_run: 盘后批量执行全部启用预设，用于预设矩阵对比
-  - strategy_exposure_run: 盘前对近30天样本不足的策略单独补跑，产出仅供胜率统计（experiment 模式，不进记录中心）
+  - midterm_block_trade_backup: 08:03 盘前大宗交易溢价备份出票（主触发为 21:00 晚间补数钩子）
 """
 
 from __future__ import annotations
@@ -36,8 +36,9 @@ from app.services.registry.data_source import (
     DEFAULT_RECOMMENDATION_DATA_SOURCE,
 )
 from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
-    EXPOSURE_CRON,
-    EXPOSURE_ENQUEUE_STAGGER_SECONDS,
+    BLOCK_TRADE_BACKUP_CRON,
+    BLOCK_TRADE_BACKUP_TASK_ID,
+    TASK_TYPE_BLOCK_TRADE_BACKUP,
     EXPOSURE_TASK_ID,
     LEGACY_POSTCLOSE_TASK_IDS,
     LOCK_CREATE_CRON,
@@ -47,7 +48,6 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     LOCK_SETTLE_TASK_ID,
     MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID,
     MANUAL_PRESET_MATRIX_TASK_ID,
-    MANUAL_STRATEGY_EXPOSURE_TASK_ID,
     POSTCLOSE_LATE_DATA_REPAIR_CRON,
     POSTCLOSE_LATE_DATA_REPAIR_TASK_ID,
     POSTCLOSE_PIPELINE_CRON,
@@ -130,7 +130,7 @@ def _set_db_running(task_id: str, running: bool) -> None:
         logger.exception("更新 is_running 失败: %s", task_id)
 
 
-BLOCK_TRADE_HOOK_TASK_IDS = frozenset({POSTCLOSE_LATE_DATA_REPAIR_TASK_ID, EXPOSURE_TASK_ID})
+BLOCK_TRADE_HOOK_TASK_IDS = frozenset({POSTCLOSE_LATE_DATA_REPAIR_TASK_ID, BLOCK_TRADE_BACKUP_TASK_ID})
 
 
 def _run_block_trade_picks_hook(db, task_id: str) -> dict[str, Any]:
@@ -210,45 +210,38 @@ def _ensure_postclose_pipeline_task() -> None:
         logger.exception("注册盘后全量同步流水线失败")
 
 
-def _ensure_strategy_exposure_task() -> None:
-    """确保策略曝光补跑调度任务存在（E 项样本可信前置）。
+def _ensure_block_trade_backup_task() -> None:
+    """注册 08:03 盘前大宗交易备份出票任务，并禁用已退役的策略曝光补跑旧行（幂等）。
 
-    盘前对近30天样本 < DEFAULT_EXPOSURE_MIN_SAMPLE(20) 的 enabled 策略单独补跑，
-    使其胜率统计可信（样本 ≥20 才能按胜率选策略、低胜率策略才敢标记）。
-
-    ⚠️ 历史根因：本函数曾缺失（仅 manual 触发路径 + _run_strategy_exposure 实现存在，
-    原进程内 scheduler 从不注册定时任务），导致 exposure cron 从未被排程——4 个低频
-    策略（chip/high-range/small-cap/trend-pullback）长期卡在 n<20，胜率统计不可信，
-    E 项持续误触发。此处使用幂等注册修复该盲区。
-
-    若任务已存在则不覆盖（保留用户手动调整的 cron/payload）。
+    曝光补跑（strategy_exposure_run）于 2026-10-19 退役：它在盘前对近30天样本<20 的策略
+    额外跑 experiment 模式推荐，只为喂样本数；17:35 盘后流水线已为每个现役策略独立出 formal 票，
+    正式胜率/KPI 只认 formal（outcome_settlement.OFFICIAL_RUN_MODE），且同一信号日重复跑会制造
+    相关性很强的重复样本。原 08:03 任务上挂的大宗交易备份钩子迁到本独立任务。
     """
     try:
         db = SessionLocal()
         try:
-            existing = db.get(ScheduledTask, EXPOSURE_TASK_ID)
-            if existing:
-                return
-            task = ScheduledTask(
-                task_id=EXPOSURE_TASK_ID,
-                name="策略曝光补跑（盘前样本补齐）",
-                task_type=TASK_TYPE_STRATEGY_EXPOSURE_RUN,
-                cron_expression=EXPOSURE_CRON,
-                payload_json=json.dumps(
-                    {
-                        "window_days": 30,
-                        "min_sample_threshold": DEFAULT_EXPOSURE_MIN_SAMPLE,
-                    }
-                ),
-                enabled=True,
-            )
-            db.add(task)
+            legacy = db.get(ScheduledTask, EXPOSURE_TASK_ID)
+            if legacy is not None and legacy.enabled:
+                legacy.enabled = False
+                logger.info("已禁用退役的策略曝光补跑任务: %s", EXPOSURE_TASK_ID)
+            if db.get(ScheduledTask, BLOCK_TRADE_BACKUP_TASK_ID) is None:
+                db.add(
+                    ScheduledTask(
+                        task_id=BLOCK_TRADE_BACKUP_TASK_ID,
+                        name="中线大宗交易溢价盘前备份出票",
+                        task_type=TASK_TYPE_BLOCK_TRADE_BACKUP,
+                        cron_expression=BLOCK_TRADE_BACKUP_CRON,
+                        payload_json=json.dumps({}),
+                        enabled=True,
+                    )
+                )
+                logger.info("已注册大宗交易盘前备份任务: %s (cron=%s)", BLOCK_TRADE_BACKUP_TASK_ID, BLOCK_TRADE_BACKUP_CRON)
             db.commit()
-            logger.info("已注册策略曝光补跑调度任务: %s (cron=%s)", EXPOSURE_TASK_ID, EXPOSURE_CRON)
         finally:
             db.close()
     except Exception:
-        logger.exception("注册策略曝光补跑任务失败")
+        logger.exception("注册大宗交易盘前备份任务失败")
 
 
 def _ensure_intraday_lock_tasks() -> None:
@@ -328,13 +321,13 @@ def ensure_scheduled_task_registrations() -> None:
     """启动接线入口：注册全部关键调度任务（幂等）。
 
     2026-08-02 系统诊断发现：_ensure_postclose_pipeline_task /
-    _ensure_strategy_exposure_task / _ensure_intraday_lock_tasks /
+    _ensure_block_trade_backup_task / _ensure_intraday_lock_tasks /
     _configure_postclose_pipeline_tasks 在生产代码中零调用点，全新部署依赖
     人工建行；safety_net 连 _ensure 函数都没有。此处统一接线，由 FastAPI
     startup 调用，确保新部署自动获得完整调度。
     """
     _ensure_postclose_pipeline_task()
-    _ensure_strategy_exposure_task()
+    _ensure_block_trade_backup_task()
     _ensure_intraday_lock_tasks()
     _ensure_formal_safety_net_task()
 
@@ -414,8 +407,11 @@ def _execute_task(
             result = asyncio.run(_safety_net_run(db, payload))
         elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
             result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
+        elif task_type == TASK_TYPE_BLOCK_TRADE_BACKUP:
+            # 实际出票由下方 BLOCK_TRADE_HOOK_TASK_IDS 钩子完成（T=上一交易日，幂等）。
+            result = {"summary_text": "盘前大宗交易备份出票"}
         elif task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN:
-            result = asyncio.run(_run_strategy_exposure(db, payload, task_run_id=task_run_id))
+            result = {"skipped": True, "status": "skipped", "summary_text": "策略曝光补跑已退役（2026-10-19）"}
         elif task_type == TASK_TYPE_OUTCOME_LABEL:
             result = _run_outcome_label(db, payload)
         elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
@@ -426,7 +422,7 @@ def _execute_task(
             raise RuntimeError(f"未知任务类型: {task_type}")
 
         # [中线] mid-block-trade-premium：Tushare 大宗交易约 21:00 发布。
-        # 主：21:00 晚间全域数据补数完成后跑当日；备：08:03 盘前任务补跑上一交易日（幂等）。
+        # 主：21:00 晚间全域数据补数完成后跑当日；备：08:03 midterm_block_trade_premarket 补跑上一交易日（幂等）。
         if task_id in BLOCK_TRADE_HOOK_TASK_IDS and isinstance(result, dict):
             result["midterm_block_trade"] = _run_block_trade_picks_hook(db, task_id)
 
@@ -700,96 +696,6 @@ def _manual_preset_matrix_task(payload: dict) -> ScheduledTask:
     task.enabled = False
     task.is_running = True
     return task
-
-
-def start_strategy_exposure_now(payload: dict | None = None) -> dict:
-    """异步启动一次低曝光策略补跑，立即返回任务运行状态。
-
-    供手动触发/测试用；定时路径由 scheduled_tasks 表的 strategy_exposure_run 任务按 cron 触发。
-    """
-    if not _try_mark_running_memory(MANUAL_STRATEGY_EXPOSURE_TASK_ID):
-        running = get_latest_strategy_exposure_task_run()
-        if running and running.get("status") == "running":
-            return {"started": False, "task_run": running}
-        raise RuntimeError("策略曝光补跑正在执行中，请等待当前批次完成")
-
-    run_payload = dict(payload or {})
-    db = SessionLocal()
-    task_run_id: str | None = None
-    try:
-        existing_running = _latest_running_strategy_exposure_task_run(db)
-        if existing_running is not None:
-            _mark_done_memory(MANUAL_STRATEGY_EXPOSURE_TASK_ID)
-            return {"started": False, "task_run": serialize_scheduled_task_run(existing_running)}
-
-        task = ScheduledTask(task_id=MANUAL_STRATEGY_EXPOSURE_TASK_ID)
-        task.name = "手工策略曝光补跑"
-        task.task_type = TASK_TYPE_STRATEGY_EXPOSURE_RUN
-        task.cron_expression = "0 0 * * *"
-        task.payload_json = json.dumps(run_payload, ensure_ascii=False)
-        task.enabled = False
-        task.is_running = True
-        task_run = start_task_run(db, task, trigger_source="manual")
-        task_run_id = task_run.task_run_id
-    except Exception:
-        _mark_done_memory(MANUAL_STRATEGY_EXPOSURE_TASK_ID)
-        raise
-    finally:
-        db.close()
-
-    from app.orchestration import trigger_manual_exposure
-    trigger_manual_exposure(task_run_id, run_payload)
-    return {"started": True, "task_run": get_latest_strategy_exposure_task_run()}
-
-
-def get_latest_strategy_exposure_task_run() -> dict | None:
-    db = SessionLocal()
-    try:
-        run = db.scalars(
-            select(ScheduledTaskRun)
-            .where(ScheduledTaskRun.task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN)
-            .order_by(ScheduledTaskRun.started_at.desc())
-            .limit(1)
-        ).first()
-        return serialize_scheduled_task_run(run) if run is not None else None
-    finally:
-        db.close()
-
-
-def _latest_running_strategy_exposure_task_run(db) -> ScheduledTaskRun | None:
-    return db.scalars(
-        select(ScheduledTaskRun)
-        .where(
-            ScheduledTaskRun.task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN,
-            ScheduledTaskRun.status == "running",
-            ScheduledTaskRun.finished_at.is_(None),
-        )
-        .order_by(ScheduledTaskRun.started_at.desc())
-        .limit(1)
-    ).first()
-
-
-def _execute_manual_strategy_exposure(task_run_id: str, payload: dict) -> None:
-    db = SessionLocal()
-    try:
-        result = asyncio.run(_run_strategy_exposure(db, payload, task_run_id=task_run_id))
-        finish_task_run(
-            db,
-            task_run_id,
-            status=_task_result_status(result),
-            summary=str(result.get("summary_text") or ""),
-            result=result,
-        )
-    except Exception as exc:
-        logger.exception("手工策略曝光补跑失败: %s", task_run_id)
-        db.rollback()
-        try:
-            finish_task_run(db, task_run_id, status="failed", error=str(exc), summary=str(exc))
-        except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-            logger.debug("_execute_manual_strategy_exposure: ignored non-fatal error: %s", exc)
-    finally:
-        db.close()
-        _mark_done_memory(MANUAL_STRATEGY_EXPOSURE_TASK_ID)
 
 
 def _run_outcome_label(db, payload: dict) -> dict:
@@ -2215,154 +2121,6 @@ async def _safety_net_run(db, payload: dict) -> dict:
 #  产出 experiment run，仅供 metrics_by_strategy 统计，不进记录中心/驾驶舱。
 #  目的：打破「低曝光策略没样本 → 永远不被选 → 永远没样本」的死循环。
 # ═══════════════════════════════════════════════════════════════
-
-
-def _has_inflight_experiment_run(db, skill_id: str, within_minutes: int = 60) -> bool:
-    """该策略近 within_minutes 分钟内是否已有 queued/running 的 experiment run。
-
-    曝光补跑串行 enqueue 多个策略，每个策略起一个独立子进程跑全市场扫描（85~160s）。
-    若上一次补跑的子进程尚未结束（或被后端重启打断后仍在窗口内），重复 enqueue 会造成
-    同一策略多个重离子进程并发 → CPU 争用 → 心跳超时中断（实测 interrupted 多源于此）。
-    跳过在途任务可避免堆积，让有限的补跑窗口真正产出样本。
-    """
-    if db is None:
-        # 测试中以 None 注入（DB 全 mock）时无法查在途，直接放行（与旧行为一致）。
-        return False
-    cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(minutes=within_minutes)
-    stmt = (
-        select(RecommendationRun)
-        .where(RecommendationRun.run_mode == "experiment")
-        .where(RecommendationRun.status.in_(("queued", "running")))
-        .where(RecommendationRun.started_at >= cutoff)
-    )
-    for run in db.scalars(stmt).all():
-        try:
-            skills = json.loads(run.selected_skills_json or "[]")
-        except (ValueError, TypeError):
-            continue
-        ids = [s.get("skill_id") for s in skills if isinstance(s, dict)]
-        if skill_id in ids:
-            return True
-    return False
-
-
-async def _run_strategy_exposure(db, payload: dict, task_run_id: str | None = None) -> dict:
-    """对近30天样本不足的策略串行补跑 single_skill_id（experiment 模式）。
-
-    每个策略单独 enqueue 到独立子进程，run_mode=experiment，关闭 LLM 审查以加速。
-    产出的推荐只供 metrics_by_strategy 统计胜率，不进记录中心/驾驶舱（list_runs 过滤 experiment）。
-
-    低曝光判定口径（修复点）：只统计 run_mode IN ('formal','experiment') 的真实推荐样本，
-    必须排除 'backtest' 合成回测。backtest run 同样带 skill_breakdown_json，若计入会让
-    真实样本不足的策略被误判为「样本已够」而永远不被补跑（high-range 曾因 13 笔 backtest
-    命中被误判 sample>=20，真实 formal+experiment 仅 16，长期卡在 n<20）。
-    """
-    from app.services.workbench_service import enqueue_workbench_run, sync_skills
-
-    window_days = int(payload.get("window_days", 30))
-    min_sample = int(payload.get("min_sample_threshold") or DEFAULT_EXPOSURE_MIN_SAMPLE)
-    trade_date = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y%m%d")
-
-    # 1. 拿全部 enabled 策略
-    skills = sync_skills(db)
-    enabled_ids = [s.skill_id for s in skills if s.enabled]
-    name_by_sid = {s.skill_id: s.name for s in skills}
-
-    # 2. 拿近 window_days 各策略「真实」样本数（formal+experiment，排除 backtest 合成回测）
-    #    口径与 scripts/self_check.py 的 E 项曝光分布一致（按 recommended_at 近 N 天），
-    #    避免误用 trade_date 窗口导致高覆盖策略被低估、错选入曝光补跑。
-    from app.services.outcome_service import exposure_sample_counts
-
-    sample_by_sid = exposure_sample_counts(
-        db, window_days=window_days, run_mode=("formal", "experiment")
-    )
-
-    # 3. 筛低曝光策略：enabled 但样本 < 阈值
-    low_exposure = []
-    skipped = []
-    for sid in sorted(enabled_ids):
-        cnt = sample_by_sid.get(sid, 0)
-        if cnt < min_sample:
-            low_exposure.append({"skill_id": sid, "sample_count": cnt})
-        else:
-            skipped.append({"skill_id": sid, "sample_count": cnt})
-
-    if not low_exposure:
-        msg = f"曝光补跑跳过: 全部 {len(enabled_ids)} 个策略近{window_days}天样本均≥{min_sample}"
-        logger.info(msg)
-        return {
-            "skipped": True,
-            "window_days": window_days,
-            "min_sample_threshold": min_sample,
-            "exposed_strategies": [],
-            "skipped_strategies": skipped,
-            "summary_text": msg,
-        }
-
-    logger.info(
-        "曝光补跑启动: 近%d天低曝光策略 %d/%d: %s",
-        window_days, len(low_exposure), len(enabled_ids),
-        [r["skill_id"] for r in low_exposure],
-    )
-
-    # 4. 串行 enqueue 每个低曝光策略
-    exposed: list[dict] = []
-    skipped_inflight: list[dict] = []
-    total = len(low_exposure)
-    for index, item in enumerate(low_exposure, start=1):
-        sid = item["skill_id"]
-        if task_run_id:
-            _update_matrix_progress(
-                db,
-                task_run_id,
-                summary=f"曝光补跑 {index}/{total}: {sid}（样本 {item['sample_count']}）",
-            )
-        # 跳过在途任务：避免与尚未结束的上一次补跑（或被重启打断仍在窗口内）重叠，
-        # 防止同一策略多个重离子进程并发导致 CPU 争用与心跳超时中断。
-        if _has_inflight_experiment_run(db, sid):
-            logger.info("曝光补跑跳过在途任务: %s（近 60min 已有 queued/running experiment run）", sid)
-            skipped_inflight.append({"skill_id": sid, "sample_count": item["sample_count"]})
-            continue
-        try:
-            result = enqueue_workbench_run(
-                db,
-                {
-                    "single_skill_id": sid,
-                    "run_name": f"曝光补跑 {name_by_sid.get(sid, sid)} {trade_date}",
-                    "run_mode": "experiment",
-                    "skip_aux_refresh": True,
-                    "disable_agent_review": True,
-                },
-            )
-            run = result.get("run") or {}
-            exposed.append({
-                "skill_id": sid,
-                "run_id": run.get("run_id"),
-                "queued": bool(result.get("queued")),
-            })
-        except Exception as exc:
-            logger.exception("曝光补跑策略 %s 入队失败: %s", sid, exc)
-            db.rollback()
-            exposed.append({"skill_id": sid, "error": str(exc)})
-        # 错峰入队：每个策略起一个全市场扫描子进程，间隔拉起避免 CPU 尖峰。
-        if index < total:
-            time.sleep(EXPOSURE_ENQUEUE_STAGGER_SECONDS)
-
-    inflight_sids = [r["skill_id"] for r in skipped_inflight]
-    msg = (
-        f"曝光补跑完成: {len(exposed)}/{total} 策略已入队"
-        f"（跳过在途 {len(skipped_inflight)}: {', '.join(inflight_sids) or '无'}；"
-        f"近{window_days}天样本<{min_sample}的: {', '.join(r['skill_id'] for r in low_exposure)}）"
-    )
-    return {
-        "skipped": False,
-        "window_days": window_days,
-        "min_sample_threshold": min_sample,
-        "exposed_strategies": exposed,
-        "skipped_inflight_strategies": skipped_inflight,
-        "skipped_strategies": skipped,
-        "summary_text": msg,
-    }
 
 
 def ensure_formal_recommendation_safely() -> dict:

@@ -18,7 +18,3 @@ deployments:
     entrypoint: backend/app/orchestration/flows.py:manual_data_health_remediation_flow
     work_pool:
       name: ashare-local
-  - name: default
-    entrypoint: backend/app/orchestration/flows.py:manual_strategy_exposure_flow
-    work_pool:
-      name: ashare-local

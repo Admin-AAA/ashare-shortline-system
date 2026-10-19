@@ -11,7 +11,7 @@ class _DB:
 
 
 def test_hook_targets_evening_repair_and_premarket_tasks():
-    assert ss.BLOCK_TRADE_HOOK_TASK_IDS == {"postclose_late_data_repair", "strategy_exposure_run"}
+    assert ss.BLOCK_TRADE_HOOK_TASK_IDS == {"postclose_late_data_repair", "midterm_block_trade_premarket"}
 
 
 def test_hook_calls_generate_with_latest_bar_date(monkeypatch):
@@ -30,6 +30,6 @@ def test_hook_failure_is_swallowed_and_logged(monkeypatch, caplog):
 
     monkeypatch.setattr(midterm_service, "generate_block_trade_picks", boom)
     db = _DB()
-    out = ss._run_block_trade_picks_hook(db, "strategy_exposure_run")
+    out = ss._run_block_trade_picks_hook(db, "midterm_block_trade_premarket")
     assert "RuntimeError" in out["error"] and db.rolled == 1
     assert any("block-trade picks failed" in r.message for r in caplog.records)
