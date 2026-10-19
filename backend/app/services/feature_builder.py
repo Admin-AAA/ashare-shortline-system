@@ -832,9 +832,10 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
     holder_trade_snapshot_ok = _event_snapshot_ok(coverage, "holder_trade")
     # surveys 只有显式加载（aux 带 "surveys" 键，且 coverage 未标错误/停更）才算可用
     survey_snapshot_ok = "surveys" in aux and _event_snapshot_ok(coverage, "institutional_survey", default=True)
-    # 公告是 7 个按日分区；只有整体不可用（有错误且 0 行）才不认“查过为空”，个别节假日分区缺失不影响
+    # 公告：news 字段属 _SCORED_FEATURES，改“查过为空”判定会改变历史回放（早期日无快照指针）的真实性/完整度，
+    # 需 owner 批准后再改；此处只记录快照状态，不改判定。
     _news_cov = coverage.get("news_announcement") if isinstance(coverage, Mapping) else None
-    news_snapshot_ok = not (
+    news_snapshot_unavailable = bool(
         isinstance(_news_cov, Mapping) and _news_cov.get("errors") and not int(_news_cov.get("record_count") or 0)
     )
     auxiliary_trade_date = str(aux.get("as_of_trade_date") or trade_date)
@@ -931,7 +932,9 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             data_quality["news_checked"] = True
             data_quality["announcements_checked"] = True
         else:
-            if code in checked_news_codes and news_snapshot_ok:
+            if news_snapshot_unavailable:
+                data_quality["news_snapshot_unavailable"] = True
+            if code in checked_news_codes:
                 missing_fields.discard("news")
                 missing_fields.discard("announcements")
                 data_quality["news_checked_empty"] = True
