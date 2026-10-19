@@ -308,7 +308,17 @@ class _TushareSession:
         )
 
     def _call(self, api_name: str, *, fields: str = "", params: Mapping[str, Any]) -> pd.DataFrame:
-        envelope = self._router.request(api_name, params=params, fields=fields)
+        if api_name == "fina_indicator_vip" and params.get("period"):
+            try:
+                envelope = self._router.request(api_name, params=params, fields=fields)
+            except TushareProviderError as exc:
+                # 仅 quantdata 支持 period 批量；不可用时走备用源（本地基线 + promax 逐股新公告），见 fina_fallback
+                logger.warning("fina_indicator_vip unavailable, using fallback: %s", exc)
+                from app.services.datasource.fina_fallback import fina_period_fallback
+
+                return fina_period_fallback(self, str(params["period"]), fields)
+        else:
+            envelope = self._router.request(api_name, params=params, fields=fields)
         data = envelope.get("data")
         if not data:
             return pd.DataFrame()
@@ -1761,8 +1771,10 @@ def fetch_broker_recommend(month: str | None = None) -> list[dict[str, Any]]:
     m = month or date.today().strftime("%Y%m")
     try:
         df = pro.broker_recommend(month=m)
-    except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
-        logger.debug("fetch_broker_recommend: best-effort fallback after %r", _ble_exc)
+    except Exception as _ble_exc:  # noqa: BLE001 - 非必需数据集：失败只告警（无备用源，owner 2026-10-19）
+        from app.core.alerts import emit_alert
+
+        emit_alert("broker_recommend_failed", m, f"券商金股 broker_recommend({m}) 取数失败（仅 quantdata，无备源）: {_ble_exc}")
         return []
     if df is None or df.empty:
         return []

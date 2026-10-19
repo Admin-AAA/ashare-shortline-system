@@ -12,6 +12,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, Protocol
+import logging
+import time
 
 from sqlalchemy import func, select
 from sqlalchemy.dialects.mysql import insert as mysql_insert
@@ -20,6 +22,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
 from app.adapters.market_source.dataframe_contracts import validate_market_frame
+from app.core.alerts import emit_alert
 from app.models.tables import (
     AuctionData,
     BrokerRecommend,
@@ -344,7 +347,23 @@ class TushareStateProvider:
         return rows
 
     def concept_sector(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
-        frame = self._client.ths_index()
+        try:
+            frame = self._client.ths_index()
+        except Exception as exc:
+            # owner 2026-10-19：15:05 之后失败重试一次（promax 池耗尽多为瞬时）；仍失败则告警并抛出，
+            # 不写当日行，读侧 _StateViews.concept_sector 回落到最近一个有数据的交易日（旧概念数据）。
+            if _now_hm() >= CONCEPT_RETRY_AFTER_HM:
+                time.sleep(CONCEPT_RETRY_DELAY_SECONDS)
+                try:
+                    frame = self._client.ths_index()
+                except Exception as exc2:
+                    emit_alert("concept_sector_failed", request.trade_date.isoformat(),
+                               f"ths_index 重试后仍失败，继续使用旧概念数据: {exc2}")
+                    raise
+            else:
+                emit_alert("concept_sector_failed", request.trade_date.isoformat(),
+                           f"ths_index 失败（15:05 前不重试），继续使用旧概念数据: {exc}")
+                raise
         if frame is None or frame.empty:
             return ()
         return tuple(
@@ -580,7 +599,12 @@ class TushareStateProvider:
 
     def broker_recommend(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         month = request.trade_date.strftime("%Y%m")
-        frame = self._client.broker_recommend(month=month)
+        try:
+            frame = self._client.broker_recommend(month=month)
+        except Exception as exc:
+            # 非必需数据集（仅 quantdata，无备源）：失败只告警（owner 2026-10-19）
+            emit_alert("broker_recommend_failed", month, f"券商金股 broker_recommend({month}) 取数失败: {exc}")
+            raise
         if frame is None or frame.empty:
             return ()
         return tuple(
@@ -725,6 +749,17 @@ def _preloaded(session: Session, key: str):
     _REPLAY_PRELOAD[key] = dict(by_code)
     return _REPLAY_PRELOAD[key]
 
+CONCEPT_RETRY_AFTER_HM = "15:05"
+CONCEPT_RETRY_DELAY_SECONDS = 30.0
+_concept_logger = logging.getLogger(__name__)
+
+
+def _now_hm() -> str:
+    from datetime import timedelta
+
+    return datetime.now(timezone(timedelta(hours=8))).strftime("%H:%M")
+
+
 class _StateViews:
     """Current ORM loaders, kept typed and independent from legacy auxiliary tables."""
 
@@ -776,10 +811,20 @@ class _StateViews:
                 if sector := sectors_c.get(sc):
                     grouped_c[code_m].append(sector)
             return {"concept_sectors": dict(grouped_c)}
+        target = self._target(request)
+        if self._session.scalar(select(ConceptSector.id).where(ConceptSector.trade_date >= target).limit(1)) is None:
+            # 仅当没有任何 >= 目标日的数据（即实盘最新日缺失）才回落；历史回放中的缺口不回落，保持回放口径不变
+            # 当日概念未入库（ths_index 失败）→ 回落到最近一个有数据的交易日（owner 2026-10-19 降级）
+            latest = self._session.scalar(
+                select(func.max(ConceptSector.trade_date)).where(ConceptSector.trade_date < target)
+            )
+            if latest is not None:
+                _concept_logger.warning("concept_sector: %s 无数据，回落使用 %s 的旧概念数据", target, latest)
+                target = latest.isoformat() if hasattr(latest, "isoformat") else str(latest)
         member_rows = self._session.scalars(
             select(ConceptSectorStock).where(
                 ConceptSectorStock.code.in_(request.requested_codes),
-                ConceptSectorStock.trade_date == self._target(request),
+                ConceptSectorStock.trade_date == target,
             )
         ).all()
         sector_codes = {item.sector_code for item in member_rows}
@@ -788,7 +833,7 @@ class _StateViews:
             for item in self._session.scalars(
                 select(ConceptSector).where(
                     ConceptSector.sector_code.in_(sector_codes),
-                    ConceptSector.trade_date == self._target(request),
+                    ConceptSector.trade_date == target,
                 )
             ).all()
         }

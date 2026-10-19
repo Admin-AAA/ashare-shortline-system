@@ -138,8 +138,24 @@ def usage(provider: str) -> tuple[int, bool]:
     return pending, exhausted
 
 
+def _dotenv_value(key: str) -> str:
+    """pydantic Settings 读 .env 但不导出到 os.environ；脚本进程在此直接读 backend/.env。"""
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[2] / ".env"
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            name, sep, value = line.partition("=")
+            if sep and name.strip() == key:
+                return value.split("#", 1)[0].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return ""
+
+
 def daily_quota(provider: str) -> int | None:
-    raw = os.environ.get(f"ASHARE_TUSHARE_{provider.upper()}_DAILY_QUOTA", "").strip()
+    key = f"ASHARE_TUSHARE_{provider.upper()}_DAILY_QUOTA"
+    raw = os.environ.get(key, "").strip() or _dotenv_value(key)
     try:
         value = int(raw)
     except ValueError:
