@@ -556,12 +556,20 @@ def dividend_lowvol_candidates(db, as_of: str, top_n: int = 10) -> list[dict[str
             for r in g.itertuples()]
 
 
-def generate_picks(db, as_of: str, force: bool = False) -> dict[str, Any]:
-    """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。"""
+def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = None,
+                   strategy_ids: list[str] | None = None) -> dict[str, Any]:
+    """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。
+
+    horizon / strategy_ids 只用于手动补跑（POST /api/horizons/{mid,long}/run），默认 None = 17:35 全部策略。
+    幂等：同一 as_of 重跑覆盖同一文件；_held_codes 只看 as_of 之前的批次。"""
     d = _dt.date.fromisoformat(as_of)
     result: dict[str, Any] = {}
     rp_cands: list[dict[str, Any]] | None | str = "unset"
     for sid, meta in STRATEGIES.items():
+        if horizon and meta.get("horizon") != horizon:
+            continue
+        if strategy_ids and sid not in strategy_ids:
+            continue
         if meta.get("schedule") == "month_end":
             if not force and not _is_month_end(db, as_of):
                 continue
@@ -722,7 +730,8 @@ def _realize(db, code: str, signal_date: str, hold: int = HOLD_DAYS) -> dict[str
         return {"status": "pending"}
     e = rows[0]
     if e.up_limit and e.open >= e.up_limit - 0.005:
-        return {"status": "skipped", "entry_date": e.trade_date, "reason": "开盘涨停买不进"}
+        return {"status": "skipped", "entry_date": e.trade_date, "reason": "开盘涨停买不进",
+                "cancel_code": "limit_up_open", "entry_open": e.open}
     tri = 1.0
     for i, r in enumerate(rows):
         if i > 0:
@@ -730,37 +739,176 @@ def _realize(db, code: str, signal_date: str, hold: int = HOLD_DAYS) -> dict[str
         if i >= hold and not (r.down_limit and r.high <= r.down_limit + 0.005):
             ret = (r.open / r.close * tri) / (e.open / e.close) - 1 - 0.003
             return {"status": "closed", "entry_date": e.trade_date, "exit_date": r.trade_date,
-                    "ret": round(ret * 100, 2), "days": i}
+                    "ret": round(ret * 100, 2), "days": i, "entry_price": e.open, "exit_price": r.open,
+                    "exit_delayed_days": i - hold}
     last = rows[-1]
     ret = tri / (e.open / e.close) - 1
     return {"status": "holding", "entry_date": e.trade_date, "mark_date": last.trade_date,
-            "ret": round(ret * 100, 2), "days": len(rows) - 1}
+            "ret": round(ret * 100, 2), "days": len(rows) - 1, "entry_price": e.open, "mark_price": last.close}
+
+
+# 统一 rule_score：各策略自己的排序指标（原单位，见 label / better），selection_reason 为中文入选依据
+def _f(x: Any, nd: int = 2) -> str:
+    try:
+        return f"{float(x):.{nd}f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[str, Any]:
+    kind = STRATEGIES.get(sid, {}).get("kind", "small_cap" if sid == "mid-small-cap-weekly" else None)
+    score = label = better = reason = None
+    try:
+        if kind == "small_cap":
+            score, label, better = round(float(p["total_mv"]) / 1e4, 2), "总市值(亿元)", "lower"
+            reason = f"总市值 {_f(score)} 亿，合格股（非ST/北交所、PE>0、上市≥1年、20日均额>3000万）里最小的10只之一；PE_ttm {_f(p.get('pe_ttm'), 1)}"
+        elif kind == "repurchase":
+            score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
+            reason = f"{p.get('ann_date', '')} 回购预案，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，占总市值 {_f(score)}%"
+        elif kind == "earnings_accel":
+            score, label, better = float(p["score"]), "扣非净利同比(%)，封顶300", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
+                      f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%")
+        elif kind == "forecast_beat":
+            score, label, better = float(p["score"]), "预告净利增幅下限(%)，封顶300", "higher"
+            reason = (f"{p.get('ann_date', '')} 首次业绩预告（{p.get('forecast_type', '')}，{p.get('end_date', '')}）："
+                      f"增幅下限 {_f(p.get('p_change_min'), 1)}%，净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e4)} 亿元")
+        elif kind == "incentive_option":
+            score, label, better = round(float(p["r20"]) * 100, 2), "公告前20日涨幅(%)", "lower"
+            reason = f"{p.get('ann_date', '')} 首次披露含股票期权的激励草案：{p.get('title', '')}；公告前20日涨幅 {_f(score)}%"
+        elif kind == "block_trade_premium":
+            score, label, better = round(float(p["ratio"]) * 100, 3), "大宗成交额/流通市值(%)", "higher"
+            reason = (f"大宗成交 {p.get('n_trades', '')} 笔，量加权价相对收盘溢价 {_f(float(p.get('premium') or 0) * 100)}%，"
+                      f"成交额占流通市值 {_f(score)}%")
+        elif kind == "lowturn_lowvol":
+            score, label, better = float(p["score"]), "60日换手排名+60日波动排名(越低越好)", "lower"
+            reason = f"市值第 {p.get('mv_rank', '')} 名；60日均换手 {_f(p.get('turn60'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"
+        elif kind == "dividend_lowvol":
+            score, label, better = float(p["score"]), "股息率排名+60日波动排名(越低越好)", "lower"
+            reason = f"市值第 {p.get('mv_rank', '')} 名；股息率(TTM) {_f(p.get('dv_ttm'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"
+    except (KeyError, TypeError, ValueError):
+        score = label = better = reason = None
+    p["rule_score"], p["rule_score_label"], p["rule_score_better"] = score, label, better
+    p["selection_reason"] = reason
+    if rank is not None:
+        p["selection_rank"] = rank
+    st = p.get("status")
+    p.setdefault("cancel_code", None)
+    p["cancel_reason"] = p.get("reason") if st == "skipped" else None
+    p["ret_includes_cost"] = True if st == "closed" else (False if st == "holding" else None)
+    return p
+
+
+def _pick_files(strategy_id: str | None, horizon: str | None) -> list[Path]:
+    if not OUT_DIR.exists():
+        return []
+    out = []
+    for f in sorted(OUT_DIR.glob("*.json"), reverse=True):
+        sid = f.stem.split("_", 1)[1] if "_" in f.stem else ""
+        if strategy_id and sid != strategy_id:
+            continue
+        if horizon and STRATEGIES.get(sid, {}).get("horizon", "mid") != horizon:
+            continue
+        out.append(f)
+    return out
+
+
+def _load_batch(db, f: Path) -> dict[str, Any]:
+    data = json.loads(f.read_text())
+    sid = data["strategy_id"]
+    for i, p in enumerate(data["picks"], 1):
+        p.update(_realize(db, p["code"], data["signal_date"], _hold(sid)))
+        annotate_pick(sid, p, i)
+    closed = [p["ret"] for p in data["picks"] if p.get("status") in ("closed", "holding")]
+    data["strategy_name"] = STRATEGIES.get(sid, {}).get("name", sid)
+    data["horizon"] = STRATEGIES.get(sid, {}).get("horizon", "mid")
+    data["hold_days"] = _hold(sid)
+    data["avg_ret"] = round(sum(closed) / len(closed), 2) if closed else None
+    data["status"] = ("closed" if all(p.get("status") in ("closed", "skipped") for p in data["picks"])
+                      else "pending" if all(p.get("status") == "pending" for p in data["picks"]) else "holding")
+    return data
+
+
+def pick_id(signal_date: str, strategy_id: str, code: str) -> str:
+    return f"{signal_date}_{strategy_id}_{code}"
+
+
+def _pick_files(strategy_id: str | None, horizon: str | None) -> list[Path]:
+    if not OUT_DIR.exists():
+        return []
+    out = []
+    for f in sorted(OUT_DIR.glob("*.json"), reverse=True):
+        sd, _, sid = f.stem.partition("_")
+        if strategy_id and sid != strategy_id:
+            continue
+        if horizon and STRATEGIES.get(sid, {}).get("horizon", "mid") != horizon:
+            continue
+        out.append(f)
+    return out
+
+
+def _load_batch(db, f: Path) -> dict[str, Any]:
+    data = json.loads(f.read_text())
+    for p in data["picks"]:
+        p.update(_realize(db, p["code"], data["signal_date"], _hold(data["strategy_id"])))
+        p["pick_id"] = pick_id(data["signal_date"], data["strategy_id"], p["code"])
+    closed = [p["ret"] for p in data["picks"] if p.get("status") in ("closed", "holding")]
+    data["strategy_name"] = STRATEGIES.get(data["strategy_id"], {}).get("name", data["strategy_id"])
+    data["horizon"] = STRATEGIES.get(data["strategy_id"], {}).get("horizon", "mid")
+    data["avg_ret"] = round(sum(closed) / len(closed), 2) if closed else None
+    data["status"] = ("closed" if all(p.get("status") in ("closed", "skipped") for p in data["picks"])
+                      else "pending" if all(p.get("status") == "pending" for p in data["picks"]) else "holding")
+    return data
 
 
 def list_picks(db, strategy_id: str | None = None, limit_batches: int = 30,
-               horizon: str | None = None) -> list[dict[str, Any]]:
-    if not OUT_DIR.exists():
-        return []
-    files = sorted(OUT_DIR.glob("*.json"), reverse=True)
-    batches = []
-    for f in files:
-        data = json.loads(f.read_text())
-        if strategy_id and data["strategy_id"] != strategy_id:
-            continue
-        if horizon and STRATEGIES.get(data["strategy_id"], {}).get("horizon", "mid") != horizon:
-            continue
-        for p in data["picks"]:
-            p.update(_realize(db, p["code"], data["signal_date"], _hold(data["strategy_id"])))
-        closed = [p["ret"] for p in data["picks"] if p.get("status") in ("closed", "holding")]
-        data["picks"] = [p for p in data["picks"]]
-        data["strategy_name"] = STRATEGIES.get(data["strategy_id"], {}).get("name", data["strategy_id"])
-        data["avg_ret"] = round(sum(closed) / len(closed), 2) if closed else None
-        data["status"] = ("closed" if all(p.get("status") in ("closed", "skipped") for p in data["picks"])
-                          else "pending" if all(p.get("status") == "pending" for p in data["picks"]) else "holding")
-        batches.append(data)
-        if len(batches) >= limit_batches:
-            break
-    return batches
+               horizon: str | None = None, offset: int = 0) -> list[dict[str, Any]]:
+    return [_load_batch(db, f) for f in _pick_files(strategy_id, horizon)[offset:offset + limit_batches]]
+
+
+def list_picks_page(db, strategy_id: str | None = None, limit_batches: int = 30,
+                    horizon: str | None = None, offset: int = 0) -> dict[str, Any]:
+    """分页版：total=批次总数，total_picks=全部批次的选股只数（不做收益计算，便宜）。"""
+    files = _pick_files(strategy_id, horizon)
+    total_picks = sum(len(json.loads(f.read_text()).get("picks", [])) for f in files)
+    batches = [_load_batch(db, f) for f in files[offset:offset + limit_batches]]
+    return {"batches": batches, "total": len(files), "total_picks": total_picks,
+            "limit": limit_batches, "offset": offset, "has_more": offset + len(batches) < len(files)}
+
+
+def get_pick_detail(db, pid: str, horizon: str | None = None, bars: int = 80) -> dict[str, Any] | None:
+    """单股详情：pick_id = {signal_date}_{strategy_id}_{code}。"""
+    try:
+        sd, rest = pid.split("_", 1)
+        sid, code = rest.rsplit("_", 1)
+    except ValueError:
+        return None
+    if sid not in STRATEGIES or (horizon and STRATEGIES[sid].get("horizon") != horizon):
+        return None
+    f = OUT_DIR / f"{sd}_{sid}.json"
+    if not f.exists():
+        return None
+    batch = _load_batch(db, f)
+    pick = next((p for p in batch["picks"] if p["code"] == code), None)
+    if pick is None:
+        return None
+    meta = STRATEGIES[sid]
+    rows = db.execute(text(
+        "SELECT trade_date, open, high, low, close, pct_chg, volume, amount FROM daily_kbars "
+        "WHERE code=:c AND trade_date>=:d AND close>0 ORDER BY trade_date LIMIT :n"),
+        {"c": code, "d": sd, "n": bars}).mappings().all()
+    history = [{"signal_date": b.stem.split("_", 1)[0], "strategy_id": b.stem.split("_", 1)[1]}
+               for b in sorted(OUT_DIR.glob("*.json"), reverse=True)
+               if any(p.get("code") == code for p in json.loads(b.read_text()).get("picks", []))]
+    return {
+        "pick_id": pid, "code": code, "name": pick.get("name"), "signal_date": sd,
+        "strategy_id": sid, "strategy_name": meta.get("name"), "horizon": meta.get("horizon"),
+        "hold_days": _hold(sid), "strategy_summary": meta.get("summary"),
+        "pick": pick, "batch_size": len(batch["picks"]),
+        "rank": next((i + 1 for i, p in enumerate(batch["picks"]) if p["code"] == code), None),
+        "bars": [{k: (str(v) if k == "trade_date" else (float(v) if v is not None else None)) for k, v in r.items()} for r in rows],
+        "other_signals": [h for h in history if not (h["signal_date"] == sd and h["strategy_id"] == sid)],
+    }
 
 
 def strategies_overview(horizon: str | None = None) -> list[dict[str, Any]]:
