@@ -5,6 +5,9 @@ returns ``{code6: row}`` normalized to ``SCHEMAS["quote.realtime"]``.
 """
 from __future__ import annotations
 
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as _FutTimeout
 from datetime import date
 from typing import Any, Mapping
 
@@ -12,6 +15,21 @@ from app.services.datasource.gateway import DatasetGateway, DataSourceError, Err
 
 DATASET = "quote.realtime"
 RT_MIN_MAX_CODES = 60  # rt_min is per-code; cap the fan-out of this last-resort tier
+# Fast-fail (owner, 2026-10-19): a rate-limited promax used to stall every quote ~9s
+# (limiter wait + retries) before Sina was tried. rt_k now gets a hard deadline and is
+# skipped outright while its shared breaker is open.
+RTK_DEADLINE_SECONDS = 1.5
+RTK_BREAKER_KEY = "tushare:promax:rt_k"
+_RTK_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rtk-fast")
+
+
+def _rtk_breaker_open() -> bool:
+    from app.core.shared_breaker import breaker_namespace, shared_open_until
+
+    try:
+        return shared_open_until(f"{breaker_namespace()}:{RTK_BREAKER_KEY}") > time.time()
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _f(v: Any) -> float:
@@ -40,7 +58,16 @@ class RtkProvider:
         from app.engine.trading_calendar import latest_allowed_quote_date
         from app.services.tushare_client import get_pro
 
-        df = get_pro().rt_k(ts_code=",".join(_ts(c) for c in query["keys"]))
+        if _rtk_breaker_open():
+            raise DataSourceError(ErrorKind.CIRCUIT_OPEN, "promax rt_k breaker open", provider=self.name, dataset=dataset)
+        fut = _RTK_POOL.submit(get_pro().rt_k, ts_code=",".join(_ts(c) for c in query["keys"]))
+        try:
+            df = fut.result(timeout=RTK_DEADLINE_SECONDS)
+        except _FutTimeout:
+            fut.cancel()
+            raise DataSourceError(
+                ErrorKind.TIMEOUT, f"rt_k exceeded {RTK_DEADLINE_SECONDS}s", provider=self.name, dataset=dataset
+            ) from None
         out: dict[str, dict[str, Any]] = {}
         if df is None or df.empty:
             return out

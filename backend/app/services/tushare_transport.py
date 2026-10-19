@@ -340,6 +340,44 @@ def _make_limiter(key: str, requests_per_minute: int):
     return SharedSlidingWindowLimiter(key, requests_per_minute, db_path, fallback=local)
 
 
+# Promax quota reservation (owner, 2026-10-19): during the trading session (Mon-Fri
+# 09:15-15:05 Asia/Shanghai) processes in the research: breaker namespace are throttled on
+# promax so live: realtime quotes (rt_k) keep their headroom of the ~200 RPM per-IP budget.
+RESEARCH_INTRADAY_WINDOW = ((9, 15), (15, 5))
+_RESEARCH_LIMITER: list[Any] = []
+_RESEARCH_LIMITER_LOCK = threading.Lock()
+
+
+def _in_research_window(now: datetime | None = None) -> bool:
+    from zoneinfo import ZoneInfo
+
+    now = now or datetime.now(ZoneInfo("Asia/Shanghai"))
+    if now.weekday() >= 5:
+        return False
+    hm = (now.hour, now.minute)
+    return RESEARCH_INTRADAY_WINDOW[0] <= hm < RESEARCH_INTRADAY_WINDOW[1]
+
+
+def research_intraday_throttled(now: datetime | None = None) -> bool:
+    from app.core.shared_breaker import RESEARCH_NAMESPACE, breaker_namespace
+
+    return breaker_namespace() == RESEARCH_NAMESPACE and _in_research_window(now)
+
+
+def _research_promax_limiter():
+    with _RESEARCH_LIMITER_LOCK:
+        if not _RESEARCH_LIMITER:
+            rpm = 30
+            try:
+                from app.core.config import get_settings
+
+                rpm = int(get_settings().tushare_promax_research_intraday_rpm)
+            except Exception:  # noqa: BLE001
+                pass
+            _RESEARCH_LIMITER.append(_make_limiter("promax:research_intraday", max(1, rpm)))
+        return _RESEARCH_LIMITER[0]
+
+
 class CircuitBreaker:
     """Small per-API circuit breaker with a single half-open probe."""
 
@@ -523,6 +561,8 @@ class TushareHttpProvider:
 
     def _wait_for_capacity(self, api_name: str) -> None:
         t0 = time.perf_counter()
+        if self.config.name == "promax" and research_intraday_throttled():
+            _research_promax_limiter().acquire()  # leave promax headroom for live: realtime
         self._provider_limiter.acquire()
         api_limiter = self._api_limiters.get(api_name)
         if api_limiter is not None:

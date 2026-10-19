@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     tushare_promax_api_key: str = Field(default="", repr=False)
     tushare_promax_rate_limit_per_minute: int = 180
     tushare_promax_max_concurrency: int = 4
+    # research: 命名空间在盘中（工作日 9:15–15:05）对 promax 的限速，给 live: 实时行情留额度。
+    tushare_promax_research_intraday_rpm: int = 30
     # quantdata：第三方 tushare pro 协议数据源（JSON token，POST 根路径不带 api 路径）。
     # 探测权限：日线/基本面/筹码/资金流/涨跌停/龙虎榜/同花顺概念全量可用（数据到当天）；
     # anns_d/rt_k/stk_mins 未购买（走 per-API 路由链自动 fallback）。平滑限速，稳态 6rps 无限制。
