@@ -57,6 +57,16 @@ const pnl = (v?: number | null) => (v == null ? "" : v > 0 ? "hz-up" : v < 0 ? "
 const STATUS: Record<string, [string, string]> = {
   pending: ["待买入", "amber"], holding: ["持有中", "blue"], closed: ["已平仓", "gray"], skipped: ["开盘涨停·已取消", "gray"],
 };
+/** 信号日的下一个工作日（未接交易日历，节假日不处理） */
+function nextWeekday(d: string): string {
+  const t = new Date(`${d}T00:00:00Z`);
+  do { t.setUTCDate(t.getUTCDate() + 1); } while (t.getUTCDay() === 0 || t.getUTCDay() === 6);
+  return t.toISOString().slice(0, 10);
+}
+const todayBj = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+/** 待买入且预计买入日=今天、尚无 entry_date → 「今日开盘买入，收盘后确认」 */
+const buyingToday = (signalDate: string, p: HorizonPick) =>
+  p.status === "pending" && !p.entry_date && signalDate < todayBj() && nextWeekday(signalDate) === todayBj();
 const Status = ({ s }: { s: string }) => { const [l, c] = STATUS[s] ?? [s, "gray"]; return <span className={`hz-pill hz-pill--${c}`}>{l}</span>; };
 const SCHEDULE: Record<string, string> = { weekly: "每周五盘后", daily: "每日盘后", month_end: "月末盘后", monthly: "每月" };
 const fmtDate = (d?: string) => (!d ? "—" : /^\d{8}$/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}` : d);
@@ -280,7 +290,7 @@ function BatchCard({ b, defaultOpen, list, highlight, onPick }: { b: HorizonBatc
         {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         <span className="hz-num">{b.signal_date}</span>
         <span className="hz-batch__name">{b.strategy_name}</span>
-        <Status s={b.status} />
+        {b.status === "pending" && b.picks.some((p) => buyingToday(b.signal_date, p)) ? <span className="hz-pill hz-pill--amber">今日开盘买入，收盘后确认</span> : <Status s={b.status} />}
         <span className="hz-muted">{b.picks.length} 只{cancelN ? `（${cancelN} 只开盘涨停取消）` : ""}{hold ? ` · 持 ${hold} 日` : ""}</span>
         <span className={`hz-batch__ret hz-num ${pnl(b.avg_ret)}`}>{b.avg_ret == null ? "—" : `${b.status === "closed" ? "平均" : "浮动平均"} ${pct(b.avg_ret)}`}</span>
       </button>
@@ -295,7 +305,7 @@ function BatchCard({ b, defaultOpen, list, highlight, onPick }: { b: HorizonBatc
                   <td className="r hz-num">{p.selection_rank ?? "—"}</td>
                   <td className="hz-num">{p.code}</td><td>{p.name}</td>
                   <td className="r hz-num">{p.rule_score ?? "—"}</td>
-                  <td><Status s={isCancelled(p) ? "skipped" : p.status} />{isCancelled(p) || (p.exit_delayed_days ?? 0) > 0 ? <PickStatusLine p={p} /> : null}</td>
+                  <td>{buyingToday(b.signal_date, p) ? <span className="hz-pill hz-pill--amber">今日开盘买入，收盘后确认</span> : <Status s={isCancelled(p) ? "skipped" : p.status} />}{isCancelled(p) || (p.exit_delayed_days ?? 0) > 0 ? <PickStatusLine p={p} /> : null}</td>
                   <td className="hz-num">{p.entry_date ? `${p.entry_date} @${p.entry_price ?? "—"}` : "—"}</td>
                   <td className="hz-num">{p.exit_date ? `${p.exit_date} @${p.exit_price ?? "—"}` : p.mark_date ? `${p.mark_date} @${p.mark_price ?? "—"}（估）` : "—"}</td>
                   <td className="r hz-num">{p.days ?? "—"}</td>
