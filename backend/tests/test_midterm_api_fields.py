@@ -51,7 +51,8 @@ def test_pagination_and_horizon(tmp_path, monkeypatch):
     assert ms.list_picks_page(None, "long-repurchase-big", None, 1, 30)["total"] == 3
 
 
-def test_generate_picks_horizon_filter(monkeypatch):
+def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
+    monkeypatch.setattr(ms, "OUT_DIR", tmp_path / "picks")
     seen = []
     monkeypatch.setattr(ms, "_is_month_end", lambda db, d: True)
     monkeypatch.setattr(ms, "_held_codes", lambda db, sid, d: seen.append(sid) or set())

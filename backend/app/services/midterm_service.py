@@ -646,6 +646,20 @@ def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = No
     except Exception as exc:  # noqa: BLE001
         logger.warning("daily_basic staleness check failed: %s", exc)
     result: dict[str, Any] = {}
+    try:
+        _generate_picks_loop(db, as_of, d, force, horizon, strategy_ids, result)
+    except Exception as exc:
+        cur = result.pop("__current__", None)
+        if cur:
+            result[cur] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        _record_status(as_of, result)
+        raise
+    result.pop("__current__", None)
+    _record_status(as_of, result)
+    return result
+
+
+def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, result: dict[str, Any]) -> None:
     rp_cands: list[dict[str, Any]] | None | str = "unset"
     for sid, meta in STRATEGIES.items():
         if horizon and meta.get("horizon") != horizon:
@@ -654,9 +668,12 @@ def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = No
             continue
         if meta.get("schedule") == "month_end":
             if not force and not _is_month_end(db, as_of):
+                result[sid] = {"skipped": "not_signal_day"}
                 continue
         elif not force and not is_signal_day(sid, d):
+            result[sid] = {"skipped": "not_signal_day"}
             continue
+        result["__current__"] = sid
         if meta.get("kind") in ("lowturn_lowvol", "dividend_lowvol"):
             cand_fn = lowturn_lowvol_candidates if meta["kind"] == "lowturn_lowvol" else dividend_lowvol_candidates
             cands = cand_fn(db, as_of, int(meta["top_n"]))
@@ -773,7 +790,71 @@ def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = No
         (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
             {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
         result[sid] = len(picks)
-    return result
+
+
+DAILY_STATUS_VALUES = ("ok", "no_signal", "data_error", "slots_full", "not_signal_day")
+
+
+def classify_daily_status(raw: Any) -> str:
+    """generate_picks 单策略原始结果 -> ok / no_signal / data_error / slots_full / not_signal_day。"""
+    if isinstance(raw, bool):
+        return "data_error"
+    if isinstance(raw, int):
+        return "ok" if raw > 0 else "no_signal"
+    if raw == "no_data":
+        return "data_error"
+    if isinstance(raw, dict):
+        if "error" in raw:
+            return "data_error"
+        sk = raw.get("skipped")
+        if sk == "slots_full":
+            return "slots_full"
+        if sk == "not_signal_day":
+            return "not_signal_day"
+        if sk in ("all_held", "small_cap_below_ma20"):
+            return "no_signal"
+    return "data_error"
+
+
+def _status_dir() -> Path:
+    """每日各策略运行状态 {as_of}.json 目录（generate_picks 落盘，/strategies 读）；跟随 OUT_DIR，测试 monkeypatch 时一并隔离。"""
+    return OUT_DIR.parent / "status"
+
+
+def _record_status(as_of: str, result: dict[str, Any]) -> None:
+    """把本次结果并入 status/{as_of}.json（同日多次运行按策略覆盖）。非致命。"""
+    try:
+        sd = _status_dir()
+        sd.mkdir(parents=True, exist_ok=True)
+        f = sd / f"{as_of}.json"
+        stored = json.loads(f.read_text()) if f.exists() else {}
+        now = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        for sid, raw in result.items():
+            if sid.startswith("__"):
+                continue
+            stored[sid] = {"status": classify_daily_status(raw), "raw": raw, "recorded_at": now}
+        f.write_text(json.dumps(stored, ensure_ascii=False, indent=1, default=str))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("record midterm status failed: %s", exc)
+
+
+def latest_daily_status(sid: str, *, lookback: int = 15) -> dict[str, Any] | None:
+    """最近一个有记录的业务日里该策略的状态；忽略 not_signal_day 之前先返回最近的那条（含 not_signal_day）。"""
+    sd = _status_dir()
+    if not sd.exists():
+        return None
+    for f in sorted(sd.glob("*.json"), reverse=True)[:lookback]:
+        try:
+            row = json.loads(f.read_text()).get(sid)
+        except Exception:  # noqa: BLE001
+            continue
+        if row:
+            out = {"date": f.stem, "status": row.get("status"), "recorded_at": row.get("recorded_at")}
+            raw = row.get("raw")
+            if isinstance(raw, dict):
+                out["detail"] = raw.get("skipped") or raw.get("error")
+            return out
+    return None
 
 
 def _block_trade_picks(db, sid: str, meta: dict[str, Any], as_of: str) -> Any:
@@ -798,7 +879,13 @@ def _block_trade_picks(db, sid: str, meta: dict[str, Any], as_of: str) -> Any:
 def generate_block_trade_picks(db, as_of: str) -> dict[str, Any]:
     """只跑 mid-block-trade-premium（as_of = 大宗交易日 T，YYYY-MM-DD）。供 21:00 后 / T+1 开盘前的晚间任务调用。"""
     sid = "mid-block-trade-premium"
-    return {sid: _block_trade_picks(db, sid, STRATEGIES[sid], as_of)}
+    try:
+        res = {sid: _block_trade_picks(db, sid, STRATEGIES[sid], as_of)}
+    except Exception as exc:
+        _record_status(as_of, {sid: {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}})
+        raise
+    _record_status(as_of, res)
+    return res
 
 
 def _realize(db, code: str, signal_date: str, hold: int = HOLD_DAYS) -> dict[str, Any]:
@@ -1051,6 +1138,7 @@ def strategies_overview(horizon: str | None = None, db=None) -> list[dict[str, A
                 "top_n": meta.get("top_n", meta.get("max_new")),
                 "metrics": metrics.get(sid, {}),
                 "next_batch_note": next_batch_note(sid, db),
+                "daily_status": latest_daily_status(sid),
             })
         return out
     finally:

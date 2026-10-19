@@ -25,8 +25,10 @@ def test_backup_task_registered_and_legacy_exposure_disabled(monkeypatch, db):
     assert ss.EXPOSURE_TASK_ID not in ss.BLOCK_TRADE_HOOK_TASK_IDS
 
 
-def test_backup_hook_only_targets_block_trade_strategy(monkeypatch):
+def test_backup_hook_only_targets_block_trade_strategy(monkeypatch, tmp_path):
     import app.services.midterm_service as ms
+
+    monkeypatch.setattr(ms, "OUT_DIR", tmp_path / "picks")
 
     monkeypatch.setattr(ss, "_latest_allowed_bar_date", lambda: "2026-10-16")
     out = {}
