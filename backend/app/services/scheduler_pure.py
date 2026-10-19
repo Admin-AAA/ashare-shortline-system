@@ -437,8 +437,18 @@ def _sync_step_summary(label: str, result: dict) -> str:
         parts.append(f"空结果待重试 {empty}")
     if skipped:
         parts.append(f"跳过 {skipped}")
-    parts.append(f"失败 {failed}")
-    return " / ".join(parts)
+    # batch_sync 数据集级失败（如 margin_detail fetch_failed）不进 action_summary；之前状态
+    # partial_failed 而摘要写"失败 0"。这里把失败/已知缺口数据集如实列出（known_gap 不计失败）。
+    batch = result.get("batch_sync") if isinstance(result.get("batch_sync"), dict) else {}
+    failed_sets = sorted(k for k, v in batch.items() if isinstance(v, dict) and v.get("status") == "failed")
+    known_sets = sorted(k for k, v in batch.items() if isinstance(v, dict) and v.get("status") == "known_gap")
+    parts.append(f"失败 {failed + len(failed_sets)}")
+    text = " / ".join(parts)
+    if failed_sets:
+        text += f"（失败数据集: {','.join(failed_sets)}）"
+    if known_sets:
+        text += f"（已知缺口不计失败: {','.join(known_sets)}）"
+    return text
 
 
 def _action_summary_count(result: object, key: str) -> int:
