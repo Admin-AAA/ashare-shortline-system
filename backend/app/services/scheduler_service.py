@@ -1872,7 +1872,6 @@ async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
         raise ValueError(_NO_RUNNABLE_SKILL_MSG)
     timeout = int(payload.get("recommendation_wait_timeout_seconds") or 3600)
     strategy_runs: list[dict[str, Any]] = []
-    risk_note_threads: list[Any] = []
     # 幂等：同一交易日该策略已有 completed formal run 时跳过（重跑/安全网补跑不重复出票）。
     if not payload.get("force_rerun"):
         done = _completed_standalone_runs(db, payload)
@@ -1910,29 +1909,16 @@ async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
                 strategy_runs.append({"skill_id": sid, "run_id": run_id, "status": "failed", "error": str(exc)[:300]})
                 continue
             status = str(final.get("status") or "failed")
-            if status == "completed" and run_id:
-                try:
-                    from app.services.async_llm_risk_notes import schedule_attach_llm_risk_notes
-                    risk_note_threads.append(schedule_attach_llm_risk_notes(run_id))
-                except Exception:  # noqa: BLE001
-                    logger.exception("调度异步 LLM 风险备注失败: %s", run_id)
+            # LLM 风险备注已停用（2026-10-19 用户决定：低 QPM、无明确收益，不得拖累主流水线）。
+            # 原 daemon 线程会随 Prefect 子进程退出被杀（10-14 起静默），已移除，不再调度。
             strategy_runs.append({
                 "skill_id": sid,
                 "run_id": run_id,
                 "status": status,
                 "recommended_count": int(final.get("recommended_count") or 0),
                 "error": final.get("error"),
-                "llm_risk_notes": "async_scheduled" if status == "completed" else None,
+                "llm_risk_notes": "disabled",
             })
-    llm_notes_wait: dict[str, Any] | None = None
-    if risk_note_threads:
-        # 出票已落库；限时等风险备注线程，避免 Prefect 子进程退出把 daemon 线程杀掉。失败/超时只告警。
-        try:
-            from app.services.async_llm_risk_notes import wait_llm_risk_note_threads
-            wait_s = float(payload.get("llm_risk_notes_wait_seconds") or 600)
-            llm_notes_wait = await asyncio.to_thread(wait_llm_risk_note_threads, risk_note_threads, wait_s)
-        except Exception:  # noqa: BLE001
-            logger.exception("等待异步 LLM 风险备注失败")
     failed = [r for r in strategy_runs if r.get("status") != "completed"]
     if failed:
         try:
@@ -1968,7 +1954,6 @@ async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
         "recommended_count": total_recs,
         "final_run": final_run,
         "summary_text": f"单策略正式推荐 {len(completed)}/{len(payloads)} 个策略完成，共 {total_recs} 条",
-        "llm_risk_notes_wait": llm_notes_wait,
     }
 
 

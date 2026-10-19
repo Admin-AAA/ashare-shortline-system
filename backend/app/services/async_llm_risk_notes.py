@@ -1,4 +1,4 @@
-"""正式出票后的异步 LLM 风险备注（L-171）。
+"""正式出票后的 LLM 风险备注（L-171）。2026-10-19 起停用：正式流水线不再调度（低 QPM、无明确收益）。
 
 正式 run 在管线内关闭 LLM（disable_agent_review），先按规则出票落库；
 本模块在出票完成后对**已出票**股票做 LLM 审查，只写入 agent_summary_json /
@@ -136,49 +136,13 @@ async def attach_llm_risk_notes_for_run(db: Session, run_id: str) -> dict[str, A
 
 
 def schedule_attach_llm_risk_notes(run_id: str):
-    """在独立线程里跑异步挂备注，不阻塞出票调度；返回线程。
-
-    注意：Prefect 每日任务跑在子进程里，子进程退出时 daemon 线程会被直接杀掉（10-14 起审查静默的原因）。
-    调用方应在出票全部完成后用 wait_llm_risk_note_threads() 限时等待。"""
-    import threading
-
-    def _worker() -> None:
-        from app.db.session import SessionLocal
-
-        try:
-            with SessionLocal() as db:
-                asyncio.run(attach_llm_risk_notes_for_run(db, run_id))
-        except Exception:  # noqa: BLE001
-            logger.exception("异步 LLM 风险备注线程失败 run=%s", run_id)
-
-    t = threading.Thread(
-        target=_worker,
-        name=f"llm-risk-notes-{run_id[:12]}",
-        daemon=True,
-    )
-    t.start()
-    return t
-
-
-def wait_llm_risk_note_threads(threads, timeout_seconds: float = 600.0) -> dict[str, Any]:
-    """出票后限时等待风险备注线程（共享一个截止时间）。超时只告警，不影响出票结果。"""
-    import time
-
-    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
-    pending = []
-    for t in [t for t in threads if t is not None]:
-        t.join(max(0.0, deadline - time.monotonic()))
-        if t.is_alive():
-            pending.append(t.name)
-    if pending:
-        logger.warning("异步 LLM 风险备注超时 %ss 未完成: %s", timeout_seconds, ",".join(pending))
-    out = {"waited": len([t for t in threads if t is not None]), "timed_out": pending}
-    logger.info("异步 LLM 风险备注等待结束: %s", out)
-    return out
+    """已停用（2026-10-19）：正式流水线不再调度 LLM 风险备注。保留函数仅为兼容旧调用，直接返回 None。
+    需要时可手动 asyncio.run(attach_llm_risk_notes_for_run(db, run_id))。"""
+    logger.info("LLM 风险备注已停用，跳过 run=%s", run_id)
+    return None
 
 
 __all__ = [
     "attach_llm_risk_notes_for_run",
     "schedule_attach_llm_risk_notes",
-    "wait_llm_risk_note_threads",
 ]
