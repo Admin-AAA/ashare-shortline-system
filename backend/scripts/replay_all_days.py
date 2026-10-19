@@ -398,7 +398,13 @@ def main() -> int:
             f"(code_revision={identity.code_revision[:12]})"
         )
         results = {"completed": 0, "failed": 0, "timeout": 0, "skipped": 0}
+        stop_file = str(os.environ.get("REPLAY_STOP_FILE") or "").strip()
         for i, td in enumerate(dates):
+            # 交易日边界的干净暂停：存在停止文件时不再入队下一天、也不发布批次；
+            # 已 sealed 的天保持不变，之后用 --skip-existing 续跑。
+            if stop_file and os.path.exists(stop_file):
+                print(f"[{i+1}/{len(dates)}] 检测到停止文件 {stop_file}，在 {td} 前暂停（未发布批次）", flush=True)
+                return 75
             if args.skip_existing and _run_exists(db, identity, td):
                 print(f"[{i+1}/{len(dates)}] {td}: 当前 manifest 已 sealed，跳过")
                 results["skipped"] += 1
