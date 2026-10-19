@@ -536,3 +536,28 @@ def test_refresh_recoverable_aux_routes_index_daily_to_index_backfill(monkeypatc
     assert aux_calls == [("limit_up_board", "2026-10-15")]
     assert result["index_daily"]["record_count"] == 2
     assert result["limit_up_board"]["record_count"] == 7
+
+
+def test_refresh_auxiliary_dataset_never_sends_index_daily_to_orchestrator(monkeypatch):
+    """Structural guard for the 2026-10-15 KeyError: any caller passing index_daily is rerouted."""
+    import app.services.data_gap_remediation_service as dgr
+
+    monkeypatch.setattr(dgr, "_index_ts_codes", lambda db: ["000001.SH"])
+    monkeypatch.setattr(dgr, "_backfill_index_daily_dates", lambda db, d, c: {"row_count": 1, "dates": d})
+
+    def _boom(*a, **k):
+        raise AssertionError("orchestrator must not be called for index_daily")
+
+    monkeypatch.setattr(dgr, "run_auxiliary_application", _boom)
+    count, audit = dgr._refresh_auxiliary_dataset(object(), dataset="index_daily", trade_date="2026-10-15")
+    assert count == 1 and audit["dates"] == ["2026-10-15"]
+
+
+def test_refresh_auxiliary_dataset_rejects_unknown_dataset_before_orchestrator(monkeypatch):
+    import pytest as _pytest
+
+    import app.services.data_gap_remediation_service as dgr
+
+    monkeypatch.setattr(dgr, "run_auxiliary_application", lambda *a, **k: (_ for _ in ()).throw(AssertionError()))
+    with _pytest.raises(ValueError, match="不是 S4"):
+        dgr._refresh_auxiliary_dataset(object(), dataset="no_such_dataset", trade_date="2026-10-15")

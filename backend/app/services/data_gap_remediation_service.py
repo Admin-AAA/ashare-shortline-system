@@ -127,6 +127,17 @@ def _refresh_auxiliary_dataset(
     codes: list[str] | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Refresh one frozen S4 descriptor through the sole application boundary."""
+    if dataset == "index_daily":
+        # index_daily is NOT an S4 auxiliary descriptor; sending it to the orchestrator
+        # raised KeyError and failed the whole 17:35 formal run (2026-10-15). Route it to
+        # the index backfill here so no caller can ever repeat that mistake.
+        backfill = _backfill_index_daily_dates(db, [trade_date], _index_ts_codes(db))
+        return int(backfill.get("row_count") or 0), dict(backfill)
+    from app.services.auxiliary.production import AUXILIARY_DATASET_INVENTORY
+
+    known = {entry.key for entry in AUXILIARY_DATASET_INVENTORY}
+    if dataset not in known:
+        raise ValueError(f"'{dataset}' 不是 S4 辅助数据集，不能走 orchestrator 刷新")
     result = run_auxiliary_application(
         db,
         instruments=tuple(codes or ()),
