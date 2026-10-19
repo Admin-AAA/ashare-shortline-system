@@ -46,6 +46,17 @@ def test_offset_ignored_stops_without_duplicates():
     assert len(df) == 5000 and len(pro.calls) == 2
 
 
+def test_continuation_error_keeps_first_page():
+    class _Strict(_Pro):
+        def cyq_perf(self, **kw):
+            if "offset" in kw:
+                raise RuntimeError("2003: parameter not allowed: limit")
+            return super().cyq_perf(**kw)
+
+    pro = _Strict(5460)
+    assert len(fetch_trade_date_paged(pro, "cyq_perf", trade_date="20260430")) == 5000
+
+
 def test_budget_gate(monkeypatch):
     monkeypatch.setattr(provider_quota, "_conn", lambda: None)
     monkeypatch.setattr(provider_quota, "_pending", {})

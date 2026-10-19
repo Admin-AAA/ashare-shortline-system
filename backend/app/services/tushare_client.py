@@ -528,7 +528,8 @@ def fetch_trade_date_paged(
     """按 trade_date 全市场拉取，命中单次上限时用 offset/limit 续页。
 
     首次请求与旧行为一致（不带 offset/limit），返回行数 != page_size 即视为完整，零额外调用；
-    恰好 page_size 行才续页。续页按 ts_code 去重，若上游忽略 offset（返回重复行）立即停止并告警。
+    恰好 page_size 行才续页。续页按 ts_code 去重，若上游忽略 offset（返回重复行）立即停止并告警；
+    续页请求报错（如 quantdata 不接受 limit/offset）时保留已取页并告警，不让整日数据作废。
     """
     call = getattr(pro, api_name)
     first = call(trade_date=trade_date, fields=fields)
@@ -538,7 +539,14 @@ def fetch_trade_date_paged(
     seen = set(first["ts_code"].astype(str)) if "ts_code" in first.columns else set()
     offset = len(first)
     for _ in range(max_pages - 1):
-        page = call(trade_date=trade_date, fields=fields, offset=offset, limit=page_size)
+        try:
+            page = call(trade_date=trade_date, fields=fields, offset=offset, limit=page_size)
+        except Exception as exc:  # noqa: BLE001 - 续页失败不能丢掉首页（quantdata 拒绝 limit/offset: 2003）
+            logger.warning(
+                "fetch_trade_date_paged: %s(%s) 续页 offset=%d 失败，仅保留已取 %d 行: %s",
+                api_name, trade_date, offset, sum(len(f) for f in frames), exc,
+            )
+            break
         if page is None or page.empty:
             break
         if "ts_code" in page.columns:
