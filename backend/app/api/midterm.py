@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 
 from app.api.contracts import ContractRouter as APIRouter
 from app.db.session import get_db
-from app.services import midterm_runs as runs_svc
 from app.services import midterm_service as svc
 
 router = APIRouter(prefix="/api/horizons", tags=["horizons"])
@@ -125,22 +124,16 @@ def _detail(db, horizon, strategy_id, signal_date, code, before, after):
     return out
 
 
-def _h(horizon: str) -> str:
-    if horizon not in ("mid", "long"):
-        raise HTTPException(status_code=404, detail="horizon must be mid/long")
-    return horizon
-
-
-class HorizonRunRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    as_of: str | None = None  # YYYY-MM-DD，默认今天
-    force: bool = False  # true：非信号日也出票（覆盖同日文件）
-    strategy_ids: list[str] | None = None
-
-
 @router.get("/mid/strategies")
 def mid_strategies():
     return {"horizon": "mid", "strategies": svc.strategies_overview("mid"), "rejected": MID_REJECTED}
+
+
+@router.get("/mid/picks")
+def mid_picks(strategy_id: str | None = Query(None), limit: int = Query(30, ge=1, le=200),
+              page: int | None = Query(None, ge=1), page_size: int | None = Query(None, ge=1, le=200),
+              db: Session = Depends(get_db)):
+    return _picks(db, "mid", strategy_id, limit, page, page_size)
 
 
 @router.get("/long/strategies")
@@ -148,60 +141,25 @@ def long_strategies():
     return {"horizon": "long", "strategies": svc.strategies_overview("long"), "rejected": LONG_REJECTED}
 
 
-@router.get("/{horizon}/picks")
-def picks(horizon: str, strategy_id: str | None = Query(None), limit: int = Query(30, ge=1, le=200),
-          offset: int = Query(0, ge=0), db: Session = Depends(get_db)):
-    """批次分页：batches + total（批次数）+ total_picks（只数）+ has_more。"""
-    return svc.list_picks_page(db, strategy_id, limit, horizon=_h(horizon), offset=offset)
+@router.get("/long/picks")
+def long_picks(strategy_id: str | None = Query(None), limit: int = Query(30, ge=1, le=200),
+               page: int | None = Query(None, ge=1), page_size: int | None = Query(None, ge=1, le=200),
+               db: Session = Depends(get_db)):
+    return _picks(db, "long", strategy_id, limit, page, page_size)
 
 
-@router.get("/{horizon}/picks/{pick_id}")
-def pick_detail(horizon: str, pick_id: str, db: Session = Depends(get_db)):
-    d = svc.get_pick_detail(db, pick_id, horizon=_h(horizon))
-    if d is None:
-        raise HTTPException(status_code=404, detail="pick not found")
-    return d
+@router.post("/{horizon}/run")
+def run_horizon(horizon: str, payload: dict = Body(default_factory=dict), db: Session = Depends(get_db)):
+    """手动出票/续跑：{as_of: YYYY-MM-DD, force?: bool, strategy_ids?: [..]}；同日重跑覆盖同日文件（幂等）。"""
+    if horizon not in ("mid", "long"):
+        raise HTTPException(404, "horizon 只能是 mid/long")
+    return _run(db, horizon, payload)
 
 
-@router.post("/{horizon}/runs")
-def start_run(horizon: str, payload: HorizonRunRequest | None = None, db: Session = Depends(get_db)):
-    p = payload or HorizonRunRequest()
-    as_of = p.as_of or _dt.date.today().isoformat()
-    try:
-        _dt.date.fromisoformat(as_of)
-        return runs_svc.start_run(db, _h(horizon), as_of, force=p.force, strategy_ids=p.strategy_ids)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/{horizon}/runs")
-def list_runs(horizon: str, limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
-    return runs_svc.list_runs(_h(horizon), limit, offset)
-
-
-@router.get("/{horizon}/runs/{run_id}")
-def get_run(horizon: str, run_id: str):
-    r = runs_svc.get_run(run_id, _h(horizon))
-    if r is None:
-        raise HTTPException(status_code=404, detail="run not found")
-    return r
-
-
-@router.post("/{horizon}/runs/{run_id}/resume")
-def resume_run(horizon: str, run_id: str, db: Session = Depends(get_db)):
-    if runs_svc.get_run(run_id, _h(horizon)) is None:
-        raise HTTPException(status_code=404, detail="run not found")
-    try:
-        return runs_svc.resume_run(db, run_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=409, detail={"code": "nothing_to_resume", "message": str(exc)}) from exc
-
-
-@router.get("/{horizon}/runs/{run_id}/diff")
-def run_diff(horizon: str, run_id: str, against: str | None = Query(None)):
-    if runs_svc.get_run(run_id, _h(horizon)) is None:
-        raise HTTPException(status_code=404, detail="run not found")
-    d = runs_svc.diff_runs(run_id, against)
-    if d is None:
-        raise HTTPException(status_code=404, detail="against run not found")
-    return d
+@router.get("/{horizon}/picks/{strategy_id}/{signal_date}/{code}")
+def horizon_pick_detail(horizon: str, strategy_id: str, signal_date: str, code: str,
+                        before: int = Query(20, ge=0, le=250), after: int = Query(80, ge=0, le=250),
+                        db: Session = Depends(get_db)):
+    if horizon not in ("mid", "long"):
+        raise HTTPException(404, "horizon 只能是 mid/long")
+    return _detail(db, horizon, strategy_id, signal_date, code, before, after)

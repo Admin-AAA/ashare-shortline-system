@@ -829,86 +829,56 @@ def _load_batch(db, f: Path) -> dict[str, Any]:
     return data
 
 
-def pick_id(signal_date: str, strategy_id: str, code: str) -> str:
-    return f"{signal_date}_{strategy_id}_{code}"
-
-
-def _pick_files(strategy_id: str | None, horizon: str | None) -> list[Path]:
-    if not OUT_DIR.exists():
-        return []
-    out = []
-    for f in sorted(OUT_DIR.glob("*.json"), reverse=True):
-        sd, _, sid = f.stem.partition("_")
-        if strategy_id and sid != strategy_id:
-            continue
-        if horizon and STRATEGIES.get(sid, {}).get("horizon", "mid") != horizon:
-            continue
-        out.append(f)
-    return out
-
-
-def _load_batch(db, f: Path) -> dict[str, Any]:
-    data = json.loads(f.read_text())
-    for p in data["picks"]:
-        p.update(_realize(db, p["code"], data["signal_date"], _hold(data["strategy_id"])))
-        p["pick_id"] = pick_id(data["signal_date"], data["strategy_id"], p["code"])
-    closed = [p["ret"] for p in data["picks"] if p.get("status") in ("closed", "holding")]
-    data["strategy_name"] = STRATEGIES.get(data["strategy_id"], {}).get("name", data["strategy_id"])
-    data["horizon"] = STRATEGIES.get(data["strategy_id"], {}).get("horizon", "mid")
-    data["avg_ret"] = round(sum(closed) / len(closed), 2) if closed else None
-    data["status"] = ("closed" if all(p.get("status") in ("closed", "skipped") for p in data["picks"])
-                      else "pending" if all(p.get("status") == "pending" for p in data["picks"]) else "holding")
-    return data
-
-
 def list_picks(db, strategy_id: str | None = None, limit_batches: int = 30,
-               horizon: str | None = None, offset: int = 0) -> list[dict[str, Any]]:
-    return [_load_batch(db, f) for f in _pick_files(strategy_id, horizon)[offset:offset + limit_batches]]
+               horizon: str | None = None) -> list[dict[str, Any]]:
+    return [_load_batch(db, f) for f in _pick_files(strategy_id, horizon)[:limit_batches]]
 
 
-def list_picks_page(db, strategy_id: str | None = None, limit_batches: int = 30,
-                    horizon: str | None = None, offset: int = 0) -> dict[str, Any]:
-    """分页版：total=批次总数，total_picks=全部批次的选股只数（不做收益计算，便宜）。"""
+def list_picks_page(db, strategy_id: str | None = None, horizon: str | None = None,
+                    page: int = 1, page_size: int = 30) -> dict[str, Any]:
+    """批次分页：total=批次总数、total_picks=全部只数（不算收益，便宜）、has_more。"""
     files = _pick_files(strategy_id, horizon)
+    start = (max(page, 1) - 1) * page_size
     total_picks = sum(len(json.loads(f.read_text()).get("picks", [])) for f in files)
-    batches = [_load_batch(db, f) for f in files[offset:offset + limit_batches]]
-    return {"batches": batches, "total": len(files), "total_picks": total_picks,
-            "limit": limit_batches, "offset": offset, "has_more": offset + len(batches) < len(files)}
+    batches = [_load_batch(db, f) for f in files[start:start + page_size]]
+    return {"batches": batches, "total": len(files), "total_picks": total_picks, "page": page,
+            "page_size": page_size, "has_more": start + len(batches) < len(files)}
 
 
-def get_pick_detail(db, pid: str, horizon: str | None = None, bars: int = 80) -> dict[str, Any] | None:
-    """单股详情：pick_id = {signal_date}_{strategy_id}_{code}。"""
-    try:
-        sd, rest = pid.split("_", 1)
-        sid, code = rest.rsplit("_", 1)
-    except ValueError:
+def pick_detail(db, horizon: str, strategy_id: str, signal_date: str, code: str,
+                before: int = 20, after: int = 80) -> dict[str, Any] | None:
+    """单股详情：该批次里这只票的全部字段 + 信号日前 before / 后 after 根日K + 同股其它中长线信号。"""
+    meta = STRATEGIES.get(strategy_id)
+    if meta is None or meta.get("horizon") != horizon:
         return None
-    if sid not in STRATEGIES or (horizon and STRATEGIES[sid].get("horizon") != horizon):
-        return None
-    f = OUT_DIR / f"{sd}_{sid}.json"
+    f = OUT_DIR / f"{signal_date}_{strategy_id}.json"
     if not f.exists():
         return None
     batch = _load_batch(db, f)
     pick = next((p for p in batch["picks"] if p["code"] == code), None)
     if pick is None:
         return None
-    meta = STRATEGIES[sid]
-    rows = db.execute(text(
-        "SELECT trade_date, open, high, low, close, pct_chg, volume, amount FROM daily_kbars "
-        "WHERE code=:c AND trade_date>=:d AND close>0 ORDER BY trade_date LIMIT :n"),
-        {"c": code, "d": sd, "n": bars}).mappings().all()
-    history = [{"signal_date": b.stem.split("_", 1)[0], "strategy_id": b.stem.split("_", 1)[1]}
-               for b in sorted(OUT_DIR.glob("*.json"), reverse=True)
-               if any(p.get("code") == code for p in json.loads(b.read_text()).get("picks", []))]
-    return {
-        "pick_id": pid, "code": code, "name": pick.get("name"), "signal_date": sd,
-        "strategy_id": sid, "strategy_name": meta.get("name"), "horizon": meta.get("horizon"),
-        "hold_days": _hold(sid), "strategy_summary": meta.get("summary"),
-        "pick": pick, "batch_size": len(batch["picks"]),
-        "rank": next((i + 1 for i, p in enumerate(batch["picks"]) if p["code"] == code), None),
-        "bars": [{k: (str(v) if k == "trade_date" else (float(v) if v is not None else None)) for k, v in r.items()} for r in rows],
-        "other_signals": [h for h in history if not (h["signal_date"] == sd and h["strategy_id"] == sid)],
-    }
+    cols = "trade_date, open, high, low, close, pct_chg, volume, amount"
+    pre = db.execute(text(f"SELECT {cols} FROM daily_kbars WHERE code=:c AND trade_date<:d AND close>0 "
+                          "ORDER BY trade_date DESC LIMIT :n"), {"c": code, "d": signal_date, "n": before}).mappings().all()
+    post = db.execute(text(f"SELECT {cols} FROM daily_kbars WHERE code=:c AND trade_date>=:d AND close>0 "
+                           "ORDER BY trade_date LIMIT :n"), {"c": code, "d": signal_date, "n": after}).mappings().all()
+    bars = [{k: (str(v)[:10] if k == "trade_date" else (float(v) if v is not None else None)) for k, v in r.items()}
+            for r in [*reversed(pre), *post]]
+    others = []
+    for g in sorted(OUT_DIR.glob("*.json"), reverse=True):
+        sd, _, sid = g.stem.partition("_")
+        if (sd, sid) == (signal_date, strategy_id):
+            continue
+        if any(q.get("code") == code for q in json.loads(g.read_text()).get("picks", [])):
+            others.append({"signal_date": sd, "strategy_id": sid,
+                           "strategy_name": STRATEGIES.get(sid, {}).get("name", sid),
+                           "horizon": STRATEGIES.get(sid, {}).get("horizon", "mid")})
+    return {"horizon": horizon, "strategy_id": strategy_id, "strategy_name": meta.get("name"),
+            "strategy_summary": meta.get("summary"), "hold_days": _hold(strategy_id),
+            "signal_date": signal_date, "code": code, "name": pick.get("name"),
+            "batch_size": len(batch["picks"]), "batch_status": batch["status"], "pick": pick,
+            "bars": bars, "other_signals": others}
 
 
 def strategies_overview(horizon: str | None = None) -> list[dict[str, Any]]:
