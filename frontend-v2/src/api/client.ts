@@ -100,7 +100,16 @@ function request<T>(path: string, init?: RequestInit, options?: RequestOptions):
   const key = `${path}|${options?.timeoutMs ?? ""}`;
   const existing = inflightGets.get(key) as Promise<T> | undefined;
   if (existing) return existing.then((v) => structuredClone(v));
-  const p = requestNetwork<T>(path, init, options).finally(() => inflightGets.delete(key));
+  const p = requestNetwork<T>(path, init, options)
+    .catch(async (err) => {
+      // 仅 GET：502/503/504 或网络错误时 1.5s 后自动重试一次；POST/PUT/DELETE 永不重试
+      const st = (err as { status?: number }).status;
+      const transient = st === 502 || st === 503 || st === 504 || (st === undefined && (err as Error).name !== "AbortError" && (err as Error).message !== "UNAUTHORIZED" && !/超时|已取消/.test((err as Error).message));
+      if (!transient || options?.signal?.aborted) throw err;
+      await new Promise((r) => setTimeout(r, 1500));
+      return requestNetwork<T>(path, init, options);
+    })
+    .finally(() => inflightGets.delete(key));
   inflightGets.set(key, p);
   return p;
 }

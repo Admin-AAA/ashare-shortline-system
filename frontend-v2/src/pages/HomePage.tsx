@@ -307,7 +307,7 @@ function StatusBar({
             title={`actual_generated_at: ${formatBj(hardening.current_run.actual_generated_at, "datetime-sec")}\nlast_updated: ${formatBj(hardening.last_updated_at, "datetime-sec")}（北京时间）`}
             style={{ color: hardening.stale ? "var(--warning)" : "var(--ink)" }}
           >
-            {hardening.current_label}{hardening.stale ? " · STALE" : ""}
+            {hardening.current_run.business_date ? (hardening.current_label ?? "").replace(/^今日\s*/, `${hardening.current_run.business_date} `) : hardening.current_label}{hardening.stale ? " · STALE" : ""}
           </strong>
           <Sep />
           <span className="text-muted">DQ/Risk：</span>
