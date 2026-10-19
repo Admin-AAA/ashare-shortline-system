@@ -59,7 +59,7 @@ def test_contract_violation_is_classified_and_skipped():
 
 
 def test_breaker_opens_after_threshold():
-    a = _P("a", exc=ConnectionError())
+    a = _P("a", exc=RuntimeError("upstream"))  # non-retryable: one call per fetch
     g = gw.DatasetGateway([a], enabled=_all_on, failure_threshold=2)
     for _ in range(3):
         g.fetch_first("bar.minute", {})

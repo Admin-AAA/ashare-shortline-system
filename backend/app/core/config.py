@@ -82,6 +82,10 @@ class Settings(BaseSettings):
     # 熔断阈值按失败类型（网关审计 1）：超时 N 次、错误数据（空/缺字段）N 次熔断；限流按上游等待时间。
     breaker_threshold_timeout: int = 2
     breaker_threshold_bad_data: int = 3
+    # 网关整体截止时间与重试预算（网关审计 2）
+    datasource_deadline_realtime_seconds: float = 3.0
+    datasource_deadline_default_seconds: float = 120.0
+    datasource_retry_budget: int = 2
     tushare_provider_max_attempts: int = 2
     tushare_connect_timeout_seconds: float = 5.0
     tushare_read_timeout_seconds: float = 120.0

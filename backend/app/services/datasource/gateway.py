@@ -168,6 +168,60 @@ def provider_enabled(provider: DataProvider, disabled: set[tuple[str, str]] | No
     return not any(key in disabled for key in getattr(provider, "config_keys", ()))
 
 
+# ── deadlines / retry budget (audit item 2) ──────────────────────────────────
+REALTIME_DATASETS: frozenset[str] = frozenset({"quote.realtime", "quote.realtime_frame"})
+RETRYABLE_KINDS = frozenset({ErrorKind.NETWORK})
+_FETCH_POOL: Any = None
+
+
+def _pool():
+    global _FETCH_POOL
+    if _FETCH_POOL is None:
+        from concurrent.futures import ThreadPoolExecutor
+
+        _FETCH_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix="gw-fetch")
+    return _FETCH_POOL
+
+
+def _setting(attr: str, default: float) -> float:
+    try:
+        from app.core.config import get_settings
+
+        return float(getattr(get_settings(), attr, default))
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def default_deadline(dataset: str) -> float:
+    """Whole-request budget: realtime 3s, everything else (daily update etc.) 120s; configurable."""
+    if dataset in REALTIME_DATASETS:
+        return _setting("datasource_deadline_realtime_seconds", 3.0)
+    return _setting("datasource_deadline_default_seconds", 120.0)
+
+
+class _Budget:
+    def __init__(self, dataset: str, deadline_s: float | None) -> None:
+        self.until = time.monotonic() + (default_deadline(dataset) if deadline_s is None else float(deadline_s))
+        self.retries_left = int(_setting("datasource_retry_budget", 2))
+
+    def remaining(self) -> float:
+        return self.until - time.monotonic()
+
+
+def _call_with_timeout(fn: Callable[[], Any], timeout: float) -> Any:
+    """Run ``fn`` in the shared pool, give up after ``timeout`` (the worker is abandoned)."""
+    import contextvars
+    from concurrent.futures import TimeoutError as FutTimeout
+
+    ctx = contextvars.copy_context()
+    fut = _pool().submit(ctx.run, fn)
+    try:
+        return fut.result(timeout=max(0.001, timeout))
+    except FutTimeout:
+        fut.cancel()
+        raise DataSourceError(ErrorKind.TIMEOUT, f"deadline {timeout:.2f}s exceeded") from None
+
+
 # ── gateway ────────────────────────────────────────────────────────────────
 @dataclass
 class GatewayResult:
@@ -233,7 +287,43 @@ class DatasetGateway:
             out.append(p)
         return out
 
-    def _attempt(self, p: DataProvider, dataset: str, query: Mapping[str, Any], attempts: list) -> Any:
+    def _fetch_once(self, p: DataProvider, dataset: str, query: Mapping[str, Any], budget: _Budget) -> Any:
+        remaining = budget.remaining()
+        if remaining <= 0:
+            raise DataSourceError(ErrorKind.TIMEOUT, "request deadline exhausted", provider=p.name, dataset=dataset)
+        rows = _call_with_timeout(lambda: p.fetch(dataset, query), remaining)
+        seq = rows.values() if isinstance(rows, Mapping) else (rows or [])
+        validate_rows(dataset, seq, p.name)
+        if not rows and dataset in EXPECT_NONEMPTY_IN_SESSION and in_trading_session():
+            raise DataSourceError(ErrorKind.BAD_DATA, "empty during trading session", provider=p.name, dataset=dataset)
+        return rows
+
+    def _fetch_with_retry(self, p: DataProvider, dataset: str, query: Mapping[str, Any], budget: _Budget) -> Any:
+        """tenacity retry for transient kinds, bounded by the shared per-request retry budget and deadline."""
+        import tenacity
+
+        def _retryable(exc: BaseException) -> bool:
+            if classify_exception(exc) not in RETRYABLE_KINDS or budget.retries_left <= 0 or budget.remaining() < 0.3:
+                return False
+            budget.retries_left -= 1
+            return True
+
+        retrying = tenacity.Retrying(
+            stop=tenacity.stop_after_attempt(3),
+            retry=tenacity.retry_if_exception(_retryable),
+            wait=tenacity.wait_exponential(multiplier=0.1, max=1.0),
+            reraise=True,
+        )
+        return retrying(lambda: self._fetch_once(p, dataset, query, budget))
+
+    def _attempt(
+        self, p: DataProvider, dataset: str, query: Mapping[str, Any], attempts: list, budget: _Budget | None = None
+    ) -> Any:
+        budget = budget or _Budget(dataset, None)
+        if budget.remaining() <= 0:
+            attempts.append({"provider": p.name, "outcome": "deadline"})
+            _metrics.inc("dataset_requests", dataset=dataset, provider=p.name, outcome="deadline")
+            return None
         breaker = self._breaker(p.name, dataset)
         if self._upstream_open(p) or not breaker.allow_request():
             attempts.append({"provider": p.name, "outcome": ErrorKind.CIRCUIT_OPEN.value})
@@ -241,11 +331,7 @@ class DatasetGateway:
             return None
         t0 = time.perf_counter()
         try:
-            rows = p.fetch(dataset, query)
-            seq = rows.values() if isinstance(rows, Mapping) else (rows or [])
-            validate_rows(dataset, seq, p.name)
-            if not rows and dataset in EXPECT_NONEMPTY_IN_SESSION and in_trading_session():
-                raise DataSourceError(ErrorKind.BAD_DATA, "empty during trading session", provider=p.name, dataset=dataset)
+            rows = self._fetch_with_retry(p, dataset, query, budget)
         except Exception as exc:  # noqa: BLE001 - classified, recorded, next provider tried
             kind = classify_exception(exc)
             if kind not in NON_BREAKER_KINDS:
@@ -266,25 +352,31 @@ class DatasetGateway:
         _metrics.observe("dataset_latency", time.perf_counter() - t0, dataset=dataset, provider=p.name)
         return rows
 
-    def fetch_first(self, dataset: str, query: Mapping[str, Any]) -> GatewayResult:
-        """First provider returning a non-empty answer wins."""
+    def fetch_first(
+        self, dataset: str, query: Mapping[str, Any], *, deadline_s: float | None = None
+    ) -> GatewayResult:
+        """First provider returning a non-empty answer wins (whole call bounded by deadline_s)."""
         attempts: list[dict[str, Any]] = []
+        budget = _Budget(dataset, deadline_s)
         for p in self._candidates(dataset, query):
-            rows = self._attempt(p, dataset, query, attempts)
+            rows = self._attempt(p, dataset, query, attempts, budget)
             if rows:
                 return GatewayResult(rows, p.name, attempts)
         return GatewayResult([], None, attempts)
 
-    def fetch_fill(self, dataset: str, query: Mapping[str, Any], keys: Sequence[str]) -> GatewayResult:
-        """Keyed merge: each provider is asked only for keys still missing."""
+    def fetch_fill(
+        self, dataset: str, query: Mapping[str, Any], keys: Sequence[str], *, deadline_s: float | None = None
+    ) -> GatewayResult:
+        """Keyed merge: each provider is asked only for keys still missing (bounded by deadline_s)."""
         attempts: list[dict[str, Any]] = []
+        budget = _Budget(dataset, deadline_s)
         merged: dict[str, Any] = {}
         used: list[str] = []
         for p in self._candidates(dataset, query):
             missing = [k for k in keys if k not in merged]
             if not missing:
                 break
-            rows = self._attempt(p, dataset, {**query, "keys": missing}, attempts) or {}
+            rows = self._attempt(p, dataset, {**query, "keys": missing}, attempts, budget) or {}
             added = False
             for k in missing:
                 if k in rows:

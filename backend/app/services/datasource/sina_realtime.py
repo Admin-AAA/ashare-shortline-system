@@ -17,6 +17,7 @@ from app.services.datasource.gateway import DatasetGateway
 FRAME_DATASET = "quote.realtime_frame"
 CHUNK = 50  # sina 单次最多 50 只
 SINA_RPM = 600
+SINA_TIMEOUT_SECONDS = 2.0  # tushare.realtime_quote has no timeout knob: bound each chunk ourselves
 
 
 class FrameRows(list):
@@ -27,12 +28,18 @@ class FrameRows(list):
         self.frame = frame
 
 
-def _raw_frame(ts_codes: list[str]) -> pd.DataFrame:
+def _raw_frame_unbounded(ts_codes: list[str]) -> pd.DataFrame:
     import tushare as ts
 
     from app.services import market_data  # noqa: F401 - import applies the verify_token short-circuit
 
     return ts.realtime_quote(ts_code=",".join(ts_codes))
+
+
+def _raw_frame(ts_codes: list[str]) -> pd.DataFrame:
+    from app.services.datasource.gateway import _call_with_timeout
+
+    return _call_with_timeout(lambda: _raw_frame_unbounded(ts_codes), SINA_TIMEOUT_SECONDS)
 
 
 def _f(v: Any) -> float:
