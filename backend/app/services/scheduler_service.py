@@ -429,44 +429,48 @@ def _execute_task(
                 )
                 return
 
-        if task_type == "recommendation_run":
-            try:
-                result = asyncio.run(
-                    _run_postclose_pipeline(db, payload)
-                    if payload.get("pre_run_full_sync")
-                    else _run_recommendation(db, payload)
-                )
-            except ValueError as ve:
-                # 预设下 Skill 全部被禁用 → 优雅跳过而非报错。其它 ValueError 透传。
-                skip = _recommendation_run_error_to_skip(task_id, payload, ve)
-                if skip is not None:
-                    result = skip
-                else:
-                    raise
-        elif task_type == TASK_TYPE_FORMAL_SAFETY_NET:
-            result = asyncio.run(_safety_net_run(db, payload))
-        elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
-            result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
-        elif task_type == TASK_TYPE_BLOCK_TRADE_BACKUP:
-            # 实际出票由下方 BLOCK_TRADE_HOOK_TASK_IDS 钩子完成（T=上一交易日，幂等）。
-            result = {"summary_text": "盘前大宗交易备份出票"}
-        elif task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN:
-            result = {"skipped": True, "status": "skipped", "summary_text": "策略曝光补跑已退役（2026-10-19）"}
-        elif task_type == TASK_TYPE_OUTCOME_LABEL:
-            result = _run_outcome_label(db, payload)
-        elif task_type == TASK_TYPE_DATA_FRESHNESS_CHECK:
-            result = _run_data_freshness_check(db)
-        elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
-            result = _run_intraday_lock_shadow(db, payload)
-        elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
-            result = _run_data_sync(db, payload, task_type=task_type)
-        else:
-            raise RuntimeError(f"未知任务类型: {task_type}")
+        # 正式链路（出票/中长线/大宗钩子/结算/日更）：数据网关一律拒绝旧缓存（stale）数据。
+        from app.services.datasource.cache import formal_chain
 
-        # [中线] mid-block-trade-premium：Tushare 大宗交易约 21:00 发布。
-        # 主：21:00 晚间全域数据补数完成后跑当日；备：08:03 midterm_block_trade_premarket 补跑上一交易日（幂等）。
-        if task_id in BLOCK_TRADE_HOOK_TASK_IDS and isinstance(result, dict):
-            result["midterm_block_trade"] = _run_block_trade_picks_hook(db, task_id)
+        with formal_chain():
+            if task_type == "recommendation_run":
+                try:
+                    result = asyncio.run(
+                        _run_postclose_pipeline(db, payload)
+                        if payload.get("pre_run_full_sync")
+                        else _run_recommendation(db, payload)
+                    )
+                except ValueError as ve:
+                    # 预设下 Skill 全部被禁用 → 优雅跳过而非报错。其它 ValueError 透传。
+                    skip = _recommendation_run_error_to_skip(task_id, payload, ve)
+                    if skip is not None:
+                        result = skip
+                    else:
+                        raise
+            elif task_type == TASK_TYPE_FORMAL_SAFETY_NET:
+                result = asyncio.run(_safety_net_run(db, payload))
+            elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
+                result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
+            elif task_type == TASK_TYPE_BLOCK_TRADE_BACKUP:
+                # 实际出票由下方 BLOCK_TRADE_HOOK_TASK_IDS 钩子完成（T=上一交易日，幂等）。
+                result = {"summary_text": "盘前大宗交易备份出票"}
+            elif task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN:
+                result = {"skipped": True, "status": "skipped", "summary_text": "策略曝光补跑已退役（2026-10-19）"}
+            elif task_type == TASK_TYPE_OUTCOME_LABEL:
+                result = _run_outcome_label(db, payload)
+            elif task_type == TASK_TYPE_DATA_FRESHNESS_CHECK:
+                result = _run_data_freshness_check(db)
+            elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
+                result = _run_intraday_lock_shadow(db, payload)
+            elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
+                result = _run_data_sync(db, payload, task_type=task_type)
+            else:
+                raise RuntimeError(f"未知任务类型: {task_type}")
+
+            # [中线] mid-block-trade-premium：Tushare 大宗交易约 21:00 发布。
+            # 主：21:00 晚间全域数据补数完成后跑当日；备：08:03 midterm_block_trade_premarket 补跑上一交易日（幂等）。
+            if task_id in BLOCK_TRADE_HOOK_TASK_IDS and isinstance(result, dict):
+                result["midterm_block_trade"] = _run_block_trade_picks_hook(db, task_id)
 
         finish_task_run(
             db,

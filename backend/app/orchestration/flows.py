@@ -98,7 +98,10 @@ def execute_recommendation_run(
             record = SQLAlchemyRunRepository(db).get_run(run_id)
             if record is None:
                 raise RuntimeError(f"Run {run_id} has no canonical request")
-            asyncio.run(run_staged_pipeline(db, run_id=run_id, request=record.request))
+            from app.services.datasource.cache import formal_chain
+
+            with formal_chain():  # 正式出票链路拒绝旧缓存数据
+                asyncio.run(run_staged_pipeline(db, run_id=run_id, request=record.request))
         except Exception as exc:
             db.rollback()
             _mark_run_failed(db, run_id, exc)

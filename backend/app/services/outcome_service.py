@@ -147,6 +147,20 @@ BREAKDOWN_HORIZON_DAYS = (3, DEFAULT_OUTCOME_HORIZON_DAYS, 10)
 OFFICIAL_RECOMMENDATION_PREFIX = "rec_"
 
 
+def _formal_entry(fn):
+    """正式链路入口：函数内经数据网关的请求一律拒绝旧缓存（stale）数据。"""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from app.services.datasource.cache import formal_chain
+
+        with formal_chain():
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
 def _resolve_window(
     window_days: int | None = None,
     start_date: str | None = None,
@@ -644,6 +658,7 @@ def _apply_outcome_simulation(
         return False
 
 
+@_formal_entry
 def label_pending_outcomes(
     db: Session,
     horizon_days: int = DEFAULT_OUTCOME_HORIZON_DAYS,
@@ -765,6 +780,7 @@ def find_outcomes_needing_reprojection(db: Session, horizon_days: int = DEFAULT_
     return selected
 
 
+@_formal_entry
 def reproject_revised_outcomes(db: Session, horizon_days: int = DEFAULT_OUTCOME_HORIZON_DAYS) -> dict[str, Any]:
     ids = find_outcomes_needing_reprojection(db, horizon_days)
     if not ids:
@@ -815,6 +831,7 @@ def _load_execution_states(
     return {str(state.recommendation_id): state for state in states}
 
 
+@_formal_entry
 def recompute_stale_outcomes(
     db: Session,
     horizon_days: int = DEFAULT_OUTCOME_HORIZON_DAYS,

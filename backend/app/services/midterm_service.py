@@ -122,6 +122,20 @@ STRATEGIES: dict[str, dict[str, Any]] = {
 }
 
 
+def _formal_entry(fn):
+    """正式链路入口：函数内经数据网关的请求一律拒绝旧缓存（stale）数据。"""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from app.services.datasource.cache import formal_chain
+
+        with formal_chain():
+            return fn(*args, **kwargs)
+
+    return wrapper
+
+
 def _hold(strategy_id: str) -> int:
     return int(STRATEGIES.get(strategy_id, {}).get("hold_days", HOLD_DAYS))
 
@@ -634,6 +648,7 @@ def check_daily_basic_staleness(db, as_of: str, max_lag: int = 1) -> dict[str, A
     return info
 
 
+@_formal_entry
 def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = None,
                    strategy_ids: list[str] | None = None) -> dict[str, Any]:
     """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。
@@ -876,6 +891,7 @@ def _block_trade_picks(db, sid: str, meta: dict[str, Any], as_of: str) -> Any:
     return len(picks)
 
 
+@_formal_entry
 def generate_block_trade_picks(db, as_of: str) -> dict[str, Any]:
     """只跑 mid-block-trade-premium（as_of = 大宗交易日 T，YYYY-MM-DD）。供 21:00 后 / T+1 开盘前的晚间任务调用。"""
     sid = "mid-block-trade-premium"
