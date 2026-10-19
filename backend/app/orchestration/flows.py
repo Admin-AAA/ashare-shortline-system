@@ -13,6 +13,17 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def _ensure_app_logging() -> None:
+    """Prefect flow 跑在 worker 子进程里，不经过 app.main 的 setup_logging：在 flow 入口补上，
+    让业务 INFO 日志进 backend/logs/app.log（幂等）。失败不影响 flow。"""
+    try:
+        from app.core.logger import setup_logging
+
+        setup_logging()
+    except Exception:  # noqa: BLE001
+        logger.exception("setup_logging in flow failed")
+
+
 @task(retries=2, retry_delay_seconds=[300, 900])
 def execute_scheduled_task(
     task_id: str,
@@ -47,6 +58,7 @@ def scheduled_task_flow(
     trigger_source: str = "schedule",
     correlation_id: str | None = None,
 ) -> None:
+    _ensure_app_logging()
     execute_scheduled_task(task_id, trigger_source, correlation_id, _scheduled_start_iso())
 
 
@@ -100,11 +112,13 @@ def recommendation_flow(
     run_id: str,
     correlation_id: str | None = None,
 ) -> None:
+    _ensure_app_logging()
     execute_recommendation_run(run_id, correlation_id)
 
 
 @flow(name="manual-preset-matrix", timeout_seconds=10800)
 def manual_preset_matrix_flow(task_run_id: str, payload: dict) -> None:
+    _ensure_app_logging()
     assert_no_brokerage_access(payload, context="flow:manual-preset-matrix")  # Scope_Guard 0.10
     from app.services.scheduler_service import _execute_manual_preset_matrix
 
@@ -113,6 +127,7 @@ def manual_preset_matrix_flow(task_run_id: str, payload: dict) -> None:
 
 @flow(name="manual-data-health-remediation", timeout_seconds=7200)
 def manual_data_health_remediation_flow(task_run_id: str, payload: dict) -> None:
+    _ensure_app_logging()
     assert_no_brokerage_access(payload, context="flow:manual-data-health-remediation")  # Scope_Guard 0.10
     from app.services.scheduler_service import _execute_manual_data_health_remediation
 
@@ -153,6 +168,7 @@ def poll_intraday_lock(scheduled_at: str) -> dict:
 
 @flow(name="intraday-lock-poll", timeout_seconds=900)
 def intraday_lock_poll_flow() -> None:
+    _ensure_app_logging()
     poll_intraday_lock(_scheduled_start_iso())
 
 
@@ -180,4 +196,5 @@ def recover_stale_runs() -> int:
 
 @flow(name="stale-run-recovery", timeout_seconds=900)
 def stale_run_recovery_flow() -> None:
+    _ensure_app_logging()
     recover_stale_runs()

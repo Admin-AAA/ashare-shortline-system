@@ -410,7 +410,11 @@ class IndexDaily(Base):
 
 
 class MarginData(Base):
-    """融资融券数据。数据来源：Tushare margin。"""
+    """融资融券数据。数据来源：Tushare margin。
+
+    ⚠️ 旧表，不用于实盘（2026-10-19 排查）：已无日更写入，最新约 2026-07-08。实盘读的是 margin_detail 日更表，
+    新代码不要依赖本表做选股/风控；仅供历史研究与页面数据健康展示。
+    """
     __tablename__ = "margin_data"
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_margin_data_code_date"),)
 
@@ -443,7 +447,11 @@ class MarginDetail(Base):
 
 
 class BlockTrade(Base):
-    """大宗交易。数据来源：Tushare block_trade。"""
+    """大宗交易。数据来源：Tushare block_trade。
+
+    ⚠️ 旧表，不用于实盘（2026-10-19 排查）：已无日更写入，最新约 2026-07-09。实盘读的是 auxiliary 大宗交易快照 / data/midterm parquet，
+    新代码不要依赖本表做选股/风控；仅供历史研究与页面数据健康展示。
+    """
     __tablename__ = "block_trades"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -645,7 +653,11 @@ class PledgeStat(Base):
 
 
 class Repurchase(Base):
-    """股票回购。数据来源：Tushare repurchase。"""
+    """股票回购。数据来源：Tushare repurchase。
+
+    ⚠️ 旧表，不用于实盘（2026-10-19 排查）：已无日更写入，最新约 2026-05-23（恰 100000 行，疑似截断）。实盘读的是 data/midterm/events/repurchase_*.parquet，
+    新代码不要依赖本表做选股/风控；仅供历史研究与页面数据健康展示。
+    """
     __tablename__ = "repurchases"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
