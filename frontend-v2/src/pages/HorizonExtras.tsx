@@ -31,7 +31,7 @@ export function RunPanel({ horizon, list, onClose, onDone }: { horizon: H; list:
       setRes(r); onDone();
     } catch (e) {
       const st = (e as { status?: number }).status; const m = detailOf((e as Error).message);
-      setErr(st === 409 ? `已有中长线出票在运行，请稍后再试（${m}）` : st === 400 ? `日期或参数不合法：${m}` : m);
+      setErr(st === 409 ? "已有运行中，请稍后再试" : st === 400 ? `日期或参数不合法：${m}` : /请求超时/.test(m) ? "等待超过 15 分钟，可能仍在运行，请稍后刷新" : m);
     } finally { setBusy(false); setConfirm(false); }
   }
   const entries = res ? Object.entries(res.result ?? {}) : [];

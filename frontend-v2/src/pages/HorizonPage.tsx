@@ -193,7 +193,7 @@ function TodayView({ batches, list, onPick }: { batches: HorizonBatch[]; list: H
           <div className="hz-sechead"><b>还没有出票的策略</b><span className="hz-muted">{noPicks.length} 个</span></div>
           <div className="hz-rej">{noPicks.map((s) => (
             <div key={s.id} className="hz-rej__item hz-rej__item--wait"><div className="hz-rej__name">{s.name}</div>
-              <div className="hz-rej__why">{FIRST_BATCH[s.id] ?? `${SCHEDULE_OVERRIDE[s.id] ?? SCHEDULE[s.schedule] ?? s.schedule}出票，暂无批次`}</div></div>))}</div>
+              <div className="hz-rej__why">{s.next_batch_note ?? FIRST_BATCH[s.id] ?? `${SCHEDULE_OVERRIDE[s.id] ?? SCHEDULE[s.schedule] ?? s.schedule}出票，暂无批次`}</div></div>))}</div>
         </section>)}
     </>
   );

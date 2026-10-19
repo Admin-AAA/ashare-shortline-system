@@ -205,7 +205,7 @@ function metricsQuery(windowDays: number | undefined, sampleScope: MetricsSample
 
 export type HorizonMetrics = { n?: number; win?: number; avg?: number; pf?: number; days?: number; tot?: number; mdd?: number };
 export type HorizonStrategy = {
-  id: string; name: string; horizon: string; summary: string; schedule: string; hold_days: number; top_n: number;
+  id: string; name: string; horizon: string; summary: string; next_batch_note?: string | null; schedule: string; hold_days: number; top_n: number;
   metrics: { recent_12m?: HorizonMetrics; phases?: Record<string, HorizonMetrics>; window?: string; note?: string };
 };
 export type HorizonStrategiesResponse = { horizon: string; strategies: HorizonStrategy[]; rejected?: { name: string; reason: string }[] };
