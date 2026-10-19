@@ -1120,9 +1120,25 @@ function MetricsWindowBar({
             fontSize: 12,
             color: "var(--text-muted)",
           }}
-          title={`batch ${historicalCohort.batch_id}\ncohort seal ${historicalCohort.cohort_identity_hash}\nstrategy policy ${historicalCohort.strategy_policy_fingerprint}\nexecution policy ${historicalCohort.execution_policy_fingerprint}\ncode ${historicalCohort.code_revision}`}
+          title={
+            (historicalCohort.batches?.length ?? 0) > 1
+              ? [
+                  `合并 ${historicalCohort.batches!.length} 个策略批次（每个策略取最新有效批次）`,
+                  `cohort seal ${historicalCohort.cohort_identity_hash}`,
+                  ...historicalCohort.batches!.map(
+                    (b) =>
+                      `· ${b.strategy_label || b.strategy_key || "?"}  ${b.window_start}~${b.window_end}  ${b.completed_trade_date_count} 天  batch ${b.batch_id.slice(0, 17)}  code ${b.code_revision.slice(0, 8)}  完成于 ${b.completed_at.slice(0, 16)}`,
+                  ),
+                ].join("\n")
+              : `batch ${historicalCohort.batch_id}${historicalCohort.strategy_label ? `\nstrategy ${historicalCohort.strategy_label}` : ""}\ncohort seal ${historicalCohort.cohort_identity_hash}\nstrategy policy ${historicalCohort.strategy_policy_fingerprint}\nexecution policy ${historicalCohort.execution_policy_fingerprint}\ncode ${historicalCohort.code_revision}`
+          }
         >
           <span>研究 cohort</span>
+          {(historicalCohort.batch_count ?? 1) > 1 ? (
+            <span className="tag">{historicalCohort.batch_count} 个策略批次合并</span>
+          ) : historicalCohort.strategy_label ? (
+            <span>{historicalCohort.strategy_label}</span>
+          ) : null}
           <span style={{ fontFamily: "var(--font-mono)" }}>
             {historicalCohort.window_start} ~ {historicalCohort.window_end}
           </span>
@@ -1133,7 +1149,7 @@ function MetricsWindowBar({
             seal {historicalCohort.cohort_identity_hash.slice(0, 12)}
           </span>
           <span style={{ fontFamily: "var(--font-mono)" }}>
-            code {historicalCohort.code_revision.slice(0, 12)}
+            code {historicalCohort.code_revision.split(",").map((rev) => rev.slice(0, 8)).join(",")}
           </span>
         </div>
       )}

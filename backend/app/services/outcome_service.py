@@ -41,7 +41,7 @@ from app.services.evidence.identity import (
 )
 from app.services.evidence.provenance_writer import resolve_code_revision
 from app.services.evidence.selectors import historical_reconstruction_run_conditions
-from app.services.evidence.reconstruction_batch import ValidatedReconstructionCohort
+from app.services.evidence.reconstruction_batch import ReconstructionCohortView
 from app.services.evidence.validation import (
     canonical_historical_reconstruction_cohort,
     canonical_live_forward_run_ids,
@@ -205,7 +205,7 @@ def _historical_cohort_for_metrics(
     sample_scope: str | None,
     start_date: str | None = None,
     end_date: str | None = None,
-) -> ValidatedReconstructionCohort | None:
+) -> ReconstructionCohortView | None:
     if sample_scope != HISTORICAL_REPLAY_SCOPE:
         return None
     return canonical_historical_reconstruction_cohort(
@@ -217,7 +217,7 @@ def _historical_cohort_for_metrics(
 
 def _metrics_population_token(
     sample_scope: str | None,
-    cohort: ValidatedReconstructionCohort | None,
+    cohort: ReconstructionCohortView | None,
 ) -> str:
     if sample_scope != HISTORICAL_REPLAY_SCOPE:
         return sample_scope or "legacy"
@@ -226,7 +226,7 @@ def _metrics_population_token(
 
 def _historical_run_ids_for_metrics(
     sample_scope: str | None,
-    cohort: ValidatedReconstructionCohort | None,
+    cohort: ReconstructionCohortView | None,
 ) -> tuple[str, ...] | None:
     if sample_scope != HISTORICAL_REPLAY_SCOPE:
         return None
@@ -235,7 +235,7 @@ def _historical_run_ids_for_metrics(
 
 def _cohort_metadata(
     sample_scope: str | None,
-    cohort: ValidatedReconstructionCohort | None,
+    cohort: ReconstructionCohortView | None,
 ) -> dict[str, Any] | None:
     if sample_scope != HISTORICAL_REPLAY_SCOPE or cohort is None:
         return None
@@ -1110,7 +1110,7 @@ def _overview_metrics(
     live_only: bool = True,
     sample_scope: str | None = None,
     historical_run_ids: tuple[str, ...] | None = None,
-    historical_cohort: ValidatedReconstructionCohort | None = None,
+    historical_cohort: ReconstructionCohortView | None = None,
 ) -> dict[str, Any]:
     rows = _scoped_recommendation_rows(
         db,

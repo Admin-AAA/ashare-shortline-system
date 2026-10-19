@@ -115,10 +115,20 @@ class ValidatedReconstructionCohort:
     strategy_policy_fingerprint: str
     execution_policy_fingerprint: str
     code_revision: str
+    # 策略身份（不含 run_name / attempt-tag）：同一策略的不同批次按它去重。
+    strategy_key: str = ""
+    strategy_label: str = ""
+    # 同策略更新批次已覆盖、因此从本 cohort 剔除的交易日数（窗口不同但重叠时）。
+    superseded_trade_date_count: int = 0
 
     def as_metadata(self) -> dict[str, Any]:
         return {
             "batch_id": self.batch_id,
+            "batch_count": 1,
+            "run_count": len(self.run_ids),
+            "strategy_key": self.strategy_key,
+            "strategy_label": self.strategy_label,
+            "superseded_trade_date_count": self.superseded_trade_date_count,
             "window_start": self.window_start,
             "window_end": self.window_end,
             "expected_trade_date_count": len(self.expected_trade_dates),
@@ -130,6 +140,154 @@ class ValidatedReconstructionCohort:
             "execution_policy_fingerprint": self.execution_policy_fingerprint,
             "code_revision": self.code_revision,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class MergedReconstructionCohort:
+    """Union of the latest validated cohort of each strategy (2026-10-19).
+
+    Short-line replay is rebuilt per strategy (one batch per single-skill
+    template), so Metrics / review / dashboard consumers must aggregate all of
+    them.  Exposes the same read surface as :class:`ValidatedReconstructionCohort`.
+    """
+
+    cohorts: tuple[ValidatedReconstructionCohort, ...]
+
+    @property
+    def run_ids(self) -> tuple[str, ...]:
+        return tuple(run_id for cohort in self.cohorts for run_id in cohort.run_ids)
+
+    @property
+    def expected_trade_dates(self) -> tuple[str, ...]:
+        return tuple(sorted({d for cohort in self.cohorts for d in cohort.expected_trade_dates}))
+
+    @property
+    def batch_id(self) -> str:
+        return ",".join(cohort.batch_id for cohort in self.cohorts)
+
+    @property
+    def window_start(self) -> str:
+        return min(cohort.window_start for cohort in self.cohorts)
+
+    @property
+    def window_end(self) -> str:
+        return max(cohort.window_end for cohort in self.cohorts)
+
+    @property
+    def completed_at(self) -> datetime:
+        return max(cohort.completed_at for cohort in self.cohorts)
+
+    @property
+    def cohort_identity_hash(self) -> str:
+        payload = sorted(
+            [cohort.batch_id, cohort.cohort_identity_hash, list(cohort.run_ids)]
+            for cohort in self.cohorts
+        )
+        return hashlib.sha256(_canonical_json(payload).encode("utf-8")).hexdigest()
+
+    def _joined(self, attribute: str) -> str:
+        values: list[str] = []
+        for cohort in self.cohorts:
+            value = str(getattr(cohort, attribute))
+            if value not in values:
+                values.append(value)
+        return ",".join(values)
+
+    @property
+    def request_template_fingerprint(self) -> str:
+        return self._joined("request_template_fingerprint")
+
+    @property
+    def strategy_policy_fingerprint(self) -> str:
+        return self._joined("strategy_policy_fingerprint")
+
+    @property
+    def execution_policy_fingerprint(self) -> str:
+        return self._joined("execution_policy_fingerprint")
+
+    @property
+    def code_revision(self) -> str:
+        return self._joined("code_revision")
+
+    def as_metadata(self) -> dict[str, Any]:
+        dates = self.expected_trade_dates
+        return {
+            "batch_id": self.batch_id,
+            "batch_count": len(self.cohorts),
+            "run_count": len(self.run_ids),
+            "strategy_key": self._joined("strategy_key"),
+            "strategy_label": self._joined("strategy_label"),
+            "superseded_trade_date_count": sum(
+                cohort.superseded_trade_date_count for cohort in self.cohorts
+            ),
+            "window_start": self.window_start,
+            "window_end": self.window_end,
+            "expected_trade_date_count": len(dates),
+            "completed_trade_date_count": len(dates),
+            "completed_at": self.completed_at.isoformat(),
+            "cohort_identity_hash": self.cohort_identity_hash,
+            "request_template_fingerprint": self.request_template_fingerprint,
+            "strategy_policy_fingerprint": self.strategy_policy_fingerprint,
+            "execution_policy_fingerprint": self.execution_policy_fingerprint,
+            "code_revision": self.code_revision,
+            "batches": [cohort.as_metadata() for cohort in self.cohorts],
+        }
+
+
+ReconstructionCohortView = ValidatedReconstructionCohort | MergedReconstructionCohort
+
+
+def merge_reconstruction_cohorts(
+    cohorts: Sequence[ValidatedReconstructionCohort],
+) -> ReconstructionCohortView | None:
+    """None / the single cohort itself (seal unchanged) / a merged view."""
+
+    items = tuple(cohort for cohort in cohorts if cohort.run_ids)
+    if not items:
+        return None
+    if len(items) == 1:
+        return items[0]
+    return MergedReconstructionCohort(cohorts=items)
+
+
+def reconstruction_strategy_identity(
+    request: Mapping[str, Any] | str | bytes | bytearray | None,
+    *,
+    strategy_policy_fingerprint: str = "",
+) -> tuple[str, str]:
+    """Strategy identity of a reconstruction batch, independent of run_name / attempt-tag.
+
+    Taken from the manifest-verified request template (``preset_id`` or the set of
+    ``skills[].skill_id``).  ``strategy_policy_fingerprint`` is *not* used as the
+    primary key because it embeds each skill's implementation hash and so changes
+    with code revisions of the same strategy; it is only the fallback when the
+    template carries no strategy selector.
+    """
+
+    payload: Any = None
+    if isinstance(request, Mapping):
+        payload = dict(request)
+    elif request:
+        try:
+            payload = json.loads(request)
+        except (TypeError, ValueError):
+            payload = None
+    if isinstance(payload, dict):
+        preset = str(payload.get("preset_id") or "").strip()
+        if preset:
+            return f"preset:{preset}", preset
+        skills = payload.get("skills")
+        skill_ids = sorted(
+            {
+                str(item.get("skill_id")).strip()
+                for item in (skills if isinstance(skills, list) else [])
+                if isinstance(item, Mapping) and str(item.get("skill_id") or "").strip()
+            }
+        )
+        if skill_ids:
+            return "skills:" + "+".join(skill_ids), "+".join(skill_ids)
+    fingerprint = str(strategy_policy_fingerprint or "").lower()
+    return f"policy:{fingerprint}", f"policy:{fingerprint[:12]}"
 
 
 def canonical_request_template_fingerprint(
@@ -521,12 +679,18 @@ def latest_validated_reconstruction_cohorts(
     date_to: str | None = None,
     per_template: bool = True,
 ) -> list[ValidatedReconstructionCohort]:
-    """Latest validated cohort per request template (2026-10-19: short-line replay is
-    rebuilt per strategy, one batch per single_skill template; consumers must see the
-    union, not only the most recently published strategy). ``per_template=False``
-    returns at most the single latest cohort (legacy behaviour)."""
+    """Latest validated cohort per strategy, newest first.
+
+    Strategy identity = ``reconstruction_strategy_identity`` (preset / skill set
+    from the request template; run_name / attempt-tag ignored).  For each strategy
+    the batch with the latest ``completed_at`` wins; an older batch of the same
+    strategy only keeps trade dates no newer batch covers (identical windows ⇒
+    dropped entirely), so no (strategy, trade_date) is ever counted twice.
+    Different strategies are all returned (consumers take the union).
+    ``per_template=False`` returns at most the single latest cohort (legacy).
+    """
     found: list[ValidatedReconstructionCohort] = []
-    seen_templates: set[str] = set()
+    covered_dates: dict[str, set[str]] = {}
     if trade_date is not None and (date_from is not None or date_to is not None):
         raise ValueError("trade_date cannot be combined with a date range")
     target = _optional_iso_date(trade_date, field_name="trade_date")
@@ -566,7 +730,8 @@ def latest_validated_reconstruction_cohorts(
     for batch in db.scalars(statement).all():
         try:
             identity = identity_from_persisted_batch(batch)
-            validated = _validate_runs(identity, _load_batch_runs(db, identity.batch_id))
+            batch_runs = _load_batch_runs(db, identity.batch_id)
+            validated = _validate_runs(identity, batch_runs)
             persisted_hash = str(batch.cohort_identity_hash or "").lower()
             if not _SHA256_RE.fullmatch(persisted_hash) or not hmac.compare_digest(
                 persisted_hash,
@@ -595,12 +760,30 @@ def latest_validated_reconstruction_cohorts(
                 execution_policy_fingerprint=validated.execution_policy_fingerprint,
                 code_revision=validated.code_revision,
             )
+            strategy_key, strategy_label = reconstruction_strategy_identity(
+                str(batch_runs[0].request_json or "") if batch_runs else None,
+                strategy_policy_fingerprint=validated.strategy_policy_fingerprint,
+            )
         except (ReconstructionBatchError, TypeError, ValueError):
             continue
-        template = str(cohort.request_template_fingerprint)
-        if template in seen_templates:
-            continue
-        seen_templates.add(template)
+        covered = covered_dates.setdefault(strategy_key, set())
+        keep = [
+            (run_id, run_date)
+            for run_id, run_date in zip(cohort.run_ids, cohort.expected_trade_dates)
+            if run_date not in covered
+        ]
+        if not keep:
+            continue  # 同策略更新批次已覆盖全部交易日（如换 attempt-tag 重跑）
+        superseded = len(cohort.run_ids) - len(keep)
+        cohort = replace(
+            cohort,
+            run_ids=tuple(run_id for run_id, _ in keep),
+            expected_trade_dates=tuple(run_date for _, run_date in keep),
+            strategy_key=strategy_key,
+            strategy_label=strategy_label,
+            superseded_trade_date_count=superseded,
+        )
+        covered.update(cohort.expected_trade_dates)
         found.append(cohort)
         if not per_template:
             break
@@ -791,6 +974,8 @@ __all__ = [
     "RECONSTRUCTION_BATCH_STATUS_FAILED",
     "ReconstructionBatchError",
     "ReconstructionBatchIdentity",
+    "MergedReconstructionCohort",
+    "ReconstructionCohortView",
     "ValidatedReconstructionCohort",
     "bind_reconstruction_worker_revision",
     "build_reconstruction_batch_identity",
@@ -799,6 +984,9 @@ __all__ = [
     "finalize_reconstruction_run",
     "identity_from_persisted_batch",
     "latest_validated_reconstruction_cohort",
+    "latest_validated_reconstruction_cohorts",
     "mark_reconstruction_batch_failed",
+    "merge_reconstruction_cohorts",
     "publish_reconstruction_batch",
+    "reconstruction_strategy_identity",
 ]

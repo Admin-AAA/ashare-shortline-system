@@ -368,6 +368,11 @@ def test_published_reconstruction_cohort_drives_all_historical_metrics(db):
     assert overview["failed_count"] == 1
     assert overview["historical_reconstruction_cohort"] == {
         "batch_id": identity.batch_id,
+        "batch_count": 1,
+        "run_count": 1,
+        "strategy_key": "policy:" + identity.strategy_policy_fingerprint,
+        "strategy_label": "policy:" + identity.strategy_policy_fingerprint[:12],
+        "superseded_trade_date_count": 0,
         "window_start": trade_date,
         "window_end": trade_date,
         "expected_trade_date_count": 1,

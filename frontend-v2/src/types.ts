@@ -2559,8 +2559,29 @@ export type AccuracyPolicyAudit = {
   }>;
 };
 
+export type HistoricalReconstructionCohortBatch = {
+  batch_id: string;
+  strategy_key?: string;
+  strategy_label?: string;
+  window_start: string;
+  window_end: string;
+  expected_trade_date_count: number;
+  completed_trade_date_count: number;
+  run_count?: number;
+  superseded_trade_date_count?: number;
+  completed_at: string;
+  cohort_identity_hash: string;
+  code_revision: string;
+};
+
 export type HistoricalReconstructionCohort = {
   batch_id: string;
+  /** 合并的策略批次数（每个策略只取最新有效批次）；旧后端无此字段视为 1 */
+  batch_count?: number;
+  run_count?: number;
+  strategy_label?: string;
+  superseded_trade_date_count?: number;
+  batches?: HistoricalReconstructionCohortBatch[];
   window_start: string;
   window_end: string;
   expected_trade_date_count: number;

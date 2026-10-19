@@ -10,9 +10,9 @@ from app.services.evidence.identity import (
     has_canonical_persisted_identity,
 )
 from app.services.evidence.reconstruction_batch import (
-    ValidatedReconstructionCohort,
-    latest_validated_reconstruction_cohort,
+    ReconstructionCohortView,
     latest_validated_reconstruction_cohorts,
+    merge_reconstruction_cohorts,
 )
 from app.services.evidence.selectors import (
     live_forward_run_conditions,
@@ -41,14 +41,21 @@ def canonical_historical_reconstruction_cohort(
     trade_date: str | None = None,
     date_from: str | None = None,
     date_to: str | None = None,
-) -> ValidatedReconstructionCohort | None:
-    """Return the latest complete, sealed reconstruction cohort for Metrics."""
+) -> ReconstructionCohortView | None:
+    """Return the merged reconstruction cohort for Metrics.
 
-    return latest_validated_reconstruction_cohort(
-        db,
-        trade_date=trade_date,
-        date_from=date_from,
-        date_to=date_to,
+    Same population as ``canonical_historical_reconstruction_run_ids``: the latest
+    validated batch of every strategy (run_name / attempt-tag ignored), merged.
+    A single strategy yields its own cohort unchanged (same seal).
+    """
+
+    return merge_reconstruction_cohorts(
+        latest_validated_reconstruction_cohorts(
+            db,
+            trade_date=trade_date,
+            date_from=date_from,
+            date_to=date_to,
+        )
     )
 
 
@@ -71,7 +78,7 @@ def canonical_historical_reconstruction_run_ids(
         raise ValueError("trade_date cannot be combined with a date range")
     if date_from is not None and date_to is not None and date_from > date_to:
         raise ValueError("date_from must not be later than date_to")
-    # 短线回放按策略分批（每个单策略模板一个 batch）：取每个模板最新的已验证 cohort 并集。
+    # 短线回放按策略分批：每个策略（不看 run_name/attempt-tag）取最新已验证 cohort，再取并集。
     cohorts = latest_validated_reconstruction_cohorts(
         db,
         trade_date=trade_date,
