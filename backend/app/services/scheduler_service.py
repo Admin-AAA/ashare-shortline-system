@@ -1482,6 +1482,17 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         indicator_fill["ivol"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
         logger.warning("ivol fill failed: %s", exc)
 
+    # bias_10/max_dd60/atr/ema/obv 等本地可算指标：此前日更无人写（只 09-08 补过一次），只补 NULL，失败只告警。
+    try:
+        from app.services.local_indicator_fill import fill_local_indicators
+
+        _li_since = (_dt_mod.date.fromisoformat(str(trade_date)[:10]) - _dt_mod.timedelta(days=15)).isoformat()
+        indicator_fill["local_indicators"] = fill_local_indicators(db, since=_li_since, end=str(trade_date)[:10])
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        indicator_fill["local_indicators"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        logger.warning("local indicator fill failed: %s", exc)
+
     # daily_basic（市值/PE/换手）此前从未接入日更，2026-10-09 后停更；补当日 + 停更告警。
     try:
         from app.services.daily_basic_ingest import ingest_daily_basic_with_alert

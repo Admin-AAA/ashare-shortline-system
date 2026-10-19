@@ -165,9 +165,9 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     {"key": "institutional_survey", "label": "机构调研", "category": "基本面", "table": InstitutionalSurvey, "date_col": "surv_date", "critical": False, "fresh_days": None},
     # 事件 / 公告
     {"key": "news", "label": "新闻公告", "category": "事件公告", "table": NewsAnnouncement, "date_col": "announce_date", "critical": False, "fresh_days": 14},
-    {"key": "block_trade", "label": "大宗交易", "category": "事件公告", "table": BlockTrade, "date_col": "trade_date", "critical": False, "fresh_days": None},
+    {"key": "block_trade", "label": "大宗交易", "category": "事件公告", "table": BlockTrade, "date_col": "trade_date", "critical": False, "fresh_days": 7, "live_source": "block_trade"},
     {"key": "share_float", "label": "限售解禁", "category": "事件公告", "table": ShareFloat, "date_col": "float_date", "critical": False, "fresh_days": None},
-    {"key": "repurchase", "label": "股票回购", "category": "事件公告", "table": Repurchase, "date_col": "ann_date", "critical": False, "fresh_days": None},
+    {"key": "repurchase", "label": "股票回购", "category": "事件公告", "table": Repurchase, "date_col": "ann_date", "critical": False, "fresh_days": 10, "live_source": "repurchase"},
     # 基础参照
     {"key": "stock_basic", "label": "股票基础信息", "category": "基础参照", "table": Stock, "date_col": "list_date", "critical": False, "fresh_days": None},
 ]
@@ -795,6 +795,18 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
                 "fresh_window_days": fresh, "gap_days": None, "note": str(exc),
             })
             continue
+
+        _live = ddef.get("live_source")
+        if _live:
+            try:
+                from app.services.data_live_sources import LIVE_SOURCES
+
+                total, max_date = LIVE_SOURCES[_live](db)
+                total_estimated = False
+                has_data = bool(total)
+            except Exception as exc:  # noqa: BLE001 - keep legacy-table numbers
+                _rollback_session_safely(db)
+                logger.warning("数据域 %s 真源统计失败: %s", key, exc)
 
         max_date = _fmt_date(max_date)
         # 月份型列（YYYYMM，如 券商金股 month）归一化为 YYYY-MM 便于展示

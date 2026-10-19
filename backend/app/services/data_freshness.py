@@ -128,6 +128,36 @@ def check_snapshot_datasets(db) -> list[dict[str, Any]]:
     return out
 
 
+_KBAR_BASE_COLUMNS = {"id", "code", "trade_date", "source", "updated_at", "open", "high", "low", "close",
+                      "volume", "amount", "pct_chg"}
+# 已确认无定义、无写方、无线上读方的列（2026-10-19 审计）；仍列出在结果里但不告警
+KNOWN_UNIMPLEMENTED_COLUMNS = {"profit_efficiency"}
+
+
+def check_indicator_columns(db, trade_date: str) -> dict[str, Any]:
+    """daily_kbars 所有指标列：最近交易日非 NULL 占比 < 5% 视为整列为空。"""
+    cols = [r[0] for r in db.execute(text(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() "
+        "AND table_name = 'daily_kbars' ORDER BY ordinal_position")) if r[0] not in _KBAR_BASE_COLUMNS]
+    sel = ", ".join(f"SUM(`{c}` IS NOT NULL)" for c in cols)
+    row = db.execute(text(f"SELECT COUNT(*), {sel} FROM daily_kbars WHERE trade_date = :d"), {"d": trade_date}).one()
+    n = int(row[0] or 0)
+    empty = [c for c, v in zip(cols, row[1:]) if n and int(v or 0) < DEAD_COL_RATIO * n]
+    alerting = [c for c in empty if c not in KNOWN_UNIMPLEMENTED_COLUMNS]
+    issues = [f"{trade_date} 指标列整列为空: {','.join(alerting)}"] if alerting else []
+    return {"table": "daily_kbars:indicators", "latest": trade_date, "columns_checked": len(cols),
+            "empty_columns": empty, "issues": issues}
+
+
+def check_repurchase_events() -> dict[str, Any]:
+    from app.services.data_live_sources import repurchase_events_latest
+
+    n, mx = repurchase_events_latest()
+    age = (_today() - date.fromisoformat(mx)).days if mx else None
+    issues = [] if age is not None and age <= 10 else [f"回购事件 parquet 最新 {mx}（{age} 天前）"]
+    return {"table": "events:repurchase", "latest": mx, "age_days": age, "rows": n, "issues": issues}
+
+
 def run_freshness_check(db, *, alert: bool = True) -> dict[str, Any]:
     from app.core.alerts import emit_alert
     from app.services.daily_basic_ingest import check_daily_basic_staleness
@@ -146,6 +176,12 @@ def run_freshness_check(db, *, alert: bool = True) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             results.append({"table": spec[0], "issues": [f"检查失败 {type(exc).__name__}: {str(exc)[:120]}"]})
+    for fn in (lambda: check_indicator_columns(db, dates[-1]), check_repurchase_events):
+        try:
+            results.append(fn())
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            results.append({"table": "extra", "issues": [f"检查失败 {type(exc).__name__}: {str(exc)[:120]}"]})
     try:
         results.extend(check_snapshot_datasets(db))
     except Exception as exc:  # noqa: BLE001

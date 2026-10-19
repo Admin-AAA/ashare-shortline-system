@@ -99,6 +99,9 @@ def list_data_sources(db: Session) -> list[dict[str, Any]]:
     # 来自 Router 进程内遥测，不写入旧的可编辑注册表，也不会被孤儿清理删除。
     from app.services.tushare_client import get_tushare_provider_health
 
+    from app.services.data_source_live_stats import apply_live_stats
+
+    apply_live_stats(db, rows)
     rows.extend(get_tushare_provider_health())
     return sorted(
         rows,

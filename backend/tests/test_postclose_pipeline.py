@@ -27,6 +27,9 @@ def _stub_ma250_fill(monkeypatch):
     import app.services.ivol_fill as ivol_fill
 
     monkeypatch.setattr(ivol_fill, "fill_ivol_incremental", lambda _db, _d, **_kw: {"stub": True})
+    import app.services.local_indicator_fill as local_indicator_fill
+
+    monkeypatch.setattr(local_indicator_fill, "fill_local_indicators", lambda _db, **_kw: {"stub": True})
     import app.services.daily_basic_ingest as daily_basic_ingest
 
     monkeypatch.setattr(daily_basic_ingest, "ingest_daily_basic_with_alert", lambda _db, _d: {"stub": True})
