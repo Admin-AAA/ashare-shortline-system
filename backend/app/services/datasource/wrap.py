@@ -66,9 +66,10 @@ def _limiter(name: str, rpm: int):
 def _breaker(name: str, dataset: str):
     key = (name, dataset)
     if key not in _breakers:
-        from app.services.tushare_transport import CircuitBreaker
+        from app.core.shared_breaker import SharedCircuitBreaker
 
-        _breakers[key] = CircuitBreaker(5, 300.0)
+        # shared across backend / Prefect worker / scripts (runtime SQLite store)
+        _breakers[key] = SharedCircuitBreaker(f"gw:{name}:{dataset}", 5, 300.0)
     return _breakers[key]
 
 

@@ -204,6 +204,12 @@ def snapshot(include_processes: bool = True) -> dict[str, Any]:
     out["process"] = {"role": _process_role(), "pid": os.getpid(), "started_at": _PROCESS_STARTED_AT}
     if include_processes:
         out["processes"] = _stored_processes()
+        try:
+            from app.core.shared_breaker import shared_breaker_states
+
+            out["open_breakers"] = shared_breaker_states()
+        except Exception:  # noqa: BLE001
+            out["open_breakers"] = []
     return out
 
 
