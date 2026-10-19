@@ -609,6 +609,31 @@ def dividend_lowvol_candidates(db, as_of: str, top_n: int = 10) -> list[dict[str
             for r in g.itertuples()]
 
 
+def check_daily_basic_staleness(db, as_of: str, max_lag: int = 1) -> dict[str, Any]:
+    """只读告警：daily_basic 最近快照（<=as_of）落后 as_of 多少个交易日；超过 max_lag 记 warning + emit_alert。
+    不改变任何选股逻辑（各策略仍按原口径取最近快照/按收盘折算）。"""
+    bd = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
+    if not bd:
+        lag = None
+    else:
+        lag = int(db.execute(text(
+            "SELECT COUNT(DISTINCT trade_date) FROM daily_kbars WHERE code='000001' AND trade_date>:b AND trade_date<=:d"),
+            {"b": bd, "d": as_of}).scalar() or 0)
+    info = {"table": "daily_basic", "as_of": as_of, "snapshot": bd, "lag_trading_days": lag}
+    if lag is None or lag > max_lag:
+        msg = f"daily_basic 快照过期：as_of={as_of} 最近快照={bd} 落后 {lag} 个交易日（中长线市值/PE/流通市值口径受影响）"
+        logger.warning(msg)
+        try:
+            from app.core.alerts import emit_alert
+            emit_alert("data_stale", "daily_basic", msg)
+        except Exception as exc:  # noqa: BLE001 — 告警失败不影响出票，但要留痕
+            logger.warning("emit_alert daily_basic stale failed: %s", exc)
+        info["stale"] = True
+    else:
+        info["stale"] = False
+    return info
+
+
 def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = None,
                    strategy_ids: list[str] | None = None) -> dict[str, Any]:
     """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。
@@ -616,6 +641,10 @@ def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = No
     horizon / strategy_ids 只用于手动补跑（POST /api/horizons/{mid,long}/run），默认 None = 17:35 全部策略。
     幂等：同一 as_of 重跑覆盖同一文件；_held_codes 只看 as_of 之前的批次。"""
     d = _dt.date.fromisoformat(as_of)
+    try:
+        check_daily_basic_staleness(db, as_of)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("daily_basic staleness check failed: %s", exc)
     result: dict[str, Any] = {}
     rp_cands: list[dict[str, Any]] | None | str = "unset"
     for sid, meta in STRATEGIES.items():
