@@ -418,30 +418,19 @@ def _fetch_stock_basics(pro: Any, settings: Any) -> list[dict[str, Any]]:
 
 
 def _recent_open_trade_dates(settings: Any, *, allow_current_session: bool = False) -> list[str]:
-    from app.services.tushare_client import get_pro
+    # 本地交易日历优先（trade_calendar 表）；未覆盖时才经网关拉取，盘中绝不在线拉 trade_cal。
+    from app.services.trade_calendar import TradeCalendarUnavailable, open_dates_between
 
-    pro = get_pro()
-    today_str = date.today().strftime("%Y%m%d")
-    start_str = (date.today() - timedelta(days=14)).strftime("%Y%m%d")
-    cal = _call_tushare_with_retry(
-        pro,
-        settings,
-        "trade_cal",
-        exchange="SSE",
-        start_date=start_str,
-        end_date=today_str,
-        is_open="1",
-    )
-    if cal is None or cal.empty:
+    try:
+        dates = open_dates_between(date.today() - timedelta(days=14), date.today())
+    except TradeCalendarUnavailable as exc:
+        raise MarketDataError(f"交易日历不可用：{exc}") from exc
+    if not dates:
         raise MarketDataError("Tushare 未返回交易日历。")
     latest_allowed = (
         _latest_allowed_quote_date() if allow_current_session else _latest_allowed_bar_date()
     ).replace("-", "")
-    return [
-        str(value)
-        for value in cal.sort_values("cal_date")["cal_date"].astype(str).tolist()
-        if str(value) <= latest_allowed
-    ]
+    return [str(value) for value in sorted(dates) if str(value) <= latest_allowed]
 
 
 def _batch_quote_tradeable_count(
@@ -1293,12 +1282,13 @@ def _exchange_from_code(code: str) -> str:
 
 
 def _latest_tushare_trade_date(pro: Any) -> str:
-    today = date.today().strftime("%Y%m%d")
-    start = (date.today() - timedelta(days=14)).strftime("%Y%m%d")
-    cal = pro.trade_cal(exchange="SSE", start_date=start, end_date=today, is_open="1")
-    if cal.empty:
-        raise MarketDataError("Tushare 未返回交易日历。")
-    return str(cal.sort_values("cal_date").iloc[-1]["cal_date"])
+    # pro 保留签名兼容；读本地交易日历（不再在线调 trade_cal）。
+    from app.services.trade_calendar import TradeCalendarUnavailable, latest_trade_date
+
+    try:
+        return latest_trade_date()
+    except TradeCalendarUnavailable as exc:
+        raise MarketDataError(f"交易日历不可用：{exc}") from exc
 
 
 def _format_yyyymmdd(value: Any) -> str:

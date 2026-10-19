@@ -1453,6 +1453,16 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
     sync_result = _run_data_sync(db, sync_payload)
     _plap("sync")
 
+    # 交易日历每日盘后刷新一次（经网关 tushare→akshare→baostock）；失败只告警，沿用本地表。
+    try:
+        from app.services.trade_calendar import refresh_trade_calendar
+
+        sync_result_calendar = refresh_trade_calendar()
+    except Exception as exc:  # noqa: BLE001
+        sync_result_calendar = {"status": "failed", "error": str(exc)[:300]}
+    logger.info("盘后交易日历刷新: %s", sync_result_calendar)
+    _plap("trade_calendar")
+
     # 补齐 Tushare stk_factor 缺失的 RSI/MACD（通达信口径，只填 NULL/0）；失败只告警。
     indicator_fill: dict[str, Any] = {}
     try:

@@ -10,6 +10,8 @@ APIs and upstreams (all verified on akshare==1.19.1):
   both must succeed, never a half-market answer)
 * ``stk_surv``       <- stock_jgdy_tj_em (东财机构调研统计; window <= 62 days)
 * ``anns_d``         <- stock_notice_report("全部", day) (whole market per day, <= 7 days)
+* ``trade_cal``      <- tool_trade_date_hist_sina (all SSE open days; days in range up to the
+  last listed date get is_open 0/1); then baostock query_trade_dates (baostock_backup)
 * ``pledge_stat``    <- stock_gpzy_pledge_ratio_em (中登 weekly, whole market per date;
   history back to 2018 available)
 
@@ -28,7 +30,7 @@ from app.services.datasource.gateway import DataSourceError, DatasetGateway, Err
 
 PROVIDER_NAME = "akshare"
 CONFIG_KEY = (PROVIDER_NAME, "tushare_provider")
-AKSHARE_BACKUP_APIS: frozenset[str] = frozenset({"margin_detail", "stk_surv", "anns_d", "pledge_stat"})
+AKSHARE_BACKUP_APIS: frozenset[str] = frozenset({"margin_detail", "stk_surv", "anns_d", "pledge_stat", "trade_cal"})
 AKSHARE_RPM = 30
 _CACHE_TTL = 600.0
 MAX_SURV_WINDOW_DAYS = 62
@@ -226,6 +228,22 @@ def map_pledge(rows: list[dict[str, Any]], end_date: str) -> list[dict[str, Any]
     return out
 
 
+def calendar_rows(opens: set[str], start: str, end: str, params: Mapping[str, Any],
+                  source: str) -> list[dict[str, Any]]:
+    """Tushare trade_cal shape for every calendar day in [start, end]; honours is_open filter."""
+    out: list[dict[str, Any]] = []
+    d, last = _day(start), _day(end)
+    want = str(params.get("is_open") or "").strip()
+    while d <= last:
+        day = d.strftime("%Y%m%d")
+        is_open = 1 if day in opens else 0
+        if not want or str(is_open) == want:
+            out.append({"exchange": str(params.get("exchange") or "SSE"), "cal_date": day,
+                        "is_open": is_open, "source": source})
+        d += timedelta(days=1)
+    return out
+
+
 # ── provider ────────────────────────────────────────────────────────────────
 class AkshareProvider:
     name = PROVIDER_NAME
@@ -271,6 +289,14 @@ class AkshareProvider:
             d += timedelta(days=1)
         return out
 
+    def _trade_cal(self, params: Mapping[str, Any]) -> list[dict[str, Any]]:
+        start, end = _range(params, "cal_date")
+        opens = {_compact(r.get("trade_date")) for r in _call("tool_trade_date_hist_sina")}
+        opens.discard("")
+        if not opens:
+            return []
+        return calendar_rows(opens, start, min(end, max(opens)), params, "akshare_sina")
+
     def _pledge_stat(self, params: Mapping[str, Any]) -> list[dict[str, Any]]:
         # 中登 data is weekly (Fridays).  end_date given: that date, else the last 3 Fridays <= it;
         # no end_date (per-stock "latest"): last 3 Fridays from today.  Whole market cached per date.
@@ -298,7 +324,9 @@ _GATEWAY: DatasetGateway | None = None
 def backup_gateway() -> DatasetGateway:
     global _GATEWAY
     if _GATEWAY is None:
-        _GATEWAY = DatasetGateway([AkshareProvider()])
+        from app.services.datasource.baostock_backup import BaostockTradeCalProvider
+
+        _GATEWAY = DatasetGateway([AkshareProvider(), BaostockTradeCalProvider()])
     return _GATEWAY
 
 
