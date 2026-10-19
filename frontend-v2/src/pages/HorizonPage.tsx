@@ -103,7 +103,8 @@ function StrategyCard({ s }: { s: HorizonStrategy }) {
   const m = s.metrics.recent_12m ?? {};
   const ex = m as HorizonMetrics & { excess?: number; bench?: number };
   const allPh = s.metrics.phases ?? {};
-  const phases = Object.entries(allPh).filter(([k]) => !k.startsWith("N3")).map(([k, v]) => [k.startsWith("R12") ? "近12个月" : k, v] as [string, HorizonMetrics]);
+  const phases = Object.entries(allPh).filter(([k]) => !k.startsWith("N3")).map(([k, v]) => [k.startsWith("R12") ? "近12个月" : k, v] as [string, HorizonMetrics])
+    .reverse(); // 倒序：近12个月在最上，2019 在最下（接口按时间正序返回）
   const n3 = Object.entries(allPh).find(([k]) => k.startsWith("N3"))?.[1];
   const maxAbs = Math.max(1, ...phases.map(([, p]) => Math.abs(p.avg ?? 0)));
   void 0;
