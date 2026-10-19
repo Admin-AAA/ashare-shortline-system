@@ -1517,6 +1517,16 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         indicator_fill["daily_basic"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
         logger.warning("daily_basic ingest failed: %s", exc)
 
+    # 机构调研 institutional_surveys / 两融汇总 margin_data 回到日更（2026-10-19）；失败只记录不阻断。
+    try:
+        from app.services.survey_margin_ingest import daily_survey_margin_update
+
+        indicator_fill["survey_margin"] = daily_survey_margin_update(db, str(trade_date)[:10])
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        indicator_fill["survey_margin"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        logger.warning("survey/margin_data daily update failed: %s", exc)
+
     # [中长线] 中线策略选股（周五信号日落盘，独立于短线出票）；失败只告警。
     # 结果写入 result_json.midterm_picks（之前只打 INFO，worker 日志不收，完全不可观测）。
     midterm_picks: dict[str, Any] = {}

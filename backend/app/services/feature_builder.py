@@ -829,6 +829,14 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
     holder_trade_map = aux.get("holder_trades", {})
     survey_map = aux.get("surveys", {})
     coverage = aux.get("coverage", {}) or {}
+    holder_trade_snapshot_ok = _event_snapshot_ok(coverage, "holder_trade")
+    # surveys 只有显式加载（aux 带 "surveys" 键，且 coverage 未标错误/停更）才算可用
+    survey_snapshot_ok = "surveys" in aux and _event_snapshot_ok(coverage, "institutional_survey", default=True)
+    # 公告是 7 个按日分区；只有整体不可用（有错误且 0 行）才不认“查过为空”，个别节假日分区缺失不影响
+    _news_cov = coverage.get("news_announcement") if isinstance(coverage, Mapping) else None
+    news_snapshot_ok = not (
+        isinstance(_news_cov, Mapping) and _news_cov.get("errors") and not int(_news_cov.get("record_count") or 0)
+    )
     auxiliary_trade_date = str(aux.get("as_of_trade_date") or trade_date)
     audit = (snapshot.get("breadth") or {}).get("auxiliary_data_audit") or {}
     checked_news_codes = _checked_codes_from_audit(audit.get("news"))
@@ -923,7 +931,7 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             data_quality["news_checked"] = True
             data_quality["announcements_checked"] = True
         else:
-            if code in checked_news_codes:
+            if code in checked_news_codes and news_snapshot_ok:
                 missing_fields.discard("news")
                 missing_fields.discard("announcements")
                 data_quality["news_checked_empty"] = True
@@ -1135,28 +1143,44 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["holder_num_decreasing"] = False
 
         # ── 股东增减持特征 ──
+        # 2026-10-19：快照不可用（holder_trade 无覆盖/有错误）时报缺失（None + optional_missing_fields），
+        # 不再写 0 冒充“查过无增减持”。10-09 后快照 unknown_schema 期间全市场都被写成 0。
         ht = holder_trade_map.get(code)
         if ht:
             stock["holder_trade_count"] = ht.get("holder_trade_count", 0)
             stock["holder_trade_increase_count"] = ht.get("holder_trade_increase_count", 0)
             stock["holder_trade_decrease_count"] = ht.get("holder_trade_decrease_count", 0)
             stock["holder_trade_net_ratio"] = ht.get("holder_trade_net_ratio", 0.0)
-        else:
+        elif holder_trade_snapshot_ok:
             stock["holder_trade_count"] = 0
             stock["holder_trade_increase_count"] = 0
             stock["holder_trade_decrease_count"] = 0
             stock["holder_trade_net_ratio"] = 0.0
+        else:
+            for _f in ("holder_trade_count", "holder_trade_increase_count",
+                       "holder_trade_decrease_count", "holder_trade_net_ratio"):
+                stock[_f] = None
+            optional_missing_fields.add("holder_trade")
+            data_quality["holder_trade_snapshot_unavailable"] = True
 
         # ── 机构调研特征 ──
+        # 2026-10-19：机构调研未接入 feature views（S4 audit-only，aux 无 "surveys" 键）或本地表停更时报缺失，
+        # 不再写 0 冒充“近 30 天无调研”。
         sv = survey_map.get(code)
         if sv:
             stock["survey_count"] = sv.get("survey_count", 0)
             stock["survey_fund_visitors"] = sv.get("survey_fund_visitors", 0)
             stock["survey_latest_date"] = sv.get("survey_latest_date", "")
-        else:
+        elif survey_snapshot_ok:
             stock["survey_count"] = 0
             stock["survey_fund_visitors"] = 0
             stock["survey_latest_date"] = ""
+        else:
+            stock["survey_count"] = None
+            stock["survey_fund_visitors"] = None
+            stock["survey_latest_date"] = None
+            optional_missing_fields.add("survey")
+            data_quality["survey_snapshot_unavailable"] = True
 
         # ── 炸板数据（市场情绪温度计，limit_type='Z'） ──
         # 炸板=曾涨停后打开，炸板率高=市场情绪转弱
@@ -1170,6 +1194,14 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
         data_quality["missing_fields"] = sorted(missing_fields)
         data_quality["optional_missing_fields"] = sorted(optional_missing_fields)
         data_quality["fallback_fields"] = sorted(fallback_fields)
+
+def _event_snapshot_ok(coverage: Mapping[str, Any] | Any, dataset: str, *, default: bool = False) -> bool:
+    """事件快照是否可用：coverage 有该数据集且无错误码。无 coverage 条目时返回 default。"""
+    entry = coverage.get(dataset) if isinstance(coverage, Mapping) else None
+    if not isinstance(entry, Mapping):
+        return default
+    return not entry.get("errors")
+
 
 def _checked_codes_from_audit(audit_row: Any) -> set[str]:
     if not isinstance(audit_row, dict):
