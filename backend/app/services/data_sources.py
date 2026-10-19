@@ -617,7 +617,9 @@ def _refresh_bar_source_stats_in_background() -> None:
             with _bar_source_stats_lock:
                 _bar_source_stats_refreshing = False
 
-    threading.Thread(target=_run, name="pool-bar-source-stats", daemon=True).start()
+    from app.services.datasource.cache import ctx_bound
+
+    threading.Thread(target=ctx_bound(_run), name="pool-bar-source-stats", daemon=True).start()
 
 
 def _compute_raw_bar_source_rows(db: Session, latest_allowed_bar_date: Any) -> list[dict[str, Any]]:
@@ -1129,10 +1131,12 @@ def _probe_xiaoshi_source() -> dict[str, Any]:
             logger.debug("_probe_xiaoshi_source: best-effort fallback after %r", exc)
             return (False, {}, f"{type(exc).__name__}: {str(exc)[:160]}")
 
+    from app.services.datasource.cache import submit_ctx
+
     with ThreadPoolExecutor(max_workers=3) as pool:
-        manifest_future = pool.submit(_probe_manifest)
-        quote_future = pool.submit(_probe_quote)
-        kline_future = pool.submit(_probe_kline)
+        manifest_future = submit_ctx(pool, _probe_manifest)
+        quote_future = submit_ctx(pool, _probe_quote)
+        kline_future = submit_ctx(pool, _probe_kline)
         manifest_detail, manifest_error = manifest_future.result()
         quote_ok, quote_detail, quote_error = quote_future.result()
         kline_ok, kline_detail, kline_error = kline_future.result()

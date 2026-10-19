@@ -49,7 +49,9 @@ class RtkProvider:
         from app.engine.trading_calendar import latest_allowed_quote_date
         from app.services.tushare_client import get_pro
 
-        fut = _RTK_POOL.submit(get_pro().rt_k, ts_code=",".join(_ts(c) for c in query["keys"]))
+        from app.services.datasource.cache import submit_ctx
+
+        fut = submit_ctx(_RTK_POOL, get_pro().rt_k, ts_code=",".join(_ts(c) for c in query["keys"]))
         try:
             df = fut.result(timeout=RTK_DEADLINE_SECONDS)
         except _FutTimeout:

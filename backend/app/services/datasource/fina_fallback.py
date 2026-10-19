@@ -45,7 +45,10 @@ def load_baseline(period: str, fina_dir: Path = FINA_DIR) -> pd.DataFrame:
     if not files:
         return pd.DataFrame()
     with ThreadPoolExecutor(8) as pool:
-        parts = [p for p in pool.map(lambda f: _read_one(f, period), files) if p is not None]
+        from app.services.datasource.cache import submit_ctx
+
+        futs = [submit_ctx(pool, _read_one, f, period) for f in files]
+        parts = [p for p in (fu.result() for fu in futs) if p is not None]
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 

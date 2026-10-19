@@ -49,6 +49,25 @@ def formal_chain() -> Iterator[None]:
         _formal.reset(tok)
 
 
+def ctx_bound(fn):
+    """Bind fn to a fresh copy of the *current* context (call once per submit/thread).
+
+    contextvars do not cross into pool/Thread workers; without this the formal_chain marker
+    is lost and the gateway would serve stale data on formal paths.
+    """
+    ctx = contextvars.copy_context()
+
+    def _runner(*args, **kwargs):
+        return ctx.run(fn, *args, **kwargs)
+
+    return _runner
+
+
+def submit_ctx(pool, fn, *args, **kwargs):
+    """pool.submit with a per-submit copy of the current context."""
+    return pool.submit(ctx_bound(fn), *args, **kwargs)
+
+
 def in_formal_chain() -> bool:
     return _formal.get()
 

@@ -2008,7 +2008,9 @@ def _fetch_minute_code_batch(
         max_workers=min(MINUTE_REMEDIATION_WORKERS, len(codes)),
         thread_name_prefix="minute-remediation",
     ) as pool:
-        futures = [pool.submit(fetch_code, code) for code in codes]
+        from app.services.datasource.cache import submit_ctx
+
+        futures = [submit_ctx(pool, fetch_code, code) for code in codes]
         for future in as_completed(futures):
             results.append(future.result())
     return results
