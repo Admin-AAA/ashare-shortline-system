@@ -237,6 +237,50 @@ def _store_repurchase_events(new) -> None:
         logger.warning("store repurchase events failed: %s", exc)
 
 
+
+def _scaled_total_mv(
+    total_mv_snapshot: float,
+    close_bd,
+    close_t,
+    adj_bd=None,
+    adj_t=None,
+    total_share=None,
+) -> float:
+    """把 daily_basic 快照总市值折算到信号日：total_mv_snapshot * close(signal) / close(snapshot)。
+
+    daily_kbars.close 为不复权价。若快照日与信号日之间 adj_factor 变化（疑似除权除息/送转等），
+    不复权收盘比不再对应同一股本，优先用 total_share * close_t（单位与 total_mv 一致：万股×元=万元）；
+    本地无 total_share 时退回快照值，避免错误缩放。
+    """
+    snap = float(total_mv_snapshot)
+    if snap <= 0:
+        return snap
+    try:
+        c_bd = float(close_bd) if close_bd is not None else None
+        c_t = float(close_t) if close_t is not None else None
+    except (TypeError, ValueError):
+        return snap
+    if not c_bd or not c_t or c_bd <= 0 or c_t <= 0:
+        return snap
+    corp_action = False
+    try:
+        if adj_bd is not None and adj_t is not None:
+            a_bd, a_t = float(adj_bd), float(adj_t)
+            if a_bd > 0 and a_t > 0 and abs(a_bd - a_t) > 1e-9:
+                corp_action = True
+    except (TypeError, ValueError):
+        corp_action = False
+    if corp_action:
+        try:
+            shares = float(total_share) if total_share is not None else None
+        except (TypeError, ValueError):
+            shares = None
+        if shares is not None and shares > 0:
+            return shares * c_t
+        return snap
+    return snap * c_t / c_bd
+
+
 def repurchase_plan_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     """as_of 收盘后可见的新回购预案（公告日在 (上一交易日, as_of] 内，周末/盘后公告顺延到下一交易日），
     同一股票 365 天内只取首次；流动性口径与 lt_research.py liq 一致。按 回购金额上限/总市值 降序。
@@ -275,15 +319,22 @@ def repurchase_plan_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     if not amt:
         return []
     codes = sorted(amt)
+    bd = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
+    if not bd:
+        return []
     q = text("""
-        SELECT b.code, b.total_mv, a.amt20 FROM daily_basic b
+        SELECT b.code, b.total_mv, a.amt20,
+               kb.close AS close_bd, kt.close AS close_t,
+               kb.adj_factor AS adj_bd, kt.adj_factor AS adj_t
+        FROM daily_basic b
         JOIN (SELECT code, AVG(amount) amt20 FROM daily_kbars
               WHERE trade_date>:d20x AND trade_date<=:d AND code IN :codes GROUP BY code) a ON a.code=b.code
         JOIN (SELECT code FROM daily_kbars WHERE trade_date=:d250 AND code IN :codes) old ON old.code=b.code
-        JOIN (SELECT code FROM daily_kbars WHERE trade_date=:d AND close>0 AND code IN :codes) t ON t.code=b.code
-        WHERE b.trade_date=(SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d) AND b.code IN :codes
+        JOIN daily_kbars kt ON kt.code=b.code AND kt.trade_date=:d AND kt.close>0
+        LEFT JOIN daily_kbars kb ON kb.code=b.code AND kb.trade_date=:bd
+        WHERE b.trade_date=:bd AND b.code IN :codes
     """).bindparams(bindparam("codes", expanding=True))
-    rows = db.execute(q, {"d20x": dates[20], "d": as_of, "d250": dates[250], "codes": codes}).mappings().all()
+    rows = db.execute(q, {"d20x": dates[20], "d": as_of, "d250": dates[250], "bd": bd, "codes": codes}).mappings().all()
     st = {r[0] for r in db.execute(text(
         "SELECT code FROM stock_metadata_history WHERE name LIKE '%ST%' AND effective_from<=:d "
         "AND (effective_to IS NULL OR effective_to>:d)"), {"d": as_of})}
@@ -293,7 +344,9 @@ def repurchase_plan_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     for r in rows:
         if r["code"] in st or not r["amt20"] or float(r["amt20"]) <= 5e7 or not r["total_mv"]:
             continue
-        mv = float(r["total_mv"])
+        mv = _scaled_total_mv(
+            float(r["total_mv"]), r["close_bd"], r["close_t"], r["adj_bd"], r["adj_t"],
+        )
         out.append({"code": r["code"], "name": names.get(r["code"], ""), "ann_date": ann[r["code"]],
                     "repurchase_amount": amt[r["code"]], "total_mv": mv,
                     "ratio": round(amt[r["code"]] / (mv * 1e4), 5), "amt20": float(r["amt20"])})
