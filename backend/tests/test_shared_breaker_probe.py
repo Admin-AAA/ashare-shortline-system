@@ -77,7 +77,7 @@ def test_gateway_uses_shared_breaker(monkeypatch, tmp_path):
             return True
 
         def fetch(self, d, q):
-            raise TimeoutError("t")
+            raise RuntimeError("t")
 
     gw = DatasetGateway([P()], enabled=lambda p: True, failure_threshold=1)
     gw.fetch_first("ds", {})

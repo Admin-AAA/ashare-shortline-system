@@ -144,6 +144,18 @@ class ProductionPrefectDispatchBlocked(RuntimeError):
 
 
 @pytest.fixture(autouse=True)
+def _reset_gateway_breakers():
+    """Gateway breakers are module-level singletons: isolate per test (failure kinds now accumulate)."""
+    yield
+    try:
+        from app.services.datasource.gateway import reset_all_breakers
+
+        reset_all_breakers()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _block_prefect_dispatch(request, monkeypatch):
     """所有测试默认禁止 Prefect 派发：拦截 run_deployment，记录并在 teardown 失败。
 

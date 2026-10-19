@@ -378,6 +378,17 @@ def _research_promax_limiter():
         return _RESEARCH_LIMITER[0]
 
 
+def _breaker_kind(category: "FailureCategory") -> str | None:
+    """FailureCategory -> SharedCircuitBreaker failure kind (per-kind thresholds)."""
+    if category in (FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT):
+        return "rate_limit"
+    if category is FailureCategory.TIMEOUT:
+        return "timeout"
+    if category in (FailureCategory.MALFORMED_RESPONSE, FailureCategory.NON_JSON):
+        return "bad_data"
+    return None
+
+
 class CircuitBreaker:
     """Small per-API circuit breaker with a single half-open probe."""
 
@@ -407,7 +418,11 @@ class CircuitBreaker:
             self._open_until = 0.0
             self._half_open_probe = False
 
-    def record_failure(self, *, force_open: bool = False, recovery_seconds: float | None = None) -> None:
+    def record_failure(
+        self, *, force_open: bool = False, recovery_seconds: float | None = None, kind: str | None = None
+    ) -> None:
+        if kind == "rate_limit":
+            force_open = True
         with self._lock:
             self._failure_count += 1
             if force_open or self._half_open_probe or self._failure_count >= self._threshold:
@@ -699,8 +714,9 @@ class TushareHttpProvider:
                 FailureCategory.DATA_PENDING,
             }:
                 breaker.record_failure(
-                    force_open=force_open,
+                    force_open=force_open and failure.category is FailureCategory.PERMISSION,
                     recovery_seconds=failure.retry_after_seconds,
+                    kind=_breaker_kind(failure.category),
                 )
             raise
 

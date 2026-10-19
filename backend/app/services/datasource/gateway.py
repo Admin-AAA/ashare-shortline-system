@@ -48,6 +48,30 @@ class ErrorKind(StrEnum):
     DISABLED = "disabled"
     CIRCUIT_OPEN = "circuit_open"
     CONTRACT = "contract"
+    BAD_DATA = "bad_data"  # empty where data is expected (e.g. realtime quotes in session)
+
+
+# breaker failure kind per ErrorKind (thresholds in shared_breaker.kind_threshold)
+BREAKER_KIND: dict[ErrorKind, str] = {
+    ErrorKind.RATE_LIMIT: "rate_limit", ErrorKind.TIMEOUT: "timeout",
+    ErrorKind.CONTRACT: "bad_data", ErrorKind.BAD_DATA: "bad_data",
+}
+# Not provider faults: never count toward a breaker.
+NON_BREAKER_KINDS = frozenset({ErrorKind.INVALID_REQUEST, ErrorKind.DATA_PENDING, ErrorKind.DISABLED})
+
+# Datasets that must be non-empty during the trading session (empty => BAD_DATA, not success).
+EXPECT_NONEMPTY_IN_SESSION: frozenset[str] = frozenset({"quote.realtime", "quote.realtime_frame"})
+
+
+def in_trading_session(now: Any = None) -> bool:
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    now = now or datetime.now(ZoneInfo("Asia/Shanghai"))
+    if now.weekday() >= 5:
+        return False
+    hm = (now.hour, now.minute)
+    return (9, 30) <= hm < (11, 30) or (13, 0) <= hm < (15, 0)
 
 
 class DataSourceError(RuntimeError):
@@ -152,6 +176,12 @@ class GatewayResult:
     attempts: list[dict[str, Any]]
 
 
+def reset_all_breakers() -> None:
+    """Drop every gateway's in-process breaker objects (tests / admin reset)."""
+    for gw in list(_ALL_GATEWAYS):
+        gw._breakers.clear()
+
+
 class DatasetGateway:
     def __init__(
         self,
@@ -165,6 +195,7 @@ class DatasetGateway:
 
         self._providers = list(providers)
         self._enabled = enabled
+        _ALL_GATEWAYS.add(self)
         self._breakers: dict[tuple[str, str], Any] = {}
         # Shared (cross-process, per-namespace) breaker keyed like wrap.py: gw:<provider>:<dataset>.
         self._breaker_factory = lambda provider, dataset: SharedCircuitBreaker(
@@ -213,14 +244,23 @@ class DatasetGateway:
             rows = p.fetch(dataset, query)
             seq = rows.values() if isinstance(rows, Mapping) else (rows or [])
             validate_rows(dataset, seq, p.name)
+            if not rows and dataset in EXPECT_NONEMPTY_IN_SESSION and in_trading_session():
+                raise DataSourceError(ErrorKind.BAD_DATA, "empty during trading session", provider=p.name, dataset=dataset)
         except Exception as exc:  # noqa: BLE001 - classified, recorded, next provider tried
             kind = classify_exception(exc)
-            breaker.record_failure()
+            if kind not in NON_BREAKER_KINDS:
+                breaker.record_failure(
+                    kind=BREAKER_KIND.get(kind), recovery_seconds=getattr(exc, "retry_after_seconds", None)
+                )
             attempts.append({"provider": p.name, "outcome": kind.value, "error": str(exc)[:160]})
             _metrics.inc("dataset_requests", dataset=dataset, provider=p.name, outcome=kind.value)
             return None
+        if not rows:  # valid-empty: not a success (breaker untouched), not a failure
+            attempts.append({"provider": p.name, "outcome": "empty", "rows": 0})
+            _metrics.inc("dataset_requests", dataset=dataset, provider=p.name, outcome="empty")
+            return rows
         breaker.record_success()
-        outcome = "success" if rows else "empty"
+        outcome = "success"
         attempts.append({"provider": p.name, "outcome": outcome, "rows": len(rows or ())})
         _metrics.inc("dataset_requests", dataset=dataset, provider=p.name, outcome=outcome)
         _metrics.observe("dataset_latency", time.perf_counter() - t0, dataset=dataset, provider=p.name)
@@ -253,6 +293,11 @@ class DatasetGateway:
             if added:
                 used.append(p.name)
         return GatewayResult(merged, ",".join(used) or None, attempts)
+
+
+import weakref  # noqa: E402
+
+_ALL_GATEWAYS = weakref.WeakSet()
 
 
 # ── cutover / shadow ───────────────────────────────────────────────────────
