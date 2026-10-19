@@ -1,5 +1,9 @@
 """[中长线] 中线 / 长线策略 API。"""
-from fastapi import Depends, Query
+import datetime as _dt
+import threading
+
+from fastapi import Body, Depends, HTTPException, Query
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.api.contracts import ContractRouter as APIRouter
@@ -31,6 +35,7 @@ LONG_REJECTED = [
     {"name": "送转预案公告（每股送转≥0.3即10送转3以上，同一报告期只认第一次预案，公告日信号次日开盘买，持60日）", "reason": "§111 预注册3版之一（tushare 分红送转数据、真实成交、未调参，对照为同日同市值五分位全体等权）：最近12个月32笔 每笔 +15.65%（PF 3.82），但 2024 每笔 −10.10%（PF 0.24）、2025年1–9月 −0.63%，2024-01~2026-10 连续 87笔 +2.48%/笔（PF 1.30、回撤 −30.6%），只 4/8 阶段跑赢对照；收益集中在 2026 年与 2020 年，不稳定。不达采纳标准（原题卖方研报评级上调因数据接口限制无法回测全历史）"},
     {"name": "大宗交易溢价成交（持60日：当日成交量加权大宗价不低于收盘价、大宗成交额≥流通市值0.5%，次日开盘买）", "reason": "§114 预注册3版之一（Tushare 大宗交易、真实成交、未调参，对照为同日同市值五分位全体等权）：最近12个月77笔 每笔 +5.87%（PF 1.91、超额 +5.63）、2024-01~2026-10 214笔 +5.84%/笔（PF 2.01、回撤 −22.8%），2024 +2.39、2025年1–9月 +13.78；但 2023-04~12 每笔 −7.74%（PF 0.33、胜率 23%），超过预设老阶段 −5%/笔 风控线，且 2024、2022-04~2023-03、2023-04~12 都跑输对照（5/8）。按预注册标准否决；同事件持20日版已上线中线"},
     {"name": "机构调研关注度激增（持60日：近30天来访机构≥30家、该股前90天内没有过同样激增，可见日按调研后第4个交易日开盘买）", "reason": "§105 预注册3版之一（Tushare 机构调研 stk_surv 2021-08 起、真实成交、未调参，对照为同日同市值五分位全体等权）：最近12个月60笔 每笔 −8.26%（胜率 30%、PF 0.39、跑输对照 2.25 个点）、2024-01~2026-10 200笔 +1.19%/笔（PF 1.15、回撤 −29.6%），2024、2025年1–9月 都跑输对照；2026 年入场的笔整体大幅亏损（6、8、9 月入场每笔 −13%~−18%）。不达采纳标准（注：上游调研数据 2025-09-12~11-06 整段缺失，2021-09~2023-09 未回补，老阶段未评，不影响结论）"},
+    {"name": "业绩快报首次快报大增（持60日：归母净利同比≥50%或扭亏、营收同比>0；同期已有预告/正式报告的不算，次日开盘买）", "reason": "§116 预注册3版之一（Tushare 业绩快报、真实成交、未调参）：最近12个月7笔 每笔 −0.77%（PF 0.89）；2024-01~2026-10 只有21笔（<30，+9.03% 主要来自 2024 年6笔 +31%）；8阶段只有4个跑赢同市值对照，2021 每笔 −4.85%"},
 ]
 
 
@@ -64,7 +69,59 @@ MID_REJECTED = [
     {"name": "大宗交易高溢价成交（成交量加权大宗价≥收盘价×1.02、大宗成交额≥流通市值0.5%，次日开盘买，持20日）", "reason": "§114 预注册3版之一（真实成交、未调参）：最近12个月只有22笔（每笔 +4.22%、PF 1.86），不到预设的≥30笔；2024-01~2026-10 95笔 +3.07%/笔 PF1.72，但 2024、2025年1–9月、2022-04~2023-03（−1.78%/笔）、2021 都跑输同市值对照，只 4/8 阶段跑赢（预设要求 ≥5/8）。样本太少，按预注册标准否决；同事件溢价≥0 的宽口径版已上线"},
     {"name": "机构调研关注度激增（近30天来访机构≥30家、该股前90天内没有过同样激增，调研后第4个交易日开盘买，持20日）", "reason": "§105 预注册3版之一（Tushare 机构调研 stk_surv、真实成交、未调参，对照为同日同市值五分位全体等权）：最近12个月151笔 每笔 −1.44%（胜率 39.1%、PF 0.81、最长连亏19笔），2024-01~2026-10 515笔 +0.88%/笔（PF 1.17）、超额 −0.08；2024 +1.76、2025年1–9月 +1.83（后者跑输对照 0.95 个点），2026 年入场整体为负。不达采纳标准（上游调研数据 2025-09-12~11-06 缺失，老阶段未评，不影响结论）"},
     {"name": "基金/券商调研激增（近30天来访基金公司+券商≥15家、前90天内没有过同样激增，调研后第4个交易日开盘买，持20日）", "reason": "§105 预注册3版之一（真实成交、未调参）：2024-01~2026-10 531笔 +1.64%/笔（PF 1.33、超额 +0.92），2024 +3.32%/笔，但最近12个月153笔 每笔 −2.18%（PF 0.72、跑输对照 0.43 个点）、2025年1–9月 跑输对照 1.06 个点；收益集中在 2024 年。不达采纳标准"},
+    {"name": "业绩快报首次快报正增长（同一报告期第一次快报、归母净利>0 且同比增长或扭亏；同期已有业绩预告/正式报告的不算，公告日信号次日开盘买，持20日）", "reason": "§116 预注册3版之一（Tushare 业绩快报、真实成交、未调参，对照为同日同市值五分位全体等权）：最近12个月99笔 胜率46.5% 每笔+0.47%（已扣成本）PF 1.13、回撤−14.0%；2024-01~2026-10 284笔 +1.40% PF 1.46，但跑输同市值对照（最近12个月 −0.40、近3年 −0.54），8阶段只有3个跑赢；2022-04~2023-03 −2.27%、2020 −2.59%；平均盈/亏 +8.2%/−6.6%，绝对收益基本是市值档贝塔"},
+    {"name": "业绩快报首次快报大增（归母净利同比≥50%或扭亏、营收同比>0；同期已有预告/正式报告的不算，持20日）", "reason": "§116 预注册3版之一（真实成交、未调参）：去掉已预告的公司后样本太少——最近12个月8笔、2024-01~2026-10 22笔（<30），近3年每笔 −0.46%（PF 0.91），跑输同市值对照 −2.99，8阶段只有2个跑赢"},
 ]
+
+
+_RUN_LOCK = threading.Lock()
+
+
+def _picks(db, horizon: str, strategy_id: str | None, limit: int, page: int | None, page_size: int | None):
+    """兼容旧调用：不传 page 时按 limit 返回最近 N 批，同时带 total；传 page 时分页（page_size 默认 30）。"""
+    if page is None and page_size is None:
+        out = svc.list_picks_page(db, strategy_id, horizon, 1, limit)
+        out["page"], out["page_size"] = None, None
+        out["limit"] = limit
+        return out
+    return svc.list_picks_page(db, strategy_id, horizon, page or 1, page_size or 30)
+
+
+def _run(db, horizon: str, payload: dict):
+    as_of = str((payload or {}).get("as_of") or "")[:10]
+    try:
+        d = _dt.date.fromisoformat(as_of)
+    except ValueError:
+        raise HTTPException(400, "as_of 需为 YYYY-MM-DD")
+    if d > _dt.date.today():
+        raise HTTPException(400, "as_of 不能晚于今天")
+    sids = (payload or {}).get("strategy_ids") or None
+    valid = {k for k, v in svc.STRATEGIES.items() if v.get("horizon") == horizon}
+    if sids and not set(sids) <= valid:
+        raise HTTPException(400, f"strategy_ids 只能是 {sorted(valid)}")
+    has_bar = db.execute(text("SELECT 1 FROM daily_kbars WHERE code='000001' AND trade_date=:d LIMIT 1"),
+                         {"d": as_of}).first()
+    if not has_bar:
+        raise HTTPException(400, f"{as_of} 不是已入库的交易日（000001 无日K）")
+    if not _RUN_LOCK.acquire(blocking=False):
+        raise HTTPException(409, "已有中长线出票在运行")
+    try:
+        result = svc.generate_picks(db, as_of, force=bool((payload or {}).get("force", False)),
+                                    horizon=horizon, strategy_ids=sids)
+    finally:
+        _RUN_LOCK.release()
+    return {"horizon": horizon, "as_of": as_of, "force": bool((payload or {}).get("force", False)),
+            "result": result,
+            "files": sorted(f.name for f in svc.OUT_DIR.glob(f"{as_of}_*.json")
+                            if svc.STRATEGIES.get(f.stem.split("_", 1)[1], {}).get("horizon") == horizon)
+            if svc.OUT_DIR.exists() else []}
+
+
+def _detail(db, horizon, strategy_id, signal_date, code, before, after):
+    out = svc.pick_detail(db, horizon, strategy_id, signal_date, code, before, after)
+    if out is None:
+        raise HTTPException(404, "找不到该批次或个股")
+    return out
 
 
 @router.get("/mid/strategies")
@@ -73,8 +130,21 @@ def mid_strategies():
 
 
 @router.get("/mid/picks")
-def mid_picks(strategy_id: str | None = Query(None), limit: int = Query(30, ge=1, le=200), db: Session = Depends(get_db)):
-    return {"batches": svc.list_picks(db, strategy_id, limit, horizon="mid")}
+def mid_picks(strategy_id: str | None = Query(None), limit: int = Query(30, ge=1, le=200),
+              page: int | None = Query(None, ge=1), page_size: int | None = Query(None, ge=1, le=200),
+              db: Session = Depends(get_db)):
+    return _picks(db, "mid", strategy_id, limit, page, page_size)
+
+
+@router.post("/mid/run")
+def mid_run(payload: dict = Body(...), db: Session = Depends(get_db)):
+    return _run(db, "mid", payload)
+
+
+@router.get("/mid/picks/{strategy_id}/{signal_date}/{code}")
+def mid_pick_detail(strategy_id: str, signal_date: str, code: str, before: int = Query(60, ge=0, le=250),
+                    after: int = Query(10, ge=0, le=60), db: Session = Depends(get_db)):
+    return _detail(db, "mid", strategy_id, signal_date, code, before, after)
 
 
 @router.get("/long/strategies")
@@ -83,5 +153,18 @@ def long_strategies():
 
 
 @router.get("/long/picks")
-def long_picks(strategy_id: str | None = Query(None), limit: int = Query(30, ge=1, le=200), db: Session = Depends(get_db)):
-    return {"batches": svc.list_picks(db, strategy_id, limit, horizon="long")}
+def long_picks(strategy_id: str | None = Query(None), limit: int = Query(30, ge=1, le=200),
+               page: int | None = Query(None, ge=1), page_size: int | None = Query(None, ge=1, le=200),
+               db: Session = Depends(get_db)):
+    return _picks(db, "long", strategy_id, limit, page, page_size)
+
+
+@router.post("/long/run")
+def long_run(payload: dict = Body(...), db: Session = Depends(get_db)):
+    return _run(db, "long", payload)
+
+
+@router.get("/long/picks/{strategy_id}/{signal_date}/{code}")
+def long_pick_detail(strategy_id: str, signal_date: str, code: str, before: int = Query(60, ge=0, le=250),
+                     after: int = Query(10, ge=0, le=60), db: Session = Depends(get_db)):
+    return _detail(db, "long", strategy_id, signal_date, code, before, after)
