@@ -16,6 +16,37 @@ class Base(DeclarativeBase):
 
 settings = get_settings()
 
+PRODUCTION_DB_NAME = "ashare_workbench"
+
+
+def _under_pytest() -> bool:
+    """pytest 进程本身或其派生子进程（conftest 设 ASHARE_UNDER_PYTEST=1 并被继承）。"""
+    import os
+    import sys
+
+    return "pytest" in sys.modules or bool(os.environ.get("PYTEST_CURRENT_TEST")) or os.environ.get("ASHARE_UNDER_PYTEST") == "1"
+
+
+def _refuse_production_db_under_pytest(url: str) -> None:
+    """第二道闸（第一道在 tests/conftest.py）：任何测试路径都不得连生产库。
+
+    覆盖 tests/conftest.py 管不到的入口：`pytest app/**/tests`（不在 tests/ 下、不加载该 conftest）、
+    测试里起的子进程（继承 ASHARE_UNDER_PYTEST）。2026-07-10 diag 探针在生产库留下
+    977483/967711 及 07-09 的 17 行假 K 线，2026-10-19 清理。
+    """
+    if not url.startswith("mysql") or not _under_pytest():
+        return
+    from sqlalchemy.engine import make_url
+
+    if make_url(url).database == PRODUCTION_DB_NAME:
+        raise RuntimeError(
+            f"refuse to connect to production database {PRODUCTION_DB_NAME!r} under pytest; "
+            "use ashare_test (ASHARE_TEST_DATABASE_URL)"
+        )
+
+
+_refuse_production_db_under_pytest(settings.database_url)
+
 # 支持 SQLite 本地开发（后端自动检测）
 _is_sqlite = settings.database_url.startswith("sqlite")
 

@@ -7,6 +7,8 @@ from pathlib import Path
 # 历史事故：test_recover_interrupted_runs_marks_active_runs 把事务内假 queued run
 # 重新派发到生产 Prefect，worker 看不到未提交行 → 每天数条 recommendation-run FAILED。
 os.environ["PREFECT_API_URL"] = "http://127.0.0.1:9/api"
+# 派生子进程也要被 app.db.session 的生产库闸拦住（子进程里没有 pytest 模块）。
+os.environ["ASHARE_UNDER_PYTEST"] = "1"
 # 事务内造数的测试需要现算数据池统计，不能读生产落盘的预计算缓存。
 os.environ.setdefault("ASHARE_POOL_STATS_CACHE", "off")
 
