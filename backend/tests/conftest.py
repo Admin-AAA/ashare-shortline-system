@@ -148,9 +148,11 @@ def _reset_gateway_breakers():
     """Gateway breakers are module-level singletons: isolate per test (failure kinds now accumulate)."""
     yield
     try:
+        from app.services.datasource.cache import clear_fresh
         from app.services.datasource.gateway import reset_all_breakers
 
         reset_all_breakers()
+        clear_fresh()
     except Exception:  # noqa: BLE001
         pass
 

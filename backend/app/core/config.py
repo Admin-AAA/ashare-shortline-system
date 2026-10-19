@@ -86,6 +86,8 @@ class Settings(BaseSettings):
     datasource_deadline_realtime_seconds: float = 3.0
     datasource_deadline_default_seconds: float = 120.0
     datasource_retry_budget: int = 2
+    # 按数据集覆盖缓存 TTL（秒），如 "quote.realtime=5,bar.minute=60"；默认见 datasource/cache.py
+    datasource_cache_ttl: str = ""
     tushare_provider_max_attempts: int = 2
     tushare_connect_timeout_seconds: float = 5.0
     tushare_read_timeout_seconds: float = 120.0

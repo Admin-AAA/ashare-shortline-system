@@ -228,6 +228,9 @@ class GatewayResult:
     rows: Any
     provider: str | None
     attempts: list[dict[str, Any]]
+    stale: bool = False  # True => (part of) rows are last-known data from the stale store
+    data_time: str | None = None  # when stale: time the stale data was fetched (Asia/Shanghai)
+    stale_keys: tuple[str, ...] = ()
 
 
 def reset_all_breakers() -> None:
@@ -353,6 +356,35 @@ class DatasetGateway:
         return rows
 
     def fetch_first(
+        self, dataset: str, query: Mapping[str, Any], *, deadline_s: float | None = None,
+        allow_stale: bool | None = None,
+    ) -> GatewayResult:
+        """Cached / single-flight / stale-fallback wrapper over ``_fetch_first_live``."""
+        from app.services.datasource import cache as _c
+
+        ck = canonical(query)
+        hit = _c.fresh_get(dataset, ck)
+        if hit is not None:
+            return GatewayResult(hit[0], hit[1], [{"provider": hit[1], "outcome": "cache_hit"}])
+        res = _c.single_flight(
+            f"first|{dataset}|{ck}", lambda: self._fetch_first_live(dataset, query, deadline_s=deadline_s)
+        )
+        if res.provider is not None:
+            _c.fresh_put(dataset, ck, (res.rows, res.provider))
+            _c.stale_put(dataset, ck, res.rows, res.provider)
+            return res
+        if _c.stale_allowed(dataset, allow_stale):
+            st = _c.stale_get(dataset, ck)
+            if st is not None:
+                _metrics.inc("dataset_requests", dataset=dataset, provider=str(st.get("provider")), outcome="stale")
+                rows = st["value"]
+                if isinstance(rows, Mapping):
+                    rows = {k: _c.mark_stale_row(v, st["data_time"]) for k, v in rows.items()}
+                return GatewayResult(rows, st.get("provider"), res.attempts + [{"provider": st.get("provider"),
+                                     "outcome": "stale"}], stale=True, data_time=st["data_time"])
+        return res
+
+    def _fetch_first_live(
         self, dataset: str, query: Mapping[str, Any], *, deadline_s: float | None = None
     ) -> GatewayResult:
         """First provider returning a non-empty answer wins (whole call bounded by deadline_s)."""
@@ -365,6 +397,55 @@ class DatasetGateway:
         return GatewayResult([], None, attempts)
 
     def fetch_fill(
+        self, dataset: str, query: Mapping[str, Any], keys: Sequence[str], *, deadline_s: float | None = None,
+        allow_stale: bool | None = None,
+    ) -> GatewayResult:
+        """Per-key cache, single-flight on the missing set, per-key stale fallback."""
+        from app.services.datasource import cache as _c
+
+        qk = canonical(query)
+        merged: dict[str, Any] = {}
+        hit_provs: list[str] = []
+        for k in keys:
+            hit = _c.fresh_get(dataset, f"{qk}|{k}")
+            if hit is not None:
+                merged[k] = hit[0]
+                hit_provs.append(hit[1])
+        missing = [k for k in keys if k not in merged]
+        attempts: list[dict[str, Any]] = [{"provider": "cache", "outcome": "cache_hit", "rows": len(merged)}] if merged else []
+        providers = sorted(set(hit_provs))
+        if missing:
+            live = _c.single_flight(
+                f"fill|{dataset}|{qk}|{','.join(sorted(missing))}",
+                lambda: self._fetch_fill_live(dataset, query, missing, deadline_s=deadline_s),
+            )
+            attempts += live.attempts
+            for k, row in live.rows.items():
+                merged[k] = row
+                prov = str((row or {}).get("source") or live.provider) if isinstance(row, Mapping) else live.provider
+                _c.fresh_put(dataset, f"{qk}|{k}", (row, prov))
+                _c.stale_put(dataset, f"{qk}|{k}", row, prov)
+            if live.provider:
+                providers += [x for x in live.provider.split(",") if x not in providers]
+        still = [k for k in keys if k not in merged]
+        stale_keys: list[str] = []
+        data_times: list[str] = []
+        if still and _c.stale_allowed(dataset, allow_stale):
+            for k in still:
+                st = _c.stale_get(dataset, f"{qk}|{k}")
+                if st is not None:
+                    merged[k] = _c.mark_stale_row(st["value"], st["data_time"])
+                    stale_keys.append(k)
+                    data_times.append(st["data_time"])
+            if stale_keys:
+                attempts.append({"provider": "stale_store", "outcome": "stale", "rows": len(stale_keys)})
+                _metrics.inc("dataset_requests", dataset=dataset, provider="stale_store", outcome="stale")
+        return GatewayResult(
+            merged, ",".join(providers) or None, attempts, stale=bool(stale_keys),
+            data_time=min(data_times) if data_times else None, stale_keys=tuple(stale_keys),
+        )
+
+    def _fetch_fill_live(
         self, dataset: str, query: Mapping[str, Any], keys: Sequence[str], *, deadline_s: float | None = None
     ) -> GatewayResult:
         """Keyed merge: each provider is asked only for keys still missing (bounded by deadline_s)."""
