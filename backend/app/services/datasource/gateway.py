@@ -159,20 +159,37 @@ class DatasetGateway:
         *,
         enabled: Callable[[DataProvider], bool] = provider_enabled,
         failure_threshold: int = 3,
-        recovery_seconds: float = 60.0,
+        recovery_seconds: float = 300.0,
     ) -> None:
-        from app.services.tushare_transport import CircuitBreaker
+        from app.core.shared_breaker import SharedCircuitBreaker
 
         self._providers = list(providers)
         self._enabled = enabled
         self._breakers: dict[tuple[str, str], Any] = {}
-        self._breaker_factory = lambda: CircuitBreaker(failure_threshold, recovery_seconds)
+        # Shared (cross-process, per-namespace) breaker keyed like wrap.py: gw:<provider>:<dataset>.
+        self._breaker_factory = lambda provider, dataset: SharedCircuitBreaker(
+            f"gw:{provider}:{dataset}", failure_threshold, recovery_seconds
+        )
 
     def _breaker(self, provider: str, dataset: str):
         key = (provider, dataset)
         if key not in self._breakers:
-            self._breakers[key] = self._breaker_factory()
+            self._breakers[key] = self._breaker_factory(provider, dataset)
         return self._breakers[key]
+
+    @staticmethod
+    def _upstream_open(p: DataProvider) -> bool:
+        """Providers may declare ``upstream_breaker_keys`` (e.g. the transport's
+        ``tushare:promax:rt_k``); any of them open in the shared store => skip without calling."""
+        keys = getattr(p, "upstream_breaker_keys", ()) or ()
+        if not keys:
+            return False
+        from app.core.shared_breaker import is_open
+
+        try:
+            return any(is_open(k) for k in keys)
+        except Exception:  # noqa: BLE001
+            return False
 
     def _candidates(self, dataset: str, query: Mapping[str, Any]) -> list[DataProvider]:
         out = []
@@ -187,7 +204,7 @@ class DatasetGateway:
 
     def _attempt(self, p: DataProvider, dataset: str, query: Mapping[str, Any], attempts: list) -> Any:
         breaker = self._breaker(p.name, dataset)
-        if not breaker.allow_request():
+        if self._upstream_open(p) or not breaker.allow_request():
             attempts.append({"provider": p.name, "outcome": ErrorKind.CIRCUIT_OPEN.value})
             _metrics.inc("dataset_requests", dataset=dataset, provider=p.name, outcome="circuit_open")
             return None

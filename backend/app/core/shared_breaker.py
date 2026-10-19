@@ -138,29 +138,89 @@ def shared_breaker_states() -> list[dict[str, Any]]:
     ]
 
 
+# Unified cooldown / half-open policy (user, 2026-10-19): an open breaker stays open at least
+# PROBE_INTERVAL_SECONDS; then exactly ONE process (per namespace) claims the half-open probe via an
+# atomic UPDATE on the SQLite row. Probe success deletes the row (closed); failure re-opens it for
+# another PROBE_INTERVAL_SECONDS. A crashed prober's claim expires after PROBE_LEASE_SECONDS.
+PROBE_INTERVAL_SECONDS = 300.0
+PROBE_LEASE_SECONDS = 60.0
+
+
+def _try_claim_probe(key: str) -> bool | None:
+    """True = this process owns the probe; False = shared row still open / someone else probing;
+    None = shared store unavailable (caller falls back to local breaker)."""
+    try:
+        conn = _conn()
+        if conn is None:
+            return None
+        import os
+
+        from app.core import metrics
+
+        now = time.time()
+        with conn:
+            cur = conn.execute(
+                "UPDATE breaker_state SET open_until=?, updated_at=?, role=?, pid=?, reason='half_open_probe' "
+                "WHERE key=? AND open_until<=?",
+                (now + PROBE_LEASE_SECONDS, now, metrics._process_role(), os.getpid(), key, now),
+            )
+            claimed = cur.rowcount == 1
+            row = None if claimed else conn.execute("SELECT open_until FROM breaker_state WHERE key=?", (key,)).fetchone()
+        conn.close()
+        with _cache_lock:
+            _cache[key] = (time.monotonic(), now + PROBE_LEASE_SECONDS if claimed else (float(row[0]) if row else 0.0))
+        if claimed:
+            return True
+        return False if row else True  # row vanished = closed meanwhile
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("shared breaker probe claim failed %s: %s", key, exc)
+        return None
+
+
+def is_open(key: str) -> bool:
+    """Generic pre-request check for an un-namespaced breaker key (e.g. an upstream transport key):
+    True while the current namespace's shared row says open (half-open probes not claimed here)."""
+    return shared_open_until(f"{breaker_namespace()}:{key}") > time.time()
+
+
 class SharedCircuitBreaker:
-    """Drop-in for tushare_transport.CircuitBreaker with cross-process open state."""
+    """Drop-in for tushare_transport.CircuitBreaker with cross-process open state and a single
+    cross-process half-open probe every PROBE_INTERVAL_SECONDS."""
 
     def __init__(self, key: str, failure_threshold: int, recovery_seconds: float) -> None:
         from app.services.tushare_transport import CircuitBreaker
 
         self.base_key = key
         self.key = f"{breaker_namespace()}:{key}"
-        self._local = CircuitBreaker(failure_threshold, recovery_seconds)
+        self._recovery = max(float(recovery_seconds), PROBE_INTERVAL_SECONDS)
+        self._local = CircuitBreaker(failure_threshold, self._recovery)
+        self._probing = False
 
     def allow_request(self) -> bool:
-        if not self._local.allow_request():
+        open_until = shared_open_until(self.key)
+        if open_until > time.time():
             return False
-        return shared_open_until(self.key) <= time.time()
+        if open_until > 0:  # cooldown elapsed: race for the one shared probe
+            claimed = _try_claim_probe(self.key)
+            if claimed is False:
+                return False
+            if claimed is True:
+                self._probing = True
+                self._local.record_success()  # shared state governs; local half-open would double-gate
+                return True
+        return self._local.allow_request()
 
     def record_success(self) -> None:
+        self._probing = False
         self._local.record_success()
         _publish_closed(self.key)
 
     def record_failure(self, *, force_open: bool = False, recovery_seconds: float | None = None) -> None:
+        if self._probing:
+            force_open, self._probing = True, False
         before = self._local.state
         self._local.record_failure(force_open=force_open, recovery_seconds=recovery_seconds)
-        if self._local.state == "open" and before != "open":
+        if self._local.state == "open" and (before != "open" or force_open):
             remaining = max(0.0, self._local._open_until - time.monotonic())
             _publish_open(self.key, time.time() + remaining, reason="force_open" if force_open else "threshold")
 
@@ -169,4 +229,7 @@ class SharedCircuitBreaker:
         local = self._local.state
         if local != "closed":
             return local
-        return "open" if shared_open_until(self.key) > time.time() else "closed"
+        ou = shared_open_until(self.key)
+        if ou <= 0:
+            return "closed"
+        return "open" if ou > time.time() else "half_open"

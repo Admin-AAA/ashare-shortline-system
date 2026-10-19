@@ -137,7 +137,7 @@ class ProviderConfig:
     max_attempts: int = 2
     append_api_path: bool = False
     failure_threshold: int = 3
-    recovery_seconds: float = 60.0
+    recovery_seconds: float = 300.0
     api_rate_limits: Mapping[str, int] = field(default_factory=dict)
     proxy: str = field(default="", repr=False)
     http_method: HttpMethod = HttpMethod.POST

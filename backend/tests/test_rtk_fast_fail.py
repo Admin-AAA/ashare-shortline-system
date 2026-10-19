@@ -35,7 +35,6 @@ def test_rtk_deadline_raises_timeout(monkeypatch):
     import app.services.tushare_client as tc
 
     monkeypatch.setattr(tc, "get_pro", lambda: _SlowPro())
-    monkeypatch.setattr(qr, "_rtk_breaker_open", lambda: False)
     t0 = time.perf_counter()
     with pytest.raises(DataSourceError) as ei:
         qr.RtkProvider().fetch(qr.DATASET, {"keys": ["600000"]})
@@ -43,17 +42,20 @@ def test_rtk_deadline_raises_timeout(monkeypatch):
     assert time.perf_counter() - t0 < 2.0
 
 
-def test_rtk_breaker_open_skips_without_calling(monkeypatch):
+def test_rtk_upstream_breaker_open_skips_without_calling(monkeypatch):
+    import app.core.shared_breaker as sb
     import app.services.tushare_client as tc
+    from app.services.datasource.gateway import DatasetGateway
 
     def boom():
         raise AssertionError("promax must not be called while breaker open")
 
     monkeypatch.setattr(tc, "get_pro", boom)
-    monkeypatch.setattr(qr, "_rtk_breaker_open", lambda: True)
-    with pytest.raises(DataSourceError) as ei:
-        qr.RtkProvider().fetch(qr.DATASET, {"keys": ["600000"]})
-    assert ei.value.kind is ErrorKind.CIRCUIT_OPEN
+    monkeypatch.setattr(sb, "is_open", lambda k: k == "tushare:promax:rt_k")
+    gw = DatasetGateway([qr.RtkProvider(), _sina_like()], enabled=lambda p: True)
+    res = gw.fetch_fill(qr.DATASET, {}, ["600000"])
+    assert res.provider == "sina"
+    assert res.attempts[0] == {"provider": "tushare_rt_k", "outcome": "circuit_open"}
 
 
 def test_gateway_falls_to_sina_under_2s(monkeypatch):
@@ -61,7 +63,6 @@ def test_gateway_falls_to_sina_under_2s(monkeypatch):
     from app.services.datasource.gateway import DatasetGateway
 
     monkeypatch.setattr(tc, "get_pro", lambda: _SlowPro())
-    monkeypatch.setattr(qr, "_rtk_breaker_open", lambda: False)
     gw = DatasetGateway([qr.RtkProvider(), _sina_like()], enabled=lambda p: True)
     t0 = time.perf_counter()
     res = gw.fetch_fill(qr.DATASET, {}, ["600000"])
@@ -69,13 +70,13 @@ def test_gateway_falls_to_sina_under_2s(monkeypatch):
     assert time.perf_counter() - t0 < 2.0
 
 
-def test_shared_breaker_key_read(monkeypatch):
+def test_is_open_uses_namespace(monkeypatch):
     import app.core.shared_breaker as sb
 
     seen = {}
     monkeypatch.setattr(sb, "shared_open_until", lambda k: seen.setdefault("k", k) and time.time() + 30)
     monkeypatch.setenv(sb.BREAKER_NAMESPACE_ENV, "live")
-    assert qr._rtk_breaker_open() is True
+    assert sb.is_open("tushare:promax:rt_k") is True
     assert seen["k"] == "live:tushare:promax:rt_k"
 
 

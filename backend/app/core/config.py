@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     datasource_shadow: str = ""
     datasource_shadow_sample_rate: float = 0.1
     tushare_provider_failure_threshold: int = 3
-    tushare_provider_recovery_seconds: float = 60.0
+    tushare_provider_recovery_seconds: float = 300.0
     tushare_provider_max_attempts: int = 2
     tushare_connect_timeout_seconds: float = 5.0
     tushare_read_timeout_seconds: float = 120.0

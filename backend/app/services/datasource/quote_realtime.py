@@ -5,7 +5,6 @@ returns ``{code6: row}`` normalized to ``SCHEMAS["quote.realtime"]``.
 """
 from __future__ import annotations
 
-import time
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FutTimeout
 from datetime import date
@@ -19,17 +18,7 @@ RT_MIN_MAX_CODES = 60  # rt_min is per-code; cap the fan-out of this last-resort
 # (limiter wait + retries) before Sina was tried. rt_k now gets a hard deadline and is
 # skipped outright while its shared breaker is open.
 RTK_DEADLINE_SECONDS = 1.5
-RTK_BREAKER_KEY = "tushare:promax:rt_k"
 _RTK_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rtk-fast")
-
-
-def _rtk_breaker_open() -> bool:
-    from app.core.shared_breaker import breaker_namespace, shared_open_until
-
-    try:
-        return shared_open_until(f"{breaker_namespace()}:{RTK_BREAKER_KEY}") > time.time()
-    except Exception:  # noqa: BLE001
-        return False
 
 
 def _f(v: Any) -> float:
@@ -49,6 +38,8 @@ class RtkProvider:
     """promax rt_k (batch, comma-separated ts_code) via the Tushare router."""
 
     name = "tushare_rt_k"
+    # generic gateway pre-check: skipped without a call while the transport breaker is open
+    upstream_breaker_keys = ("tushare:promax:rt_k",)
     config_keys = (("promax", "tushare_provider"),)
 
     def supports(self, dataset: str, query: Mapping[str, Any]) -> bool:
@@ -58,8 +49,6 @@ class RtkProvider:
         from app.engine.trading_calendar import latest_allowed_quote_date
         from app.services.tushare_client import get_pro
 
-        if _rtk_breaker_open():
-            raise DataSourceError(ErrorKind.CIRCUIT_OPEN, "promax rt_k breaker open", provider=self.name, dataset=dataset)
         fut = _RTK_POOL.submit(get_pro().rt_k, ts_code=",".join(_ts(c) for c in query["keys"]))
         try:
             df = fut.result(timeout=RTK_DEADLINE_SECONDS)
