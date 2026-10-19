@@ -788,6 +788,11 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
             result[sid] = len(picks)
             continue
+        # daily_basic 市值未更新到 as_of 时不拿旧市值排名/算小盘指数（10-16 批次曾用 10-09 市值）：标 data_error，补数后重跑。
+        basic_max = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
+        if basic_max is None or str(basic_max)[:10] < as_of:
+            result[sid] = {"error": "daily_basic_stale", "daily_basic_max": str(basic_max)[:10] if basic_max else None}
+            continue
         guard = small_cap_guard(db, as_of) if meta.get("guard") else {"on": True}
         if not guard["on"]:
             result[sid] = {"skipped": "small_cap_below_ma20", **guard}
