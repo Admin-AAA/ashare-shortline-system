@@ -12,10 +12,10 @@ Stages (each resumable via data/midterm/backfill_state.json):
   holdernum    : pro.stk_holdernumber per stock (full history, ann_date PIT) -> data/midterm/holdernum/<code>.parquet
   events       : pro.stk_holdertrade trade_type=IN (monthly ann_date windows, auto-split near the row cap) + pro.repurchase (monthly)
                  2017-07..today -> data/midterm/events/{holdertrade_in,repurchase}_<year>.parquet
-  events_de    : pro.stk_holdertrade trade_type=DE (same monthly windows / bisection) -> data/midterm/events/holdertrade_de_<year>.parquet (§128)
+  events_de    : pro.stk_holdertrade trade_type=DE (10-day windows, ASHARE_DE_WINDOW_DAYS; bisection; retry passes) -> data/midterm/events/holdertrade_de_<year>.parquet (§128)
 """
 from __future__ import annotations
-import json, logging, sys, time, datetime as dt
+import json, logging, os, sys, time, datetime as dt
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -159,18 +159,49 @@ def _range_fetch(pro, api, a, b, cap, **extra):
 
 EVENTS_SPECS = (("repurchase", "repurchase", 31, 1900, {}), ("stk_holdertrade", "holdertrade_in", 31, 2900, {"trade_type": "IN"}))
 # §128: decreases (trade_type=DE) as their own stage; monthly windows, _range_fetch bisects any window near the row cap
-EVENTS_DE_SPECS = (("stk_holdertrade", "holdertrade_de", 31, 2900, {"trade_type": "DE"}),)
+# 2026-10-19 owner：DE 量大（实测每 15 天约 2,700 行），窗口改 7–10 天（默认 10，ASHARE_DE_WINDOW_DAYS 可调）、慢速；
+# 已按旧 31 天窗口完成的区间按覆盖判定跳过，不重拉。
+DE_WINDOW_DAYS = max(1, int(os.environ.get("ASHARE_DE_WINDOW_DAYS", "10")))
+EVENTS_DE_SPECS = (("stk_holdertrade", "holdertrade_de", DE_WINDOW_DAYS, 2900, {"trade_type": "DE"}),)
+DE_PASSES = max(1, int(os.environ.get("ASHARE_DE_PASSES", "6")))  # 失败窗口重试的轮数（轮间等冷却）
+DE_PASS_WAIT = float(os.environ.get("ASHARE_DE_PASS_WAIT", "90"))
+DE_WINDOW_SLEEP = float(os.environ.get("ASHARE_DE_WINDOW_SLEEP", "2.0"))
 
-def events_stage(pro, s, start="20170701", specs=EVENTS_SPECS):
+
+def _covered_days(done) -> set:
+    """done 里 'YYYYMMDD-YYYYMMDD' 窗口覆盖的全部日期（不同窗口长度的历史进度可互认）。"""
+    days = set()
+    for key in done:
+        try:
+            a, b = (dt.datetime.strptime(x, "%Y%m%d").date() for x in key.split("-"))
+        except ValueError:
+            continue
+        while a <= b:
+            days.add(a); a += dt.timedelta(days=1)
+    return days
+
+def events_stage(pro, s, start="20170701", specs=EVENTS_SPECS, passes=1, pass_wait=0.0, window_sleep=0.6):
+    for p in range(passes):
+        left = _events_pass(pro, s, start, specs, window_sleep)
+        log.info("events pass %d/%d: %d window(s) left", p + 1, passes, left)
+        if not left: return 0
+        if p < passes - 1: time.sleep(pass_wait)
+    return left
+
+def _events_pass(pro, s, start, specs, window_sleep):
     out = D / "events"; out.mkdir(exist_ok=True)
-    today = dt.date.today()
+    today = dt.date.today(); left = 0
     # holdertrade: increases only (trade_type=IN) -- far fewer rows than DE, so monthly windows fit under the row cap
     for api, name, step, cap, extra in specs:
-        key = f"events_{name}"; done = set(s.get(key, []))
+        key = f"events_{name}"; done = set(s.get(key, [])); covered = _covered_days(done)
         a = dt.datetime.strptime(start, "%Y%m%d").date(); wins = []
         while a <= today:
             b = min(a + dt.timedelta(days=step - 1), today); wins.append((a.strftime("%Y%m%d"), b.strftime("%Y%m%d"))); a = b + dt.timedelta(days=1)
-        todo = [w for w in wins if f"{w[0]}-{w[1]}" not in done]
+        def _is_done(w):
+            if f"{w[0]}-{w[1]}" in done: return True
+            d0, d1 = (dt.datetime.strptime(x, "%Y%m%d").date() for x in w)
+            return all((d0 + dt.timedelta(days=i)) in covered for i in range((d1 - d0).days + 1))
+        todo = [w for w in wins if not _is_done(w)]
         buf: dict[str, list] = {}
         for n, (wa, wb) in enumerate(todo):
             df = _range_fetch(pro, api, wa, wb, cap, **extra)
@@ -183,7 +214,9 @@ def events_stage(pro, s, start="20170701", specs=EVENTS_SPECS):
                     if f.exists(): new = pd.concat([pd.read_parquet(f), new])
                     _to_parquet(new.drop_duplicates(), f)
                 buf = {}; s[key] = sorted(done); log.info("%s %d/%d", key, n + 1, len(todo))
-            time.sleep(0.6)
+            time.sleep(window_sleep)
+        left += len([w for w in todo if f"{w[0]}-{w[1]}" not in done])
+    return left
 
 def hk_stage(pro, db, s):
     done = set(s.get("hk_hold", []))
@@ -225,7 +258,7 @@ def main():
         elif st == "hk_hold": hk_stage(pro, db, s)
         elif st == "holdernum": per_code_stage(pro, db, s, st, "stk_holdernumber", "holdernum")
         elif st == "events": events_stage(pro, s)
-        elif st == "events_de": events_stage(pro, s, specs=EVENTS_DE_SPECS)  # §128; run only outside 09:15-15:05 (promax feeds live rt_k)
+        elif st == "events_de": events_stage(pro, s, specs=EVENTS_DE_SPECS, passes=DE_PASSES, pass_wait=DE_PASS_WAIT, window_sleep=DE_WINDOW_SLEEP)  # §128; run only outside 09:15-15:05 (promax feeds live rt_k)
     log.info("ALL DONE")
 
 if __name__ == "__main__":
