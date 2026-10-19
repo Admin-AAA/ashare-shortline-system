@@ -1394,6 +1394,9 @@ def test_backfill_news_announcements_uses_eastmoney_primary(monkeypatch):
 
 def test_backfill_news_announcements_falls_back_to_tushare_when_eastmoney_blocked(monkeypatch):
     import app.services.data_gap_remediation_service as dgr
+
+    # anns_d fallback only runs when routing_table lists a supported provider (2026-10-19)
+    monkeypatch.setattr(dgr, "_tushare_api_has_supported_provider", lambda api: True)
     import app.services.eastmoney_news as em
     import app.services.cninfo_news as cn
     import pandas as pd
