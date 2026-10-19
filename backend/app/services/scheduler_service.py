@@ -1764,7 +1764,7 @@ async def _run_recommendation(db, payload: dict) -> dict:
 
     # 无 preset_id 时无法入队独立子进程（enqueue 前置条件），退化为原 in-process 执行，
     # 保留历史行为，避免破坏潜在的非预设触发路径。
-    if not run_payload.get("preset_id"):
+    if not run_payload.get("preset_id") and not run_payload.get("single_skill_id"):
         from app.services.workbench_service import run_workbench
 
         logger.warning("定时推荐缺少 preset_id，退化为进程内执行: %s", run_payload)
@@ -1812,8 +1812,12 @@ def _standalone_run_payloads(db, payload: dict) -> list[dict[str, Any]]:
     base = {
         k: v
         for k, v in payload.items()
-        if k not in {"selected_skill_ids", "skills", "single_skill_id", "score_line", "output_count", "run_name"}
+        if k not in {"selected_skill_ids", "skills", "single_skill_id", "score_line", "output_count", "run_name", "preset_id"}
     }
+    # 2026-10-19 用户删除 preset_formal_opening：单策略 run 不再挂组合预设。原预设贡献的
+    # 口径显式写死（与 10-14..10-16 live run 的 params_json 一致）。
+    base.setdefault("hide_recent_repeats", False)
+    base.setdefault("dedup_same_day", True)
     label = str(payload.get("trade_date_override") or datetime.now().strftime("%Y%m%d"))
     out: list[dict[str, Any]] = []
     for sid in standalone_strategy_ids(skills):
@@ -2112,7 +2116,6 @@ async def _safety_net_run(db, payload: dict) -> dict:
         run_payload = json.loads(task.payload_json)
     else:
         run_payload = {
-            "preset_id": "preset_formal_opening",
             "run_name": "安全网补跑推荐",
             "data_source": DEFAULT_RECOMMENDATION_DATA_SOURCE,
             "risk_template": "balanced",

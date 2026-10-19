@@ -93,7 +93,6 @@ def _base_payload(db=None) -> dict:
         if not row:
             return {
                 "run_name": "REPLAY-历史推荐重建",
-                "preset_id": "preset_formal_opening",
                 "run_mode": "formal",
                 "matrix_run": False,
                 "trade_date_override": None,
@@ -108,20 +107,23 @@ def _base_payload(db=None) -> dict:
             }
         params = json.loads(row)
         params["run_name"] = "REPLAY-历史推荐重建"
-        params["preset_id"] = "preset_formal_opening"
+        params.pop("preset_id", None)  # 单策略 run 不挂组合预设
         params["trade_date_override"] = None  # 每日单独设
-        # 实盘 10-14 起按单策略逐个 run（每策略 3 只）；若最近 run 是单策略，回放改用
-        # preset 的全部现役策略（skills 来自 preset_skills），output_count=3×策略数。
-        if len(params.get("skills") or []) <= 1:
-            params.pop("skills", None)
-            params.pop("single_skill_id", None)
-            from app.models.tables import PresetSkill
-            n = len(db.scalars(select(PresetSkill.skill_id).where(PresetSkill.preset_id == "preset_formal_opening")).all())
-            params["output_count"] = 3 * max(n, 1)
         return params
     finally:
         if owns_session:
             db.close()
+
+
+def _single_skill_base(base: dict, skill_id: str) -> dict:
+    """与 scheduler._standalone_run_payloads 同口径：单策略、该策略自己的分数线/出票上限。"""
+    from app.services.standalone_strategies import standalone_run_settings
+
+    out = {k: v for k, v in base.items() if k not in {"skills", "selected_skill_ids", "single_skill_id", "preset_id"}}
+    score_line, output_count = standalone_run_settings(skill_id)
+    out.update({"single_skill_id": skill_id, "score_line": score_line, "output_count": output_count,
+                "hide_recent_repeats": False, "dedup_same_day": True})
+    return out
 
 
 def _historical_payload(
@@ -333,6 +335,7 @@ def main() -> int:
         "--dates",
         help="逗号分隔的精确交易日列表；指定后覆盖 --start/--end",
     )
+    parser.add_argument("--single-skill", help="按单策略独立 run 回放（与 live 一致）")
     parser.add_argument("--skip-existing", action="store_true", help="跳过已有 run 的交易日")
     parser.add_argument(
         "--rule-only-fallback",
@@ -370,6 +373,8 @@ def main() -> int:
         print(f"交易日: {len(dates)} 个 ({dates[0]} ~ {dates[-1]})")
 
         base = _base_payload(db)
+        if args.single_skill:
+            base = _single_skill_base(base, args.single_skill)
         identity = _reconstruction_identity(
             db,
             dates,

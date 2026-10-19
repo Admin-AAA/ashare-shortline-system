@@ -391,7 +391,7 @@ def test_replay_base_payload_uses_latest_hash_verified_live_run(db):
     assert payload["score_line"] == 73.0
     assert payload["output_count"] == 5
     assert payload["run_name"] == "REPLAY-历史推荐重建"
-    assert payload["preset_id"] == "preset_formal_opening"
+    assert "preset_id" not in payload  # 单策略 run 不挂组合预设
 
 
 def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_time(db):

@@ -2433,12 +2433,14 @@ def _select_skills_for_run(
     preset_id: str | None = None,
     raw_skills: list[StrategySkill] | tuple[StrategySkill, ...] | None = None,
 ) -> list[dict[str, Any]]:
-    if str(run_mode or "").lower() == "formal":
+    # 预设级注册诊断只对挂了预设的 formal run 生效；单策略独立 run（无 preset）由
+    # standalone_strategy_ids 保证 enabled/executable/非退役。
+    if str(run_mode or "").lower() == "formal" and preset_id:
         report = build_registry_diagnostics(
             tuple(raw_skills) if raw_skills is not None else tuple(skill_map.values()),
             list_presets(db),
         )
-        report.require_executable(preset_id or "preset_formal_opening")
+        report.require_executable(preset_id)
 
     selected: list[dict[str, Any]] = []
     available_strategy_ids = tuple(sorted(skill_map))

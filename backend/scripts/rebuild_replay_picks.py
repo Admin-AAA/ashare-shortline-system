@@ -257,11 +257,22 @@ def execute(db, args, short_rng, mid_rng, strategies) -> dict:
         shutil.rmtree(staging.parent, ignore_errors=True)
     # 4) 短线回放（正式管线，需 Prefect worker 在线）
     if not args.skip_short:
-        cmd = [sys.executable, str(BASE_DIR / "scripts" / "replay_all_days.py"),
-               "--start", short_rng[0], "--end", short_rng[1], "--attempt-tag", "rebuild-current-strategies"]
-        if args.rule_only_fallback:
-            cmd.append("--rule-only-fallback")
-        report["short_replay_exit"] = subprocess.call(cmd, cwd=str(BASE_DIR))
+        # 与 live 一致：每个现役短线策略各自一个单策略 run（10-14 起），逐策略一个重建批次。
+        from app.services.standalone_strategies import standalone_strategy_ids
+        from app.services.workbench_service import sync_skills
+        sids = standalone_strategy_ids(sync_skills(db))
+        report["short_strategies"] = sids
+        report["short_replay_exit"] = {}
+        for sid in sids:
+            if _in_blackout(dt.datetime.now()):
+                report["short_replay_exit"][sid] = "blackout_skipped"
+                continue
+            cmd = [sys.executable, str(BASE_DIR / "scripts" / "replay_all_days.py"),
+                   "--start", short_rng[0], "--end", short_rng[1], "--single-skill", sid,
+                   "--attempt-tag", f"rebuild-{sid}", "--skip-existing"]
+            if args.rule_only_fallback:
+                cmd.append("--rule-only-fallback")
+            report["short_replay_exit"][sid] = subprocess.call(cmd, cwd=str(BASE_DIR))
     return report
 
 

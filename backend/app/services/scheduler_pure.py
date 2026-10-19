@@ -167,7 +167,7 @@ def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[
         {
             "pre_run_full_sync": True,
             "sync_scope": "all",
-            "preset_id": payload.get("preset_id") or "preset_formal_opening",
+            "preset_id": None,  # 单策略独立 run 不挂组合预设（preset_formal_opening 已删除）
             "run_name": payload.get("run_name") or "盘后全量同步后正式推荐",
             "run_mode": "formal",
             # 同步和健康闸门已在推荐前完成；正式推荐只读本地池，
