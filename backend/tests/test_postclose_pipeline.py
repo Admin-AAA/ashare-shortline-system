@@ -24,6 +24,9 @@ def _stub_ma250_fill(monkeypatch):
 
     monkeypatch.setattr(ma250_fill, "fill_ma250", lambda _db, **_kw: {"rows_changed": 0})
     monkeypatch.setattr(ma250_fill, "fill_moving_averages", lambda _db, **_kw: {"rows_changed": 0})
+    import app.services.ivol_fill as ivol_fill
+
+    monkeypatch.setattr(ivol_fill, "fill_ivol_incremental", lambda _db, _d, **_kw: {"stub": True})
 
 
 @pytest.fixture(autouse=True)

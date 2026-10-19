@@ -79,6 +79,32 @@ _RISK_SEVERITY_RULES: list[tuple[list[str], str]] = [
 ]
 
 
+
+import logging as _logging
+
+_risk_logger = _logging.getLogger("app.engine.aggregator_pure")
+
+
+def _note_missing_risk_pct(card: dict[str, Any], rule_id: str, field: str, missing: list[str]) -> None:
+    """Risk percentile absent: the veto cannot be evaluated. Keep the card (no silent drop)
+    but record it in the audit trace so a data gap is never an invisible pass."""
+    card.setdefault("policy_verdict_steps", []).append({
+        "rule_id": rule_id,
+        "action": "observe",
+        "reason": f"{field} 缺失，{rule_id} 未能评估（数据缺口，非放行结论）",
+        "eliminated": False,
+        "risk_data_missing": True,
+    })
+    missing.append(str(card.get("code") or ""))
+
+
+def _warn_missing_risk_pct(rule_id: str, field: str, missing: list[str], total: int) -> None:
+    if missing:
+        _risk_logger.warning(
+            "%s: %d/%d 张卡缺 %s，否决未评估（示例 %s）",
+            rule_id, len(missing), total, field, ",".join(missing[:5]),
+        )
+
 def _risk_severity(flag: str) -> str:
     """根据风险文本判断严重级别。"""
     import re
@@ -1071,10 +1097,12 @@ def apply_pool_rules(
         and bool(getattr(selection_policy, "no_support_high_ivol_veto_enabled", False))
     ):
         _ns_thr = float(getattr(selection_policy, "no_support_high_ivol_pct_threshold", 0.70))
+        _ns_missing: list[str] = []
         kept_after_support: list[dict[str, Any]] = []
         for card in deduped:
             _ivol = card.get("ivol20_pct")
             if _ivol is None:
+                _note_missing_risk_pct(card, "no_support_high_ivol_veto", "ivol20_pct", _ns_missing)
                 kept_after_support.append(card)
                 continue
             try:
@@ -1093,6 +1121,7 @@ def apply_pool_rules(
                 })
                 continue
             kept_after_support.append(card)
+        _warn_missing_risk_pct("no_support_high_ivol_veto", "ivol20_pct", _ns_missing, len(deduped))
         deduped = kept_after_support
     if (
         selection_policy is not None
@@ -1138,9 +1167,11 @@ def apply_pool_rules(
     ):
         _ivol_thr = float(selection_policy.strong_high_ivol_pct_threshold)
         kept_after_ivol: list[dict[str, Any]] = []
+        _iv_missing: list[str] = []
         for card in deduped:
             _ivol_pct = card.get("ivol20_pct")
             if _ivol_pct is None:
+                _note_missing_risk_pct(card, "strong_high_ivol_veto", "ivol20_pct", _iv_missing)
                 kept_after_ivol.append(card)
                 continue
             try:
@@ -1158,6 +1189,7 @@ def apply_pool_rules(
                 })
                 continue
             kept_after_ivol.append(card)
+        _warn_missing_risk_pct("strong_high_ivol_veto", "ivol20_pct", _iv_missing, len(deduped))
         deduped = kept_after_ivol
     # L-109 弱势 regime × 低特质下行半波动（"安静票"）横截面风险否决：弱势当日把全市场
     # ivol_dn20 分位最低的一档候选硬剔除、由其后按 final_score 排序的下一名自然递补。
@@ -1173,9 +1205,11 @@ def apply_pool_rules(
     ):
         _dn_thr = float(selection_policy.weak_low_ivoldn20_pct_threshold)
         kept_after_dn: list[dict[str, Any]] = []
+        _dn_missing: list[str] = []
         for card in deduped:
             _dn_pct = card.get("ivol_dn20_pct")
             if _dn_pct is None:
+                _note_missing_risk_pct(card, "weak_low_ivoldn20_veto", "ivol_dn20_pct", _dn_missing)
                 kept_after_dn.append(card)
                 continue
             try:
@@ -1193,6 +1227,7 @@ def apply_pool_rules(
                 })
                 continue
             kept_after_dn.append(card)
+        _warn_missing_risk_pct("weak_low_ivoldn20_veto", "ivol_dn20_pct", _dn_missing, len(deduped))
         deduped = kept_after_dn
     result: list[dict[str, Any]] = []
     watchlist: list[dict[str, Any]] = []

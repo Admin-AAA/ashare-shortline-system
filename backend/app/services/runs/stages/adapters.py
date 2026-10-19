@@ -645,6 +645,15 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
                 attach_ivol20_pct(scored_cards, _sel_date, _ivol_map)
                 _ivoldn_map = load_ivol_dn20_pct_map(self._db, [_sel_date])
                 attach_ivol_dn20_pct(scored_cards, _sel_date, _ivoldn_map)
+                if not _ivol_map or not _ivoldn_map:
+                    from app.core.alerts import emit_alert
+
+                    emit_alert(
+                        "ivol_coverage",
+                        f"selection:{_sel_date}",
+                        f"{_sel_date} ivol20={len(_ivol_map)} / ivol_dn20={len(_ivoldn_map)} 条分位，"
+                        "风控否决将缺数据（卡片审计里记为 risk_data_missing）",
+                    )
             except Exception as _ivol_exc:  # noqa: BLE001
                 logger.warning("风险特征分位附加失败，本轮保守不做风险否决: %s", _ivol_exc)
         # L-126 自适应共识闸门：按"已结算的近 K 日多背书边际"选当日政策版本

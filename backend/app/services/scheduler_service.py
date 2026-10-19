@@ -144,7 +144,7 @@ def _run_block_trade_picks_hook(db, task_id: str) -> dict[str, Any]:
         from app.services.midterm_service import generate_block_trade_picks
 
         out = generate_block_trade_picks(db, trade_date)
-        logger.info("midterm block-trade picks (%s, T=%s): %s", task_id, trade_date, out)
+        logger.warning("midterm block-trade picks (%s, T=%s): %s", task_id, trade_date, out)
         return {"trade_date": trade_date, "trigger": task_id, "result": out}
     except Exception as exc:  # noqa: BLE001 - must not break the parent job
         try:
@@ -1523,13 +1523,28 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         db.rollback()
         logger.warning("moving-average fill failed: %s", exc)
 
+    # L-093/L-109/L-121 risk vetoes read daily_kbars.ivol20/ivol_dn20; nothing computed them
+    # after 2026-09-11, so the vetoes silently stopped. Incremental fill + coverage alert.
+    try:
+        from app.services.ivol_fill import fill_ivol_incremental
+
+        indicator_fill["ivol"] = fill_ivol_incremental(db, str(trade_date)[:10])
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        indicator_fill["ivol"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        logger.warning("ivol fill failed: %s", exc)
+
     # [中长线] 中线策略选股（周五信号日落盘，独立于短线出票）；失败只告警。
+    # 结果写入 result_json.midterm_picks（之前只打 INFO，worker 日志不收，完全不可观测）。
+    midterm_picks: dict[str, Any] = {}
     try:
         from app.services.midterm_service import generate_picks as _mid_generate_picks
 
-        logger.info("midterm picks: %s", _mid_generate_picks(db, trade_date))
+        midterm_picks = {"trade_date": str(trade_date)[:10], "result": _mid_generate_picks(db, trade_date)}
+        logger.warning("midterm picks (T=%s): %s", trade_date, midterm_picks["result"])
     except Exception as exc:  # noqa: BLE001
         db.rollback()
+        midterm_picks = {"trade_date": str(trade_date)[:10], "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
         logger.warning("midterm picks failed: %s", exc)
     _plap("midterm_picks")
 
@@ -1571,6 +1586,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
                 "blocker_classification": classification,
                 "aux_refresh": aux_refresh,
                 "indicator_fill": indicator_fill,
+                "midterm_picks": midterm_picks,
                 "pipeline_timings_seconds": pipeline_timings,
                 "summary_text": (
                     f"盘后辅助数据尚未就绪，等待有界重试：{blockers}"
@@ -1653,6 +1669,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
             "readiness": readiness,
             "aux_refresh": aux_refresh,
             "indicator_fill": indicator_fill,
+            "midterm_picks": midterm_picks,
             "outcome": outcome,
             "pipeline_timings_seconds": pipeline_timings,
             "recommendation": recommendation if "recommendation" in locals() else None,
@@ -1670,6 +1687,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
             "readiness": readiness,
             "aux_refresh": aux_refresh,
             "indicator_fill": indicator_fill,
+            "midterm_picks": midterm_picks,
             "outcome": outcome,
             "pipeline_timings_seconds": pipeline_timings,
             "recommendation": recommendation,
@@ -1686,6 +1704,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         "readiness": readiness,
         "aux_refresh": aux_refresh,
         "indicator_fill": indicator_fill,
+        "midterm_picks": midterm_picks,
         "outcome": outcome,
         "pipeline_timings_seconds": pipeline_timings,
         "recommendation": recommendation,
