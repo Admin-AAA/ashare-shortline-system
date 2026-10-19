@@ -593,7 +593,9 @@ def _slim_strategy_signal(signal: dict[str, Any]) -> dict[str, Any]:
 
 
 def _now_str() -> str:
-    return time.strftime("%Y-%m-%dT%H:%M:%S")
+    from app.core.time import bj_now_iso
+
+    return bj_now_iso()
 
 
 def _empty_response(requested_count: int, settled_skipped: int, started: float) -> dict[str, Any]:

@@ -280,6 +280,13 @@ def list_strategies(
 STANDALONE_METRICS_PATH = Path(__file__).resolve().parents[2] / "data" / "strategy_metrics" / "standalone_metrics.json"
 
 
+def _bj_offset(value):
+    """compute_standalone_metrics.py 历史上写的是无时区北京时间；补 +08:00，已带偏移的原样返回。"""
+    if isinstance(value, str) and len(value) >= 19 and value[10] in "T " and value[-6] not in "+-" and not value.endswith("Z"):
+        return value.replace(" ", "T", 1) + "+08:00"
+    return value
+
+
 @router.get("/standalone-metrics")
 def standalone_metrics(db: Session = Depends(get_db)):
     """每日独立运行策略的单策略口径指标（scripts/compute_standalone_metrics.py 落盘）。
@@ -309,7 +316,7 @@ def standalone_metrics(db: Session = Depends(get_db)):
             row["status"] = "watch"
         rows.append(row)
     return {
-        "generated_at": stored.get("generated_at"),
+        "generated_at": _bj_offset(stored.get("generated_at")),
         "window": stored.get("window"),
         "method": stored.get("method"),
         "strategies": rows,

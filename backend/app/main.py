@@ -68,9 +68,12 @@ async def application_lifespan(_app: FastAPI):
             logger.error("application shutdown cleanup failures: %s", ",".join(failures))
 
 
+from app.core.offset_json import OffsetJSONResponse  # noqa: E402
+
 app = FastAPI(
     title="AShare Shortline System",
     lifespan=application_lifespan,
+    default_response_class=OffsetJSONResponse,
 )
 _startup_db_error: str | None = None
 

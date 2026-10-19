@@ -22,3 +22,9 @@ def utc_isoformat(value: datetime | None) -> str | None:
         return None
     aware = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
     return aware.isoformat().replace("+00:00", "Z")
+
+
+def bj_now_iso() -> str:
+    """北京时间当前时刻，带 +08:00 偏移的 ISO 串（秒精度），给 API 直接输出。"""
+    from zoneinfo import ZoneInfo
+    return datetime.now(ZoneInfo("Asia/Shanghai")).isoformat(timespec="seconds")

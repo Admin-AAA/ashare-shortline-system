@@ -98,7 +98,7 @@ def list_pending_realtime_pnl(db: Session, *, use_cache: bool = True) -> dict[st
     quotes = _fetch_rtk_quotes(codes)
     items = compute_realtime_pnl_items(db, recs, quotes)
     result = {
-        "computed_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "computed_at": __import__("app.core.time", fromlist=["bj_now_iso"]).bj_now_iso(),
         "cached": False,
         "items": items,
     }

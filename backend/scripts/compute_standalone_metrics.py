@@ -127,7 +127,7 @@ def main():
                     "tuned_filter_emulated": ex is not None, "panel": sources[sid],
                     **({"cooldown_emulated": cooldown} if cooldown else {})})
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(json.dumps({"generated_at": datetime.now().isoformat(timespec="seconds"),
+    OUT.write_text(json.dumps({"generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         "window": {"start": shared["days"][0]["signal_date"], "end": shared["days"][-1]["signal_date"], "recent_start": a.split},
         "method": f"单策略政策（production_selection.v{base_pol.version} 去组合共识闸门），每日前 3，分数线 72；面板 solo=真单策略回放，否则 {Path(a.panel).parent.parent.name}",
         "strategies": out}, ensure_ascii=False, indent=1))
