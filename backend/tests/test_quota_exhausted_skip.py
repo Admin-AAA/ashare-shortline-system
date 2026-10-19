@@ -170,3 +170,66 @@ def test_midterm_fetch_no_wait_when_only_quota_left(monkeypatch):
     monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: _Pro())
     assert ms._pro_fetch_with_wait("forecast", "x", start_date="20261016") is None
     assert sleeps == []
+
+
+def test_forecast_day_uses_ann_date_first(monkeypatch):
+    """promax forecast 需要 ann_date 或 ts_code；只给 start/end 会回 50101（10-19 日跑 mid-forecast-beat no_data）。"""
+    from app.services import midterm_forecast as mf
+
+    calls = []
+
+    class _Pro:
+        def forecast(self, **kw):
+            calls.append(kw)
+            return pd.DataFrame([{"ts_code": "000001.SZ", "ann_date": "20261017"}])
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: _Pro())
+    df = mf._fetch_forecast_day("20261017")
+    assert len(df) == 1
+    assert len(calls) == 1
+    assert calls[0]["ann_date"] == "20261017"
+    assert "start_date" not in calls[0] and "end_date" not in calls[0]
+
+
+def test_forecast_day_falls_back_to_start_end_on_invalid_params(monkeypatch):
+    from app.services import midterm_forecast as mf
+    from app.services.tushare_transport import ProviderFailure, TushareProviderError
+
+    sleeps = []
+    monkeypatch.setattr("time.sleep", lambda s: sleeps.append(s))
+    calls = []
+
+    class _Pro:
+        def forecast(self, **kw):
+            calls.append(kw)
+            if "ann_date" in kw:
+                raise TushareProviderError("forecast", [ProviderFailure(
+                    provider="promax", api_name="forecast", category=FailureCategory.INVALID_REQUEST,
+                    retryable=False, fallback_allowed=True, upstream_detail="50101")])
+            return pd.DataFrame([{"ts_code": "000001.SZ", "ann_date": "20261017"}])
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: _Pro())
+    df = mf._fetch_forecast_day("20261017")
+    assert len(df) == 1
+    assert [sorted(k for k in c if k != "fields") for c in calls] == [["ann_date"], ["end_date", "start_date"]]
+    assert all("fields" in c for c in calls)
+    assert sleeps == []
+
+
+def test_forecast_day_invalid_params_twice_returns_none(monkeypatch):
+    from app.services import midterm_forecast as mf
+    from app.services.tushare_transport import ProviderFailure, TushareProviderError
+
+    monkeypatch.setattr("time.sleep", lambda s: None)
+    calls = []
+
+    class _Pro:
+        def forecast(self, **kw):
+            calls.append(kw)
+            raise TushareProviderError("forecast", [ProviderFailure(
+                provider="promax", api_name="forecast", category=FailureCategory.INVALID_REQUEST,
+                retryable=False, fallback_allowed=True)])
+
+    monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: _Pro())
+    assert mf._fetch_forecast_day("20261017") is None
+    assert len(calls) == 2

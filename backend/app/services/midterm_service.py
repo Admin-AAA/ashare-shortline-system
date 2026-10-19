@@ -232,8 +232,12 @@ _WAITABLE_CATEGORIES = frozenset({
 })
 
 
-def _pro_fetch_with_wait(api: str, label: str, **params):
-    """get_pro().<api>(**params)；上游全部瞬时失败时按 PRO_RETRY_WAITS 等待重试，最终失败返回 None。"""
+def _pro_fetch_with_wait(api: str, label: str, *, alt_params: dict | None = None, **params):
+    """get_pro().<api>(**params)；上游全部瞬时失败时按 PRO_RETRY_WAITS 等待重试，最终失败返回 None。
+
+    alt_params：本次尝试里所有“活着的”上游都回 invalid_request（参数写法不被接受）时，换成这组参数再试一次
+    （只换一次，不消耗等待次数）。例：forecast 主用 ann_date（promax 必须有 ann_date 或 ts_code），
+    备用 start_date/end_date。"""
     import time as _time
 
     from app.services.tushare_client import get_pro
@@ -245,6 +249,13 @@ def _pro_fetch_with_wait(api: str, label: str, **params):
             return getattr(get_pro(), api)(**params)
         except TushareProviderError as exc:
             cats = {getattr(getattr(f, "category", None), "value", "") for f in getattr(exc, "failures", ())}
+            if alt_params is not None and "invalid_request" in cats \
+                    and cats <= {"invalid_request", "quota_exhausted", "circuit_open"}:
+                logger.warning("%s %s invalid params %s (%s); retry with %s",
+                               api, label, sorted(k for k in params if k != "fields"), exc, sorted(alt_params))
+                keep = {k: v for k, v in params.items() if k == "fields"}
+                params, alt_params = {**keep, **alt_params}, None
+                continue
             live = [f for f in getattr(exc, "failures", ())
                     if getattr(getattr(f, "category", None), "value", "") != "quota_exhausted"]
             if waits and cats and cats <= _WAITABLE_CATEGORIES and live:
