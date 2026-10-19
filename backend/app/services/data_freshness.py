@@ -149,6 +149,31 @@ def check_indicator_columns(db, trade_date: str) -> dict[str, Any]:
             "empty_columns": empty, "issues": issues}
 
 
+CHIP_FROZEN_RATIO = 0.9
+
+
+def chip_frozen_issue(trade_date: str, prev_date: str, compared: int, identical: int) -> str | None:
+    if compared and identical > CHIP_FROZEN_RATIO * compared:
+        return (f"{trade_date} 筹码列与前一交易日 {prev_date} 完全相同 {identical}/{compared}"
+                f"（>{int(CHIP_FROZEN_RATIO * 100)}%，疑似把前一日筹码写成当日）")
+    return None
+
+
+def check_chip_frozen(db, dates: list[str]) -> dict[str, Any]:
+    """chip_cost_15/50/85 + chip_weight_avg 与前一交易日完全相同的股票占比 > 90% 告警。"""
+    issues: list[str] = []
+    for prev, d in zip(dates, dates[1:]):
+        n, same = db.execute(text(
+            "SELECT COUNT(*), SUM(a.chip_cost_50 = b.chip_cost_50 AND a.chip_cost_15 <=> b.chip_cost_15 "
+            "AND a.chip_cost_85 <=> b.chip_cost_85 AND a.chip_weight_avg <=> b.chip_weight_avg) "
+            "FROM daily_kbars a JOIN daily_kbars b ON b.code = a.code AND b.trade_date = :p "
+            "WHERE a.trade_date = :d AND a.chip_cost_50 IS NOT NULL"), {"p": prev, "d": d}).one()
+        msg = chip_frozen_issue(d, prev, int(n or 0), int(same or 0))
+        if msg:
+            issues.append(msg)
+    return {"table": "daily_kbars:chip_frozen", "latest": dates[-1] if dates else None, "issues": issues}
+
+
 def check_repurchase_events() -> dict[str, Any]:
     from app.services.data_live_sources import repurchase_events_latest
 
@@ -176,7 +201,8 @@ def run_freshness_check(db, *, alert: bool = True) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             results.append({"table": spec[0], "issues": [f"检查失败 {type(exc).__name__}: {str(exc)[:120]}"]})
-    for fn in (lambda: check_indicator_columns(db, dates[-1]), check_repurchase_events):
+    for fn in (lambda: check_indicator_columns(db, dates[-1]), lambda: check_chip_frozen(db, dates),
+               check_repurchase_events):
         try:
             results.append(fn())
         except Exception as exc:  # noqa: BLE001

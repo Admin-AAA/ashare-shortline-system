@@ -1604,6 +1604,9 @@ def _backfill_chip_date(db: Session, trade_date: str) -> dict[str, Any]:
         trade_date=target.replace("-", ""),
         fields="ts_code,trade_date,cost_15pct,cost_50pct,cost_85pct,weight_avg,winner_rate",
     )
+    from app.services.tushare_client_pure import keep_rows_for_trade_date
+
+    frame = keep_rows_for_trade_date(frame, target, api_name="cyq_perf")
     if frame is None or frame.empty:
         return {"row_count": 0, "provider_row_count": 0}
 

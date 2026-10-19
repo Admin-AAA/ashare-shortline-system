@@ -94,6 +94,8 @@ def backfill_chip(db, pro, trade_days: list[str]) -> int:
     for td in trade_days:
         try:
             df = pro.cyq_perf(trade_date=td)
+            from app.services.tushare_client_pure import keep_rows_for_trade_date
+            df = keep_rows_for_trade_date(df, td, api_name="cyq_perf")
         except Exception as exc:
             logger.warning("cyq_perf(%s) 异常: %s", td, str(exc)[:80])
             continue

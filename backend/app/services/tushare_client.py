@@ -40,6 +40,7 @@ from app.services.tushare_transport import (
     TushareProviderError,
     TushareProviderRouter,
 )
+from app.services.tushare_client_pure import keep_rows_for_trade_date  # noqa: E402
 from app.services.tushare_client_pure import (  # noqa: F401,E402  re-export (split)
     TushareRawEnvelopeError,
     _BAOSTOCK_FREQ_MAP,
@@ -962,6 +963,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
             trade_date=target,
             fields="ts_code,trade_date,cost_15pct,cost_50pct,cost_85pct,weight_avg,winner_rate",
         )
+        chips = keep_rows_for_trade_date(chips, target, api_name="cyq_perf")
         if chips is not None and not chips.empty:
             validate_market_frame("cyq_perf", chips)
             for _, row in chips.iterrows():
