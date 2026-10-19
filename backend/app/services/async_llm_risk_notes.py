@@ -135,8 +135,11 @@ async def attach_llm_risk_notes_for_run(db: Session, run_id: str) -> dict[str, A
     return {"run_id": run_id, "status": "ok", "updated": updated, "errors": errors}
 
 
-def schedule_attach_llm_risk_notes(run_id: str) -> None:
-    """Fire-and-forget：在独立线程里跑异步挂备注，不阻塞出票调度。"""
+def schedule_attach_llm_risk_notes(run_id: str):
+    """在独立线程里跑异步挂备注，不阻塞出票调度；返回线程。
+
+    注意：Prefect 每日任务跑在子进程里，子进程退出时 daemon 线程会被直接杀掉（10-14 起审查静默的原因）。
+    调用方应在出票全部完成后用 wait_llm_risk_note_threads() 限时等待。"""
     import threading
 
     def _worker() -> None:
@@ -148,14 +151,34 @@ def schedule_attach_llm_risk_notes(run_id: str) -> None:
         except Exception:  # noqa: BLE001
             logger.exception("异步 LLM 风险备注线程失败 run=%s", run_id)
 
-    threading.Thread(
+    t = threading.Thread(
         target=_worker,
         name=f"llm-risk-notes-{run_id[:12]}",
         daemon=True,
-    ).start()
+    )
+    t.start()
+    return t
+
+
+def wait_llm_risk_note_threads(threads, timeout_seconds: float = 600.0) -> dict[str, Any]:
+    """出票后限时等待风险备注线程（共享一个截止时间）。超时只告警，不影响出票结果。"""
+    import time
+
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    pending = []
+    for t in [t for t in threads if t is not None]:
+        t.join(max(0.0, deadline - time.monotonic()))
+        if t.is_alive():
+            pending.append(t.name)
+    if pending:
+        logger.warning("异步 LLM 风险备注超时 %ss 未完成: %s", timeout_seconds, ",".join(pending))
+    out = {"waited": len([t for t in threads if t is not None]), "timed_out": pending}
+    logger.info("异步 LLM 风险备注等待结束: %s", out)
+    return out
 
 
 __all__ = [
     "attach_llm_risk_notes_for_run",
     "schedule_attach_llm_risk_notes",
+    "wait_llm_risk_note_threads",
 ]

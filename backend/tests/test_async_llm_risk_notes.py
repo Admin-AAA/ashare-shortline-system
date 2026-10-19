@@ -81,3 +81,35 @@ def test_attach_writes_notes_without_touching_score(monkeypatch):
     assert summary["stance"] == "veto"
     tags = json.loads(rec.risk_tags_json)
     assert any("LLM风险备注:veto" in t for t in tags)
+
+
+def test_wait_llm_risk_note_threads_joins_and_reports_timeout():
+    import threading
+    import time
+    from app.services.async_llm_risk_notes import wait_llm_risk_note_threads
+
+    done = threading.Thread(target=lambda: time.sleep(0.05), name="fast", daemon=True)
+    stuck = threading.Thread(target=lambda: time.sleep(5), name="slow", daemon=True)
+    done.start(); stuck.start()
+    out = wait_llm_risk_note_threads([done, None, stuck], timeout_seconds=0.3)
+    assert not done.is_alive()
+    assert out == {"waited": 2, "timed_out": ["slow"]}
+
+
+def test_schedule_returns_thread(monkeypatch):
+    import app.services.async_llm_risk_notes as mod
+
+    async def fake(db, run_id):
+        return {"ok": run_id}
+
+    monkeypatch.setattr(mod, "attach_llm_risk_notes_for_run", fake)
+    import app.db.session as sess
+
+    class _S:
+        def __enter__(self): return None
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(sess, "SessionLocal", lambda: _S())
+    t = mod.schedule_attach_llm_risk_notes("run-x")
+    t.join(5)
+    assert not t.is_alive()
