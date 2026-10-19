@@ -99,6 +99,9 @@ EXPOSURE_TASK_ID = "strategy_exposure_run"
 TASK_TYPE_BLOCK_TRADE_BACKUP = "midterm_block_trade_backup"
 BLOCK_TRADE_BACKUP_TASK_ID = "midterm_block_trade_premarket"
 BLOCK_TRADE_BACKUP_CRON = "3 8 * * mon-fri"  # 周一到周五 08:03（开盘前，T=上一交易日）
+TASK_TYPE_DATA_FRESHNESS_CHECK = "data_freshness_check"
+DATA_FRESHNESS_TASK_ID = "data_freshness_check_daily"
+DATA_FRESHNESS_CRON = "0 18 * * mon-fri"  # 周一到周五 18:00 只读巡检（允许在 16:35–18:35 日更窗口内跑）
 
 
 # ── 盘中锁利影子链路（只记录不交易，见 intraday_lock_service）────────────────

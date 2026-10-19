@@ -1,96 +1,79 @@
-"""回填 daily_basic（换手率/PE/市值，Tushare daily_basic）。
+"""回填 daily_basic（换手率/PE/市值）——经统一网关，按交易日幂等覆盖。
 
-按 trade_date 批量拉全市场（一次 5400+ 只，不限速），写入 daily_basic 表。
-total_mv/circ_mv 单位为万元（与 Tushare 一致），free_mv_yi = circ_mv / 1e8。
+守卫：research: 熔断命名空间；盘中 9:15–15:05 与日更窗口 16:35–18:35 拒绝运行；
+任一上游当日额度用到 60%（或报日限）即停。
 
-用法：
-  python scripts/backfill_daily_basic.py --start 2025-01-15 --end 2026-01-16
-  python scripts/backfill_daily_basic.py --start 2025-01-15 --end 2026-01-16 --dry-run
+  PYTHONPATH=. .venv/bin/python scripts/backfill_daily_basic.py --start 2026-10-12 --end 2026-10-16
 """
+import os
 import sys
+from datetime import datetime, time, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+os.environ.setdefault("ASHARE_BREAKER_NAMESPACE", "research")
 
-import argparse
+import argparse  # noqa: E402
 
-from sqlalchemy import text
+from sqlalchemy import text  # noqa: E402
 
-from app.db.session import SessionLocal
-from app.models.tables import DailyBasic
+from app.core.provider_quota import BACKFILL_BUDGET_FRACTION, backfill_budget_check, flush  # noqa: E402
+from app.db.session import SessionLocal  # noqa: E402
+from app.services.daily_basic_ingest import check_daily_basic_staleness, ingest_daily_basic  # noqa: E402
+
+PROVIDERS = ("promax", "quantdata")
+BLOCKED_WINDOWS = ((time(9, 15), time(15, 5), "盘中"), (time(16, 35), time(18, 35), "日更窗口"))
 
 
-def _trade_dates(db, start: str, end: str) -> list[str]:
-    """窗口内 daily_kbars 已有的真实交易日（避免对非交易日空调用）。"""
-    rows = db.execute(
-        text(
-            "SELECT DISTINCT trade_date FROM daily_kbars "
-            "WHERE trade_date >= :s AND trade_date <= :e ORDER BY trade_date"
-        ),
-        {"s": start, "e": end},
-    ).scalars().all()
+def blocked_window(now: datetime | None = None) -> str | None:
+    now = now or datetime.now(timezone(timedelta(hours=8)))
+    if now.weekday() >= 5:
+        return None
+    t = now.time()
+    for lo, hi, name in BLOCKED_WINDOWS:
+        if lo <= t < hi:
+            return name
+    return None
+
+
+def trade_dates(db, start: str, end: str) -> list[str]:
+    rows = db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE trade_date >= :s AND trade_date <= :e "
+        "ORDER BY trade_date"), {"s": start, "e": end}).scalars().all()
     return [str(r) for r in rows]
 
 
-def backfill(db, pro, trade_date: str) -> int:
-    df = pro.daily_basic(
-        trade_date=trade_date.replace("-", ""),
-        fields="ts_code,trade_date,turnover_rate,pe_ttm,total_mv,circ_mv",
-    )
-    if df is None or len(df) == 0:
-        return 0
-    objs = []
-    for _, row in df.iterrows():
-        code = str(row["ts_code"]).split(".")[0]
-        if len(code) != 6 or not code.isdigit():
-            continue
-        objs.append(
-            DailyBasic(
-                code=code,
-                trade_date=trade_date,
-                turnover_rate=(
-                    float(row["turnover_rate"]) if row["turnover_rate"] is not None and row["turnover_rate"] == row["turnover_rate"] else None
-                ),
-                pe_ttm=(float(row["pe_ttm"]) if row["pe_ttm"] is not None and row["pe_ttm"] == row["pe_ttm"] else None),
-                total_mv=(float(row["total_mv"]) if row["total_mv"] is not None and row["total_mv"] == row["total_mv"] else None),
-                circ_mv=(float(row["circ_mv"]) if row["circ_mv"] is not None and row["circ_mv"] == row["circ_mv"] else None),
-            )
-        )
-    # 幂等：删当日再插
-    db.execute(text("DELETE FROM daily_basic WHERE trade_date = :d"), {"d": trade_date})
-    db.bulk_save_objects(objs)
-    db.commit()
-    return len(objs)
-
-
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--start", required=True)
-    parser.add_argument("--end", required=True)
-    parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
-
-    from app.services.tushare_client import get_pro
-
-    db = SessionLocal()
-    try:
-        pro = get_pro()
-        dates = _trade_dates(db, args.start, args.end)
-        print(f"trade_dates to backfill: {len(dates)} ({dates[0]}..{dates[-1] if dates else '-'})")
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--start", required=True)
+    ap.add_argument("--end", required=True)
+    ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--budget-fraction", type=float, default=BACKFILL_BUDGET_FRACTION)
+    ap.add_argument("--ignore-window", action="store_true", help="仅测试用")
+    args = ap.parse_args()
+    with SessionLocal() as db:
+        dates = trade_dates(db, args.start, args.end)
+        print("dates:", dates, flush=True)
         if args.dry_run:
-            n = backfill(db, pro, dates[0]) if dates else 0
-            db.rollback()
-            print(f"dry-run {dates[0]}: would write {n} rows (rolled back)")
             return
-        total = 0
         for i, d in enumerate(dates):
-            n = backfill(db, pro, d)
-            total += n
-            if (i + 1) % 20 == 0 or i == len(dates) - 1:
-                print(f"  {i+1}/{len(dates)} {d} rows={n} cumulative={total}")
-        print(f"done: {total} rows across {len(dates)} trade_dates")
-    finally:
-        db.close()
+            w = None if args.ignore_window else blocked_window()
+            if w:
+                print(f"STOP before {d}: 处于{w}，剩余未补 {dates[i:]}", flush=True)
+                break
+            ok, reason = backfill_budget_check(PROVIDERS, args.budget_fraction)
+            if not ok:
+                print(f"STOP before {d}: {reason}; 剩余未补 {dates[i:]}", flush=True)
+                break
+            try:
+                out = ingest_daily_basic(db, d)
+            except Exception as exc:  # noqa: BLE001
+                db.rollback()
+                print(f"STOP at {d}: {type(exc).__name__}: {exc}; 剩余未补 {dates[i:]}", flush=True)
+                break
+            print(d, out, flush=True)
+        print("staleness:", check_daily_basic_staleness(db), flush=True)
+    flush()
 
 
 if __name__ == "__main__":

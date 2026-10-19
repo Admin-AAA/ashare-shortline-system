@@ -37,6 +37,9 @@ from app.services.registry.data_source import (
 )
 from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     BLOCK_TRADE_BACKUP_CRON,
+    DATA_FRESHNESS_CRON,
+    DATA_FRESHNESS_TASK_ID,
+    TASK_TYPE_DATA_FRESHNESS_CHECK,
     BLOCK_TRADE_BACKUP_TASK_ID,
     TASK_TYPE_BLOCK_TRADE_BACKUP,
     EXPOSURE_TASK_ID,
@@ -317,6 +320,42 @@ def _ensure_formal_safety_net_task() -> None:
         logger.exception("注册 formal 安全网任务失败")
 
 
+def _ensure_data_freshness_task() -> None:
+    """注册 18:00 每日数据新鲜度只读巡检（幂等，不覆盖手动调整）。"""
+    try:
+        db = SessionLocal()
+        try:
+            if db.get(ScheduledTask, DATA_FRESHNESS_TASK_ID) is None:
+                db.add(
+                    ScheduledTask(
+                        task_id=DATA_FRESHNESS_TASK_ID,
+                        name="每日数据新鲜度巡检（滞后/行数异常/关键列失效，只读）",
+                        task_type=TASK_TYPE_DATA_FRESHNESS_CHECK,
+                        cron_expression=DATA_FRESHNESS_CRON,
+                        payload_json=json.dumps({}),
+                        enabled=True,
+                    )
+                )
+                db.commit()
+                logger.info("已注册数据新鲜度巡检任务: %s (cron=%s)", DATA_FRESHNESS_TASK_ID, DATA_FRESHNESS_CRON)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册数据新鲜度巡检任务失败")
+
+
+def _run_data_freshness_check(db) -> dict:
+    from app.services.data_freshness import run_freshness_check
+
+    out = run_freshness_check(db)
+    problems = out.get("problems") or {}
+    out["summary_text"] = (
+        "数据新鲜度正常" if not problems
+        else f"数据新鲜度异常 {len(problems)} 张表: " + "；".join(f"{t}: {v[0]}" for t, v in list(problems.items())[:8])
+    )
+    return out
+
+
 def ensure_scheduled_task_registrations() -> None:
     """启动接线入口：注册全部关键调度任务（幂等）。
 
@@ -330,6 +369,7 @@ def ensure_scheduled_task_registrations() -> None:
     _ensure_block_trade_backup_task()
     _ensure_intraday_lock_tasks()
     _ensure_formal_safety_net_task()
+    _ensure_data_freshness_task()
 
 
 def _execute_task(
@@ -414,6 +454,8 @@ def _execute_task(
             result = {"skipped": True, "status": "skipped", "summary_text": "策略曝光补跑已退役（2026-10-19）"}
         elif task_type == TASK_TYPE_OUTCOME_LABEL:
             result = _run_outcome_label(db, payload)
+        elif task_type == TASK_TYPE_DATA_FRESHNESS_CHECK:
+            result = _run_data_freshness_check(db)
         elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
             result = _run_intraday_lock_shadow(db, payload)
         elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
@@ -1439,6 +1481,16 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         db.rollback()
         indicator_fill["ivol"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
         logger.warning("ivol fill failed: %s", exc)
+
+    # daily_basic（市值/PE/换手）此前从未接入日更，2026-10-09 后停更；补当日 + 停更告警。
+    try:
+        from app.services.daily_basic_ingest import ingest_daily_basic_with_alert
+
+        indicator_fill["daily_basic"] = ingest_daily_basic_with_alert(db, str(trade_date)[:10])
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        indicator_fill["daily_basic"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        logger.warning("daily_basic ingest failed: %s", exc)
 
     # [中长线] 中线策略选股（周五信号日落盘，独立于短线出票）；失败只告警。
     # 结果写入 result_json.midterm_picks（之前只打 INFO，worker 日志不收，完全不可观测）。

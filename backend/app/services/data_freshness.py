@@ -1,0 +1,160 @@
+"""每日数据新鲜度巡检（只读）：滞后 + 近 30 个交易日行数异常 + 关键列全 0/NULL。
+
+由 Prefect 定时任务 data_freshness_check（每天 18:00，只读，可在日更窗口内跑）调用，
+发现问题走 emit_alert("data_freshness", ...)；同时包含 daily_basic 停更告警。
+"""
+from __future__ import annotations
+
+import logging
+from datetime import date, datetime, timedelta, timezone
+from statistics import median
+from typing import Any
+
+from sqlalchemy import text
+
+logger = logging.getLogger(__name__)
+
+WINDOW = 30
+DROP_RATIO = 0.7          # 当日行数 < 近 30 日中位数 * 0.7 视为断崖
+DEAD_COL_RATIO = 0.05     # 关键列非 0 非 NULL 占比 < 5% 视为整列失效
+ROUND_COUNTS = (1000, 2000, 3000, 4000, 5000, 6000, 8000, 10000)
+
+# table, date_col, allowed_lag_trade_days, key_cols, per_day_checks
+DAILY_TABLES: list[tuple[str, str, int, tuple[str, ...], bool]] = [
+    ("daily_kbars", "trade_date", 0, ("close", "adj_factor", "turnover_rate", "ma5", "ma60", "macd_dif", "kdj_k",
+                                       "boll_mid", "cci", "rsi_6", "chip_cost_50", "chip_winner_rate", "ivol20"), True),
+    ("daily_basic", "trade_date", 0, ("total_mv", "circ_mv", "turnover_rate"), True),
+    ("capital_flow", "trade_date", 0, ("main_net_inflow_yi",), True),
+    ("stk_limits", "trade_date", 0, ("up_limit", "down_limit"), True),
+    ("margin_detail", "trade_date", 1, ("rzye",), True),
+    ("auction_data", "trade_date", 0, ("price",), True),
+    ("stock_quotes", "trade_date", 0, ("price", "total_mv_yi"), True),
+    ("index_daily", "trade_date", 0, ("close",), True),
+    ("limit_up_board", "trade_date", 0, ("pct_chg",), False),
+    ("dragon_tiger", "trade_date", 0, ("net_amount_yi",), False),
+    ("concept_sector", "trade_date", 0, (), False),
+    ("concept_sector_stock", "trade_date", 0, (), False),
+    ("hsgt_flows", "trade_date", 0, ("north_money",), False),
+    ("hsgt_top10", "trade_date", 0, ("amount",), False),
+    ("minute_kbars", "trade_date", 0, (), False),
+]
+# 事件/低频表：按自然日阈值判断停更
+EVENT_TABLES: list[tuple[str, str, int]] = [
+    ("share_floats", "created_at", 10),
+    ("news_announcement", "announce_date", 3),
+    ("institutional_surveys", "surv_date", 14),
+    ("stock_fina_indicator", "ann_date", 30),
+    ("holder_numbers", "ann_date", 45),
+    ("pledge_stats", "end_date", 30),
+    ("margin_data", "trade_date", 5),
+    ("hk_holdings", "trade_date", 100),
+]
+
+# 事件类数据的线上真源是 auxiliary_snapshot_batches（block_trades/holder_trades 旧表已不再写入，设计如此），
+# 按数据集看最近一次 complete 批次的年龄
+SNAPSHOT_MAX_AGE_DAYS = {"block_trade": 4, "holder_trade": 4, "share_float": 4, "news_announcement": 4}
+
+
+def _norm(v: Any) -> str | None:
+    if v is None:
+        return None
+    s = str(v)[:10].replace("-", "")
+    return f"{s[:4]}-{s[4:6]}-{s[6:8]}" if len(s) == 8 and s.isdigit() else None
+
+
+def _today() -> date:
+    return datetime.now(timezone(timedelta(hours=8))).date()
+
+
+def recent_trade_dates(db, n: int = WINDOW) -> list[str]:
+    rows = db.execute(text("SELECT DISTINCT trade_date FROM daily_kbars ORDER BY trade_date DESC LIMIT :n"),
+                      {"n": n}).scalars().all()
+    return sorted(str(r) for r in rows)
+
+
+def check_daily_table(db, table: str, col: str, allowed_lag: int, keys: tuple[str, ...], per_day: bool,
+                      dates: list[str]) -> dict[str, Any]:
+    latest = dates[-1]
+    mx = _norm(db.execute(text(f"SELECT MAX(`{col}`) FROM `{table}`")).scalar())
+    lag = sum(1 for d in dates if mx is None or d > mx)
+    issues: list[str] = []
+    if lag > allowed_lag:
+        issues.append(f"滞后 {lag} 个交易日（最新 {mx}，最近交易日 {latest}）")
+    out: dict[str, Any] = {"table": table, "latest": mx, "lag_trade_days": lag}
+    if per_day:
+        sel = ", ".join(f"SUM(`{k}` IS NOT NULL AND `{k}` <> 0)" for k in keys)
+        rows = db.execute(text(
+            f"SELECT `{col}`, COUNT(*){', ' + sel if sel else ''} FROM `{table}` "
+            f"WHERE `{col}` >= :s GROUP BY `{col}` ORDER BY `{col}`"), {"s": dates[0]}).all()
+        counts = {str(r[0]): int(r[1]) for r in rows}
+        out["counts"] = counts
+        med = median(counts.values()) if counts else 0
+        for r in rows:
+            d, n = str(r[0]), int(r[1])
+            if med and n < DROP_RATIO * med:
+                issues.append(f"{d} 行数 {n} 断崖（中位 {int(med)}）")
+            if n in ROUND_COUNTS:
+                issues.append(f"{d} 行数恰为 {n}（疑似单次上限截断）")
+            dead = [k for k, v in zip(keys, r[2:]) if n and int(v or 0) < DEAD_COL_RATIO * n]
+            if dead:
+                issues.append(f"{d} 关键列全 0/NULL: {','.join(dead)}")
+    out["issues"] = issues
+    return out
+
+
+def check_event_table(db, table: str, col: str, max_age_days: int) -> dict[str, Any]:
+    mx = _norm(db.execute(text(f"SELECT MAX(`{col}`) FROM `{table}`")).scalar())
+    age = (_today() - date.fromisoformat(mx)).days if mx else None
+    issues = [] if age is not None and age <= max_age_days else [f"最新 {mx}，已 {age} 天未更新（阈值 {max_age_days} 天）"]
+    return {"table": table, "latest": mx, "age_days": age, "issues": issues}
+
+
+def check_snapshot_datasets(db) -> list[dict[str, Any]]:
+    rows = db.execute(text(
+        "SELECT dataset, MAX(CASE WHEN status='complete' THEN fetched_at END), "
+        "SUM(status<>'complete' AND fetched_at >= NOW() - INTERVAL 3 DAY), "
+        "MAX(CASE WHEN status<>'complete' THEN failure_code END) "
+        "FROM auxiliary_snapshot_batches GROUP BY dataset")).all()
+    out = []
+    now = datetime.now()
+    for ds, last_ok, recent_fail, code in rows:
+        limit = SNAPSHOT_MAX_AGE_DAYS.get(str(ds), 4)
+        age = (now - last_ok).days if last_ok else None
+        issues = []
+        if age is None or age > limit:
+            issues.append(f"最近成功快照 {last_ok}（{age} 天前），近 3 天失败 {int(recent_fail or 0)} 次，失败码 {code}")
+        out.append({"table": f"snapshot:{ds}", "latest": str(last_ok)[:19] if last_ok else None,
+                    "age_days": age, "issues": issues})
+    return out
+
+
+def run_freshness_check(db, *, alert: bool = True) -> dict[str, Any]:
+    from app.core.alerts import emit_alert
+    from app.services.daily_basic_ingest import check_daily_basic_staleness
+
+    dates = recent_trade_dates(db)
+    results: list[dict[str, Any]] = []
+    for spec in DAILY_TABLES:
+        try:
+            results.append(check_daily_table(db, *spec, dates=dates))
+        except Exception as exc:  # noqa: BLE001 - one broken table must not hide the rest
+            db.rollback()
+            results.append({"table": spec[0], "issues": [f"检查失败 {type(exc).__name__}: {str(exc)[:120]}"]})
+    for spec in EVENT_TABLES:
+        try:
+            results.append(check_event_table(db, *spec))
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            results.append({"table": spec[0], "issues": [f"检查失败 {type(exc).__name__}: {str(exc)[:120]}"]})
+    try:
+        results.extend(check_snapshot_datasets(db))
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        results.append({"table": "snapshot:*", "issues": [f"检查失败 {type(exc).__name__}: {str(exc)[:120]}"]})
+    problems = {r["table"]: r["issues"] for r in results if r["issues"]}
+    if alert:
+        for table, issues in problems.items():
+            emit_alert("data_freshness", f"{table}:{dates[-1]}", f"{table}: " + "；".join(issues[:5]))
+    daily_basic = check_daily_basic_staleness(db, latest=dates[-1]) if alert else None
+    return {"latest_trade_date": dates[-1], "problems": problems, "tables": results, "daily_basic": daily_basic,
+            "ok": not problems}
