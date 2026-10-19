@@ -119,6 +119,20 @@ from app.services.data_gap_pure import (  # noqa: F401,E402  re-export (split)
 logger = logging.getLogger(__name__)
 
 
+def _tushare_api_has_supported_provider(api: str) -> bool:
+    """False when datasource/routing_table.json marks every configured provider unsupported for `api`."""
+    import json as _json
+    from pathlib import Path as _Path
+
+    try:
+        table = _json.loads((_Path(__file__).parent / "datasource" / "routing_table.json").read_text())
+        entry = (table.get("apis") or table).get(api) or {}
+    except Exception:  # noqa: BLE001 - unknown -> keep legacy behaviour
+        return True
+    unsupported = set(entry.get("unsupported") or [])
+    return not (unsupported and not (entry.get("order") or []) and unsupported >= {"promax", "quantdata"})
+
+
 def _refresh_auxiliary_dataset(
     db: Session,
     *,
@@ -302,7 +316,9 @@ def _backfill_news_announcements(
             remaining_for_tushare = [c for c in remaining_for_tushare if c not in got]
 
     # Tushare anns_d 可选回退：仅当东方财富/巨潮都漏掉时尝试；无权限时静默跳过。
-    if remaining_for_tushare:
+    # 2026-10-19：tushare_official 已删除（c41f5e7），promax/quantdata 在 routing_table 里均标为
+    # anns_d unsupported——没有可用上游时整段跳过，不再逐代码空打、刷权限错误和全失败告警。
+    if remaining_for_tushare and _tushare_api_has_supported_provider("anns_d"):
         pro = None
         try:
             pro = get_pro()

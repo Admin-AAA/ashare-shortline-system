@@ -378,7 +378,20 @@ def _fetch_tushare_concept_sectors(settings: Any, trade_date: str | None = None)
 
 
 def _fetch_tushare_news(code: str, settings: Any, trade_date: str | None = None) -> list[dict[str, Any]]:
-    """Tushare 个股公告。news 公共新闻不按股票代码稳定映射，正式链路先接 anns_d。"""
+    """个股公告。anns_d 已无任何可用上游（official 删除、promax/quantdata unsupported），
+    改走巨潮 cninfo（按股票代码查询）；巨潮失败才尝试 anns_d（保持旧行为兜底）。"""
+    try:
+        from app.services.cninfo_news import fetch_announcements_for_code as _cninfo_fetch
+
+        _end = _normalize_trade_date(_compact_trade_date(trade_date)) if trade_date else date.today().isoformat()
+        _start = (date.fromisoformat(_end) - timedelta(days=7)).isoformat()
+        _rows = _cninfo_fetch(code, start_date=_start, end_date=_end, max_pages=1)
+        for _row in _rows:
+            _row.setdefault("article_id", _stable_article_id("cninfo", code, _row.get("announce_date"), _row.get("title"), ""))
+            _row.setdefault("source", "cninfo")
+        return _rows
+    except Exception as e:  # noqa: BLE001
+        logger.debug("巨潮公告不可用 (%s): %s，回退 anns_d", code, e)
     try:
         from app.services.tushare_client import get_pro, ts_code
 
