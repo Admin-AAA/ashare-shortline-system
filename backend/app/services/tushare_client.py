@@ -785,11 +785,11 @@ def fetch_daily_kbars(
             "wr_6": _f(fpr.get("wr_6_bfq")),
             "wr_10": _f(fpr.get("wr_10_bfq")),
             # 筹码分布 (from cyq_perf)
-            "chip_cost_15": _f(chp.get("cost_15pct")),
-            "chip_cost_50": _f(chp.get("cost_50pct")),
-            "chip_cost_85": _f(chp.get("cost_85pct")),
-            "chip_weight_avg": _f(chp.get("weight_avg")),
-            "chip_winner_rate": _f(chp.get("winner_rate")),
+            "chip_cost_15": _f(chp.get("cost_15pct"), None),
+            "chip_cost_50": _f(chp.get("cost_50pct"), None),
+            "chip_cost_85": _f(chp.get("cost_85pct"), None),
+            "chip_weight_avg": _f(chp.get("weight_avg"), None),
+            "chip_winner_rate": _f(chp.get("winner_rate"), None),
             # 来源标记
             "source": "tushare",
         }
@@ -947,11 +947,11 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
                 "boll_lower": _f(fac.get("boll_lower"), None),
                 "cci": _f(fac.get("cci"), None),
                 "adj_factor": (_f(fac.get("adj_factor")) or adj_map.get(raw_ts_code)) or None,
-                "chip_cost_15": _f(chp.get("cost_15pct")),
-                "chip_cost_50": _f(chp.get("cost_50pct")),
-                "chip_cost_85": _f(chp.get("cost_85pct")),
-                "chip_weight_avg": _f(chp.get("weight_avg")),
-                "chip_winner_rate": _f(chp.get("winner_rate")),
+                "chip_cost_15": _f(chp.get("cost_15pct"), None),
+                "chip_cost_50": _f(chp.get("cost_50pct"), None),
+                "chip_cost_85": _f(chp.get("cost_85pct"), None),
+                "chip_weight_avg": _f(chp.get("weight_avg"), None),
+                "chip_winner_rate": _f(chp.get("winner_rate"), None),
                 "source": "tushare",
             }
         )

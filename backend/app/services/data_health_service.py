@@ -120,6 +120,9 @@ _VALUE_SENTINEL_DEFS: list[dict[str, Any]] = [
     {"column": "upper_shadow_count20", "label": "20日长上影次数", "critical": False, "min_distinct": 3, "min_nonzero_ratio": 0.05},
     # 布尔型：唯一值只有 0/1，期望必须放宽否则必然误报
     {"column": "breakout20", "label": "20日突破", "critical": False, "min_distinct": 2, "min_nonzero_ratio": 0.0},
+    # 2026-10-19：筹码整日写 0、ivol20 自 09-11 起全 NULL 都没人发现——纳入哨兵
+    {"column": "chip_cost_50", "label": "筹码成本中位", "critical": False, "min_distinct": 100, "min_nonzero_ratio": 0.80},
+    {"column": "ivol20", "label": "20日特质波动", "critical": False, "min_distinct": 100, "min_nonzero_ratio": 0.80},
 ]
 
 # 成交额(元)/(成交量×收盘价)：按手计约 100，按股计约 1；低于该值即判定这一行按股写入。
@@ -130,7 +133,7 @@ _VOLUME_UNIT_MAX_SHARES_RATIO = 0.05
 _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 行情 K 线
     {"key": "daily_kbar", "label": "日K线(含技术指标)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
-    {"key": "chip", "label": "筹码分布(筹码峰)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "column": "chip_cost_50"},
+    {"key": "chip", "label": "筹码分布(筹码峰)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "column": "chip_cost_50", "positive_only": True},
     {"key": "minute_kbar", "label": "分钟K线", "category": "行情K线", "table": MinuteKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     {"key": "index_daily", "label": "指数日线", "category": "行情K线", "table": IndexDaily, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     {"key": "stk_limit", "label": "涨跌停价格", "category": "行情K线", "table": StkLimit, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
@@ -756,8 +759,13 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
         try:
             value_col = getattr(tbl, column) if column and hasattr(tbl, column) else None
             presence_query = select(1).select_from(tbl)
+            # positive_only: legacy writes stored "missing" as 0 (e.g. chip_cost_50 on days cyq_perf
+            # wasn't published at 17:35); 0 must not count as present or the 21:00 repair never re-pulls.
+            positive_only = bool(ddef.get("positive_only"))
             if value_col is not None:
                 presence_query = presence_query.where(value_col.is_not(None))
+                if positive_only:
+                    presence_query = presence_query.where(value_col > 0)
             has_data = db.scalar(presence_query.limit(1)) is not None
 
             if value_col is not None:
@@ -775,6 +783,8 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
                 latest_query = select(date_col).where(date_col.is_not(None))
                 if value_col is not None:
                     latest_query = latest_query.where(value_col.is_not(None))
+                    if positive_only:
+                        latest_query = latest_query.where(value_col > 0)
                 max_date = db.scalar(latest_query.order_by(date_col.desc()).limit(1))
         except Exception as exc:
             _rollback_session_safely(db)
