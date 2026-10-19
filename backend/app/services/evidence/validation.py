@@ -12,6 +12,7 @@ from app.services.evidence.identity import (
 from app.services.evidence.reconstruction_batch import (
     ValidatedReconstructionCohort,
     latest_validated_reconstruction_cohort,
+    latest_validated_reconstruction_cohorts,
 )
 from app.services.evidence.selectors import (
     live_forward_run_conditions,
@@ -70,31 +71,33 @@ def canonical_historical_reconstruction_run_ids(
         raise ValueError("trade_date cannot be combined with a date range")
     if date_from is not None and date_to is not None and date_from > date_to:
         raise ValueError("date_from must not be later than date_to")
-    cohort = latest_validated_reconstruction_cohort(
+    # 短线回放按策略分批（每个单策略模板一个 batch）：取每个模板最新的已验证 cohort 并集。
+    cohorts = latest_validated_reconstruction_cohorts(
         db,
         trade_date=trade_date,
         date_from=date_from,
         date_to=date_to,
     )
-    if cohort is None:
+    if not cohorts:
         return ()
     # A validated cohort holds exactly one run per expected trade date, aligned
     # positionally with ``expected_trade_dates`` (``_validate_runs`` enforces
     # uniqueness and ordering).  Narrow the returned ids to the requested window.
     matched: list[str] = []
-    for run_id, run_date in zip(
-        cohort.run_ids,
-        cohort.expected_trade_dates,
-    ):
-        if trade_date is not None:
-            if run_date == trade_date:
-                matched.append(run_id)
-            continue
-        if date_from is not None and run_date < date_from:
-            continue
-        if date_to is not None and run_date > date_to:
-            continue
-        matched.append(run_id)
+    for cohort in cohorts:
+        for run_id, run_date in zip(
+            cohort.run_ids,
+            cohort.expected_trade_dates,
+        ):
+            if trade_date is not None:
+                if run_date == trade_date:
+                    matched.append(run_id)
+                continue
+            if date_from is not None and run_date < date_from:
+                continue
+            if date_to is not None and run_date > date_to:
+                continue
+            matched.append(run_id)
     return tuple(matched)
 
 

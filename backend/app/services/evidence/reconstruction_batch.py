@@ -507,6 +507,26 @@ def latest_validated_reconstruction_cohort(
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> ValidatedReconstructionCohort | None:
+    cohorts = latest_validated_reconstruction_cohorts(
+        db, trade_date=trade_date, date_from=date_from, date_to=date_to, per_template=False
+    )
+    return cohorts[0] if cohorts else None
+
+
+def latest_validated_reconstruction_cohorts(
+    db: Session,
+    *,
+    trade_date: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    per_template: bool = True,
+) -> list[ValidatedReconstructionCohort]:
+    """Latest validated cohort per request template (2026-10-19: short-line replay is
+    rebuilt per strategy, one batch per single_skill template; consumers must see the
+    union, not only the most recently published strategy). ``per_template=False``
+    returns at most the single latest cohort (legacy behaviour)."""
+    found: list[ValidatedReconstructionCohort] = []
+    seen_templates: set[str] = set()
     if trade_date is not None and (date_from is not None or date_to is not None):
         raise ValueError("trade_date cannot be combined with a date range")
     target = _optional_iso_date(trade_date, field_name="trade_date")
@@ -562,7 +582,7 @@ def latest_validated_reconstruction_cohort(
                 continue
             if target and target not in identity.expected_trade_dates:
                 continue
-            return ValidatedReconstructionCohort(
+            cohort = ValidatedReconstructionCohort(
                 batch_id=validated.batch_id,
                 window_start=validated.window_start,
                 window_end=validated.window_end,
@@ -577,7 +597,14 @@ def latest_validated_reconstruction_cohort(
             )
         except (ReconstructionBatchError, TypeError, ValueError):
             continue
-    return None
+        template = str(cohort.request_template_fingerprint)
+        if template in seen_templates:
+            continue
+        seen_templates.add(template)
+        found.append(cohort)
+        if not per_template:
+            break
+    return found
 
 
 def cohort_identity_hash(runs: Sequence[RecommendationRun]) -> str:
