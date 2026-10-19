@@ -40,7 +40,7 @@ def transient_wait(exc: TushareProviderError) -> float | None:
     from app.core.shared_breaker import breaker_namespace, shared_open_until
 
     cats = {f.category.value for f in exc.failures}
-    hard = {c for c in cats if c not in TRANSIENT and c != "business_rate_limit"}
+    hard = {c for c in cats if c not in TRANSIENT and c not in ("business_rate_limit", "quota_exhausted")}
     if hard or not any(c in TRANSIENT for c in cats):
         return None
     until = shared_open_until(f"{breaker_namespace()}:tushare:promax:cyq_perf") - time.time()

@@ -87,6 +87,7 @@ def classify_exception(exc: BaseException) -> ErrorKind:
     cat = str(getattr(getattr(exc, "category", None), "value", getattr(exc, "category", "")) or "")
     table = {
         "http_rate_limit": ErrorKind.RATE_LIMIT, "business_rate_limit": ErrorKind.RATE_LIMIT,
+        "quota_exhausted": ErrorKind.RATE_LIMIT,
         "permission": ErrorKind.NO_PERMISSION, "invalid_request": ErrorKind.INVALID_REQUEST,
         "http_client": ErrorKind.INVALID_REQUEST, "network": ErrorKind.NETWORK,
         "timeout": ErrorKind.TIMEOUT, "data_pending": ErrorKind.DATA_PENDING,

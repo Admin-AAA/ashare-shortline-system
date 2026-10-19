@@ -27,13 +27,14 @@ COLS = ["ts_code", "ann_date", "end_date", "type", "p_change_min", "net_profit_m
 
 
 def _fetch_forecast_day(day: str):
-    """tushare forecast 按公告日（YYYYMMDD）拉全市场；失败返回 None。"""
-    from app.services.tushare_client import get_pro
-    try:
-        return get_pro().forecast(ann_date=day, fields=",".join(COLS))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("forecast ann_date=%s failed: %s", day, exc)
-        return None
+    """tushare forecast 按公告日（YYYYMMDD）拉全市场；失败返回 None。
+
+    用 start_date=end_date=day 而不是 ann_date：promax 对 forecast 的 ann_date 参数回 invalid_params
+    （2026-10-19 实测），quantdata 日配额耗尽时 ann_date 写法就没有任何可用上游；两家都支持 start/end。
+    上游全部瞬时失败（promax 连接池耗尽等）时等待重试，见 midterm_service._pro_fetch_with_wait。"""
+    from app.services.midterm_service import _pro_fetch_with_wait
+
+    return _pro_fetch_with_wait("forecast", f"ann_date={day}", start_date=day, end_date=day, fields=",".join(COLS))
 
 
 def _store_live(new) -> None:

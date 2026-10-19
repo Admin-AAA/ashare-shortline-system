@@ -14,6 +14,10 @@ APIs and upstreams (all verified on akshare==1.19.1):
   last listed date get is_open 0/1); then baostock query_trade_dates (baostock_backup)
 * ``pledge_stat``    <- stock_gpzy_pledge_ratio_em (中登 weekly, whole market per date;
   history back to 2018 available)
+* ``repurchase``     <- 东财数据中心 RPTA_WEB_GETHGLIST_NEW（akshare stock_repurchase_em 同一张报表，
+  这里按首次公告日 DIM_DATE 过滤只取窗口内的，不拉全量）。EXPLICIT ONLY：不进 tushare_client 的自动兜底，
+  只由调用方（midterm 回购预案）在 Tushare 多次等待重试仍失败后显式调用。实测 2026-10-09..16：Tushare 29 条
+  「预案」东财只覆盖 16 条（召回约 55%），东财每个回购方案只保留最新进度一行，所以结果是「降级」数据。
 
 Breaker / timeout / retry come from ``DatasetGateway``; rate limit is a shared limiter
 (``gateway:akshare``); enabled switch is ``data_source_config(akshare, tushare_provider)``.
@@ -31,6 +35,13 @@ from app.services.datasource.gateway import DataSourceError, DatasetGateway, Err
 PROVIDER_NAME = "akshare"
 CONFIG_KEY = (PROVIDER_NAME, "tushare_provider")
 AKSHARE_BACKUP_APIS: frozenset[str] = frozenset({"margin_detail", "stk_surv", "anns_d", "pledge_stat", "trade_cal"})
+# Served by this provider but never as an automatic fallback (see module doc).
+EXPLICIT_BACKUP_APIS: frozenset[str] = frozenset({"repurchase"})
+MAX_REPURCHASE_WINDOW_DAYS = 62
+EM_DATACENTER_URL = "https://datacenter-web.eastmoney.com/api/data/v1/get"
+# 东财 REPURPROGRESS -> Tushare repurchase.proc 口径（只有「预案」参与中线回购策略）
+EM_REPURCHASE_PROC = {"001": "预案", "002": "股东大会通过", "003": "股东大会否决", "004": "实施",
+                      "005": "停止实施", "006": "完成", "007": "提议"}
 AKSHARE_RPM = 30
 _CACHE_TTL = 600.0
 MAX_SURV_WINDOW_DAYS = 62
@@ -228,6 +239,61 @@ def map_pledge(rows: list[dict[str, Any]], end_date: str) -> list[dict[str, Any]
     return out
 
 
+def _em_report(report: str, flt: str, sort: str, max_pages: int = 20) -> list[dict[str, Any]]:
+    """东财数据中心报表（akshare 各 *_em 函数背后的同一接口），带过滤条件分页拉取。"""
+    import requests
+
+    key = ("em", report, flt)
+    now = time.monotonic()
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and hit[0] > now:
+            return hit[1]
+    rows: list[dict[str, Any]] = []
+    page, pages = 1, 1
+    while page <= min(pages, max_pages):
+        _limit()
+        resp = requests.get(EM_DATACENTER_URL, timeout=(5, 20), params={
+            "sortColumns": sort, "sortTypes": ",".join(["-1"] * len(sort.split(","))), "pageSize": "500",
+            "pageNumber": str(page), "reportName": report, "columns": "ALL", "source": "WEB",
+            "client": "WEB", "filter": flt})
+        resp.raise_for_status()
+        payload = resp.json()
+        result = payload.get("result")
+        if result is None:  # EM answers result=null (code 9201) for an empty filter result
+            if payload.get("success") is False and payload.get("code") not in (9201, "9201"):
+                raise DataSourceError(ErrorKind.CONTRACT, f"{report}: {payload.get('message')}",
+                                      provider=PROVIDER_NAME)
+            break
+        pages = int(result.get("pages") or 1)
+        rows += list(result.get("data") or [])
+        page += 1
+    with _cache_lock:
+        _cache[key] = (now + _CACHE_TTL, rows)
+    return rows
+
+
+def map_repurchase(rows: list[dict[str, Any]], start: str, end: str) -> list[dict[str, Any]]:
+    out = []
+    for r in rows:
+        code = str(r.get("DIM_SCODE") or "").strip()
+        ann = _compact(r.get("DIM_DATE"))
+        if len(code) != 6 or not ann or not (start <= ann <= end):
+            continue
+        amount = _num(r.get("REPURAMOUNTLIMIT"))
+        if amount is None:
+            amount = _num(r.get("JESX"))
+        out.append({
+            "ts_code": ts_code(code), "ann_date": ann, "end_date": None,
+            "proc": EM_REPURCHASE_PROC.get(str(r.get("REPURPROGRESS") or ""), _str(r.get("REPURPROGRESS"))),
+            "exp_date": _compact(r.get("REPURENDDATE")) or None,
+            "vol": _num(r.get("REPURNUMCAP")), "amount": amount,
+            "high_limit": _num(r.get("REPURPRICECAP")), "low_limit": _num(r.get("REPURPRICELOWER")),
+            "source": "em_hglist",
+        })
+    return out
+
+
 def calendar_rows(opens: set[str], start: str, end: str, params: Mapping[str, Any],
                   source: str) -> list[dict[str, Any]]:
     """Tushare trade_cal shape for every calendar day in [start, end]; honours is_open filter."""
@@ -250,7 +316,7 @@ class AkshareProvider:
     config_keys = (CONFIG_KEY,)
 
     def supports(self, dataset: str, query: Mapping[str, Any]) -> bool:
-        return dataset.startswith("tushare.") and dataset.split(".", 1)[1] in AKSHARE_BACKUP_APIS
+        return dataset.startswith("tushare.") and dataset.split(".", 1)[1] in (AKSHARE_BACKUP_APIS | EXPLICIT_BACKUP_APIS)
 
     def fetch(self, dataset: str, query: Mapping[str, Any]) -> list[dict[str, Any]]:
         api = dataset.split(".", 1)[1]
@@ -288,6 +354,15 @@ class AkshareProvider:
             out += map_anns(_call("stock_notice_report", symbol="全部", date=day), day)
             d += timedelta(days=1)
         return out
+
+    def _repurchase(self, params: Mapping[str, Any]) -> list[dict[str, Any]]:
+        start, end = _range(params, "ann_date")
+        if (_day(end) - _day(start)).days > MAX_REPURCHASE_WINDOW_DAYS:
+            raise DataSourceError(ErrorKind.INVALID_REQUEST, "repurchase backup window > 62 days",
+                                  provider=PROVIDER_NAME)
+        a, b = _day(start).isoformat(), _day(end).isoformat()
+        return map_repurchase(_em_report("RPTA_WEB_GETHGLIST_NEW", f"(DIM_DATE>='{a}')(DIM_DATE<='{b}')",
+                                         "UPD,DIM_DATE,DIM_SCODE"), start, end)
 
     def _trade_cal(self, params: Mapping[str, Any]) -> list[dict[str, Any]]:
         start, end = _range(params, "cal_date")

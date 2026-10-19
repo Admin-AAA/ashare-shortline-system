@@ -95,9 +95,43 @@ def _extract_upstream_detail(response: Any) -> str | None:
 
 
 
+def _is_daily_limit_text(text: str) -> bool:
+    """42901（Tushare 协议：token 当日配额耗尽），或同时出现「当日/每日」与「上限/限额/次数」字样。"""
+    text = (text or "").lower()
+    if "42901" in text or "daily limit" in text:
+        return True
+    daily = any(t in text for t in ("daily", "每日", "今日", "每天", "当日"))
+    limit = any(t in text for t in ("limit", "上限", "限额", "额度", "次数"))
+    return daily and limit
+
+
 def _is_daily_limit(failure: "ProviderFailure") -> bool:
-    text = f"{getattr(failure, 'upstream_detail', '') or ''} {failure}".lower()
-    return "daily limit" in text or "每日" in text or "今日" in text or "42901" in text
+    if getattr(failure, "category", None) is FailureCategory.QUOTA_EXHAUSTED:
+        return True
+    return _is_daily_limit_text(f"{getattr(failure, 'upstream_detail', '') or ''} {failure}")
+
+
+# 当日配额耗尽标记（provider_quota，跨进程 SQLite）读一次缓存这么久，避免每个请求都开库。
+_EXHAUSTED_CHECK_TTL = 30.0
+_exhausted_cache: dict[str, tuple[float, str, bool]] = {}
+QUOTA_SKIP_DETAIL = "skipped: daily quota exhausted today"
+
+
+def provider_exhausted_today(provider: str) -> bool:
+    """provider 今天（Asia/Shanghai）已报告过日配额耗尽 → True。任何读取错误都视为未耗尽。"""
+    if os.environ.get("ASHARE_UNDER_PYTEST") and not os.environ.get("ASHARE_QUOTA_SKIP_IN_TESTS"):
+        return False  # 进程内耗尽标记会跨用例残留；只有专门的用例打开这个开关
+    now = time.monotonic()
+    day = _provider_quota._today()
+    hit = _exhausted_cache.get(provider)
+    if hit and hit[0] > now and hit[1] == day:
+        return hit[2]
+    try:
+        exhausted = bool(_provider_quota.usage(provider)[1])
+    except Exception:  # noqa: BLE001 - telemetry must never block fetching
+        exhausted = False
+    _exhausted_cache[provider] = (now + _EXHAUSTED_CHECK_TTL, day, exhausted)
+    return exhausted
 
 
 class AuthMode(StrEnum):
@@ -121,6 +155,9 @@ class FailureCategory(StrEnum):
     DATA_PENDING = "data_pending"
     NON_JSON = "non_json"
     BUSINESS_RATE_LIMIT = "business_rate_limit"
+    # 上游 token 当日配额耗尽（quantdata 42901 "token daily limit exceeded"）。与按分钟限流不同：
+    # 等几分钟不会恢复，本 provider 当天（Asia/Shanghai 日历日）其余请求直接跳过、换源。
+    QUOTA_EXHAUSTED = "quota_exhausted"
     PERMISSION = "permission"
     INVALID_REQUEST = "invalid_request"
     PROVIDER_ERROR = "provider_error"
@@ -388,7 +425,9 @@ def _research_promax_limiter():
 
 def _breaker_kind(category: "FailureCategory") -> str | None:
     """FailureCategory -> SharedCircuitBreaker failure kind (per-kind thresholds)."""
-    if category in (FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT):
+    if category in (
+        FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT, FailureCategory.QUOTA_EXHAUSTED
+    ):
         return "rate_limit"
     if category is FailureCategory.TIMEOUT:
         return "timeout"
@@ -603,6 +642,17 @@ class TushareHttpProvider:
         fields: str = "",
     ) -> Mapping[str, Any]:
         started = time.perf_counter()
+        if provider_exhausted_today(self.name):
+            # 当日配额已耗尽：不再打上游（不计请求数、不占限速令牌），直接让路由换下一家。
+            _metrics.inc("provider_requests", provider=self.name, outcome="quota_skip")
+            raise ProviderFailure(
+                provider=self.name,
+                api_name=api_name,
+                category=FailureCategory.QUOTA_EXHAUSTED,
+                retryable=False,
+                fallback_allowed=True,
+                upstream_detail=QUOTA_SKIP_DETAIL,
+            )
         breaker = self._breaker(api_name)
         if not breaker.allow_request():
             failure = ProviderFailure(
@@ -639,10 +689,18 @@ class TushareHttpProvider:
                 )
                 _metrics.inc("provider_requests", provider=self.name, outcome=str(failure.category.value))
                 rate_limited = failure.category in (
-                    FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT
+                    FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT,
+                    FailureCategory.QUOTA_EXHAUSTED,
                 )
-                if failure.category is FailureCategory.BUSINESS_RATE_LIMIT and _is_daily_limit(failure):
+                if failure.category in (
+                    FailureCategory.BUSINESS_RATE_LIMIT, FailureCategory.QUOTA_EXHAUSTED
+                ) and _is_daily_limit(failure):
                     _provider_quota.mark_exhausted(self.name)
+                    _exhausted_cache.pop(self.name, None)
+                    logger.warning(
+                        "tushare provider daily quota exhausted provider=%s api=%s; skipping it for the rest of today",
+                        self.name, api_name,
+                    )
                 self._lb_record(api_name, True, weight=2.0 if rate_limited else 1.0)
                 raise
             data = envelope.get("data")
@@ -716,6 +774,7 @@ class TushareHttpProvider:
         except ProviderFailure as failure:
             force_open = failure.category in {
                 FailureCategory.BUSINESS_RATE_LIMIT,
+                FailureCategory.QUOTA_EXHAUSTED,
                 FailureCategory.HTTP_RATE_LIMIT,
                 FailureCategory.PERMISSION,
             }
@@ -915,6 +974,15 @@ class TushareHttpProvider:
                 provider=self.name,
                 api_name=api_name,
                 category=FailureCategory.PERMISSION,
+                retryable=False,
+                fallback_allowed=True,
+                upstream_detail=upstream_detail,
+            )
+        if _is_daily_limit_text(f"{code} {raw_message}"):
+            return ProviderFailure(
+                provider=self.name,
+                api_name=api_name,
+                category=FailureCategory.QUOTA_EXHAUSTED,
                 retryable=False,
                 fallback_allowed=True,
                 upstream_detail=upstream_detail,
@@ -1167,7 +1235,10 @@ class TushareProviderRouter:
             except ProviderFailure as failure:
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 failures.append(failure)
-                is_breaker_skip = failure.category is FailureCategory.CIRCUIT_OPEN
+                is_breaker_skip = failure.category is FailureCategory.CIRCUIT_OPEN or (
+                    failure.category is FailureCategory.QUOTA_EXHAUSTED
+                    and failure.upstream_detail == QUOTA_SKIP_DETAIL
+                )
                 attempts.append({
                     "ordinal": ordinal,
                     "provider": provider.name,

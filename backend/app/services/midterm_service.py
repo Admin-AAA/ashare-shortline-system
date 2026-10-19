@@ -223,13 +223,73 @@ def _held_codes(db, sid: str, as_of: str) -> set[str]:
     return held
 
 
-def _fetch_repurchase_window(start: str, end: str):
+# 网关全部上游失败、且失败都属于「等一会儿就好」的类型时，正式链路按这个节奏等待再试（秒）。
+# promax 的 upstream_pool_exhausted 实测几秒到一分钟内恢复；quantdata 日配额耗尽当天不会恢复（传输层直接跳过）。
+PRO_RETRY_WAITS: tuple[float, ...] = (20.0, 40.0, 60.0)
+_WAITABLE_CATEGORIES = frozenset({
+    "http_rate_limit", "business_rate_limit", "quota_exhausted", "circuit_open", "http_server",
+    "timeout", "network",
+})
+
+
+def _pro_fetch_with_wait(api: str, label: str, **params):
+    """get_pro().<api>(**params)；上游全部瞬时失败时按 PRO_RETRY_WAITS 等待重试，最终失败返回 None。"""
+    import time as _time
+
     from app.services.tushare_client import get_pro
+    from app.services.tushare_transport import TushareProviderError
+
+    waits = list(PRO_RETRY_WAITS)
+    while True:
+        try:
+            return getattr(get_pro(), api)(**params)
+        except TushareProviderError as exc:
+            cats = {getattr(getattr(f, "category", None), "value", "") for f in getattr(exc, "failures", ())}
+            live = [f for f in getattr(exc, "failures", ())
+                    if getattr(getattr(f, "category", None), "value", "") != "quota_exhausted"]
+            if waits and cats and cats <= _WAITABLE_CATEGORIES and live:
+                wait = waits.pop(0)
+                logger.warning("%s %s transient failure (%s); retry in %.0fs", api, label, sorted(cats), wait)
+                _time.sleep(wait)
+                continue
+            logger.warning("%s %s failed: %s", api, label, exc)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s %s failed: %s", api, label, exc)
+            return None
+
+
+def _fetch_repurchase_backup(start: str, end: str):
+    """东财回购报表（降级：召回约 55%，见 datasource/akshare_backup.py）。失败/关闭返回 None。"""
+    import pandas as pd
     try:
-        return get_pro().repurchase(start_date=start, end_date=end)
+        from app.services.datasource.akshare_backup import backup_enabled, backup_gateway
+
+        if not backup_enabled():
+            return None
+        res = backup_gateway().fetch_first(
+            "tushare.repurchase", {"params": {"start_date": start, "end_date": end}, "fields": ""},
+            allow_stale=False)
+        if res.provider is None:
+            return None
+        df = pd.DataFrame.from_records(list(res.rows or []))
+        if df.empty:
+            df = pd.DataFrame(columns=["ts_code", "ann_date", "proc", "amount", "source"])
+        df.attrs["degraded_source"] = "em_hglist"
+        return df
     except Exception as exc:  # noqa: BLE001
-        logger.warning("repurchase window %s-%s failed: %s", start, end, exc)
+        logger.warning("repurchase backup %s-%s failed: %s", start, end, exc)
         return None
+
+
+def _fetch_repurchase_window(start: str, end: str):
+    df = _pro_fetch_with_wait("repurchase", f"{start}-{end}", start_date=start, end_date=end)
+    if df is not None:
+        return df
+    df = _fetch_repurchase_backup(start, end)
+    if df is not None:
+        logger.warning("repurchase %s-%s served by degraded backup em_hglist (%d rows)", start, end, len(df))
+    return df
 
 
 def _store_repurchase_events(new) -> None:
@@ -310,7 +370,9 @@ def repurchase_plan_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     new = _fetch_repurchase_window(start, end)
     if new is None:
         return None
-    if len(new):
+    degraded = new.attrs.get("degraded_source")
+    if len(new) and not degraded:
+        # 降级备源（东财）的公告日/金额口径与 Tushare 不完全一致，不写进"365天内首次"历史库，避免污染以后的判断
         _store_repurchase_events(new)
     files = sorted(EVENTS_DIR.glob("repurchase_*.parquet"))
     hist = pd.concat([pd.read_parquet(f) for f in files] + ([new] if len(new) else []))
@@ -363,7 +425,8 @@ def repurchase_plan_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         )
         out.append({"code": r["code"], "name": names.get(r["code"], ""), "ann_date": ann[r["code"]],
                     "repurchase_amount": amt[r["code"]], "total_mv": mv,
-                    "ratio": round(amt[r["code"]] / (mv * 1e4), 5), "amt20": float(r["amt20"])})
+                    "ratio": round(amt[r["code"]] / (mv * 1e4), 5), "amt20": float(r["amt20"]),
+                    **({"data_source": f"degraded:{degraded}"} if degraded else {})})
     return sorted(out, key=lambda x: (-x["ratio"], x["code"]))
 
 

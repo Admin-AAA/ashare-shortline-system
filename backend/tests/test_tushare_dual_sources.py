@@ -274,11 +274,11 @@ def test_permission_verdict_does_not_depend_on_message_wording() -> None:
     assert _business_envelope_category("40203", "") is FailureCategory.PERMISSION
 
 
-def test_token_quota_exhausted_is_rate_limit() -> None:
-    """配额耗尽等到重置即可恢复，与权限不足是两回事，必须保留限流归类。"""
+def test_token_quota_exhausted_is_quota_exhausted() -> None:
+    """42901 token 当日配额耗尽：单独归类 quota_exhausted（当天跳过该源），既不是权限不足也不是分钟级限流。"""
     assert (
         _business_envelope_category("42901", "token daily limit exceeded")
-        is FailureCategory.BUSINESS_RATE_LIMIT
+        is FailureCategory.QUOTA_EXHAUSTED
     )
 
 

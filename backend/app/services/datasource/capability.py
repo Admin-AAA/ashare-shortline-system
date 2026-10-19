@@ -23,7 +23,7 @@ MATRIX_JSON = BACKEND_ROOT / "data" / "runtime" / "datasource_capability_matrix.
 ROUTING_TABLE = Path(__file__).with_name("routing_table.json")
 
 OK = ("ok", "empty")
-TRANSIENT_ERRORS = ("http_rate_limit", "business_rate_limit", "timeout", "network", "circuit_open", "http_server")
+TRANSIENT_ERRORS = ("http_rate_limit", "business_rate_limit", "quota_exhausted", "timeout", "network", "circuit_open", "http_server")
 HARD_MARKERS = ("unknown_api", "not purchased", "permission", "no permission", "40203", "2003")
 
 
