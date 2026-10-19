@@ -303,12 +303,17 @@ export type LlmCallHealth = {
   any_unhealthy: boolean; // 最近5个 run 是否有低成功率
 };
 
+/** AI 风险审查是否停用：接口没有显式 enabled=true 时一律按停用处理 */
+export const isAiReviewDisabled = (h?: { enabled?: boolean; status?: string } | null) => !h || h.enabled !== true || h.status === "disabled";
+
 export type LlmReviewHealth = {
   last_review_at: string | null; // 最近一次成功 LLM 审查时间（ISO）
   recent_count_24h: number; // 近 24h 成功审查次数
   total_entries: number; // 缓存总条数
   model: string | null; // 最近一次审查使用的模型
-  status: "ok" | "stale" | "never"; // 审查层健康度（缓存新鲜度代理）
+  status: "ok" | "stale" | "never" | "disabled"; // 审查层健康度（缓存新鲜度代理）
+  /** 后端若显式返回 enabled=true 才视为启用；10-19 起 AI 风险审查已停用（f79a29c） */
+  enabled?: boolean;
   checked_at: string | null;
   call_health: LlmCallHealth; // 最近5个 formal run 的 skill_review 调用成功率 + 失败原因
 };

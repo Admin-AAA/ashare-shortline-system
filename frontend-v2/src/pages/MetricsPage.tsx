@@ -1,3 +1,4 @@
+import { isAiReviewDisabled } from "../types";
 import { useState, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useApi } from "../app/useApi";
@@ -36,7 +37,7 @@ const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
   { label: "近 90 天", value: 90 },
 ];
 const DEFAULT_WINDOW_DAYS = 30;
-const DEFAULT_SAMPLE_SCOPE: MetricsSampleScope = "historical_replay";
+const DEFAULT_SAMPLE_SCOPE: MetricsSampleScope = "live_forward";
 
 const SAMPLE_SCOPE_OPTIONS: Array<{
   label: string;
@@ -794,6 +795,17 @@ function ReviewHealthBlock({
 }) {
   if (loading) return <CardSkeleton count={3} />;
   if (error) return <HealthErrorNote msg="审查层状态获取失败" />;
+  if (isAiReviewDisabled(data)) {
+    return (
+      <div style={{ background: "var(--surface-1)", border: "1px solid var(--line)", borderRadius: "var(--radius-sm, 6px)", padding: "var(--space-3)" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
+          <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--muted)" }} />
+          <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--muted)" }}>AI 审查已停用</span>
+        </div>
+        <div style={{ fontSize: "var(--text-xs)", color: "var(--muted)", lineHeight: 1.6 }}>后端已停用 AI 风险审查（10-19 起），出票只看规则分；历史缓存 {data?.total_entries ?? 0} 条保留。</div>
+      </div>
+    );
+  }
   if (!data) return null;
 
   const meta =

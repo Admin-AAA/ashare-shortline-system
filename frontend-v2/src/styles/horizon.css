@@ -90,3 +90,4 @@
 .hz-bar--sum { border-top: 1px dashed var(--border); padding-top: 6px; margin-top: 2px; grid-template-columns: 128px 1fr 64px 56px; }
 .hz-reason { white-space: normal !important; min-width: 280px; font-size: 12px; }
 .hz-rej__item--wait { border-left-color: var(--info); }
+.hz-daily { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; font-size: 12px; }
