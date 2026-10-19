@@ -122,6 +122,9 @@ function formToPayload(f: PresetForm) {
   };
 }
 
+/** 正式预设（preset_formal_*）受后端保护（DELETE 返回 403），前端不提供删除入口 */
+const isFormalPreset = (id: string) => id.startsWith("preset_formal_");
+
 export function PresetsSection() {
   const [presets, setPresets] = useState<Preset[]>([]);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
@@ -221,6 +224,10 @@ export function PresetsSection() {
   }
 
   async function handleDelete(presetId: string, name: string) {
+    if (isFormalPreset(presetId)) {
+      showToast("正式预设不可删除");
+      return;
+    }
     if (!confirm(`确认删除预设「${name}」？此操作不可撤销。`)) return;
     setBusyId(presetId);
     try {
@@ -232,7 +239,8 @@ export function PresetsSection() {
       }
       await reload();
     } catch (e) {
-      showToast(`删除失败：${e instanceof Error ? e.message : String(e)}`);
+      const status = (e as { status?: number })?.status;
+      showToast(status === 403 ? "正式预设受保护，不能删除" : `删除失败：${e instanceof Error ? e.message : String(e)}`);
     } finally {
       setBusyId(null);
     }
@@ -315,6 +323,7 @@ export function PresetsSection() {
                 >
                   <Pencil size={15} />
                 </button>
+                {!isFormalPreset(p.preset_id) && (
                 <button
                   className="icon-button"
                   title="删除"
@@ -323,6 +332,7 @@ export function PresetsSection() {
                 >
                   {busyId === p.preset_id ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />}
                 </button>
+                )}
               </div>
             </div>
 
