@@ -67,6 +67,18 @@ const todayBj = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 1
 /** 待买入且预计买入日=今天、尚无 entry_date → 「今日开盘买入，收盘后确认」 */
 const buyingToday = (signalDate: string, p: HorizonPick) =>
   p.status === "pending" && !p.entry_date && signalDate < todayBj() && nextWeekday(signalDate) === todayBj();
+const DAILY: Record<string, [string, string]> = {
+  ok: ["今日已出票", "blue"], no_signal: ["今日无信号", "gray"], data_error: ["数据异常", "amber"], slots_full: ["仓位已满", "gray"], not_signal_day: ["非选股日", "gray"],
+};
+/** 兼容 daily_status 为对象 {status,reason} 或字符串 + daily_status_reason；缺失返回 null（隐藏） */
+function DailyChip({ s }: { s: HorizonStrategy }) {
+  const raw = s.daily_status;
+  if (!raw) return null;
+  const st = typeof raw === "string" ? raw : raw.status;
+  const reason = (typeof raw === "object" ? raw.reason : null) ?? s.daily_status_reason ?? null;
+  const [label, tone] = DAILY[st] ?? [st, "gray"];
+  return <span className="hz-daily"><span className={`hz-pill hz-pill--${tone}`}>{label}</span>{reason ? <span className="hz-muted">{reason}</span> : null}</span>;
+}
 const Status = ({ s }: { s: string }) => { const [l, c] = STATUS[s] ?? [s, "gray"]; return <span className={`hz-pill hz-pill--${c}`}>{l}</span>; };
 const SCHEDULE: Record<string, string> = { weekly: "每周五盘后", daily: "每日盘后", month_end: "月末盘后", monthly: "每月" };
 const fmtDate = (d?: string) => (!d ? "—" : /^\d{8}$/.test(d) ? `${d.slice(0, 4)}-${d.slice(4, 6)}-${d.slice(6)}` : d);
@@ -116,6 +128,7 @@ function StrategyCard({ s }: { s: HorizonStrategy }) {
     <article className="panel hz-card">
       <header className="hz-card__head">
         <h3>{s.name}</h3>
+        <DailyChip s={s} />
         <div className="hz-tags">
           <span className="hz-tag"><CalendarClock size={12} /> {SCHEDULE_OVERRIDE[s.id] ?? `${SCHEDULE[s.schedule] ?? s.schedule}选股`}</span>
           <span className="hz-tag">每次 Top {s.top_n}</span>
@@ -187,8 +200,14 @@ function TodayView({ batches, list, onPick }: { batches: HorizonBatch[]; list: H
   const withPicks = new Set(batches.map((b) => b.strategy_id));
   const noPicks = list.filter((s) => !withPicks.has(s.id));
   const latest = active.map((b) => b.signal_date).sort().slice(-1)[0];
+  const anyDaily = list.some((x) => x.daily_status);
   return (
     <>
+      {anyDaily && (
+        <section className="panel hz-pad">
+          <div className="hz-sechead"><b>各策略今日状态</b></div>
+          <div className="hz-rej">{list.map((x) => (<div key={x.id} className="hz-rej__item hz-rej__item--wait"><div className="hz-rej__name">{x.name}</div><DailyChip s={x} />{!x.daily_status && <span className="hz-muted">今日状态待 17:35 盘后更新</span>}</div>))}</div>
+        </section>)}
       {active.length ? <div className="hz-muted hz-hint">最近信号日 {latest} · 待买入的在下一交易日开盘买入；开盘涨停则取消买入，停牌顺延买入。</div>
         : <section className="panel hz-pad"><EmptyState title="当前没有待买入或持有中的批次" reason="到期平仓的批次在「复盘」里看。" /></section>}
       {active.map((b) => <BatchCard key={b.signal_date + b.strategy_id} b={b} defaultOpen list={list} onPick={onPick} />)}
@@ -196,7 +215,7 @@ function TodayView({ batches, list, onPick }: { batches: HorizonBatch[]; list: H
         <section className="panel hz-pad">
           <div className="hz-sechead"><b>还没有出票的策略</b><span className="hz-muted">{noPicks.length} 个</span></div>
           <div className="hz-rej">{noPicks.map((s) => (
-            <div key={s.id} className="hz-rej__item hz-rej__item--wait"><div className="hz-rej__name">{s.name}</div>
+            <div key={s.id} className="hz-rej__item hz-rej__item--wait"><div className="hz-rej__name">{s.name}</div><DailyChip s={s} />
               <div className="hz-rej__why">{s.next_batch_note ?? `${SCHEDULE_OVERRIDE[s.id] ?? SCHEDULE[s.schedule] ?? s.schedule}出票，暂无批次`}</div></div>))}</div>
         </section>)}
     </>

@@ -35,6 +35,7 @@ import { MultiStrategyBadge } from "../components/MultiStrategyBadge";
 import { dashboardRunLabel } from "../utils/display";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { formatBj, parseUtc } from "../utils/time";
+import { isAiReviewDisabled } from "../types";
 
 /**
  * 驾驶舱首页 —— 状态条 + 温度面板 + [运行状态/最近产出 | 龙头候选]
@@ -450,6 +451,11 @@ function StatusBar({
       {/* AI 审查层健康度（北极星 B 项可见性缺口修复）：以最近成功审查时间为新鲜度代理，
           key 失效 / provider 故障时审查静默停摆 → 推荐缺 LLM delta 而用户无感知，此处使其可见 */}
       {(() => {
+        if (isAiReviewDisabled(llmHealth)) {
+          return (<><Sep /><span className="text-muted">AI 审查：</span>
+            <span className="text-muted" title="后端已停用 AI 风险审查（10-19 起），出票只看规则分" style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-1)" }}>
+              <Brain size={13} style={{ flexShrink: 0 }} />已停用</span></>);
+        }
         const st = llmHealth?.status ?? null;
         if (!st) return null;
         const ch = llmHealth?.call_health;
