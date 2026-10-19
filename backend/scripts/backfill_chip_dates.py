@@ -5,6 +5,7 @@
   # 冻结日（筹码与前一交易日整列相同）：先清空当日 chip_* 再重拉，上游没有当日数据就保持 NULL
   PYTHONPATH=. .venv/bin/python scripts/backfill_chip_dates.py --overwrite 2026-07-31 2026-08-03 ...
   PYTHONPATH=. .venv/bin/python scripts/backfill_chip_dates.py --overwrite --frozen-days-since 2026-04-30
+  PYTHONPATH=. .venv/bin/python scripts/backfill_chip_dates.py --frozen-days-since 2025-01-01 --frozen-days-until 2025-12-31 --list-only
 """
 from __future__ import annotations
 
@@ -55,11 +56,11 @@ def zero_days(db, since: str) -> list[str]:
     return [str(r[0]) for r in rows]
 
 
-def frozen_days(db, since: str, ratio: float = 0.9) -> list[str]:
-    """Trade dates whose chip_* equal the previous trade date's for > ratio of stocks."""
-    days = [str(r[0]) for r in db.execute(text(
-        "SELECT DISTINCT trade_date FROM daily_kbars WHERE trade_date >= "
-        "(SELECT MAX(trade_date) FROM daily_kbars WHERE trade_date < :s) ORDER BY trade_date"), {"s": since})]
+def frozen_days(db, since: str, ratio: float = 0.9, until: str | None = None) -> list[str]:
+    """Trade dates in [since, until] whose chip_* equal the previous trade date's for > ratio of stocks."""
+    from app.services.data_freshness import chip_history_dates
+
+    days = chip_history_dates(db, since, until)
     out = []
     for prev, d in zip(days, days[1:]):
         n, same = db.execute(text(
@@ -81,6 +82,8 @@ def main() -> None:
     ap.add_argument("dates", nargs="*")
     ap.add_argument("--zero-days-since")
     ap.add_argument("--frozen-days-since", help="自动选出筹码与前一交易日 >90%% 相同的日期")
+    ap.add_argument("--frozen-days-until", help="与 --frozen-days-since 搭配：只选到该日（含）为止的冻结日")
+    ap.add_argument("--list-only", action="store_true", help="只打印要补的日期，不拉取不写库")
     ap.add_argument("--overwrite", action="store_true",
                     help="重拉前先把当日 chip_* 全部置 NULL（与重拉同一事务；上游报错则回滚）。冻结日必须带")
     ap.add_argument("--max-transient-retries", type=int, default=30,
@@ -91,8 +94,10 @@ def main() -> None:
     with SessionLocal() as db:
         dates = list(args.dates) or (zero_days(db, args.zero_days_since) if args.zero_days_since else [])
         if args.frozen_days_since:
-            dates = sorted(set(dates) | set(frozen_days(db, args.frozen_days_since)))
-        print("dates:", dates, flush=True)
+            dates = sorted(set(dates) | set(frozen_days(db, args.frozen_days_since, until=args.frozen_days_until)))
+        print(f"dates ({len(dates)}):", dates, flush=True)
+        if args.list_only:
+            return
         i, retries = 0, 0
         while i < len(dates):
             d = dates[i]

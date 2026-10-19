@@ -174,6 +174,29 @@ def check_chip_frozen(db, dates: list[str]) -> dict[str, Any]:
     return {"table": "daily_kbars:chip_frozen", "latest": dates[-1] if dates else None, "issues": issues}
 
 
+def chip_history_dates(db, since: str, until: str | None = None) -> list[str]:
+    """Trade dates in [since, until] plus the trade date just before `since` (comparison baseline)."""
+    sql = ("SELECT DISTINCT trade_date FROM daily_kbars WHERE trade_date >= "
+           "COALESCE((SELECT MAX(trade_date) FROM daily_kbars WHERE trade_date < :s), :s)")
+    params: dict[str, Any] = {"s": since}
+    if until:
+        sql += " AND trade_date <= :u"
+        params["u"] = until
+    return [str(r[0]) for r in db.execute(text(sql + " ORDER BY trade_date"), params)]
+
+
+def check_chip_frozen_since(db, since: str, until: str | None = None) -> dict[str, Any]:
+    """历史版冻结巡检：覆盖 since..until 全部交易日（默认巡检只看近 30 个交易日）。只读。
+
+    run_freshness_check(chip_frozen_since=...) 或 scripts/check_chip_frozen.py --since 2025-01-01 调用。
+    """
+    out = check_chip_frozen(db, chip_history_dates(db, since, until))
+    out["table"] = "daily_kbars:chip_frozen_history"
+    out["since"], out["until"] = since, until
+    out["frozen_dates"] = [m.split(" ", 1)[0] for m in out["issues"]]
+    return out
+
+
 def check_repurchase_events() -> dict[str, Any]:
     from app.services.data_live_sources import repurchase_events_latest
 
@@ -183,7 +206,7 @@ def check_repurchase_events() -> dict[str, Any]:
     return {"table": "events:repurchase", "latest": mx, "age_days": age, "rows": n, "issues": issues}
 
 
-def run_freshness_check(db, *, alert: bool = True) -> dict[str, Any]:
+def run_freshness_check(db, *, alert: bool = True, chip_frozen_since: str | None = None) -> dict[str, Any]:
     from app.core.alerts import emit_alert
     from app.services.daily_basic_ingest import check_daily_basic_staleness
 
@@ -201,8 +224,10 @@ def run_freshness_check(db, *, alert: bool = True) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             results.append({"table": spec[0], "issues": [f"检查失败 {type(exc).__name__}: {str(exc)[:120]}"]})
-    for fn in (lambda: check_indicator_columns(db, dates[-1]), lambda: check_chip_frozen(db, dates),
-               check_repurchase_events):
+    # chip_frozen_since 给定时，筹码冻结巡检覆盖该日起的全部历史交易日（如 2025-01-01），否则只看近 30 日
+    chip_check = ((lambda: check_chip_frozen_since(db, chip_frozen_since)) if chip_frozen_since
+                  else (lambda: check_chip_frozen(db, dates)))
+    for fn in (lambda: check_indicator_columns(db, dates[-1]), chip_check, check_repurchase_events):
         try:
             results.append(fn())
         except Exception as exc:  # noqa: BLE001
