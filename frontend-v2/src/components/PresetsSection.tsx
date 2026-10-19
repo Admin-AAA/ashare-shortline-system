@@ -222,9 +222,15 @@ export function PresetsSection() {
 
   async function handleDelete(presetId: string, name: string) {
     if (!confirm(`确认删除预设「${name}」？此操作不可撤销。`)) return;
+    const isFormal = presetId.startsWith("preset_formal_");
+    if (
+      isFormal &&
+      !confirm(`「${name}」是正式预设，定时正式运行依赖它，删除后正式运行可能失败。仍要删除吗？`)
+    )
+      return;
     setBusyId(presetId);
     try {
-      await api.deletePreset(presetId);
+      await api.deletePreset(presetId, isFormal);
       showToast("预设已删除");
       if (editingId === presetId) {
         setEditingId(null);
