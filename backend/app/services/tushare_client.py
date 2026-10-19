@@ -511,6 +511,51 @@ def invalidate_provider_enabled_override() -> None:
     _ENABLED_OVERRIDE_CACHE["expires_at"] = 0.0
 
 
+# Tushare 系接口单次最多返回 TUSHARE_PAGE_CAP 行（官方 cyq_perf 等为 5000）。2026-10-19 实测
+# daily_kbars 2026-04-30..07-29 共 61 个交易日筹码恰好 5000 行（全市场约 5500），说明曾被单次截断。
+TUSHARE_PAGE_CAP = 5000
+
+
+def fetch_trade_date_paged(
+    pro: Any,
+    api_name: str,
+    *,
+    trade_date: str,
+    fields: str = "",
+    page_size: int = TUSHARE_PAGE_CAP,
+    max_pages: int = 4,
+) -> pd.DataFrame | None:
+    """按 trade_date 全市场拉取，命中单次上限时用 offset/limit 续页。
+
+    首次请求与旧行为一致（不带 offset/limit），返回行数 != page_size 即视为完整，零额外调用；
+    恰好 page_size 行才续页。续页按 ts_code 去重，若上游忽略 offset（返回重复行）立即停止并告警。
+    """
+    call = getattr(pro, api_name)
+    first = call(trade_date=trade_date, fields=fields)
+    if first is None or first.empty or len(first) != page_size:
+        return first
+    frames = [first]
+    seen = set(first["ts_code"].astype(str)) if "ts_code" in first.columns else set()
+    offset = len(first)
+    for _ in range(max_pages - 1):
+        page = call(trade_date=trade_date, fields=fields, offset=offset, limit=page_size)
+        if page is None or page.empty:
+            break
+        if "ts_code" in page.columns:
+            page = page[~page["ts_code"].astype(str).isin(seen)]
+            if page.empty:
+                logger.warning(
+                    "fetch_trade_date_paged: %s(%s) 恰好 %d 行且上游忽略 offset，结果可能被截断",
+                    api_name, trade_date, page_size,
+                )
+                break
+            seen.update(page["ts_code"].astype(str))
+        frames.append(page)
+        if len(page) < page_size:
+            break
+        offset += page_size
+    return pd.concat(frames, ignore_index=True)
+
 @functools.lru_cache(maxsize=1)
 def get_pro() -> _TushareSession:
     """Return the cached ingestion/realtime provider facade.
@@ -893,7 +938,9 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     # (fetch_daily_kbars) 含 cyq_perf，但盘后批量路径遗漏，这里补齐。
     chip_map: dict[str, dict[str, Any]] = {}
     try:
-        chips = pro.cyq_perf(
+        chips = fetch_trade_date_paged(
+            pro,
+            "cyq_perf",
             trade_date=target,
             fields="ts_code,trade_date,cost_15pct,cost_50pct,cost_85pct,weight_avg,winner_rate",
         )

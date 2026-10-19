@@ -1596,7 +1596,11 @@ def _backfill_chip_date(db: Session, trade_date: str) -> dict[str, Any]:
     if not target:
         return {"row_count": 0, "provider_row_count": 0}
 
-    frame = get_pro().cyq_perf(
+    from app.services.tushare_client import fetch_trade_date_paged
+
+    frame = fetch_trade_date_paged(
+        get_pro(),
+        "cyq_perf",
         trade_date=target.replace("-", ""),
         fields="ts_code,trade_date,cost_15pct,cost_50pct,cost_85pct,weight_avg,winner_rate",
     )

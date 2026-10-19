@@ -21,6 +21,7 @@ import requests
 import tenacity
 
 from app.core import metrics as _metrics
+from app.core import provider_quota as _provider_quota
 
 from app.services.observability import log_observation
 
@@ -89,6 +90,12 @@ def _extract_upstream_detail(response: Any) -> str | None:
     text = str(payload).strip()
     return text[:_UPSTREAM_DETAIL_MAX_CHARS] or None
 
+
+
+
+def _is_daily_limit(failure: "ProviderFailure") -> bool:
+    text = f"{getattr(failure, 'upstream_detail', '') or ''} {failure}".lower()
+    return "daily limit" in text or "每日" in text or "今日" in text or "42901" in text
 
 
 class AuthMode(StrEnum):
@@ -549,6 +556,7 @@ class TushareHttpProvider:
         semaphore = self._concurrency
         if semaphore is not None:
             semaphore.acquire()
+        _provider_quota.record_request(self.name)
         try:
             try:
                 envelope = self._request_with_retries(
@@ -567,6 +575,8 @@ class TushareHttpProvider:
                 rate_limited = failure.category in (
                     FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT
                 )
+                if failure.category is FailureCategory.BUSINESS_RATE_LIMIT and _is_daily_limit(failure):
+                    _provider_quota.mark_exhausted(self.name)
                 self._lb_record(api_name, True, weight=2.0 if rate_limited else 1.0)
                 raise
             data = envelope.get("data")
