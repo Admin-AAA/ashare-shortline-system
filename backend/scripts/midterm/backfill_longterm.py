@@ -12,6 +12,7 @@ Stages (each resumable via data/midterm/backfill_state.json):
   holdernum    : pro.stk_holdernumber per stock (full history, ann_date PIT) -> data/midterm/holdernum/<code>.parquet
   events       : pro.stk_holdertrade trade_type=IN (monthly ann_date windows, auto-split near the row cap) + pro.repurchase (monthly)
                  2017-07..today -> data/midterm/events/{holdertrade_in,repurchase}_<year>.parquet
+  events_de    : pro.stk_holdertrade trade_type=DE (same monthly windows / bisection) -> data/midterm/events/holdertrade_de_<year>.parquet (§128)
 """
 from __future__ import annotations
 import json, logging, sys, time, datetime as dt
@@ -156,11 +157,15 @@ def _range_fetch(pro, api, a, b, cap, **extra):
         df = pd.concat([l, r])
     return df
 
-def events_stage(pro, s, start="20170701"):
+EVENTS_SPECS = (("repurchase", "repurchase", 31, 1900, {}), ("stk_holdertrade", "holdertrade_in", 31, 2900, {"trade_type": "IN"}))
+# §128: decreases (trade_type=DE) as their own stage; monthly windows, _range_fetch bisects any window near the row cap
+EVENTS_DE_SPECS = (("stk_holdertrade", "holdertrade_de", 31, 2900, {"trade_type": "DE"}),)
+
+def events_stage(pro, s, start="20170701", specs=EVENTS_SPECS):
     out = D / "events"; out.mkdir(exist_ok=True)
     today = dt.date.today()
     # holdertrade: increases only (trade_type=IN) -- far fewer rows than DE, so monthly windows fit under the row cap
-    for api, name, step, cap, extra in (("repurchase", "repurchase", 31, 1900, {}), ("stk_holdertrade", "holdertrade_in", 31, 2900, {"trade_type": "IN"})):
+    for api, name, step, cap, extra in specs:
         key = f"events_{name}"; done = set(s.get(key, []))
         a = dt.datetime.strptime(start, "%Y%m%d").date(); wins = []
         while a <= today:
@@ -220,6 +225,7 @@ def main():
         elif st == "hk_hold": hk_stage(pro, db, s)
         elif st == "holdernum": per_code_stage(pro, db, s, st, "stk_holdernumber", "holdernum")
         elif st == "events": events_stage(pro, s)
+        elif st == "events_de": events_stage(pro, s, specs=EVENTS_DE_SPECS)  # §128; run only outside 09:15-15:05 (promax feeds live rt_k)
     log.info("ALL DONE")
 
 if __name__ == "__main__":
