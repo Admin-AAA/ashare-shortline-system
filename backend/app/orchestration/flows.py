@@ -72,6 +72,13 @@ def execute_recommendation_run(
             level=logging.DEBUG,
         )
         try:
+            # Orphan guard: a flow run whose run_id has no recommendation_runs row (historically
+            # test fixtures leaking run_queued_* dispatches into the production Prefect, fixed in
+            # 0597d25) must not retry/fail noisily or touch progress state. Skip with a warning.
+            if SQLAlchemyRunRepository(db).get_run(run_id) is None:
+                logger.warning("recommendation-run skipped: run %s not found in recommendation_runs (orphan dispatch)", run_id)
+                db.rollback()
+                return
             if not _mark_run_dispatched(db, run_id):
                 db.rollback()
                 return
