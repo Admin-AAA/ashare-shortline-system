@@ -244,6 +244,9 @@ async def correlation_identity(request: Request, call_next):
 
 def on_startup() -> None:
     global _startup_db_error
+    from app.core.shared_breaker import mark_live_process
+
+    mark_live_process()  # live breaker namespace (research scripts stay isolated)
     setup_logging()
     bootstrap_default_factor_registry()
     try:

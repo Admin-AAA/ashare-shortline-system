@@ -18,6 +18,26 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 SHARED_READ_TTL = 2.0
+# Namespace isolation (owner, 2026-10-19): only the live backend and Prefect worker share the
+# "live" namespace. Every other process (scripts/*, research runners, ad-hoc python) defaults to
+# "research", so a research script tripping a breaker can never block live traffic.
+BREAKER_NAMESPACE_ENV = "ASHARE_BREAKER_NAMESPACE"
+LIVE_NAMESPACE = "live"
+RESEARCH_NAMESPACE = "research"
+
+
+def breaker_namespace() -> str:
+    import os
+
+    raw = os.environ.get(BREAKER_NAMESPACE_ENV, "").strip().lower()
+    return LIVE_NAMESPACE if raw == LIVE_NAMESPACE else RESEARCH_NAMESPACE
+
+
+def mark_live_process() -> None:
+    """Called by the backend startup and the Prefect worker entrypoint (inherited by flow subprocesses)."""
+    import os
+
+    os.environ[BREAKER_NAMESPACE_ENV] = LIVE_NAMESPACE
 _cache: dict[str, tuple[float, float]] = {}  # key -> (read_at_monotonic, open_until_epoch)
 _cache_lock = threading.Lock()
 
@@ -124,7 +144,8 @@ class SharedCircuitBreaker:
     def __init__(self, key: str, failure_threshold: int, recovery_seconds: float) -> None:
         from app.services.tushare_transport import CircuitBreaker
 
-        self.key = key
+        self.base_key = key
+        self.key = f"{breaker_namespace()}:{key}"
         self._local = CircuitBreaker(failure_threshold, recovery_seconds)
 
     def allow_request(self) -> bool:
