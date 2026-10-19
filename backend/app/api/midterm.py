@@ -125,8 +125,8 @@ def _detail(db, horizon, strategy_id, signal_date, code, before, after):
 
 
 @router.get("/mid/strategies")
-def mid_strategies():
-    return {"horizon": "mid", "strategies": svc.strategies_overview("mid"), "rejected": MID_REJECTED}
+def mid_strategies(db: Session = Depends(get_db)):
+    return {"horizon": "mid", "strategies": svc.strategies_overview("mid", db), "rejected": MID_REJECTED}
 
 
 @router.get("/mid/picks")
@@ -137,8 +137,8 @@ def mid_picks(strategy_id: str | None = Query(None), limit: int = Query(30, ge=1
 
 
 @router.get("/long/strategies")
-def long_strategies():
-    return {"horizon": "long", "strategies": svc.strategies_overview("long"), "rejected": LONG_REJECTED}
+def long_strategies(db: Session = Depends(get_db)):
+    return {"horizon": "long", "strategies": svc.strategies_overview("long", db), "rejected": LONG_REJECTED}
 
 
 @router.get("/long/picks")

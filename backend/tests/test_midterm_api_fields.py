@@ -62,3 +62,24 @@ def test_generate_picks_horizon_filter(monkeypatch):
     assert set(res) == {"long-repurchase-big", "long-lowturn-lowvol", "long-dividend-lowvol"}
     res = ms.generate_picks(None, "2026-10-16", strategy_ids=["long-repurchase-big"])
     assert set(res) == {"long-repurchase-big"}
+
+
+def test_next_batch_note(tmp_path, monkeypatch):
+    """strategies_overview 带动态 next_batch_note；无批次前缀「尚未出票；」。"""
+    monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(ms, "_next_month_end_trade_date", lambda db, today=None: "2026-10-30")
+    # 无批次：全部前缀尚未出票
+    notes = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("mid", db=None)}
+    assert notes["mid-repurchase-plan"] == "尚未出票；每个交易日盘后（17:35）选股，次日开盘买"
+    assert notes["mid-small-cap-weekly"] == "尚未出票；每个周五收盘后选股，次日开盘买"
+    assert notes["mid-block-trade-premium"] == "尚未出票；每晚约 21:00 大宗数据发布后选股，次日开盘买"
+    long_notes = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("long", db=None)}
+    assert long_notes["long-lowturn-lowvol"] == "尚未出票；每月最后一个交易日收盘后选股，下一批：2026-10-30，次日开盘买"
+    assert long_notes["long-dividend-lowvol"].startswith("尚未出票；每月最后一个交易日")
+    assert "2026-10-30" in long_notes["long-dividend-lowvol"]
+    # 有批次后去掉前缀
+    (tmp_path / "2026-10-16_mid-repurchase-plan.json").write_text(
+        json.dumps({"strategy_id": "mid-repurchase-plan", "signal_date": "2026-10-16", "picks": []}))
+    notes2 = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("mid", db=None)}
+    assert notes2["mid-repurchase-plan"] == "每个交易日盘后（17:35）选股，次日开盘买"
+    assert notes2["mid-incentive-option"].startswith("尚未出票；")

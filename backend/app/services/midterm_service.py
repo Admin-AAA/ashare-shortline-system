@@ -881,8 +881,96 @@ def pick_detail(db, horizon: str, strategy_id: str, signal_date: str, code: str,
             "bars": bars, "other_signals": others}
 
 
-def strategies_overview(horizon: str | None = None) -> list[dict[str, Any]]:
+def _next_month_end_trade_date(db, today: _dt.date | None = None) -> str | None:
+    """下一（含今日）月末交易日 YYYY-MM-DD；优先 trade_calendar SSE，日历不足时用工作日近似。"""
+    today = today or _dt.date.today()
+    key = today.strftime("%Y%m%d")
+    rows: list[str] = []
+    if db is not None:
+        try:
+            rows = [str(r).replace("-", "")[:8] for r in db.execute(text(
+                "SELECT cal_date FROM trade_calendar WHERE exchange='SSE' AND is_open=1 AND cal_date>=:d "
+                "ORDER BY cal_date LIMIT 80"), {"d": key}).scalars().all()]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("next month-end trade_calendar lookup failed: %s", exc)
+            rows = []
+    for i, d in enumerate(rows):
+        dd = _dt.datetime.strptime(d, "%Y%m%d").date()
+        if i + 1 < len(rows):
+            nxt_m = rows[i + 1][4:6]
+        else:
+            nd = dd + _dt.timedelta(days=3 if dd.weekday() == 4 else 1)
+            nxt_m = f"{nd.month:02d}"
+        if nxt_m != d[4:6]:
+            return f"{d[:4]}-{d[4:6]}-{d[6:8]}"
+    # 日历缺失：从 today 起找「下一工作日跨月」的工作日
+    d = today
+    for _ in range(62):
+        if d.weekday() < 5:
+            nd = d + _dt.timedelta(days=3 if d.weekday() == 4 else 1)
+            while nd.weekday() >= 5:
+                nd += _dt.timedelta(days=1)
+            if nd.month != d.month:
+                return d.isoformat()
+        d += _dt.timedelta(days=1)
+    return None
+
+
+def _strategy_has_batch(strategy_id: str) -> bool:
+    if not OUT_DIR.exists():
+        return False
+    return any(OUT_DIR.glob(f"*_{strategy_id}.json"))
+
+
+def next_batch_note(strategy_id: str, db=None, *, today: _dt.date | None = None) -> str:
+    """策略下次出票说明（前端策略卡用）。无历史批次时前缀「尚未出票；」。"""
+    meta = STRATEGIES.get(strategy_id) or {}
+    kind = meta.get("kind")
+    schedule = meta.get("schedule")
+    if kind == "block_trade_premium" or strategy_id == "mid-block-trade-premium":
+        base = "每晚约 21:00 大宗数据发布后选股，次日开盘买"
+    elif schedule == "weekly" or strategy_id == "mid-small-cap-weekly":
+        # is_signal_day：仅周五（weekday==4）收盘后出票
+        base = "每个周五收盘后选股，次日开盘买"
+    elif schedule == "month_end":
+        nxt = _next_month_end_trade_date(db, today=today)
+        if nxt:
+            base = f"每月最后一个交易日收盘后选股，下一批：{nxt}，次日开盘买"
+        else:
+            base = "每月最后一个交易日收盘后选股，次日开盘买"
+    else:
+        # daily 及默认
+        base = "每个交易日盘后（17:35）选股，次日开盘买"
+    if not _strategy_has_batch(strategy_id):
+        return f"尚未出票；{base}"
+    return base
+
+
+def strategies_overview(horizon: str | None = None, db=None) -> list[dict[str, Any]]:
     metrics = json.loads(METRICS_FILE.read_text()) if METRICS_FILE.exists() else {}
-    return [{"id": sid, **{k: v for k, v in meta.items() if k not in ("top_n", "guard", "hold_days")},
-             "hold_days": _hold(sid), "top_n": meta.get("top_n", meta.get("max_new")), "metrics": metrics.get(sid, {})}
-            for sid, meta in STRATEGIES.items() if horizon is None or meta.get("horizon") == horizon]
+    own_db = False
+    if db is None and any(m.get("schedule") == "month_end" for m in STRATEGIES.values()
+                          if horizon is None or m.get("horizon") == horizon):
+        try:
+            from app.db.session import SessionLocal
+            db = SessionLocal()
+            own_db = True
+        except Exception:  # noqa: BLE001
+            db = None
+    try:
+        out = []
+        for sid, meta in STRATEGIES.items():
+            if horizon is not None and meta.get("horizon") != horizon:
+                continue
+            out.append({
+                "id": sid,
+                **{k: v for k, v in meta.items() if k not in ("top_n", "guard", "hold_days")},
+                "hold_days": _hold(sid),
+                "top_n": meta.get("top_n", meta.get("max_new")),
+                "metrics": metrics.get(sid, {}),
+                "next_batch_note": next_batch_note(sid, db),
+            })
+        return out
+    finally:
+        if own_db and db is not None:
+            db.close()
