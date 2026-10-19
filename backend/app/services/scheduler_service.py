@@ -1076,7 +1076,7 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
             result["window_backfill"] = window_backfill
 
         # stk_limit（涨跌停价）不在 S4 AUXILIARY_DATASET_INVENTORY，此前只靠
-        # 未调度的 daily_data_cron 补，长期 stale。它按 trade_date 批量
+        # 未调度的 daily_data_cron（已删除）补，长期 stale。它按 trade_date 批量
         # (pro.stk_limit(trade_date=))，与辅助窗口回填同节奏，这里一并补缺口日。
         if not bool(payload.get("skip_stk_limit_backfill")):
             stk_limit_backfill = _backfill_stk_limit_window(

@@ -468,7 +468,7 @@ class TushareStateProvider:
     def capital_flow(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         # 单股资金流向按 trade_date 批量一次拉全市场（~5500 行、<1s），再按
         # requested_codes 过滤；逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。
-        # 本路径是资金流向唯一的定时写入口（scripts/daily_data_cron.py 从未排进调度），
+        # 本路径是资金流向唯一的定时写入口（scripts/daily_data_cron.py 从未排进调度，已删除），
         # 所以累计窗口必须在这里就地算好（L-166）。
         target = _compact_day(request.trade_date)
         wanted = set(request.requested_codes)
