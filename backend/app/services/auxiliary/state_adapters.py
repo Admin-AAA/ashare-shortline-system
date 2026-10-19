@@ -109,6 +109,21 @@ def _days_before(iso_day: str, days: int) -> str:
     return (date.fromisoformat(iso_day) - timedelta(days=days)).isoformat()
 
 
+def _optional_number(value: object) -> float | None:
+    import math
+
+    try:
+        numeric = float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    return None if numeric is None or math.isnan(numeric) else numeric
+
+
+def _optional_yi(value: object) -> float | None:
+    numeric = _optional_number(value)
+    return None if numeric is None else numeric / 1e8
+
+
 def _number(value: object, default: float = 0.0) -> float:
     import math
 
@@ -514,12 +529,13 @@ class TushareStateProvider:
             {
                 "code": code,
                 "trade_date": _iso_day(item.get("trade_date") or target),
-                "rzye": _number(item.get("rzye")) / 1e8,
-                "rqye": _number(item.get("rqye")) / 1e8,
-                "rzmre": _number(item.get("rzmre")) / 1e8,
-                "rzche": _number(item.get("rzche")) / 1e8,
-                "rzrqye": _number(item.get("rzrqye")) / 1e8,
-                "rqyl": _number(item.get("rqyl")),
+                # akshare backup lacks some fields (SSE: rqye/rzrqye, SZSE: rzche) -> keep NULL, not 0
+                "rzye": _optional_yi(item.get("rzye")),
+                "rqye": _optional_yi(item.get("rqye")),
+                "rzmre": _optional_yi(item.get("rzmre")),
+                "rzche": _optional_yi(item.get("rzche")),
+                "rzrqye": _optional_yi(item.get("rzrqye")),
+                "rqyl": _optional_number(item.get("rqyl")),
             }
             for _, item in frame.iterrows()
             if len(code := str(item.get("ts_code") or "").split(".")[0]) == 6

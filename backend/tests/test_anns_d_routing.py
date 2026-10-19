@@ -1,8 +1,13 @@
-def test_anns_d_has_no_supported_tushare_provider():
+def test_anns_d_has_no_supported_tushare_provider(monkeypatch):
     from app.services.data_gap_remediation_service import _tushare_api_has_supported_provider
+    from app.services.datasource import akshare_backup as ab
 
+    # tushare has no anns_d upstream; only the akshare backup (when enabled) can serve it
+    monkeypatch.setattr(ab, "backup_enabled", lambda: False)
     assert _tushare_api_has_supported_provider("anns_d") is False
     assert _tushare_api_has_supported_provider("block_trade") is True
+    monkeypatch.setattr(ab, "backup_enabled", lambda: True)
+    assert _tushare_api_has_supported_provider("anns_d") is True
 
 
 def test_stock_news_goes_through_cninfo(monkeypatch):

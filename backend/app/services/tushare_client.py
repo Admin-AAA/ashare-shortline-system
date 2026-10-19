@@ -268,6 +268,12 @@ class TushareRawEnvelope:
         )
 
 
+def _akshare_backup_apis() -> frozenset[str]:
+    from app.services.datasource.akshare_backup import AKSHARE_BACKUP_APIS
+
+    return AKSHARE_BACKUP_APIS
+
+
 class _TushareSession:
     """Tushare ``pro_api`` compatible facade over the provider router."""
 
@@ -318,8 +324,13 @@ class _TushareSession:
                 from app.services.datasource.fina_fallback import fina_period_fallback
 
                 return fina_period_fallback(self, str(params["period"]), fields)
+        elif api_name in _akshare_backup_apis():
+            return self._call_with_akshare_backup(api_name, fields=fields, params=params)
         else:
             envelope = self._router.request(api_name, params=params, fields=fields)
+        return self._envelope_frame(api_name, fields, envelope)
+
+    def _envelope_frame(self, api_name: str, fields: str, envelope: Mapping[str, Any]) -> pd.DataFrame:
         data = envelope.get("data")
         if not data:
             return pd.DataFrame()
@@ -331,6 +342,37 @@ class _TushareSession:
         if not raw.items:
             return pd.DataFrame(columns=list(raw.fields))
         return pd.DataFrame.from_records(raw.items, columns=list(raw.fields))
+
+    def _call_with_akshare_backup(self, api_name: str, *, fields: str, params: Mapping[str, Any]) -> pd.DataFrame:
+        """Tushare first; on failure/empty, akshare via DatasetGateway (breaker/timeout/limiter/enabled)."""
+        primary_exc: BaseException | None = None
+        try:
+            frame = self._envelope_frame(
+                api_name, fields, self._router.request(api_name, params=params, fields=fields)
+            )
+            if not frame.empty:
+                return frame
+        except Exception as exc:  # noqa: BLE001 - fall through to the backup source, re-raised if it fails
+            primary_exc = exc
+            frame = pd.DataFrame()
+        from app.services.datasource.akshare_backup import backup_gateway
+
+        res = backup_gateway().fetch_first(
+            f"tushare.{api_name}", {"params": dict(params), "fields": fields}, allow_stale=False
+        )
+        if res.provider is not None and res.rows:
+            logger.warning(
+                "tushare %s %s; served by backup %s (%d rows)", api_name,
+                f"failed ({type(primary_exc).__name__})" if primary_exc else "empty", res.provider, len(res.rows),
+            )
+            out = pd.DataFrame.from_records(list(res.rows))
+            wanted = [f.strip() for f in (fields or "").split(",") if f.strip()]
+            if wanted:
+                out = out[[c for c in wanted if c in out.columns] + (["source"] if "source" not in wanted else [])]
+            return out
+        if primary_exc is not None:
+            raise primary_exc
+        return frame
 
     def query(self, api_name: str, fields: str = "", **params: Any) -> pd.DataFrame:
         """Compatibility with ``tushare.pro_bar(api=...)`` query calls."""
@@ -2405,6 +2447,21 @@ def _trim_recent_trade_dates(rows: list[dict[str, Any]], ndays: int) -> list[dic
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+def _opt_f(value: Any) -> float | None:
+    """None/NaN stay None (backup sources lack some fields: SSE has no rqye/rzrqye, SZSE no rzche)."""
+    if value is None or (isinstance(value, float) and value != value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _yi(value: Any) -> float | None:
+    v = _opt_f(value)
+    return None if v is None else v / 1e8
+
+
 def fetch_margin_detail_batch(trade_date: str | None = None) -> list[dict[str, Any]]:
     """按交易日批量获取全市场融资融券明细（margin_detail 接口）。
 
@@ -2427,14 +2484,15 @@ def fetch_margin_detail_batch(trade_date: str | None = None) -> list[dict[str, A
         result.append({
             "code": code,
             "trade_date": _fmt_date(str(row.get("trade_date", td))),
-            "rzye": _f(row.get("rzye")) / 1e8,         # 融资余额(亿)
-            "rqye": _f(row.get("rqye")) / 1e8,         # 融券余额(亿)
-            "rzmre": _f(row.get("rzmre")) / 1e8,        # 融资买入额(亿)
-            "rzche": _f(row.get("rzche")) / 1e8,        # 融资偿还额(亿)
-            "rzrqye": _f(row.get("rzrqye")) / 1e8,      # 融资融券余额(亿)
-            "rqyl": _f(row.get("rqyl")),                 # 融券余量(股)
-            "rqmcl": _f(row.get("rqmcl")),               # 融券卖出量(股)
-            "rzrqye_md": _f(row.get("rzrqye")) / 1e8,   # 融资融券余额(亿,同字段)
+            "rzye": _yi(row.get("rzye")),         # 融资余额(亿)
+            "rqye": _yi(row.get("rqye")),         # 融券余额(亿)
+            "rzmre": _yi(row.get("rzmre")),        # 融资买入额(亿)
+            "rzche": _yi(row.get("rzche")),        # 融资偿还额(亿)
+            "rzrqye": _yi(row.get("rzrqye")),      # 融资融券余额(亿)
+            "rqyl": _opt_f(row.get("rqyl")),        # 融券余量(股)
+            "rqmcl": _opt_f(row.get("rqmcl")),      # 融券卖出量(股)
+            "rzrqye_md": _yi(row.get("rzrqye")),   # 融资融券余额(亿,同字段)
+            "source": str(row.get("source") or "tushare"),
         })
     return result
 

@@ -11,6 +11,7 @@ python-multipart==0.0.28
 httpx==0.28.1
 httpx2==2.9.1
 tushare==1.4.29
+akshare==1.19.1
 pandas==2.2.3
 pyarrow==21.0.0
 pandera[pandas]==0.32.1

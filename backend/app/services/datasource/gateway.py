@@ -97,7 +97,7 @@ def classify_exception(exc: BaseException) -> ErrorKind:
     name = type(exc).__name__.lower()
     if "timeout" in name:
         return ErrorKind.TIMEOUT
-    if "connect" in name or "network" in name:
+    if "connect" in name or "network" in name or "proxy" in name or "ssl" in name:
         return ErrorKind.NETWORK
     return ErrorKind.UPSTREAM
 

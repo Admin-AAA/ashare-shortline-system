@@ -130,6 +130,13 @@ def _tushare_api_has_supported_provider(api: str) -> bool:
     except Exception:  # noqa: BLE001 - unknown -> keep legacy behaviour
         return True
     unsupported = set(entry.get("unsupported") or [])
+    try:
+        from app.services.datasource.akshare_backup import AKSHARE_BACKUP_APIS, backup_enabled
+
+        if api in AKSHARE_BACKUP_APIS and backup_enabled():
+            return True  # akshare backup behind tushare (gateway) can still serve it
+    except Exception:  # noqa: BLE001
+        pass
     return not (unsupported and not (entry.get("order") or []) and unsupported >= {"promax", "quantdata"})
 
 
@@ -377,7 +384,7 @@ def _backfill_news_announcements(
                         for keyword in ("风险", "退市", "处罚", "立案", "亏损", "减持", "质押", "诉讼")
                     )
                     payload_by_id[article_id] = {
-                        "source": "tushare_anns_d",
+                        "source": str(row.get("source") or "tushare_anns_d")[:40],
                         "article_id": article_id,
                         "code": row_code,
                         "announce_date": announce_date,
