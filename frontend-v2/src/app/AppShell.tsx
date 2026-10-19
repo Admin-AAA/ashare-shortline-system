@@ -84,7 +84,7 @@ export function AppShell() {
   if (!known) content = <NotFoundPage path={pathname} onHome={() => navigate("/")} />;
   else if (horizon !== "short" && section !== "system") {
     content = section === "strategies" || section === "review" || section === "today"
-      ? <HorizonPage horizon={horizon} />
+      ? <HorizonPage horizon={horizon} view={section as "today" | "review" | "strategies"} />
       : null;
   } else if (p === "/run") content = <RunDetailPage refreshSignal={refreshSignal} />;
   else if (p.startsWith("/strategies/")) content = <StrategyDetailPage refreshSignal={refreshSignal} />;

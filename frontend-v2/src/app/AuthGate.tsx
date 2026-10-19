@@ -23,7 +23,8 @@ export default function AuthGate({ children }: Props) {
   useEffect(() => {
     void api.authStatus()
       .then((status) => setAuthenticated(!status.enabled || status.authenticated))
-      .catch(() => { if (!remembered) setError("无法确认访问状态"); })
+      // 网关/后端暂时 5xx 时不要白屏：系统无登录概念，真正需要登录的接口会以 401 触发 UNAUTHORIZED_EVENT。
+      .catch(() => { if (!remembered) setAuthenticated(true); })
       .finally(() => setReady(true));
     const onUnauthorized = () => { setAuthenticated(false); setReady(true); };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
