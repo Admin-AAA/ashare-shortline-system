@@ -25,7 +25,8 @@ def get_llm_review_health(db: Session = Depends(get_db)) -> dict:
       - recent_count_24h：近 24h 成功审查次数
       - total_entries：缓存总条数
       - model：最近一次审查使用的模型
-      - status：ok / stale / never（见 llm_review_cache_service._llm_health_status）
+      - status：ok / stale / never / disabled（停用时固定 disabled，见 _llm_health_status）
+      - enabled：是否启用 AI 风险审查（与 async_llm_risk_notes.LLM_RISK_NOTES_ENABLED 同源）
       - checked_at：本端点查询时间
       - call_health：最近5个全市场 formal run 的 skill_review 调用成功率 + 失败原因
         （run 级过程健康，与缓存新鲜度正交：缓存命中旧 cache 时新鲜度 ok 但新 run

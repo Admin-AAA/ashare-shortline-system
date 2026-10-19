@@ -15,6 +15,10 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
+# 2026-10-19 起停用（f79a29c）：正式流水线不再调度 LLM 风险备注（低 QPM、无明确收益）。
+# review-health 的 enabled / status=disabled 与 schedule_attach 共用此开关。
+LLM_RISK_NOTES_ENABLED = False
+
 
 def _loads(raw: str | None, default: Any) -> Any:
     try:
@@ -138,11 +142,15 @@ async def attach_llm_risk_notes_for_run(db: Session, run_id: str) -> dict[str, A
 def schedule_attach_llm_risk_notes(run_id: str):
     """已停用（2026-10-19）：正式流水线不再调度 LLM 风险备注。保留函数仅为兼容旧调用，直接返回 None。
     需要时可手动 asyncio.run(attach_llm_risk_notes_for_run(db, run_id))。"""
-    logger.info("LLM 风险备注已停用，跳过 run=%s", run_id)
+    if not LLM_RISK_NOTES_ENABLED:
+        logger.info("LLM 风险备注已停用，跳过 run=%s", run_id)
+        return None
+    logger.warning("LLM_RISK_NOTES_ENABLED=True 但调度实现已移除，跳过 run=%s", run_id)
     return None
 
 
 __all__ = [
+    "LLM_RISK_NOTES_ENABLED",
     "attach_llm_risk_notes_for_run",
     "schedule_attach_llm_risk_notes",
 ]
