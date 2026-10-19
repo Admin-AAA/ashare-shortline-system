@@ -8,10 +8,10 @@ export function usePresetsQuery() {
   return useQuery({ queryKey: queryKeys.presets(), queryFn: () => api.presets() });
 }
 
-export function useRunsQuery(limit?: number) {
+export function useRunsQuery(limit?: number, slim = false) {
   return useQuery({
-    queryKey: queryKeys.runs(limit),
-    queryFn: () => api.runs(limit),
+    queryKey: queryKeys.runs(limit, slim),
+    queryFn: () => api.runs(limit, slim ? "slim" : undefined),
     refetchInterval: (query) =>
       query.state.data?.some((run) => ACTIVE_RUN_STATUSES.has(run.status)) ? 300_000 : false,
   });

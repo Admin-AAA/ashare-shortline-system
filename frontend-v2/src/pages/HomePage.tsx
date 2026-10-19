@@ -34,6 +34,7 @@ import { LlmStanceBadge } from "../components/LlmStanceBadge";
 import { MultiStrategyBadge } from "../components/MultiStrategyBadge";
 import { dashboardRunLabel } from "../utils/display";
 import { useUrlRoute } from "../app/useUrlRoute";
+import { formatBj, parseUtc } from "../utils/time";
 
 /**
  * 驾驶舱首页 —— 状态条 + 温度面板 + [运行状态/最近产出 | 龙头候选]
@@ -286,6 +287,9 @@ function StatusBar({
         top: "calc(var(--topbar-height) + var(--space-3))",
         zIndex: "var(--z-sticky)",
         fontSize: "var(--text-sm)",
+        flexWrap: "wrap",
+        rowGap: "var(--space-1)",
+        whiteSpace: "nowrap",
       }}
     >
       {/* 左侧：核心状态信息 */}
@@ -300,7 +304,7 @@ function StatusBar({
           <span className="text-muted">证据：</span>
           <strong
             className="text-mono"
-            title={`actual_generated_at: ${hardening.current_run.actual_generated_at ?? "—"}\nlast_updated: ${hardening.last_updated_at ?? "—"}`}
+            title={`actual_generated_at: ${formatBj(hardening.current_run.actual_generated_at, "datetime-sec")}\nlast_updated: ${formatBj(hardening.last_updated_at, "datetime-sec")}（北京时间）`}
             style={{ color: hardening.stale ? "var(--warning)" : "var(--ink)" }}
           >
             {hardening.current_label}{hardening.stale ? " · STALE" : ""}
@@ -450,7 +454,7 @@ function StatusBar({
         if (!st) return null;
         const ch = llmHealth?.call_health;
         const liveDegraded = ch?.any_unhealthy === true;
-        const last = llmHealth?.last_review_at ? new Date(llmHealth.last_review_at) : null;
+        const last = llmHealth?.last_review_at ? parseUtc(llmHealth.last_review_at) : null;
         const hoursAgo = last ? Math.max(0, Math.round((Date.now() - last.getTime()) / 3600000)) : null;
         // 缓存新鲜度决定基础色；但若近期 formal run 的 LLM 实审成功率下降（外部 provider 降级），
         // 须以「覆盖率降级」覆盖绿色，避免用户看到「正常」却不知部分推荐缺 LLM delta。
@@ -461,10 +465,10 @@ function StatusBar({
           st === "never" ? "从未审查"
           : st === "stale" ? `静默 ${hoursAgo ?? "?"}h`
           : liveDegraded ? "覆盖率降级"
-          : last ? `${last.getHours().toString().padStart(2, "0")}:${last.getMinutes().toString().padStart(2, "0")} 更新` : "—";
+          : last ? `${formatBj(llmHealth?.last_review_at, "time")} 更新` : "—";
         let title =
           `AI 审查层状态：${st}\n` +
-          `最近成功审查：${llmHealth?.last_review_at ?? "无"}\n` +
+          `最近成功审查：${formatBj(llmHealth?.last_review_at, "datetime-sec", "无")}（北京时间）\n` +
           `近 24h 审查次数：${llmHealth?.recent_count_24h ?? 0}\n` +
           `缓存总数：${llmHealth?.total_entries ?? 0}\n` +
           `模型：${llmHealth?.model ?? "—"}\n`;

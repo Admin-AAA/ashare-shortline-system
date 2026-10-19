@@ -23,13 +23,13 @@
   --space-9: 96px;  /* hero whitespace */
 
   /* ── Typography ── */
-  --font-ui: Inter, "PingFang SC", "Microsoft YaHei", Arial, sans-serif;
+  --font-ui: "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", Inter, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace;
 
-  --text-2xs: 10px;
-  --text-xs: 11px;
-  --text-sm: 12px;
-  --text-base: 13px;
+  --text-2xs: 12px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
   --text-md: 14px;
   --text-lg: 16px;
   --text-xl: 20px;

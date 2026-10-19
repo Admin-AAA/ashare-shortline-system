@@ -1,3 +1,4 @@
+import { bjDateKey, formatBj } from "../utils/time";
 import type { RunSummary } from "../types";
 
 export type PoolRunKind = "completed" | "empty" | "active" | "failed" | "unknown";
@@ -51,33 +52,13 @@ export function summarizePoolRuns(runs: RunStateInput[]) {
   return summary;
 }
 
-/** Backend datetimes are stored as naive UTC and must be rendered in browser local time. */
-function parseBackendUtc(iso?: string | null) {
-  if (!iso) return null;
-  const instant = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/.test(iso) ? iso : `${iso}Z`);
-  return Number.isNaN(instant.getTime()) ? null : instant;
-}
-
-function localDateKey(instant: Date) {
-  const year = instant.getFullYear();
-  const month = String(instant.getMonth() + 1).padStart(2, "0");
-  const day = String(instant.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
 
 export function poolRunDate(run: RunDateInput) {
-  const instant = parseBackendUtc(run.started_at);
-  return instant ? localDateKey(instant) : run.trade_date;
+  return bjDateKey(run.started_at) ?? run.trade_date;
 }
 
 export function formatPoolRunTime(iso?: string | null, tradeDate?: string) {
-  const instant = parseBackendUtc(iso);
-  if (!instant) return "--:--";
-
-  const month = String(instant.getMonth() + 1).padStart(2, "0");
-  const day = String(instant.getDate()).padStart(2, "0");
-  const hour = String(instant.getHours()).padStart(2, "0");
-  const minute = String(instant.getMinutes()).padStart(2, "0");
-  const actualDate = localDateKey(instant);
-  return tradeDate && actualDate !== tradeDate ? `${month}-${day} ${hour}:${minute}` : `${hour}:${minute}`;
+  const actualDate = bjDateKey(iso);
+  if (!actualDate) return "--:--";
+  return tradeDate && actualDate !== tradeDate ? formatBj(iso, "short") : formatBj(iso, "time");
 }

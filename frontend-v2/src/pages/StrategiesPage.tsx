@@ -11,8 +11,10 @@ import type {
 } from "../types";
 import { ErrorPage, EmptyState, PageSkeleton } from "../components/StateViews";
 import { Panel } from "../components/Panel";
+import { ScopedStrategyStats } from "../ui/ScopedStrategyStats";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
+import { formatBj } from "../utils/time";
 
 type StrategyWindowDays = 30 | 180;
 
@@ -46,6 +48,7 @@ export function StrategiesPage() {
         </div>
       }
     >
+      <ScopedStrategyStats />
       <StandaloneMetricsSection />
       {tab === "skills" ? (
         <SkillsView skills={skills} windowDays={windowDays} onWindowDaysChange={setWindowDays} />
@@ -66,7 +69,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
         fontSize: 12,
         borderRadius: 4,
         border: "1px solid var(--border)",
-        background: active ? "var(--accent, #2563eb)" : "var(--surface-soft)",
+        background: active ? "var(--accent)" : "var(--surface-soft)",
         color: active ? "#fff" : "var(--muted)",
         cursor: "pointer",
         fontWeight: active ? 600 : 400,
@@ -169,7 +172,7 @@ function PresetTable({ rows }: { rows: PresetStatsRow[] }) {
               <tr key={r.preset_id ?? r.preset_name} style={{ borderTop: "1px solid var(--border)", fontSize: "var(--text-sm)" }}>
                 <td style={{ textAlign: "left", padding: "var(--space-3) var(--space-3)", color: "var(--text)" }}>{r.preset_name}</td>
                 <td style={{ textAlign: "right", padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>{r.run_count}</td>
-                <td style={{ textAlign: "right", padding: "var(--space-3) var(--space-3)", color: lowSample ? "var(--warning, #b45309)" : "var(--muted)" }}>
+                <td style={{ textAlign: "right", padding: "var(--space-3) var(--space-3)", color: lowSample ? "var(--warning)" : "var(--muted)" }}>
                   {r.recommendation_count}
                   {lowSample ? " ⚠" : ""}
                 </td>
@@ -183,7 +186,7 @@ function PresetTable({ rows }: { rows: PresetStatsRow[] }) {
                   {r.avg_score == null ? "—" : r.avg_score.toFixed(1)}
                 </td>
                 <td style={{ textAlign: "left", padding: "var(--space-3) var(--space-3)", color: "var(--muted)" }}>
-                  {r.last_run_at ?? "—"}
+                  {formatBj(r.last_run_at)}
                 </td>
               </tr>
             );
@@ -245,12 +248,12 @@ function CalledCard({ item, windowDays }: { item: StrategyListItem; windowDays: 
         口径：每策略每日评分 Top {perf.daily_selection_limit}；不含仓位、资金占用和账户复利
       </div>
       {perf.window_rolled && perf.target_date_to && perf.target_date_to !== perf.date_to && (
-        <div style={{ marginTop: 4, fontSize: "var(--text-xs)", color: "var(--warning, #b45309)", fontFamily: "var(--font-mono)" }} title={`目标窗口 ${perf.target_date_from} ~ ${perf.target_date_to} 随交易日漂移，暂复用同版本最近完成画像`}>
+        <div style={{ marginTop: 4, fontSize: "var(--text-xs)", color: "var(--warning)", fontFamily: "var(--font-mono)" }} title={`目标窗口 ${perf.target_date_from} ~ ${perf.target_date_to} 随交易日漂移，暂复用同版本最近完成画像`}>
           信号窗口 {perf.date_from} ~ {perf.date_to}（随交易日滚动复用）
         </div>
       )}
       <div style={{ marginTop: 4, fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" }} title={perf.strategy_version}>
-        当前版本 {perf.strategy_version.slice(0, 18)} · 更新 {perf.generated_at?.slice(0, 16).replace("T", " ") || "—"}
+        当前版本 {perf.strategy_version.slice(0, 18)} · 更新 {formatBj(perf.generated_at)}
       </div>
 
         {lowSample && (
@@ -261,9 +264,9 @@ function CalledCard({ item, windowDays }: { item: StrategyListItem; windowDays: 
               flexDirection: "column",
               gap: 4,
               fontSize: "var(--text-xs)",
-              color: "var(--warning, #b45309)",
-              background: "color-mix(in srgb, var(--warning, #b45309) 12%, transparent)",
-              border: "1px solid color-mix(in srgb, var(--warning, #b45309) 30%, transparent)",
+              color: "var(--warning)",
+              background: "color-mix(in srgb, var(--warning) 12%, transparent)",
+              border: "1px solid color-mix(in srgb, var(--warning) 30%, transparent)",
               borderRadius: 8,
               padding: "6px 10px",
               alignSelf: "flex-start",
@@ -514,7 +517,7 @@ function BacktestReturnsBlock({ item }: { item: StrategyListItem }) {
           })
           .join(" / ")}
         {" · "}
-        {bt.generated_at?.slice(0, 10) ?? "—"}
+        {formatBj(bt.generated_at, "date")}
       </div>
     </div>
   );
@@ -618,7 +621,7 @@ function fmtPct(v?: number) {
 
 function MetricCells({ m }: { m?: StandaloneWindowMetrics }) {
   if (!m || !m.n) return <><td>0</td><td>—</td><td>—</td><td>—</td><td>—</td></>;
-  const color = (m.avg_return_pct ?? 0) >= 0 ? "var(--color-up, #c0392b)" : "var(--color-down, #27884f)";
+  const color = (m.avg_return_pct ?? 0) >= 0 ? "var(--color-up)" : "var(--color-down)";
   return (
     <>
       <td>{m.n}</td>
@@ -643,7 +646,7 @@ function StandaloneMetricsSection() {
       <div style={{ display: "flex", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
         <strong>每日独立运行策略（{d.strategies.length}）</strong>
         <span style={{ opacity: 0.7, fontSize: 12 }}>
-          近12月 {d.window?.start} ~ {d.window?.end}；近期自 {d.window?.recent_start}；更新于 {d.generated_at ?? "—"}
+          近12月 {d.window?.start} ~ {d.window?.end}；近期自 {d.window?.recent_start}；更新于 {formatBj(d.generated_at)}
         </span>
       </div>
       <div style={{ overflowX: "auto" }}>
@@ -661,7 +664,7 @@ function StandaloneMetricsSection() {
           </thead>
           <tbody>
             {d.strategies.map((s) => (
-              <tr key={s.strategy_id} style={{ borderTop: "1px solid var(--color-border, #eee)", textAlign: "right" }}>
+              <tr key={s.strategy_id} style={{ borderTop: "1px solid var(--color-border)", textAlign: "right" }}>
                 <td style={{ textAlign: "left", padding: "4px 8px" }}>{s.name}</td>
                 <td style={{ textAlign: "left", padding: "4px 8px" }}>{STATUS_LABEL[s.status] ?? s.status}</td>
                 <MetricCells m={s.last_12m} />

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ArrowDown, ArrowUp, Loader2, Plug, RefreshCw, Server } from "lucide-react";
 import { api } from "../api/client";
 import type { DataSourceProvider, ProviderTestResult } from "../types";
+import { formatBj } from "../utils/time";
 
 // 参与路由调序的 pro provider（不在路由链的条目不调序）。
 const ROUTABLE = new Set(["promax", "quantdata"]);
@@ -117,7 +118,7 @@ export function DataSourcesSection() {
       </p>
 
       {error && (
-        <div style={{ marginBottom: "var(--space-3)", padding: "var(--space-3)", borderRadius: 8, fontSize: "var(--text-sm)", background: "color-mix(in srgb, var(--color-down) 14%, transparent)", color: "var(--color-down)" }}>
+        <div style={{ marginBottom: "var(--space-3)", padding: "var(--space-3)", borderRadius: 8, fontSize: "var(--text-sm)", background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning)" }}>
           {error}
         </div>
       )}
@@ -125,8 +126,15 @@ export function DataSourcesSection() {
       {loading && providers.length === 0 ? (
         <div style={{ color: "var(--muted)", fontSize: "var(--text-sm)", padding: "var(--space-4)" }}>加载中…</div>
       ) : (
-        <div style={{ display: "grid", gap: "var(--space-3)" }}>
-          {providers.map((p) => {
+        <div style={{ display: "grid", gap: "var(--space-4)" }}>
+          {groupProviders(providers).map((g) => (
+          <section key={g.key}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "4px 0 8px" }}>
+              <b style={{ fontSize: 14 }}>{g.label}</b>
+              <span className="muted small">{g.items.length} 个 · {g.hint}</span>
+            </div>
+          <div style={{ display: "grid", gap: "var(--space-3)" }}>
+          {g.items.map((p) => {
             const res = testResults[p.provider_name];
             const busy = busyName === p.provider_name;
             const routable = ROUTABLE.has(p.provider_name);
@@ -202,8 +210,8 @@ export function DataSourcesSection() {
                       fontSize: "var(--text-xs)",
                       padding: "2px 10px",
                       borderRadius: 999,
-                      color: p.enabled ? "var(--color-up)" : "var(--muted)",
-                      background: p.enabled ? "color-mix(in srgb, var(--color-up) 14%, transparent)" : "var(--surface-2)",
+                      color: p.enabled ? "var(--positive)" : "var(--muted)",
+                      background: p.enabled ? "color-mix(in srgb, var(--positive) 14%, transparent)" : "var(--surface-2)",
                     }}
                   >
                     {p.enabled ? "启用" : "停用"}
@@ -245,14 +253,14 @@ export function DataSourcesSection() {
                 )}
 
                 <div style={{ marginTop: "var(--space-2)", display: "flex", gap: "var(--space-4)", flexWrap: "wrap", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-                  {p.last_success_at && <span>最近成功 {p.last_success_at}</span>}
-                  {p.last_failure_at && <span>最近失败 {p.last_failure_at}</span>}
+                  {p.last_success_at && <span>最近成功 {formatBj(p.last_success_at)}</span>}
+                  {p.last_failure_at && <span>最近失败 {formatBj(p.last_failure_at)}</span>}
                   {p.latency_ms != null && <span>延迟 {p.latency_ms} ms</span>}
                   {p.last_api && <span>last_api {p.last_api}</span>}
                 </div>
 
                 {p.last_error && (
-                  <div style={{ marginTop: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--color-down)" }}>
+                  <div style={{ marginTop: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--warning)" }}>
                     {p.last_error}
                   </div>
                 )}
@@ -264,8 +272,8 @@ export function DataSourcesSection() {
                       padding: "var(--space-2) var(--space-3)",
                       borderRadius: 6,
                       fontSize: "var(--text-sm)",
-                      background: res.ok ? "color-mix(in srgb, var(--color-up) 8%, transparent)" : "color-mix(in srgb, var(--color-down) 8%, transparent)",
-                      color: res.ok ? "var(--color-up)" : "var(--color-down)",
+                      background: res.ok ? "color-mix(in srgb, var(--positive) 8%, transparent)" : "color-mix(in srgb, var(--warning) 8%, transparent)",
+                      color: res.ok ? "var(--positive)" : "var(--warning)",
                     }}
                   >
                     {res.ok ? "连接正常" : `连接失败：${res.error || "未知错误"}`}
@@ -275,16 +283,28 @@ export function DataSourcesSection() {
               </div>
             );
           })}
+          </div>
+          </section>
+          ))}
         </div>
       )}
     </div>
   );
 }
 
+/** 分组：Tushare Pro 兼容网关（可路由、参与优先级 fallback）vs 行情/K线直连源。分组完全由 API 返回的 provider 推导。 */
+function groupProviders(list: DataSourceProvider[]) {
+  const isTs = (p: DataSourceProvider) => ROUTABLE.has(p.provider_name) || /tushare/i.test(`${p.provider_name} ${p.source} ${p.source_type} ${p.layer ?? ""}`);
+  return [
+    { key: "quote", label: "行情 / K线", hint: "实时行情与日线直连源", items: list.filter((p) => !isTs(p)) },
+    { key: "ts", label: "Tushare Pro 系", hint: "按优先级自上而下 fallback，↑↓ 调整", items: list.filter(isTs) },
+  ].filter((g) => g.items.length > 0);
+}
+
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, { label: string; color: string; bg: string }> = {
-    healthy: { label: "健康", color: "var(--color-up)", bg: "color-mix(in srgb, var(--color-up) 14%, transparent)" },
-    degraded: { label: "降级", color: "var(--color-down)", bg: "color-mix(in srgb, var(--color-down) 14%, transparent)" },
+    healthy: { label: "健康", color: "var(--positive)", bg: "color-mix(in srgb, var(--positive) 14%, transparent)" },
+    degraded: { label: "降级", color: "var(--warning)", bg: "color-mix(in srgb, var(--warning) 14%, transparent)" },
     untested: { label: "未测试", color: "var(--muted)", bg: "var(--surface-2)" },
     disabled: { label: "已禁用", color: "var(--muted)", bg: "var(--surface-2)" },
   };

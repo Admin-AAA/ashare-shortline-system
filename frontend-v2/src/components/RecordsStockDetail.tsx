@@ -249,7 +249,7 @@ function OutcomeSection({
             const toneColor =
               tone === "positive" ? "var(--market-up)"
                 : tone === "danger" ? "var(--market-down)"
-                : tone === "warning" ? "var(--market-gold, #b8860b)"
+                : tone === "warning" ? "var(--market-gold)"
                 : "var(--muted)";
             return (
               <span style={{

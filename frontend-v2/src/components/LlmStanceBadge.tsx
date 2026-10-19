@@ -5,7 +5,8 @@ export function LlmStanceBadge({ stance, delta }: { stance?: string | null; delt
   if (!stance) return null;
   const isSupport = stance === "strong_support" || stance === "support";
   const isOppose = stance === "oppose" || stance === "veto";
-  const color = isSupport ? "var(--market-up)" : isOppose ? "var(--market-down)" : "var(--text-muted)";
+  void isSupport; void isOppose;
+  const color = "var(--muted)";
   const label =
     stance === "strong_support" ? "强支持"
     : stance === "support" ? "支持"
@@ -26,9 +27,9 @@ export function LlmStanceBadge({ stance, delta }: { stance?: string | null; delt
         border: `1px solid ${color}40`,
         whiteSpace: "nowrap",
       }}
-      title={`LLM 审查: ${label}${delta != null ? ` (${delta >= 0 ? "+" : ""}${delta})` : ""}`}
+      title={`LLM 提示（仅供参考，不影响出票）: ${label}${delta != null ? ` (${delta >= 0 ? "+" : ""}${delta})` : ""}`}
     >
-      {label}{delta != null ? ` ${delta >= 0 ? "+" : ""}${delta}` : ""}
+      LLM·{label}{delta != null ? ` ${delta >= 0 ? "+" : ""}${delta}` : ""}
     </span>
   );
 }

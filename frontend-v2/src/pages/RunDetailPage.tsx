@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, History, Loader2, PlayCircle, RotateCw, Search, Sparkles } from "lucide-react";
 import { api } from "../api/client";
 import type { Preset, RunDetail, SingleStockAnalysis, SingleStockSkillReview, ReplayAnalysisResult, StockMatrixHistoryItem } from "../types";
@@ -8,6 +8,7 @@ import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
 import { useCreateRunMutation, usePresetsQuery, useRunQuery } from "../api/queries/useRunQueries";
 import { isActiveRunStatus } from "../utils/display";
+import { formatBj } from "../utils/time";
 
 /**
  * 运行详情页 —— 从驾驶舱主 CTA 进入
@@ -130,7 +131,7 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
           )}
         </Panel>
 
-        <SingleStockScorePanel presets={presets} />
+        <SingleStockScorePanel key={queryParam("score_code") || "manual"} presets={presets} initialCode={queryParam("score_code") || ""} />
       </div>
 
       {error && <ErrorPage title="运行详情加载失败" message={error} onRetry={() => window.location.reload()} />}
@@ -270,8 +271,9 @@ function ReplayStatusTag({ label, tone }: { label: string; tone: "up" | "down" |
 // 单股票评分面板
 // ============================================================
 
-function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
-  const [code, setCode] = useState("");
+function SingleStockScorePanel({ presets, initialCode = "" }: { presets: Preset[]; initialCode?: string }) {
+  const [code, setCode] = useState(initialCode);
+  const autoScored = useRef(false);
   const [selectedPreset, setSelectedPreset] = useState<string>("");
   const [includeLlm, setIncludeLlm] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -314,6 +316,14 @@ function SingleStockScorePanel({ presets }: { presets: Preset[] }) {
     void loadHistory(code);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 来自 ⌘K「立即评分」：/run?score_code=xxxxxx —— 预设就绪后自动评分一次
+  useEffect(() => {
+    if (autoScored.current || !/^\d{6}$/.test(initialCode) || !selectedPreset) return;
+    autoScored.current = true;
+    void runScore();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCode, selectedPreset]);
 
   async function runScore() {
     const trimmed = code.trim();
@@ -522,7 +532,7 @@ function SingleStockHistoryList({
                 {h.trade_date}
               </span>
               <span className="text-muted" style={{ fontSize: "var(--text-xs)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {h.created_at ? new Date(h.created_at).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "—"}
+                {formatBj(h.created_at, "short")}
               </span>
               <span className="text-mono" style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--accent)" }}>
                 {h.final_score != null ? h.final_score.toFixed(1) : "—"}
@@ -573,20 +583,12 @@ function SingleStockScoreResult({ result }: { result: SingleStockAnalysis }) {
         <div className="text-muted" style={{ fontSize: "var(--text-xs)", marginBottom: "var(--space-2)" }}>
           {result.score_basis_note ?? "单股评分按当前库内数据重算，可能与当时正式 run 的分数不同；历史出票分数以推荐记录原始值为准。"}
         </div>
-        {result.prior_formal_recommendations?.label && (
-          <div className="tag" style={{ marginBottom: "var(--space-2)", display: "inline-block" }}>
-            {result.prior_formal_recommendations.label}
-            {result.prior_formal_recommendations.items.length > 0 &&
-              `（正式分：${result.prior_formal_recommendations.items
-                .map((it) => `${it.trade_date} ${it.final_score != null ? it.final_score.toFixed(1) : "—"}`)
-                .join("，")}）`}
-          </div>
-        )}
+        <PriorFormalRecs prior={result.prior_formal_recommendations} />
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)" }}>
-          <ScoreMetric label="管线最终分" value={result.final_score} />
+          <ScoreMetric label="规则分（出票依据）" value={result.final_score} />
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>推荐结果</span>
-            <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: result.recommended ? "var(--market-up)" : "var(--ink-secondary)" }}>
+            <span style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: result.recommended ? "var(--accent)" : "var(--ink-secondary)" }}>
               {result.recommended ? "已入选" : "未入选"}
             </span>
           </div>
@@ -670,7 +672,7 @@ function SingleStockLlmSection({ llm }: { llm: NonNullable<SingleStockAnalysis["
   if (llm.status === "error") {
     return (
       <section className="panel" style={{ margin: 0, padding: "var(--space-3)" }}>
-        <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>LLM 深度分析</div>
+        <div className="panel__kicker" style={{ marginBottom: "var(--space-2)" }}>LLM 提示 · 仅供参考，不影响出票</div>
         <div style={{ color: "var(--market-down)", fontSize: "var(--text-sm)" }}>分析失败：{llm.error || "未知错误"}</div>
       </section>
     );
@@ -689,17 +691,16 @@ function SingleStockLlmSection({ llm }: { llm: NonNullable<SingleStockAnalysis["
   return (
     <section className="panel" style={{ margin: 0, padding: "var(--space-3)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-2)" }}>
-        <div className="panel__kicker">LLM 深度分析</div>
+        <div className="panel__kicker">LLM 提示 · 仅供参考，不影响出票</div>
         {llm.elapsed_ms != null && (
           <span className="text-muted text-mono" style={{ fontSize: "var(--text-xs)" }}>{llm.elapsed_ms}ms</span>
         )}
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)", marginBottom: "var(--space-3)" }}>
-        <ScoreMetric label="最终评分" value={llm.final_score} />
-        <ScoreMetric label="LLM评分" value={llm.score} />
-        <ScoreMetric label="规则基线" value={llm.rule_score} />
-        <ScoreMetric label="LLM调整" value={llm.llm_adjustment} />
+        <ScoreMetric label="规则分（出票依据）" value={llm.rule_score ?? llm.final_score} />
+        <ScoreMetric label="LLM 参考分" value={llm.score} />
+        <ScoreMetric label="LLM 建议调整（未生效）" value={llm.llm_adjustment} />
         <ScoreMetric label="置信度" value={llm.confidence != null ? llm.confidence * 100 : null} suffix="%" />
         <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
           <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>立场</span>
@@ -765,8 +766,8 @@ function PresetLlmSection({ llm }: { llm: NonNullable<SingleStockAnalysis["llm_a
           )}
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(100px, 1fr))", gap: "var(--space-3)" }}>
-          <ScoreMetric label="最终评分" value={llm.final_score} />
-          <ScoreMetric label="Agent审查分" value={llm.agent_review_score} />
+          <ScoreMetric label="规则分（出票依据）" value={llm.final_score} />
+          <ScoreMetric label="Agent审查分（参考）" value={llm.agent_review_score} />
           <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
             <span className="text-muted" style={{ fontSize: "var(--text-xs)" }}>风险模板</span>
             <span style={{ fontSize: "var(--text-sm)" }}>{llm.risk_template || "—"}</span>
@@ -1018,5 +1019,29 @@ function RunProgressPanel({ detail, onResume }: { detail: RunDetail; onResume?: 
         )}
       </div>
     </Panel>
+  );
+}
+
+/** 当日/近 7 日正式推荐标注：状态色（同日=琥珀，近7日=蓝），不用涨跌色 */
+function PriorFormalRecs({ prior }: { prior?: SingleStockAnalysis["prior_formal_recommendations"] }) {
+  const { navigate } = useUrlRoute();
+  if (!prior || (!prior.label && !(prior.items?.length))) return null;
+  const tone = prior.same_day ? "var(--warning)" : prior.recent_7d ? "var(--accent)" : "var(--muted)";
+  return (
+    <div style={{ border: `1px solid ${tone}`, borderLeftWidth: 3, borderRadius: "var(--radius-md)", padding: "var(--space-2) var(--space-3)", marginBottom: "var(--space-2)", fontSize: "var(--text-sm)" }}>
+      <div style={{ color: tone, fontWeight: 600, marginBottom: prior.items?.length ? 4 : 0 }}>
+        {prior.label ?? (prior.same_day ? "当日已被正式推荐" : prior.recent_7d ? "近7日已被正式推荐" : "近7日未被正式推荐")}
+      </div>
+      {prior.items?.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)" }}>
+          {prior.items.map((it) => (
+            <button key={`${it.run_id}-${it.trade_date}`} className="tag" style={{ cursor: "pointer", fontFamily: "var(--font-mono)" }}
+              title={`run ${it.run_id}`} onClick={() => navigate("/records", { params: { tab: "run", run_id: it.run_id } })}>
+              {it.trade_date} · 正式分 {it.final_score != null ? it.final_score.toFixed(1) : "—"}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

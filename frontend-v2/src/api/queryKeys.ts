@@ -2,7 +2,7 @@ export const queryKeys = {
   home: () => ["home"] as const,
   dashboard: () => ["dashboard", "overview"] as const,
   presets: () => ["presets"] as const,
-  runs: (limit?: number) => ["runs", { limit: limit ?? null }] as const,
+  runs: (limit?: number, slim = false) => ["runs", { limit: limit ?? null, slim }] as const,
   run: (id: string) => ["runs", id] as const,
   runFunnel: (id: string) => ["runs", id, "funnel"] as const,
   records: (kind: "run" | "matrix", filters: object = {}) => ["records", kind, filters] as const,

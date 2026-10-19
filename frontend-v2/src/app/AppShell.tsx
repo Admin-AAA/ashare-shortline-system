@@ -1,13 +1,16 @@
-import { Activity, Moon, RefreshCw, Sun } from "lucide-react";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { Moon, PlayCircle, RefreshCw, Search, Sun } from "lucide-react";
+import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import AuthGate from "./AuthGate";
-import { HORIZONS, NAV_ITEMS, horizonFromPath, navMatches, type Section } from "./nav";
+import { HORIZONS, NAV_ITEMS, SUB_TABS, normalizePath, redirectFor, sectionFromPath } from "./nav";
 import { useUrlRoute } from "./useUrlRoute";
+import { setHorizon, useHorizon } from "./useHorizon";
 import { useThemePreference } from "../shared/theme/useThemePreference";
-import { WaveBackground } from "../components/WaveBackground";
+import { MarketBar } from "../ui/MarketBar";
+import { CommandPalette } from "../ui/CommandPalette";
+import { RunConfirmPanel } from "../ui/RunConfirmPanel";
 
-const HomeScreenPage = lazy(() => import("../pages/HomeScreenPage").then((m) => ({ default: m.HomePage })));
 const HomePage = lazy(() => import("../pages/HomePage").then((m) => ({ default: m.HomePage })));
+const PositionsPage = lazy(() => import("../pages/PositionsPage").then((m) => ({ default: m.PositionsPage })));
 const PoolPage = lazy(() => import("../pages/PoolPage").then((m) => ({ default: m.PoolPage })));
 const HistoryPage = lazy(() => import("../pages/HistoryPage").then((m) => ({ default: m.HistoryPage })));
 const RecordsPage = lazy(() => import("../pages/RecordsPage").then((m) => ({ default: m.RecordsPage })));
@@ -17,31 +20,7 @@ const StrategyDetailPage = lazy(() => import("../pages/StrategyDetailPage").then
 const ConfigPage = lazy(() => import("../pages/ConfigPage").then((m) => ({ default: m.ConfigPage })));
 const HorizonPage = lazy(() => import("../pages/HorizonPage").then((m) => ({ default: m.HorizonPage })));
 const RunDetailPage = lazy(() => import("../pages/RunDetailPage").then((m) => ({ default: m.RunDetailPage })));
-
-function SectionView({ section }: { section: Section }) {
-  switch (section) {
-    case "home":
-      return <HomeScreenPage />;
-    case "dashboard":
-      return <HomePage />;
-    case "pool":
-      return <PoolPage />;
-    case "history":
-      return <HistoryPage />;
-    case "records":
-      return <RecordsPage />;
-    case "metrics":
-      return <MetricsPage />;
-    case "strategies":
-      return <StrategiesPage />;
-    case "config":
-      return <ConfigPage />;
-    case "mid":
-      return <HorizonPage horizon="mid" />;
-    case "long":
-      return <HorizonPage horizon="long" />;
-  }
-}
+const BatchReviewPage = lazy(() => import("../pages/BatchReviewPage").then((m) => ({ default: m.BatchReviewPage })));
 
 function PageFallback() {
   return (
@@ -53,118 +32,119 @@ function PageFallback() {
   );
 }
 
-export function AppShell() {
-  const { pathname, section, navigate, navigateSection } = useUrlRoute();
-  const { theme, toggleTheme } = useThemePreference();
-  const [refreshSignal, setRefreshSignal] = useState(0);
+const KNOWN_PATHS = new Set(["/", "/pool", "/today", "/dashboard", "/positions", "/review", "/history", "/records", "/metrics", "/strategies", "/config", "/run", "/mid", "/long", "/system", "/backtest", "/data-health"]);
 
-  // /run 子路由单独走 RunDetailPage；/data-health 已并入配置页 tab，重定向过去
-  const isRunDetail = pathname === "/run";
-  const isStrategyDetail = pathname.startsWith("/strategies/");
+function NotFoundPage({ path, onHome }: { path: string; onHome: () => void }) {
+  return (
+    <section className="panel" style={{ maxWidth: 560, margin: "var(--space-8, 64px) auto", textAlign: "center", padding: "var(--space-6, 32px)" }}>
+      <div className="text-mono" style={{ fontSize: 40, fontWeight: 700, color: "var(--muted)" }}>404</div>
+      <h2 style={{ margin: "var(--space-2) 0" }}>页面不存在</h2>
+      <p className="text-muted" style={{ fontSize: "var(--text-sm)" }}>
+        没有找到 <span className="text-mono">{path}</span>，可能是旧链接或地址输入有误。
+      </p>
+      <button className="btn" style={{ marginTop: "var(--space-3)" }} onClick={onHome}>回到今日</button>
+    </section>
+  );
+}
+
+export function AppShell() {
+  const { pathname, navigate } = useUrlRoute();
+  const { theme, toggleTheme } = useThemePreference();
+  const [horizon] = useHorizon();
+  const [refreshSignal, setRefreshSignal] = useState(0);
+  const [cmdk, setCmdk] = useState(false);
+  const [runOpen, setRunOpen] = useState(false);
+  const p = normalizePath(pathname);
+  const section = sectionFromPath(p);
 
   useEffect(() => {
-    if (pathname === "/data-health") {
-      navigate("/config?tab=data-health", { replace: true });
+    const r = redirectFor(pathname, window.location.search);
+    if (r) {
+      if (r.horizon) setHorizon(r.horizon);
+      navigate(r.to, { replace: true });
     }
   }, [pathname, navigate]);
 
-  const horizon = horizonFromPath(pathname);
-  const handleRefresh = () => setRefreshSignal((n) => n + 1);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); setCmdk(true); }
+      else if (e.key === "Escape") { setCmdk(false); setRunOpen(false); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const openRun = useCallback(() => { setCmdk(false); setRunOpen(true); }, []);
+  const tabs = SUB_TABS[section].filter((t) => !(horizon !== "short" && section !== "system"));
+  const activeTab = (tp: string) => (tp === "/pool" ? p === "/" || p === "/pool" : p === tp);
+
+  const redirecting = redirectFor(pathname, window.location.search) != null;
+  const known = redirecting || KNOWN_PATHS.has(p) || p.startsWith("/strategies/");
+  let content: React.ReactNode;
+  if (!known) content = <NotFoundPage path={pathname} onHome={() => navigate("/")} />;
+  else if (horizon !== "short" && section !== "system") {
+    content = section === "strategies" || section === "review" || section === "today"
+      ? <HorizonPage horizon={horizon} view={section as "today" | "review" | "strategies"} />
+      : null;
+  } else if (p === "/run") content = <RunDetailPage refreshSignal={refreshSignal} />;
+  else if (p.startsWith("/strategies/")) content = <StrategyDetailPage refreshSignal={refreshSignal} />;
+  else switch (p) {
+    case "/dashboard": content = <HomePage />; break;
+    case "/positions": content = <PositionsPage />; break;
+    case "/review": content = <BatchReviewPage />; break;
+    case "/history": content = <HistoryPage />; break;
+    case "/records": content = <RecordsPage />; break;
+    case "/metrics": content = <MetricsPage />; break;
+    case "/strategies": content = <StrategiesPage />; break;
+    case "/config": content = <ConfigPage />; break;
+    default: content = <PoolPage />;
+  }
 
   return (
     <AuthGate>
-      <WaveBackground theme={theme} />
       <div className="app-shell">
         <header className="topbar">
-          <div
-            className="topbar__brand"
-            onClick={() => navigate("/")}
-            role="button"
-            tabIndex={0}
-          >
+          <div className="topbar__brand" onClick={() => navigate("/")} role="button" tabIndex={0}>
             <span className="topbar__brand-badge">A</span>
-            <span>{horizon === "short" ? "短线驾驶舱" : horizon === "mid" ? "中线策略" : "长线策略"}</span>
+            <span>A股策略系统</span>
           </div>
-
-          <div className="topbar__horizon" role="tablist" aria-label="策略周期">
+          <div className="hzseg" role="tablist" aria-label="策略周期">
             {HORIZONS.map((h) => (
-              <button
-                key={h.id}
-                role="tab"
-                aria-selected={horizon === h.id}
-                className={`topbar__horizon-item${horizon === h.id ? " topbar__horizon-item--active" : ""}`}
-                onClick={() => navigate(h.path)}
-              >
-                {h.label}
-              </button>
+              <button key={h.id} role="tab" aria-selected={horizon === h.id} className={horizon === h.id ? "on" : ""} onClick={() => setHorizon(h.id)}>{h.label}</button>
             ))}
           </div>
-
           <nav className="topbar__nav">
-            {horizon === "short" && NAV_ITEMS.map((item) => {
+            {NAV_ITEMS.map((item) => {
               const Icon = item.icon;
-              const active = navMatches(item.section, pathname);
+              const active = section === item.section;
               return (
-                <button
-                  key={item.section}
-                  className={`topbar__nav-item${active ? " topbar__nav-item--active" : ""}`}
-                  onClick={() => navigateSection(item.section)}
-                >
-                  <Icon size={16} />
-                  {item.label}
+                <button key={item.section} className={`topbar__nav-item${active ? " topbar__nav-item--active" : ""}`} onClick={() => navigate(item.path)}>
+                  <Icon size={16} />{item.label}
                 </button>
               );
             })}
           </nav>
-
           <div className="topbar__actions">
-            <RunCtaButton onClick={() => navigate("/run")} />
-            <button
-              className="icon-button"
-              onClick={handleRefresh}
-              title="刷新当前页"
-              aria-label="刷新"
-            >
-              <RefreshCw size={16} />
-            </button>
-            <button
-              className="icon-button"
-              onClick={toggleTheme}
-              title={theme === "dark" ? "切换到浅色" : "切换到深色"}
-              aria-label="切换主题"
-            >
+            <button className="search-btn" onClick={() => setCmdk(true)}><Search size={14} /><span>搜索股票 / 页面</span><kbd>⌘K</kbd></button>
+            <button className="run-cta" onClick={openRun}><PlayCircle size={15} />运行推荐</button>
+            <button className="icon-button" onClick={() => setRefreshSignal((n) => n + 1)} title="刷新当前页" aria-label="刷新"><RefreshCw size={16} /></button>
+            <button className="icon-button" onClick={toggleTheme} title={theme === "dark" ? "切换到浅色" : "切换到深色"} aria-label="切换主题">
               {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
             </button>
           </div>
         </header>
-
+        <MarketBar />
         <main className="app-main">
-          {isRunDetail ? (
-            <Suspense fallback={<PageFallback />}>
-              <RunDetailPage refreshSignal={refreshSignal} />
-            </Suspense>
-          ) : isStrategyDetail ? (
-            <Suspense fallback={<PageFallback />}>
-              <StrategyDetailPage refreshSignal={refreshSignal} />
-            </Suspense>
-          ) : (
-            <Suspense fallback={<PageFallback />}>
-              <SectionView section={section} />
-            </Suspense>
+          {tabs.length > 0 && (
+            <div className="subtabs">
+              {tabs.map((t) => <button key={t.path} className={activeTab(t.path) ? "on" : ""} onClick={() => navigate(t.path)}>{t.label}</button>)}
+            </div>
           )}
+          <Suspense fallback={<PageFallback />}>{content}</Suspense>
         </main>
       </div>
+      {cmdk && <CommandPalette onClose={() => setCmdk(false)} onRun={openRun} onToggleTheme={toggleTheme} />}
+      {runOpen && <RunConfirmPanel onClose={() => setRunOpen(false)} />}
     </AuthGate>
-  );
-}
-
-/** 顶部栏的运行推荐主 CTA —— 简化版：直接跳到运行页。
- * 后续可扩展为下拉选择预设 + 确认面板（见报告 §6.2） */
-function RunCtaButton({ onClick }: { onClick: () => void }) {
-  return (
-    <button className="run-cta" onClick={onClick}>
-      <Activity size={15} />
-      运行推荐
-    </button>
   );
 }

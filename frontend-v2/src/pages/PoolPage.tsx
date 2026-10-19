@@ -14,6 +14,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { api } from "../api/client";
+import { useQuery } from "@tanstack/react-query";
 import type { CockpitRecommendation, OutcomeSummary, RunSummary } from "../types";
 import { ErrorPage } from "../components/StateViews";
 import { PoolExpandedRow } from "../components/PoolExpandedRow";
@@ -25,6 +26,7 @@ import { useRunsQuery } from "../api/queries/useRunQueries";
 import { useApi } from "../app/useApi";
 import { queryParam } from "../app/nav";
 import { describePoolRun, formatPoolRunTime, poolRunDate, summarizePoolRuns, type PoolRunKind } from "./poolRunView";
+import { formatBj } from "../utils/time";
 
 /**
  * 今日记录（原候选池）—— 日期运行日志 → 运行抽屉 → 股票二级展开。
@@ -45,7 +47,7 @@ export function PoolPage() {
   const [expandedRuns, setExpandedRuns] = useState<Set<string>>(new Set());
   const [experimentsOpen, setExperimentsOpen] = useState(false);
   const initializedDate = useRef("");
-  const { data: runs, isLoading: loading, error, refetch } = useRunsQuery(100);
+  const { data: runs, isLoading: loading, error, refetch } = useRunsQuery(100, true); // slim：列表不需要 result_summary；空票抽屉按需取详情
 
   const allRuns = runs ?? [];
   const linkedRun = runId ? allRuns.find((run) => run.run_id === runId) : undefined;
@@ -338,11 +340,14 @@ function RunDrawerBody({ run, kind }: { run: RunSummary; kind: PoolRunKind }) {
       查看本次运行详情 <ChevronRight size={14} />
     </button>
   );
+  // 列表为 slim（无 result_summary）：空票抽屉按需拉运行详情取同一份 result_summary
+  const detailQ = useQuery({ queryKey: ["runs", run.run_id], queryFn: () => api.runDetail(run.run_id), enabled: kind === "empty" && !run.result_summary });
+  const summary = (run.result_summary ?? detailQ.data?.result_summary) as RunSummary["result_summary"] | undefined;
   if (kind === "completed") return <RecommendationResults run={run} />;
   if (kind === "empty") {
-    const eligible = run.result_summary?.base_filter_eligible_count;
-    const strategyInput = run.result_summary?.skill_input_count ?? run.result_summary?.actual_scan_count;
-    const marketTotal = run.result_summary?.unified_quote_total ?? run.universe_count;
+    const eligible = summary?.base_filter_eligible_count;
+    const strategyInput = summary?.skill_input_count ?? summary?.actual_scan_count;
+    const marketTotal = summary?.unified_quote_total ?? run.universe_count;
     return (
       <div style={drawerBodyStyle}>
         <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "flex-start" }}>
@@ -496,11 +501,7 @@ function RecommendationResults({ run }: { run: RunSummary }) {
 }
 
 function localDateKey() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  return formatBj(new Date().toISOString(), "date");
 }
 
 function runSortTime(run: RunSummary) {

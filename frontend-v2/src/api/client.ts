@@ -70,6 +70,8 @@ export type AuthStatus = {
 const LONG_REQUEST_THRESHOLD_MS = 3000;
 const CONTROL_CONFIG_TIMEOUT_MS = 30_000;
 
+export const UNAUTHORIZED_EVENT = "ashare:unauthorized";
+
 export type MetricsSampleScope = "live_forward" | "historical_replay";
 
 type RequestOptions = {
@@ -89,7 +91,21 @@ if (typeof window !== "undefined") {
   window.addEventListener("beforeunload", () => { pageUnloading = true; });
 }
 
-async function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
+// 性能：并发的相同 GET（同路径、无外部取消信号）合并为一次网络请求；
+// 后到的调用方拿到结果的深拷贝，避免共享对象被就地修改。响应内容不变。
+const inflightGets = new Map<string, Promise<unknown>>();
+function request<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
+  const method = init?.method ?? "GET";
+  if (method !== "GET" || options?.signal) return requestNetwork<T>(path, init, options);
+  const key = `${path}|${options?.timeoutMs ?? ""}`;
+  const existing = inflightGets.get(key) as Promise<T> | undefined;
+  if (existing) return existing.then((v) => structuredClone(v));
+  const p = requestNetwork<T>(path, init, options).finally(() => inflightGets.delete(key));
+  inflightGets.set(key, p);
+  return p;
+}
+
+async function requestNetwork<T>(path: string, init?: RequestInit, options?: RequestOptions): Promise<T> {
   const method = init?.method ?? "GET";
   const timeoutMs = options?.timeoutMs;
   const externalSignal = options?.signal;
@@ -118,9 +134,10 @@ async function request<T>(path: string, init?: RequestInit, options?: RequestOpt
     if (!res.ok) {
       const text = await res.text();
       if (res.status === 401) {
+        if (!path.startsWith("/api/auth/")) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
         throw new Error("UNAUTHORIZED");
       }
-      throw new Error(userFacingErrorMessage(text || `Request failed: ${res.status}`, res.status));
+      throw Object.assign(new Error(userFacingErrorMessage(text || `Request failed: ${res.status}`, res.status)), { status: res.status });
     }
     return (await res.json()) as T;
   } catch (err) {
@@ -135,6 +152,7 @@ async function request<T>(path: string, init?: RequestInit, options?: RequestOpt
     }
     if ((err as Error).message === "UNAUTHORIZED") throw err;
     logger.error("api", `${method} ${path} failed`, { duration, error: String(err) });
+    if (typeof (err as { status?: number }).status === "number") throw err; // HTTP 错误已整理过文案，保留 status 供调用方判断
     throw new Error(userFacingErrorMessage(err));
   } finally {
     if (timer !== null) {
@@ -187,13 +205,21 @@ function metricsQuery(windowDays: number | undefined, sampleScope: MetricsSample
 
 export type HorizonMetrics = { n?: number; win?: number; avg?: number; pf?: number; days?: number; tot?: number; mdd?: number };
 export type HorizonStrategy = {
-  id: string; name: string; horizon: string; summary: string; schedule: string; hold_days: number; top_n: number;
+  id: string; name: string; horizon: string; summary: string; next_batch_note?: string | null; schedule: string; hold_days: number; top_n: number;
   metrics: { recent_12m?: HorizonMetrics; phases?: Record<string, HorizonMetrics>; window?: string; note?: string };
 };
 export type HorizonStrategiesResponse = { horizon: string; strategies: HorizonStrategy[]; rejected?: { name: string; reason: string }[] };
-export type HorizonPick = { code: string; name: string; total_mv: number; status: string; entry_date?: string; exit_date?: string; mark_date?: string; ret?: number; days?: number };
+export type HorizonPick = { code: string; name: string; total_mv: number; status: string; entry_date?: string; exit_date?: string; mark_date?: string; ret?: number; days?: number;
+  rule_score?: number | null; rule_score_label?: string | null; rule_score_better?: "higher" | "lower" | null; selection_reason?: string | null; selection_rank?: number | null;
+  cancel_code?: string | null; cancel_reason?: string | null; ret_includes_cost?: boolean | null;
+  entry_price?: number | null; exit_price?: number | null; mark_price?: number | null; exit_delayed_days?: number | null };
 export type HorizonBatch = { strategy_id: string; strategy_name: string; signal_date: string; status: string; avg_ret: number | null; picks: HorizonPick[] };
-export type HorizonPicksResponse = { batches: HorizonBatch[] };
+export type HorizonPicksResponse = { batches: HorizonBatch[]; total?: number; total_picks?: number; page?: number; page_size?: number; has_more?: boolean };
+export type HorizonBar = { trade_date: string; open: number; high: number; low: number; close: number; pct_chg?: number; volume?: number; amount?: number };
+export type HorizonPickDetail = { horizon: string; strategy_id: string; strategy_name: string; strategy_summary?: string; hold_days?: number; signal_date: string; code: string; name: string;
+  batch_size?: number; batch_status?: string; pick: HorizonPick; bars: HorizonBar[]; other_signals?: { signal_date: string; strategy_id: string; strategy_name: string; horizon?: string }[] };
+export type HorizonRunSkip = { skipped: string };
+export type HorizonRunResponse = { horizon: string; as_of: string; force: boolean; result: Record<string, number | "no_data" | HorizonRunSkip>; files?: string[] };
 
 export const api = {
   authStatus: () => request<AuthStatus>("/api/auth/status"),
@@ -208,9 +234,11 @@ export const api = {
   updatePreset: (presetId: string, payload: PresetPayload) =>
     request<Preset>(`/api/presets/${presetId}`, json("PATCH", payload)),
 
-  runs: (limit?: number) => {
+  // fields=slim：后端去掉 result_summary（仍为数组），列表场景用
+  runs: (limit?: number, fields?: "slim") => {
     const params = new URLSearchParams();
     if (limit) params.set("limit", String(limit));
+    if (fields) params.set("fields", fields);
     const qs = params.toString();
     return request<RunSummary[]>(`/api/runs${qs ? `?${qs}` : ""}`);
   },
@@ -350,6 +378,12 @@ export const api = {
     request<HorizonStrategiesResponse>(`/api/horizons/${horizon}/strategies`),
   horizonPicks: (horizon: "mid" | "long", strategyId?: string, limit = 30) =>
     request<HorizonPicksResponse>(`/api/horizons/${horizon}/picks?limit=${limit}${strategyId ? `&strategy_id=${encodeURIComponent(strategyId)}` : ""}`),
+  horizonPicksPage: (horizon: "mid" | "long", page: number, pageSize: number, strategyId?: string) =>
+    request<HorizonPicksResponse>(`/api/horizons/${horizon}/picks?page=${page}&page_size=${pageSize}${strategyId ? `&strategy_id=${encodeURIComponent(strategyId)}` : ""}`),
+  horizonPickDetail: (horizon: "mid" | "long", strategyId: string, signalDate: string, code: string) =>
+    request<HorizonPickDetail>(`/api/horizons/${horizon}/picks/${encodeURIComponent(strategyId)}/${signalDate}/${code}`),
+  horizonRun: (horizon: "mid" | "long", payload: { as_of: string; strategy_ids?: string[]; force?: boolean }) =>
+    requestWithTimeout<HorizonRunResponse>(`/api/horizons/${horizon}/run`, 900_000, json("POST", payload)),
   strategies: () =>
     request<StrategyListItem[]>("/api/strategies", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   strategyDetail: (strategyId: string, versionId?: string) => {
@@ -452,6 +486,12 @@ export const api = {
     if (params?.limit) qs.set("limit", String(params.limit));
     const str = qs.toString();
     return request<RunSummary[]>(`/api/records/runs${str ? `?${str}` : ""}`);
+  },
+  // 服务端分页：按 started_at 倒序，覆盖最近 500 次运行
+  runRecordsPage: (params: { page: number; page_size: number; run_mode?: string; status?: string; preset_id?: string; trade_date_from?: string; trade_date_to?: string; fields?: "slim" | "full"; min_picks?: number; sort?: "started_at" | "picks" | "duration" | "status"; order?: "asc" | "desc" }) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== "") qs.set(k, String(v));
+    return request<{ items: RunSummary[]; total: number; page: number; page_size: number }>(`/api/records/runs?${qs.toString()}`);
   },
   runRecordDetail: (runId: string) => request<RunRecordDetail>(`/api/records/runs/${runId}`),
   matrixRecords: (params?: { page?: number; page_size?: number; code?: string; analysis_type?: string; exclude_analysis_type?: string }) => {

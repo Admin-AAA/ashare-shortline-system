@@ -202,9 +202,9 @@ function ScoreRow({
                 padding: "1px 5px",
                 borderRadius: 3,
                 border: soft.banned
-                  ? "1px solid var(--warning, #d4a017)40"
+                  ? "1px solid color-mix(in srgb, var(--warning) 25%, transparent)"
                   : "1px solid var(--border)",
-                color: soft.banned ? "var(--warning, #d4a017)" : "var(--muted)",
+                color: soft.banned ? "var(--warning)" : "var(--muted)",
                 fontWeight: soft.banned ? 600 : 400,
                 letterSpacing: 0.3,
                 whiteSpace: "nowrap",
@@ -292,14 +292,14 @@ function ExpandedDetail({ row }: { row: FunnelAuditRow }) {
           </DetailBlock>
 
           {/* Skill / LLM 深审 */}
-          <DetailBlock title="Skill / LLM 深审">
+          <DetailBlock title="Skill / LLM 深审（LLM 仅供参考，不影响出票）">
             <KV k="深审 skill" v={reviewIds.length ? reviewIds.join(", ") : "—"} />
             {row.rule_gate?.best_skill_id && <KV k="最佳规则门" v={row.rule_gate.best_skill_id} />}
             {Object.keys(gateScores).length > 0 &&
               Object.entries(gateScores).map(([k, v]) => <KV key={k} k={`门分·${k}`} v={fmtNum(Number(v))} />)}
             <KV
               k="LLM 状态"
-              v={llmFallback ? "降级（未用 LLM 改分）" : "正常"}
+              v={llmFallback ? "降级" : "正常（不改分）"}
               accent={llmFallback ? "var(--market-down)" : undefined}
             />
           </DetailBlock>
@@ -313,12 +313,12 @@ function ExpandedDetail({ row }: { row: FunnelAuditRow }) {
               penalties.map((p, i) => <KV key={i} k={p.label} v={`+${p.value}`} accent="var(--market-down)" />)
             )}
             <KV k="有效线" v={fmtNum(sl.effective_score_line)} bold />
-            <KV k="最终分" v={fmtNum(sl.final_score)} bold />
+            <KV k="规则分（出票依据）" v={fmtNum(sl.final_score)} bold />
             {soft.applied ? (
               <KV
                 k={soft.banned ? "软降线·污染" : "软降线"}
                 v={soft.line}
-                accent={soft.banned ? "var(--warning, #d4a017)" : "var(--muted)"}
+                accent={soft.banned ? "var(--warning)" : "var(--muted)"}
               />
             ) : null}
           </DetailBlock>

@@ -27,6 +27,7 @@ import { PageSkeleton, ErrorPage, EmptyState, CardSkeleton } from "../components
 import { SkillsCatalogPanel } from "../components/SkillsCatalogPanel";
 import { Panel } from "../components/Panel";
 import { LineChart, Info } from "lucide-react";
+import { utcMs } from "../utils/time";
 
 /** 时间窗口选项：null=全部历史累计，N=最近 N 天且已结算。 */
 const WINDOW_OPTIONS: Array<{ label: string; value: number | null }> = [
@@ -41,8 +42,8 @@ const SAMPLE_SCOPE_OPTIONS: Array<{
   label: string;
   value: MetricsSampleScope;
 }> = [
-  { label: "历史回放（研究）", value: "historical_replay" },
   { label: "LIVE 前瞻", value: "live_forward" },
+  { label: "历史重建（研究）", value: "historical_replay" },
 ];
 
 /** 英文因子名 → 中文小字翻译（Alpha 衰减面板的因子列）。 */
@@ -122,8 +123,9 @@ export function MetricsPage() {
     [windowDays, sampleScope],
   );
 
-  const loading = l1 || l2 || l3 || l4 || l5 || l6 || l7;
-  const error = e1 || e2 || e3 || e4 || e5 || e6 || e7;
+  // 性能：只由「概览」决定整块骨架/空态；其余 6 个面板各自到达即渲染（原先需等 7 个端点全部返回）。
+  const loading = l6;
+  const error = e6;
 
   // 概览覆盖窗口内全部推荐及 pending/missed；其余端点只作无概览时的降级来源。
   const dateRange: DateRangeMeta | undefined =
@@ -170,12 +172,12 @@ export function MetricsPage() {
               gap: "var(--space-4)",
             }}
           >
-            <PrecisionPanel rows={precisionAtK ?? []} />
-            <FilterEffectivenessPanel data={filterEffect} />
-            <ScoreLinePanel rows={scoreLines ?? []} />
-            <StrategyPanel rows={strategies ?? []} />
-            <SetupPanel rows={setups ?? []} />
-            <AlphaDecayPanel data={alphaDecay} />
+            <PanelSlot loading={l4} error={e4} title="Precision@K"><PrecisionPanel rows={precisionAtK ?? []} /></PanelSlot>
+            <PanelSlot loading={l5} error={e5} title="过滤效果"><FilterEffectivenessPanel data={filterEffect} /></PanelSlot>
+            <PanelSlot loading={l1} error={e1} title="分数段胜率"><ScoreLinePanel rows={scoreLines ?? []} /></PanelSlot>
+            <PanelSlot loading={l2} error={e2} title="策略胜率"><StrategyPanel rows={strategies ?? []} /></PanelSlot>
+            <PanelSlot loading={l3} error={e3} title="Setup 胜率"><SetupPanel rows={setups ?? []} /></PanelSlot>
+            <PanelSlot loading={l7} error={e7} title="Alpha 衰减"><AlphaDecayPanel data={alphaDecay} /></PanelSlot>
             <SkillsCatalogPanel />
           </div>
           <DNetPanel windowDays={windowDays} sampleScope={sampleScope} />
@@ -183,6 +185,13 @@ export function MetricsPage() {
       )}
     </div>
   );
+}
+
+/** 面板占位：数据未到显示骨架、出错显示该面板错误，到达后渲染原面板（内容与计算不变）。 */
+function PanelSlot({ loading, error, title, children }: { loading: boolean; error: string; title: string; children: ReactNode }) {
+  if (loading) return <PageSkeleton title={title} hint="加载中" rowCount={4} />;
+  if (error) return <ErrorPage title={`${title}加载失败`} message={error} />;
+  return <>{children}</>;
 }
 
 /** 指标页通用可折叠卡片：标题 kicker/title 垂直排列，右上角带折叠按钮。 */
@@ -211,8 +220,8 @@ function MetricCard({
 /** 把 ISO 时间转成「X 分钟/小时/天前」，null/无效返回「从未」。 */
 function relTime(iso: string | null | undefined): string {
   if (!iso) return "从未";
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return "未知";
+  const t = utcMs(iso);
+  if (t == null) return "未知";
   const diffMs = Date.now() - t;
   const min = Math.floor(diffMs / 60000);
   if (min < 1) return "刚刚";
@@ -1153,7 +1162,7 @@ function scopeButtonStyle(active: boolean): CSSProperties {
     fontSize: 13,
     borderRadius: 4,
     border: "1px solid var(--border)",
-    background: active ? "var(--color-accent, #2563eb)" : "var(--surface-1)",
+    background: active ? "var(--color-accent)" : "var(--surface-1)",
     color: active ? "#fff" : "var(--text-secondary)",
     cursor: "pointer",
     fontWeight: active ? 600 : 400,
@@ -1382,12 +1391,12 @@ function PrecisionPanel({ rows }: { rows: PrecisionAtKRow[] }) {
             transform: "translateX(-50%)",
             width: 320,
             padding: "12px 16px",
-            background: "#252540",
-            border: "1px solid #555",
+            background: "var(--surface-strong)",
+            border: "1px solid var(--line)",
             borderRadius: 8,
             fontSize: 13,
             lineHeight: 1.7,
-            color: "#d0d0d0",
+            color: "var(--ink-secondary)",
             whiteSpace: "normal",
             zIndex: 99999,
             boxShadow: "0 8px 24px rgba(0,0,0,.6)",
@@ -1399,7 +1408,7 @@ function PrecisionPanel({ rows }: { rows: PrecisionAtKRow[] }) {
           </strong>
           系统每次会推荐一组股票并按好坏排序。<br />
           「前 K」表示取排名最靠前的 K 只来看，「命中率」是其中真正赚钱的比例。<br />
-          <span style={{ color: "#aaa", display: "block", marginTop: 6 }}>
+          <span style={{ color: "var(--muted)", display: "block", marginTop: 6 }}>
             例：前1 = 60% → 每次推荐的第1只股票，有60%概率是涨的。<br />
             数值越高且从前1到前10递减越慢，说明排序越准。
           </span>
