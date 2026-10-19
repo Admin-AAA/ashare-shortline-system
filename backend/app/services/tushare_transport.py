@@ -25,6 +25,8 @@ from app.core import provider_quota as _provider_quota
 
 from app.services.observability import log_observation
 
+from app.core import promax_window as _promax_window  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 _RETRYABLE_HTTP_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -348,6 +350,12 @@ _RESEARCH_LIMITER: list[Any] = []
 _RESEARCH_LIMITER_LOCK = threading.Lock()
 
 
+def _is_research_namespace() -> bool:
+    from app.core.shared_breaker import RESEARCH_NAMESPACE, breaker_namespace
+
+    return breaker_namespace() == RESEARCH_NAMESPACE
+
+
 def _in_research_window(now: datetime | None = None) -> bool:
     from zoneinfo import ZoneInfo
 
@@ -578,6 +586,9 @@ class TushareHttpProvider:
         t0 = time.perf_counter()
         if self.config.name == "promax" and research_intraday_throttled():
             _research_promax_limiter().acquire()  # leave promax headroom for live: realtime
+        if self.config.name == "promax" and _is_research_namespace():
+            # 按窗口令牌桶（5min/60min）；盘中先让路给 live rt_k
+            _promax_window.research_acquire(api_name, intraday=_in_research_window())
         self._provider_limiter.acquire()
         api_limiter = self._api_limiters.get(api_name)
         if api_limiter is not None:
@@ -755,14 +766,11 @@ class TushareHttpProvider:
                         fallback_allowed=True,
                     )
                 if status == 429:
-                    retry_after = 60.0
-                    try:
-                        retry_after = max(
-                            1.0,
-                            float((getattr(response, "headers", {}) or {}).get("Retry-After", 60)),
-                        )
-                    except (TypeError, ValueError):
-                        pass
+                    upstream_wait = _promax_window.upstream_wait_seconds(response)
+                    if self.config.name == "promax":
+                        retry_after = _promax_window.cooldown_seconds(api_name, upstream_wait)
+                    else:
+                        retry_after = upstream_wait or 60.0
                     raise ProviderFailure(
                         provider=self.name,
                         api_name=api_name,
@@ -775,14 +783,20 @@ class TushareHttpProvider:
                     upstream_detail = _extract_upstream_detail(response)
                     haystack = (upstream_detail or "").lower()
                     if any(term in haystack for term in _CAPACITY_EXHAUSTED_TERMS):
-                        # 容量耗尽：让本源冷却 recovery_seconds 并立刻切换到下一个 provider。
+                        # 容量耗尽：让本源冷却并立刻切换到下一个 provider。上游给了等待时间就用上游的；
+                        # promax 否则按实测窗口（app/core/promax_window.py），其他源沿用 recovery_seconds。
+                        upstream_wait = _promax_window.upstream_wait_seconds(response)
+                        if self.config.name == "promax":
+                            cooldown = _promax_window.cooldown_seconds(api_name, upstream_wait)
+                        else:
+                            cooldown = upstream_wait or float(self.config.recovery_seconds)
                         raise ProviderFailure(
                             provider=self.name,
                             api_name=api_name,
                             category=FailureCategory.HTTP_RATE_LIMIT,
                             retryable=False,
                             fallback_allowed=True,
-                            retry_after_seconds=float(self.config.recovery_seconds),
+                            retry_after_seconds=cooldown,
                             upstream_detail=upstream_detail,
                         )
                     raise ProviderFailure(
