@@ -50,7 +50,16 @@ def _resolve_test_db_url() -> str:
     return raw
 
 
-TEST_DB_URL = _resolve_test_db_url()
+try:
+    TEST_DB_URL = _resolve_test_db_url()
+except RuntimeError as _exc:
+    pytest.exit(str(_exc), returncode=4)
+if TEST_DB_URL.startswith("mysql"):
+    from sqlalchemy.engine import make_url as _mu
+
+    _db = _mu(TEST_DB_URL).database
+    if _db != TEST_DB_NAME or PRODUCTION_DB_NAME in TEST_DB_URL:
+        pytest.exit(f"tests only run on {TEST_DB_NAME!r}, got {_db!r}", returncode=4)
 _HAS_TEST_DB = bool(TEST_DB_URL and TEST_DB_URL.startswith("mysql"))
 _MYSQL_LOCK_NAME = "ashare_pytest_db_lock"
 _MYSQL_LOCK_WAIT_SECONDS = int(os.environ.get("ASHARE_PYTEST_DB_LOCK_SECONDS", "5"))

@@ -184,8 +184,19 @@ def update_preset(db: Session, preset_id: str, payload: dict[str, Any]) -> dict[
     return _serialize_preset(db, preset)
 
 
+PROTECTED_PRESET_PREFIX = "preset_formal_"
+
+
+class ProtectedPresetError(Exception):
+    """正式预设（preset_formal_*）被正式短线/盘前 formal run 依赖，禁止通过 API/UI 删除。"""
+
+
 def delete_preset(db: Session, preset_id: str) -> bool:
     import logging
+
+    if str(preset_id).startswith(PROTECTED_PRESET_PREFIX):
+        # 2026-10-19 09:44:52 UI 误删 preset_formal_opening 导致正式短线缺预设
+        raise ProtectedPresetError(preset_id)
 
     logger = logging.getLogger(__name__)
     preset = db.get(Preset, preset_id)

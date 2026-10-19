@@ -20,7 +20,12 @@ def post_preset(payload: dict, db: Session = Depends(get_db)):
 
 @router.delete("/{preset_id}")
 def delete(preset_id: str, db: Session = Depends(get_db)):
-    ok = delete_preset(db, preset_id)
+    from app.services.registry.presets import ProtectedPresetError
+
+    try:
+        ok = delete_preset(db, preset_id)
+    except ProtectedPresetError:
+        raise HTTPException(status_code=403, detail=f"正式预设 {preset_id} 受保护，禁止删除（可改为停用/编辑）")
     if not ok:
         raise HTTPException(status_code=404, detail="preset not found")
     return {"deleted": preset_id}
