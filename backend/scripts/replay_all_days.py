@@ -110,6 +110,14 @@ def _base_payload(db=None) -> dict:
         params["run_name"] = "REPLAY-历史推荐重建"
         params["preset_id"] = "preset_formal_opening"
         params["trade_date_override"] = None  # 每日单独设
+        # 实盘 10-14 起按单策略逐个 run（每策略 3 只）；若最近 run 是单策略，回放改用
+        # preset 的全部现役策略（skills 来自 preset_skills），output_count=3×策略数。
+        if len(params.get("skills") or []) <= 1:
+            params.pop("skills", None)
+            params.pop("single_skill_id", None)
+            from app.models.tables import PresetSkill
+            n = len(db.scalars(select(PresetSkill.skill_id).where(PresetSkill.preset_id == "preset_formal_opening")).all())
+            params["output_count"] = 3 * max(n, 1)
         return params
     finally:
         if owns_session:
