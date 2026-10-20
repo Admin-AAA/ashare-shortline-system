@@ -176,6 +176,54 @@ def intraday_lock_poll_flow() -> None:
 
 
 @task(retries=0)
+def poll_execution_confirmation(scheduled_at: str) -> dict:
+    """交易时段服务端轮询盘中买入确认。
+
+    此前确认只由前端持仓/复盘页按钮触发：没人打开页面的交易日一次都不确认，
+    推荐到盘后统一被判过期 missed（2026-10-14 批次全军覆没）。
+    """
+    from datetime import datetime, timezone
+
+    from app.db.session import SessionLocal
+    from app.services.batch_execution_confirmation import (
+        MAX_BATCH_IDS,
+        confirm_batch_executions,
+        list_unsettled_confirmation_ids,
+    )
+    from app.services.schedule_gate import schedule_skip_reason
+    from app.services.tushare_client import is_open_trade_date
+
+    skip_reason = schedule_skip_reason(
+        datetime.fromisoformat(scheduled_at), datetime.now(timezone.utc), is_open_trade_date
+    )
+    if skip_reason is not None:
+        logger.info("盘中买入确认轮询%s", skip_reason)
+        return {"skipped": True, "reason": skip_reason}
+    try:
+        db = SessionLocal()
+        try:
+            ids = list_unsettled_confirmation_ids(db)
+            summaries = []
+            for start in range(0, len(ids), MAX_BATCH_IDS):
+                result = confirm_batch_executions(db, ids[start:start + MAX_BATCH_IDS], refresh=True)
+                summaries.append(result.get("summary") or {})
+                if result.get("error"):
+                    logger.warning("盘中买入确认轮询批次失败: %s", result["error"])
+            return {"pending": len(ids), "batches": summaries}
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("盘中买入确认轮询失败")
+        return {"error": True}
+
+
+@flow(name="execution-confirmation-poll", timeout_seconds=900)
+def execution_confirmation_poll_flow() -> None:
+    _ensure_app_logging()
+    poll_execution_confirmation(_scheduled_start_iso())
+
+
+@task(retries=0)
 def recover_stale_runs() -> int:
     """Prefect-scheduled stale run recovery (replaces in-process interval job)."""
     from app.services.workbench_service import recover_interrupted_runs

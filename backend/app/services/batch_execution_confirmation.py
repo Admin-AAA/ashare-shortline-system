@@ -113,6 +113,22 @@ def _load_eligible_recs(
     return eligible, skipped
 
 
+def list_unsettled_confirmation_ids(db: Session) -> list[str]:
+    """服务端轮询用：全部可做实时确认的未结算正式推荐 ID（含补跑正式运行，口径同 _load_eligible_recs）。"""
+    run_ids = tuple(canonical_live_forward_run_ids(db)) + tuple(catchup_formal_run_ids(db))
+    if not run_ids:
+        return []
+    rows = db.execute(
+        select(Recommendation, RecommendationOutcome)
+        .outerjoin(
+            RecommendationOutcome,
+            RecommendationOutcome.recommendation_id == Recommendation.recommendation_id,
+        )
+        .where(Recommendation.run_id.in_(run_ids))
+    ).all()
+    return sorted({str(rec.recommendation_id) for rec, outcome in rows if is_unsettled_formal_rec(rec, outcome)})
+
+
 def _signal_age_trade_days(bars: list[dict[str, Any]], signal_date: str, data_as_of: str) -> int:
     """推荐日之后到 data_as_of（含）之间的真实交易日数（基于合成后的完整 K 序列）。
 
@@ -737,4 +753,4 @@ def _response_for_request(
     return response
 
 
-__all__ = ["confirm_batch_executions", "MAX_BATCH_IDS"]
+__all__ = ["confirm_batch_executions", "list_unsettled_confirmation_ids", "MAX_BATCH_IDS"]
