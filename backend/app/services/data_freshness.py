@@ -41,7 +41,8 @@ DAILY_TABLES: list[tuple[str, str, int, tuple[str, ...], bool]] = [
 # 事件/低频表：按自然日阈值判断停更
 EVENT_TABLES: list[tuple[str, str, int]] = [
     ("share_floats", "created_at", 10),
-    ("news_announcement", "announce_date", 3),
+    # news_announcement 不在此查：线上真源是公告事件快照（见 SNAPSHOT_MAX_AGE_DAYS），同名 MySQL 表
+    # 只由逐股补数写入、不日更，按它判停更是误报（10-20 报「4 天未更新」时快照已写到当天）。
     ("institutional_surveys", "surv_date", 14),
     ("stock_fina_indicator", "ann_date", 30),
     ("holder_numbers", "ann_date", 45),
