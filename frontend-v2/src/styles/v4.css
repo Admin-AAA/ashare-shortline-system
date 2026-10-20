@@ -52,6 +52,16 @@ kbd { font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--li
 .reason { max-width: 420px; color: var(--muted); line-height: 1.45; white-space: normal; }
 .hyp { opacity: .8; }
 .batch { overflow: hidden; }
+/* 复盘 · 收益曲线（components/EquityCurve.tsx） */
+.eq { padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
+.eq__hd, .eq__ft { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.eq__svg { width: 100%; height: auto; display: block; }
+.eq__line { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; }
+.eq__grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.eq__base { stroke: var(--muted-strong); stroke-width: 1; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+.eq__dot { fill: var(--accent); stroke: var(--surface); stroke-width: 2; }
+.eq__tick { fill: var(--muted); font-family: var(--font-mono); font-size: 10px; }
+.eq__empty { padding: 32px 0; text-align: center; }
 .batch__hd { display: flex; align-items: center; gap: 12px; padding: 12px 16px; cursor: pointer; flex-wrap: wrap; }
 .batch__hd:hover { background: var(--surface-soft); }
 .hits { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 0; }

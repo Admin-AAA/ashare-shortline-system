@@ -5,6 +5,8 @@ import { EmptyState, ErrorPage, PageSkeleton } from "../components/StateViews";
 import { useApi } from "../app/useApi";
 import "../styles/horizon.css";
 import { RunPanel, PickDrawer, PickStatusLine } from "./HorizonExtras";
+import { EquityCurve } from "../components/EquityCurve";
+import { classifyHorizon } from "../utils/equityCurve";
 
 type Target = { sid: string; date: string; code: string };
 const SCHEDULE_OVERRIDE: Record<string, string> = { "mid-block-trade-premium": "每晚约 21:00 大宗数据发布后选股" };
@@ -231,6 +233,15 @@ function ReviewView({ horizon, list, onPick }: { horizon: H; list: HorizonStrate
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"date" | "ret_desc" | "ret_asc">("date");
   const res = useApi<HorizonPicksResponse>(() => api.horizonPicksPage(horizon, page, PAGE_SIZE, sid === "all" ? undefined : sid), [horizon, page, sid]);
+  // 收益曲线要全量批次（列表是分页的）：按 200 一页拉全，只跟随策略筛选，不跟随状态/搜索（否则幸存者偏差）
+  const all = useApi<HorizonBatch[]>(async () => {
+    const sq = sid === "all" ? undefined : sid;
+    const first = await api.horizonPicksPage(horizon, 1, 200, sq);
+    const n = Math.ceil((first.total ?? 0) / 200);
+    const rest = await Promise.all(Array.from({ length: Math.max(0, n - 1) }, (_, i) => api.horizonPicksPage(horizon, i + 2, 200, sq)));
+    return [first, ...rest].flatMap((r) => r.batches);
+  }, [horizon, sid]);
+  const curvePicks = useMemo(() => (all.data ?? []).flatMap((b) => b.picks), [all.data]);
   const kw = q.trim();
   const batches = res.data?.batches ?? [];
   const shown = batches
@@ -276,6 +287,9 @@ function ReviewView({ horizon, list, onPick }: { horizon: H; list: HorizonStrate
           <Kpi label="开盘涨停取消买入" value={`${cancelled} 只`} tone={cancelled ? "amber" : undefined} />
         </div>
       </section>
+      {all.data && (
+        <EquityCurve items={curvePicks} classify={classifyHorizon} />
+      )}
       {res.loading ? <PageSkeleton title="加载批次" /> : res.error ? <ErrorPage title="批次加载失败" message={res.error} onRetry={res.refetch} /> : <>
         {shown.length === 0 && <section className="panel hz-pad"><EmptyState title="没有符合条件的批次" reason="换个策略/状态、清空搜索或翻页。" /></section>}
         {shown.map((b, i) => <BatchCard key={b.signal_date + b.strategy_id} b={b} defaultOpen={i === 0 || !!kw} list={list} highlight={kw} onPick={onPick} />)}
@@ -309,6 +323,7 @@ function BatchCard({ b, defaultOpen, list, highlight, onPick }: { b: HorizonBatc
         {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         <span className="hz-num">{b.signal_date}</span>
         <span className="hz-batch__name">{b.strategy_name}</span>
+        {b.origin === "replay" && <span className="hz-pill hz-pill--amber">回放</span>}
         {b.status === "pending" && b.picks.some((p) => buyingToday(b.signal_date, p)) ? <span className="hz-pill hz-pill--amber">今日开盘买入，收盘后确认</span> : <Status s={b.status} />}
         <span className="hz-muted">{b.picks.length} 只{cancelN ? `（${cancelN} 只开盘涨停取消）` : ""}{hold ? ` · 持 ${hold} 日` : ""}</span>
         <span className={`hz-batch__ret hz-num ${pnl(b.avg_ret)}`}>{b.avg_ret == null ? "—" : `${b.status === "closed" ? "平均" : "浮动平均"} ${pct(b.avg_ret)}`}</span>

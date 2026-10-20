@@ -6,6 +6,7 @@ import type { RecommendationHistoryResponse } from "../types";
 import { exitReasonLabel, formatApiDateTime, isOutcomeSettled, setupLabel } from "../utils/display";
 import { SHORT_STRATEGIES, strategyShortName } from "../ui/strategyRules";
 import { EmptyState, ErrorPage, PageSkeleton } from "../components/StateViews";
+import { EquityCurve } from "../components/EquityCurve";
 
 /** 复盘 · 按批次（默认视图）
  * 数据：GET /api/recommendations/history（含 execution_state / cancel_observation / outcome / summary.cancel_observation）。
@@ -34,7 +35,6 @@ const RESULTS = ["全部", "已买入", "持有中", "已平仓", "盈利", "亏
 const PER = 5;
 
 export function BatchReviewPage() {
-  const [scope, setScope] = useState<"live" | "replay">("live");
   const [code, setCode] = useState("");
   const [strategy, setStrategy] = useState("");
   const [result, setResult] = useState("全部");
@@ -56,8 +56,11 @@ export function BatchReviewPage() {
     },
   });
 
+  // 实盘与回放一起展示，回放批次在批次头打「回放」标签。曲线跟随 代码/策略，不跟随「结果」筛选（否则只算盈利笔，幸存者偏差）
+  const scoped = useMemo(() => q.data?.items ?? [], [q.data]);
+
   const batches = useMemo(() => {
-    const items = (q.data?.items ?? []).filter((it) => (scope === "live" ? it.evidence_class !== "historical_reconstruction" : it.evidence_class === "historical_reconstruction"));
+    const items = scoped;
     const match = (it: Item) => {
       const s = statusOf(it);
       const r = it.outcome?.executed_return;
@@ -81,7 +84,7 @@ export function BatchReviewPage() {
       map.set(it.run_id, b);
     }
     return [...map.values()].filter((b) => b.view.length).sort((a, b) => (a.run < b.run ? 1 : -1));
-  }, [q.data, scope, result]);
+  }, [scoped, result]);
 
   if (q.isLoading) return <PageSkeleton title="复盘" hint="加载批次" rowCount={8} />;
   if (q.error) return <ErrorPage title="加载失败" message={(q.error as Error).message} onRetry={() => void q.refetch()} />;
@@ -97,19 +100,15 @@ export function BatchReviewPage() {
   return (
     <div className="page">
       <div className="ph">
-        <div><h1>复盘 · 按批次 {scope === "replay" && <span className="tag tag--warn">回放</span>}</h1><p>每次运行一批：买了哪些股票、命中哪个策略、为什么推荐、是否在盘中确认时取消。收益为逐笔结算（含成本）。</p></div>
-        <div className="seg" title="evidence_class：live_forward / historical_reconstruction">
-          <button className={scope === "live" ? "on" : ""} onClick={() => setScope("live")}>LIVE 前瞻</button>
-          <button className={scope === "replay" ? "on" : ""} onClick={() => setScope("replay")}>历史重建</button>
-        </div>
+        <div><h1>复盘 · 按批次</h1><p>每次运行一批：买了哪些股票、命中哪个策略、为什么推荐、是否在盘中确认时取消。收益为逐笔结算（含成本）。标「回放」的批次是用当前规则回放历史行情得到的，不代表实盘前瞻表现。</p></div>
       </div>
-      {scope === "replay" && <div className="note">历史重建口径：用当前规则回放历史行情得到的样本，标记「回放」，不代表实盘前瞻表现。</div>}
       <div className="grid g4" style={{ marginBottom: 16 }}>
         <div className="card stat"><div className="l">已结算笔数 · 胜率</div><div className="v">{q.data?.summary.trade_count ?? 0} · {q.data?.summary.win_rate == null ? "—" : `${q.data.summary.win_rate.toFixed(1)}%`}</div><div className="d">平均每笔 {pct(q.data?.summary.average_net_return)}</div></div>
         <div className="card stat"><div className="l">取消买入笔数</div><div className="v">{co?.cancelled_count ?? 0}</div><div className="d">不计入已结算统计</div></div>
         <div className="card stat"><div className="l">取消后第 5 日假设收益</div><div className="v">{pct(co?.average_5d_return)}</div><div className="d">已观察 {co?.observed_5d_count ?? 0} 笔</div></div>
         <div className="card stat"><div className="l">避免亏损率</div><div className="v">{co?.avoided_loss_rate_5d == null ? "—" : `${co.avoided_loss_rate_5d.toFixed(0)}%`}</div><div className="d">取消后第 5 日假设收益 ≤ 0 的比例</div></div>
       </div>
+      <EquityCurve items={scoped} />
       <div className="card toolbar">
         <input className="inp" placeholder="6 位代码" value={code} onChange={(e) => { setCode(e.target.value.trim()); setPage(1); }} style={{ width: 120 }} />
         <select className="inp" value={strategy} onChange={(e) => { setStrategy(e.target.value); setPage(1); }}>
@@ -129,19 +128,21 @@ export function BatchReviewPage() {
         const avg = settled.length ? settled.reduce((a, i) => a + (i.outcome?.executed_return ?? 0), 0) / settled.length : null;
         const wins = settled.filter((i) => (i.outcome?.executed_return ?? 0) > 0).length;
         const nCancel = b.all.filter((i) => ["cancel", "untriggered", "expired"].includes(statusOf(i).key)).length;
+        const replay = b.all.some((i) => i.evidence_class === "historical_reconstruction");
         const setups = new Set(b.all.map((i) => i.setup_type).filter(Boolean));
         return (
           <div className="card batch" key={b.run}>
             <div className="batch__hd" onClick={() => toggle(b.run)}>
               {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
               <b className="num">{b.date}</b>
+              {replay && <span className="tag tag--warn">回放</span>}
               <span className="mono small muted">{b.run}</span>
               {b.at && <span className="small muted">{formatApiDateTime(b.at, { hour: "2-digit", minute: "2-digit" })} 生成</span>}
               {b.preset && <span className="tag">{b.preset}</span>}
               <span className="tag">{b.view.length < b.all.length ? `匹配 ${b.view.length} / ` : ""}{b.all.length} 只</span>
               <span className="tag">{setups.size} 种买点</span>
               {nCancel > 0 && <span className="tag tag--gray">取消/未触发 {nCancel}</span>}
-              <span style={{ marginLeft: "auto" }} className="small muted">已平仓平均</span>{pct(avg)}{scope === "replay" && avg != null && <span className="tag tag--warn">回放</span>}
+              <span style={{ marginLeft: "auto" }} className="small muted">已平仓平均</span>{pct(avg)}
               <span className="small muted">胜率</span><b className="num">{settled.length ? `${Math.round((wins / settled.length) * 100)}%` : "—"}</b>
             </div>
             {isOpen && (
