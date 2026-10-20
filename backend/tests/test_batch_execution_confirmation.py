@@ -726,13 +726,14 @@ def test_stop_broken_returns_cancel_over_supportive_signal(db, monkeypatch):
     """跌破原止损优先于支持性规则 → cancel。"""
     run_id = _make_run(db, "test_batch_stop_run")
     rec = _make_rec(db, "test_batch_stop_rec", run_id, "600775", bucket=_FAKE_SKILL.skill_id, recommend_price=10.0, stop_loss=9.8)
-    _add_kbar(db, "600775", "2026-07-29", close=9.5)  # 现价低于止损
+    # 止损按结算口径归一化为 10.0*(1-5.5%)=9.45；现价 9.4 低于它
+    _add_kbar(db, "600775", "2026-07-29", close=9.4)
     db.flush()
 
     _setup_decision_mocks(
         monkeypatch,
-        stocks=[_fake_stock("600775", price=9.5)],
-        rt_quotes={"600775": _rt("600775", close=9.5)},
+        stocks=[_fake_stock("600775", price=9.4)],
+        rt_quotes={"600775": _rt("600775", close=9.4)},
         # signal 看似支持入场，但跌破止损应优先 cancel
         signal={"phase": "确认", "score": 90, "setup_match": "分歧回封", "hard_veto": False, "risk_flags": []},
     )

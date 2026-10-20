@@ -474,3 +474,48 @@ def test_condition_summary_marks_cumulative_shortfall_as_pending():
     assert waited["status"] == "pending"
     assert vetoed["status"] == "pending"
     assert failed["status"] == "failed"
+
+
+# ── #9: 原始止损高于推荐价（超跌反包，价远低于 MA20）时按结算口径归一化 ──────────
+
+def _confirm_oversold(db_session, monkeypatch, current_price: float):
+    import json
+    from types import SimpleNamespace
+
+    from app.services import execution_confirmation as ec
+
+    class _Now(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 20, 9, 40)
+
+    monkeypatch.setattr(ec, "datetime", _Now)
+    monkeypatch.setattr(ec, "latest_allowed_quote_date", lambda: "2026-10-20")
+    rec = SimpleNamespace(
+        recommendation_id="rec_x", code="002850", name="科达利", trade_date="2026-10-19",
+        recommended_at=datetime(2026, 10, 19, 10, 7),  # 18:07 CST 盘后
+        recommend_price=147.13, bucket="oversold-capital-reversal",
+        entry_rule="次日开盘介入", invalid_rule="",
+        # market_data: max(ma20*0.95, 价*0.945) = 160.05*0.95 = 152.05 > 推荐价
+        feature_snapshot_json=json.dumps({"stop_loss": 152.05}),
+    )
+    return ec.confirm_with_prepared_context(
+        db_session, rec,
+        snapshot={"trade_date": "2026-10-20"},
+        current={"price": current_price},
+        skill=SimpleNamespace(name="超跌资金反包"),
+        signal=_signal(setup_match="超跌放量反包", score=75.0),
+        prefilter_ok=True,
+        signal_age_trade_days=1,
+    )
+
+
+def test_stop_above_recommend_price_does_not_cancel_on_open(db_session, monkeypatch):
+    result = _confirm_oversold(db_session, monkeypatch, current_price=149.5)
+    assert result["entry_decision"]["code"] == "buy"
+    assert result["original"]["stop_loss"] == pytest.approx(139.04, abs=0.01)  # 147.13*(1-5.5%)
+
+
+def test_normalized_stop_still_cancels_real_break(db_session, monkeypatch):
+    result = _confirm_oversold(db_session, monkeypatch, current_price=138.0)
+    assert result["entry_decision"]["code"] == "cancel"

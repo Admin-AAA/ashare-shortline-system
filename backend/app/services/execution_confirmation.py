@@ -25,7 +25,7 @@ from app.services.evidence.validation import (
     catchup_formal_run_ids,
 )
 from app.services.intraday_cumulative_policy import intraday_cumulative_inconclusive
-from app.services.outcome_simulation import _is_intraday_recommendation
+from app.services.outcome_simulation import _is_intraday_recommendation, _resolve_stop_loss_price
 
 
 def _decision(code: str, label: str, reason: str) -> dict[str, str]:
@@ -275,7 +275,10 @@ def confirm_with_prepared_context(
 
     current_price = float(current.get("price") or current.get("close") or 0)
     original_snapshot = _json_mapping(rec.feature_snapshot_json)
-    stop_loss = float(original_snapshot.get("stop_loss") or 0)
+    # 原始 stop_loss = max(ma20*0.95, 价*(1-5.5%))，股价远低于 MA20（超跌反包）时会高于推荐价，
+    # 直接比较会让这类推荐一开盘就被判「跌破止损」取消。按结算口径（outcome_simulation）以推荐价
+    # 为入场基准归一化止损，保证实时确认与回测/结算用同一条止损线。
+    stop_loss = _resolve_stop_loss_price(float(rec.recommend_price or 0) or None, original_snapshot)
     # 止损基准跨除权修正：stop_loss 是推荐日裸价，若推荐日到今日发生除权（10送10 等），
     # 裸价比会误判跌破止损。用 pct_chg 链累乘出复权因子，把止损基准缩放到今日口径。
     adjusted_stop_loss = _adjust_stop_loss_for_ex_right(db, code, str(rec.trade_date), data_as_of, stop_loss)
