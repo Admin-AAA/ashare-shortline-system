@@ -8,6 +8,11 @@ import os
 
 os.environ["ASHARE_UNDER_PYTEST"] = "1"
 os.environ.setdefault("PREFECT_API_URL", "http://127.0.0.1:9/api")
+# 测试日志不写生产 backend/logs/app.log：否则全量回归的数千条测试日志（rec_conflict、假补数失败、
+# 假失联回收…）混进线上日志，排障时被当成真故障，还会把 app.log 提前轮转掉。
+os.environ.setdefault(
+    "LOG_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), ".cache", "pytest-logs")
+)
 
 
 def _redirect_to_test_db() -> None:

@@ -30,6 +30,8 @@ def test_replay_midlong_isolated_and_tagged(tmp_path, monkeypatch):
         return {"mid-repurchase-plan": "no_data"}
 
     monkeypatch.setattr(ms, "generate_picks", fake_generate)
+    # 不等真实重试间隔（120+300+600+900s）：否则本测试把全量回归卡住 32 分钟
+    monkeypatch.setattr(rr, "MID_RETRY_WAITS", ())
     staging = tmp_path / "stg" / "picks"
     stats = rr.replay_midlong(None, "2026-10-15", "2026-10-16", None, staging)
     assert ms.OUT_DIR == prod

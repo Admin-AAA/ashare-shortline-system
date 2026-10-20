@@ -33,6 +33,10 @@ def _stub_ma250_fill(monkeypatch):
     import app.services.daily_basic_ingest as daily_basic_ingest
 
     monkeypatch.setattr(daily_basic_ingest, "ingest_daily_basic_with_alert", lambda _db, _d: {"stub": True})
+    import app.services.survey_margin_ingest as survey_margin_ingest
+
+    # 2026-10-19 起盘后接入机构调研/两融汇总日更（直接查库），假 db 下统一桩掉
+    monkeypatch.setattr(survey_margin_ingest, "daily_survey_margin_update", lambda _db, _d: {"stub": True})
 
 
 @pytest.fixture(autouse=True)
