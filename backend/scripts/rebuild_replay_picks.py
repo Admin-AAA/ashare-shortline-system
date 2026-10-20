@@ -118,28 +118,66 @@ def short_plan(db, start: str, end: str) -> dict:
 
 
 # ---------------------------------------------------------------- mid/long replay
-def replay_midlong(db, start: str, end: str, strategies: list[str] | None, staging: Path) -> dict:
-    """在 staging 目录里逐交易日顺序跑生产 generate_picks；返回统计。不碰生产 OUT_DIR。"""
+MID_RETRY_WAITS = (120, 300, 600, 900)  # 同一天 no_data/error 的策略按序重试（历史日 no_data = 取数失败）
+
+
+def replay_midlong(db, start: str, end: str, strategies: list[str] | None, staging: Path,
+                   stop_at: dt.time | None = None) -> dict:
+    """在 staging 目录里逐交易日顺序跑生产 generate_picks；返回统计。不碰生产 OUT_DIR。
+
+    可续跑：staging 旁的 progress.json 记录已完成到哪一天，同一 staging 再跑从下一天接着做
+    （_held_codes 只看 staging 里 as_of 之前的批次，顺序不被打乱）。某天有策略 no_data/error 时
+    按 MID_RETRY_WAITS 只重试这些策略，仍失败才记入 stats。到 stop_at 在日边界停下，stats["stopped"]=True。"""
     from app.services import midterm_service as ms
 
     staging.mkdir(parents=True, exist_ok=True)
+    prog_f = staging.parent / "progress.json"
+    prog = json.loads(prog_f.read_text()) if prog_f.exists() else {}
+    stats = {"days": 0, "errors": prog.get("errors", {}), "no_data": prog.get("no_data", {}),
+             "seconds": 0.0, "stopped": False}
+    from app.services import midterm_forecast as mf
+
     orig_out, orig_store = ms.OUT_DIR, ms._store_repurchase_events
+    orig_fc_fetch, orig_fc_store = mf._fetch_forecast_day, mf._store_live
     ms.OUT_DIR = staging
     ms._store_repurchase_events = lambda new: None  # 回放不改研究事件库
-    stats = {"days": 0, "errors": {}, "no_data": {}, "seconds": 0.0}
+    # 历史日的业绩预告改读本地逐股全历史（backfill_longterm），不再按公告日逐天打 promax：
+    # 2026-10-19 23:30 起 promax forecast 持续 upstream_pool_exhausted；本地与 API 对 20251018~24 逐行一致。
+    mf._fetch_forecast_day = _local_forecast_reader(orig_fc_fetch)
+    mf._store_live = lambda new: None
     t0 = time.time()
     try:
         for d in _trade_dates(db, start, end):
-            res = ms.generate_picks(db, d, strategy_ids=strategies)
-            stats["days"] += 1
+            if d <= prog.get("done_through", ""):
+                continue
+            if stop_at and dt.datetime.now().time() >= stop_at and dt.datetime.now().time() < dt.time(16, 0):
+                stats["stopped"] = True
+                break
+            pending, waits = strategies, list(MID_RETRY_WAITS)
+            while True:
+                res = ms.generate_picks(db, d, strategy_ids=pending)
+                bad = [sid for sid, raw in res.items()
+                       if raw == "no_data" or (isinstance(raw, dict) and "error" in raw)]
+                if not bad or not waits:
+                    break
+                w = waits.pop(0)
+                print(f"[midlong] {d} retry {bad} in {w}s", flush=True)
+                time.sleep(w)
+                pending = bad
             for sid, raw in res.items():
                 if isinstance(raw, dict) and "error" in raw:
                     stats["errors"].setdefault(sid, []).append(d)
                 elif raw == "no_data":  # 多为数据源限流/缺数，必须为 0 才算干净重建
                     stats["no_data"].setdefault(sid, []).append(d)
+            stats["days"] += 1
+            prog = {"done_through": d, "errors": stats["errors"], "no_data": stats["no_data"]}
+            prog_f.write_text(json.dumps(prog, ensure_ascii=False))
+            print(f"[midlong] done {d} bad={bad}", flush=True)
     finally:
         ms.OUT_DIR, ms._store_repurchase_events = orig_out, orig_store
+        mf._fetch_forecast_day, mf._store_live = orig_fc_fetch, orig_fc_store
         stats["seconds"] = round(time.time() - t0, 1)
+    stats["done_through"] = prog.get("done_through")
     tag_dir(staging)
     by: dict = {}
     for f in staging.glob("*.json"):
@@ -149,6 +187,26 @@ def replay_midlong(db, start: str, end: str, strategies: list[str] | None, stagi
         b["picks"] += len(dd["picks"])
     stats["by_strategy"] = by
     return stats
+
+
+def _local_forecast_reader(api_fetch):
+    """按公告日从 data/midterm/forecast/<code>.parquet 取全市场预告；超出本地覆盖的日期回落 API。"""
+    import pandas as pd
+    from app.services import midterm_forecast as mf
+
+    parts = [pd.read_parquet(f, columns=mf.COLS) for f in sorted(mf.FC_DIR.glob("*.parquet"))]
+    df = pd.concat([p for p in parts if len(p)], ignore_index=True)
+    df["ann_date"] = df["ann_date"].astype(str).str.strip()
+    covered_through = df["ann_date"].max()
+    groups = {k: g.reset_index(drop=True) for k, g in df.groupby("ann_date")}
+    empty = df.iloc[0:0]
+
+    def fetch(day: str):
+        if day > covered_through:
+            return api_fetch(day)
+        return groups.get(day, empty)
+
+    return fetch
 
 
 def tag_dir(d: Path) -> None:
@@ -221,9 +279,14 @@ def execute(db, args, short_rng, mid_rng, strategies) -> dict:
     keep = args.keep_live_forward
     report: dict = {"deleted": {}}
     # 1) 中长线先在 staging 生成，成功后再删再换，避免删了生成失败
-    staging = BASE_DIR / "output" / f"replay_staging_{dt.datetime.now():%Y%m%d%H%M}" / "picks"
+    staging = (Path(args.staging) if args.staging
+               else BASE_DIR / "output" / f"replay_staging_{dt.datetime.now():%Y%m%d%H%M}") / "picks"
     if not args.skip_midlong:
-        report["midlong"] = replay_midlong(db, mid_rng[0], mid_rng[1], strategies, staging)
+        stop_at = dt.time.fromisoformat(args.stop_at) if args.stop_at else None
+        report["midlong"] = replay_midlong(db, mid_rng[0], mid_rng[1], strategies, staging, stop_at=stop_at)
+        if report["midlong"]["stopped"]:
+            raise SystemExit(f"中长线回放到 {args.stop_at} 暂停于 {report['midlong']['done_through']}，"
+                             f"未删除任何记录；同一 --staging 再跑即续上")
         if (report["midlong"]["errors"] or report["midlong"]["no_data"]) and not args.allow_no_data:
             raise SystemExit("中长线回放存在 error/no_data 日（多为限流），未删除任何记录：" + json.dumps(
                 {k: report["midlong"][k] for k in ("errors", "no_data")}, ensure_ascii=False))
@@ -299,6 +362,8 @@ def main() -> int:
     ap.add_argument("--allow-no-data", action="store_true", help="中长线有 no_data 日也继续（不推荐）")
     ap.add_argument("--onboard", metavar="STRATEGY_ID")
     ap.add_argument("--json-out")
+    ap.add_argument("--staging", help="中长线 staging 目录（固定路径可续跑，见 progress.json）")
+    ap.add_argument("--stop-at", help="HH:MM，中长线回放到点在日边界暂停（不删不换），再跑续上")
     args = ap.parse_args()
 
     from app.db.session import SessionLocal
