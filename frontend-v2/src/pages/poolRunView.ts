@@ -1,4 +1,4 @@
-import { bjDateKey, formatBj } from "../utils/time";
+import { bjDateKey, formatBj } from "../utils/time.ts";
 import type { RunSummary } from "../types";
 
 export type PoolRunKind = "completed" | "empty" | "active" | "failed" | "unknown";
