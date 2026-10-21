@@ -972,7 +972,34 @@ def generate_block_trade_picks(db, as_of: str) -> dict[str, Any]:
     return res
 
 
+_REALIZED_FINAL: dict[tuple[str, str, int], dict[str, Any]] = {}
+
+
 def _realize(db, code: str, signal_date: str, hold: int = HOLD_DAYS) -> dict[str, Any]:
+    """结算单只入选股。已平仓/开盘涨停取消的结果之后不会再变，进程内缓存（复盘、交易明细、诊断每次
+    都要全量结算 700+ 只，逐只查日K约 2.5ms/只）；待买入/持有中依赖最新日K，每次重算。"""
+    key = (code, signal_date, hold)
+    hit = _REALIZED_FINAL.get(key)
+    if hit is not None:
+        return dict(hit)
+    out = _realize_query(db, code, signal_date, hold)
+    if out["status"] in ("closed", "skipped"):
+        _REALIZED_FINAL[key] = dict(out)
+    return out
+
+
+def warm_realized_cache() -> None:
+    """启动后台预热：把全部批次结算一遍，首次打开中长线复盘/诊断页不用等。"""
+    from app.db.session import SessionLocal
+    db = SessionLocal()
+    try:
+        for f in _pick_files(None, None):
+            _load_batch(db, f)
+    finally:
+        db.close()
+
+
+def _realize_query(db, code: str, signal_date: str, hold: int) -> dict[str, Any]:
     """次日开盘买入（一字/开盘涨停买不进 -> skipped）；第 hold 个交易日开盘卖出，跌停封死顺延；0.3% 成本。"""
     rows = db.execute(text(
         "SELECT k.trade_date, k.open, k.high, k.close, k.pct_chg, l.up_limit, l.down_limit FROM daily_kbars k "

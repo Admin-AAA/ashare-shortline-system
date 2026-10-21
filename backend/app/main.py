@@ -283,6 +283,25 @@ def on_startup() -> None:
     _warmup_initial_state()
     _warmup_data_health_cache()
     _warmup_pool_cache(delay_seconds=2.0)
+    _warmup_horizon_realized(delay_seconds=5.0)
+
+
+def _warmup_horizon_realized(delay_seconds: float = 0.0) -> None:
+    """后台预热中长线已平仓结算缓存（midterm_service._REALIZED_FINAL），首开复盘/诊断页免等约 2 秒。"""
+    import threading
+    import time as _time
+
+    def _warm():
+        _time.sleep(delay_seconds)
+        from app.services.midterm_service import warm_realized_cache
+        started_at = perf_counter()
+        try:
+            warm_realized_cache()
+            logger.info("中长线结算缓存预热完成 (%.0fms)", (perf_counter() - started_at) * 1000)
+        except Exception:
+            logger.exception("中长线结算缓存预热失败")
+
+    threading.Thread(target=_warm, name="horizon-realized-warmup", daemon=True).start()
 
 
 def _cleanup_logs(log_dir: str) -> None:

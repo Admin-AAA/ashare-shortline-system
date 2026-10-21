@@ -25,8 +25,8 @@ export const SUB_TABS: Record<Section, { path: string; label: string; shortOnly?
   today: [
     { path: "/pool", label: "今日出票" },
     { path: "/positions", label: "持仓 / 待卖" },
-    { path: "/dashboard", label: "驾驶舱" },
-    { path: "/run", label: "运行详情" },
+    { path: "/dashboard", label: "驾驶舱", shortOnly: true },
+    { path: "/run", label: "运行详情", shortOnly: true },
   ],
   review: [
     { path: "/review", label: "按批次" },

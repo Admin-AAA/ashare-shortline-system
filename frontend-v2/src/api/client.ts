@@ -229,6 +229,19 @@ export type HorizonPick = { code: string; name: string; total_mv: number; status
 export type HorizonBatch = { strategy_id: string; strategy_name: string; signal_date: string; status: string; avg_ret: number | null; picks: HorizonPick[]; origin?: string | null };
 export type HorizonPicksResponse = { batches: HorizonBatch[]; total?: number; total_picks?: number; page?: number; page_size?: number; has_more?: boolean };
 export type HorizonBar = { trade_date: string; open: number; high: number; low: number; close: number; pct_chg?: number; volume?: number; amount?: number };
+/** 中长线来源：replay=历史回放重建，live=盘后真实出票，legacy=无来源标记的旧文件（不当实盘算）。 */
+export type HorizonOrigin = "live" | "replay" | "legacy";
+export type HorizonTrade = Omit<HorizonPick, "total_mv"> & { strategy_id: string; strategy_name: string; signal_date: string; hold_days: number; origin: HorizonOrigin };
+export type HorizonTradesResponse = { horizon: string; origin: string; total: number; trades: HorizonTrade[] };
+export type HorizonStats = { n: number; win_rate: number | null; avg_ret: number | null; median_ret: number | null; total_ret: number | null;
+  pl_ratio: number | null; profit_factor: number | null; avg_win: number | null; avg_loss: number | null; max_gain: number | null; max_loss: number | null;
+  avg_days: number | null; delayed_exit: number; holding: number; pending: number; skipped: number; total_picks: number };
+export type HorizonMetricsResponse = { horizon: string; origin: string; window_days: number | null; window_start: string | null;
+  date_range: { first_signal: string | null; last_signal: string | null }; overview: HorizonStats; by_origin: Record<HorizonOrigin, HorizonStats>;
+  by_strategy: (HorizonStats & { strategy_id: string; strategy_name: string; hold_days: number; first_signal: string | null; last_signal: string | null })[];
+  top_k: (HorizonStats & { k: number })[]; by_month: (HorizonStats & { month: string })[] };
+export type HorizonRunItem = { strategy_id: string; strategy_name: string; status: string; recorded_at?: string | null; picks: number | null; detail: string | null };
+export type HorizonRunsResponse = { horizon: string; days: { date: string; items: HorizonRunItem[] }[] };
 export type HorizonPickDetail = { horizon: string; strategy_id: string; strategy_name: string; strategy_summary?: string; hold_days?: number; signal_date: string; code: string; name: string;
   batch_size?: number; batch_status?: string; pick: HorizonPick; bars: HorizonBar[]; other_signals?: { signal_date: string; strategy_id: string; strategy_name: string; horizon?: string }[] };
 export type HorizonRunSkip = { skipped: string };
@@ -401,6 +414,12 @@ export const api = {
     request<HorizonPickDetail>(`/api/horizons/${horizon}/picks/${encodeURIComponent(strategyId)}/${signalDate}/${code}`),
   horizonRun: (horizon: "mid" | "long", payload: { as_of: string; strategy_ids?: string[]; force?: boolean }) =>
     requestWithTimeout<HorizonRunResponse>(`/api/horizons/${horizon}/run`, 900_000, json("POST", payload)),
+  horizonTrades: (horizon: "mid" | "long") =>
+    request<HorizonTradesResponse>(`/api/horizons/${horizon}/trades`),
+  horizonMetrics: (horizon: "mid" | "long", origin: "all" | HorizonOrigin, windowDays?: number | null) =>
+    request<HorizonMetricsResponse>(`/api/horizons/${horizon}/metrics?origin=${origin}${windowDays ? `&window_days=${windowDays}` : ""}`),
+  horizonRuns: (horizon: "mid" | "long", limit = 60) =>
+    request<HorizonRunsResponse>(`/api/horizons/${horizon}/runs?limit=${limit}`),
   strategies: () =>
     request<StrategyListItem[]>("/api/strategies", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   strategyDetail: (strategyId: string, versionId?: string) => {

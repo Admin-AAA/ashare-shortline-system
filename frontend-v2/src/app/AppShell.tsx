@@ -21,6 +21,10 @@ const ConfigPage = lazy(() => import("../pages/ConfigPage").then((m) => ({ defau
 const HorizonPage = lazy(() => import("../pages/HorizonPage").then((m) => ({ default: m.HorizonPage })));
 const RunDetailPage = lazy(() => import("../pages/RunDetailPage").then((m) => ({ default: m.RunDetailPage })));
 const BatchReviewPage = lazy(() => import("../pages/BatchReviewPage").then((m) => ({ default: m.BatchReviewPage })));
+const HorizonMetricsPage = lazy(() => import("../pages/HorizonAnalytics").then((m) => ({ default: m.HorizonMetricsPage })));
+const HorizonTradesPage = lazy(() => import("../pages/HorizonAnalytics").then((m) => ({ default: m.HorizonTradesPage })));
+const HorizonPositionsPage = lazy(() => import("../pages/HorizonAnalytics").then((m) => ({ default: m.HorizonPositionsPage })));
+const HorizonRunsPage = lazy(() => import("../pages/HorizonAnalytics").then((m) => ({ default: m.HorizonRunsPage })));
 
 function PageFallback() {
   return (
@@ -75,17 +79,20 @@ export function AppShell() {
   }, []);
 
   const openRun = useCallback(() => { setCmdk(false); setRunOpen(true); }, []);
-  const tabs = SUB_TABS[section].filter((t) => !(horizon !== "short" && section !== "system"));
+  const tabs = SUB_TABS[section].filter((t) => horizon === "short" || !t.shortOnly);
   const activeTab = (tp: string) => (tp === "/pool" ? p === "/" || p === "/pool" : p === tp);
 
   const redirecting = redirectFor(pathname, window.location.search) != null;
   const known = redirecting || KNOWN_PATHS.has(p) || p.startsWith("/strategies/");
   let content: React.ReactNode;
   if (!known) content = <NotFoundPage path={pathname} onHome={() => navigate("/")} />;
-  else if (horizon !== "short" && section !== "system") {
-    content = section === "strategies" || section === "review" || section === "today"
-      ? <HorizonPage horizon={horizon} view={section as "today" | "review" | "strategies"} />
-      : null;
+  else if (horizon !== "short" && p !== "/config") {
+    // 中长线：驾驶舱 / 运行详情 / 短线策略详情是短线专属，落回同一一级入口的中长线视图
+    content = p === "/metrics" ? <HorizonMetricsPage horizon={horizon} />
+      : p === "/positions" ? <HorizonPositionsPage horizon={horizon} />
+      : p === "/history" ? <HorizonTradesPage horizon={horizon} />
+      : p === "/records" ? <HorizonRunsPage horizon={horizon} />
+      : <HorizonPage horizon={horizon} view={section === "system" ? "today" : section} />;
   } else if (p === "/run") content = <RunDetailPage refreshSignal={refreshSignal} />;
   else if (p.startsWith("/strategies/")) content = <StrategyDetailPage refreshSignal={refreshSignal} />;
   else switch (p) {

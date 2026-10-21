@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.api.contracts import ContractRouter as APIRouter
 from app.db.session import get_db
+from app.services import horizon_analytics as analytics
 from app.services import midterm_service as svc
 
 router = APIRouter(prefix="/api/horizons", tags=["horizons"])
@@ -202,6 +203,38 @@ def run_horizon(horizon: str, payload: dict = Body(default_factory=dict), db: Se
     if horizon not in ("mid", "long"):
         raise HTTPException(404, "horizon 只能是 mid/long")
     return _run(db, horizon, payload)
+
+
+def _check_horizon(horizon: str) -> None:
+    if horizon not in ("mid", "long"):
+        raise HTTPException(404, "horizon 只能是 mid/long")
+
+
+_ORIGIN = Query("all", pattern="^(all|live|replay|legacy)$")
+
+
+@router.get("/{horizon}/trades")
+def horizon_trades(horizon: str, origin: str = _ORIGIN, strategy_id: str | None = Query(None),
+                   db: Session = Depends(get_db)):
+    """交易明细：所有批次个股平铺（一行一笔），口径与按批次复盘相同。"""
+    _check_horizon(horizon)
+    rows = analytics.trades(db, horizon, origin=origin, strategy_id=strategy_id)
+    return {"horizon": horizon, "origin": origin, "total": len(rows), "trades": rows}
+
+
+@router.get("/{horizon}/metrics")
+def horizon_metrics(horizon: str, origin: str = _ORIGIN, window_days: int | None = Query(None, ge=1, le=3650),
+                    db: Session = Depends(get_db)):
+    """诊断 / 研究：总览 KPI、按策略、批内排名 Top-K、按信号月、实盘 vs 回放。"""
+    _check_horizon(horizon)
+    return analytics.metrics(db, horizon, origin=origin, window_days=window_days)
+
+
+@router.get("/{horizon}/runs")
+def horizon_runs(horizon: str, limit: int = Query(60, ge=1, le=400)):
+    """运行记录：每日盘后各策略的出票结果（出票/无信号/仓位已满/非选股日/数据异常）。"""
+    _check_horizon(horizon)
+    return {"horizon": horizon, "days": analytics.runs(horizon, limit)}
 
 
 @router.get("/{horizon}/picks/{strategy_id}/{signal_date}/{code}")
