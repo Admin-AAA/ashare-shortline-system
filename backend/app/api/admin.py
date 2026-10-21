@@ -103,6 +103,28 @@ def list_data_sources_api(db: Session = Depends(get_db)):
     return {"providers": list_management_sources(db)}
 
 
+@router.get("/data-gateway")
+def data_gateway_topology_api(db: Session = Depends(get_db)):
+    """数据网关拓扑：数据类型 → 有序 provider → 开关 + live 熔断状态。"""
+    from app.services.datasource.topology import build_topology
+
+    return build_topology(db)
+
+
+@router.post("/data-gateway/switch")
+def data_gateway_switch_api(payload: dict, db: Session = Depends(get_db)):
+    """启停一个网关开关 {source, source_type, enabled}（写 data_source_config，各进程 5s 内生效）。"""
+    from app.services.data_sources import set_gateway_switch
+    from app.services.datasource.topology import build_topology
+
+    source, source_type = str(payload.get("source") or ""), str(payload.get("source_type") or "")
+    if "enabled" not in payload:
+        raise HTTPException(status_code=400, detail="enabled is required")
+    if not set_gateway_switch(db, source, source_type, bool(payload["enabled"])):
+        raise HTTPException(status_code=404, detail=f"不是网关开关: {source}/{source_type}")
+    return build_topology(db)
+
+
 @router.post("/data-sources/reorder")
 def reorder_providers_api(payload: dict, db: Session = Depends(get_db)):
     """重排当前 Tushare Pro Provider 的路由优先级（运行时即时生效，不动 config）。

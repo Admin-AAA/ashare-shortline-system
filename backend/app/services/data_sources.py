@@ -355,15 +355,9 @@ def enabled_sources(db: Session, source_type: str, configured_sources: list[str]
     return []
 
 
-def sync_data_source_configs(db: Session) -> None:
-    """对账数据源注册表：注册 desired（来自配置的实际接入策略），并清理孤儿行。
-
-    孤儿 = 存在于 DataSourceConfig / DataSourceHealth 但不在 desired 中的条目
-    （历史上多 provider 行情源等残留，当前代码仅实现了 tushare 等部分 provider）。
-    清理让注册表与实际策略保持一致。desired 是注册表的唯一真相源。
-    """
-    settings = get_settings()
-    desired = {
+def registry_sources(settings: Any) -> dict[str, list[str]]:
+    """数据源注册表：每类数据按配置顺序接入的源（sync 与网关拓扑共用）。"""
+    return {
         "quote": _quote_sources(settings),
         "kline": _kline_sources(settings),
         "limit_up": _limit_up_sources(settings),
@@ -372,7 +366,45 @@ def sync_data_source_configs(db: Session) -> None:
         "dragon_tiger": _dragon_tiger_sources(settings),
         "news": _news_sources(settings),
     }
+
+
+def set_gateway_switch(db: Session, source: str, source_type: str, enabled: bool) -> bool:
+    """写网关开关行 (source, source_type)；只接受网关 provider 实际声明过的键。"""
+    from app.services.datasource import gateway as _gw
+    from app.services.datasource.topology import gateway_config_keys
+
+    if (source, source_type) not in gateway_config_keys():
+        return False
+    row = db.get(DataSourceConfig, {"source": source, "source_type": source_type})
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if row is None:
+        db.add(DataSourceConfig(source=source, source_type=source_type, enabled=enabled, priority=100, updated_at=now))
+    else:
+        row.enabled = enabled
+        row.updated_at = now
+    db.commit()
+    _gw._ENABLED_CACHE.update(value=None, expires_at=0.0)
+    if source_type == _PROVIDER_SOURCE_TYPE:
+        from app.services.tushare_client import invalidate_provider_enabled_override
+
+        invalidate_provider_enabled_override()
+    return True
+
+
+def sync_data_source_configs(db: Session) -> None:
+    """对账数据源注册表：注册 desired（来自配置的实际接入策略），并清理孤儿行。
+
+    孤儿 = 存在于 DataSourceConfig / DataSourceHealth 但不在 desired 中的条目
+    （历史上多 provider 行情源等残留，当前代码仅实现了 tushare 等部分 provider）。
+    清理让注册表与实际策略保持一致。desired 是注册表的唯一真相源。
+    """
+    desired = registry_sources(get_settings())
     desired_set = {(src, st) for st, srcs in desired.items() for src in srcs}
+    # 网关 provider 的开关行（如 sina/quote、cninfo/news）不在七类注册表里，同样豁免清理，
+    # 否则在「数据源管理」里禁用后会被下一次对账删除、被禁源静默回流。
+    from app.services.datasource.topology import gateway_config_keys
+
+    desired_set |= gateway_config_keys()
 
     last_error: IntegrityError | None = None
     for _attempt in range(3):

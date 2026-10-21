@@ -1112,6 +1112,27 @@ export type ProviderTestResult = {
   error?: string | null;
 };
 
+/** 数据网关拓扑（/api/admin/data-gateway）。 */
+export type GatewaySwitch = { source: string; source_type: string; enabled: boolean };
+export type GatewayBreakerItem = { key: string; open_until: number; reason: string; state: "open" | "half_open" };
+export type GatewayProvider = {
+  name: string;
+  label: string;
+  switches: GatewaySwitch[];
+  active: boolean;
+  inactive_reason: string | null;
+  breaker: { state: "open" | "half_open" | "closed"; items: GatewayBreakerItem[] };
+};
+export type GatewayDataset = {
+  key: string;
+  label: string;
+  mode: "fill" | "first" | "chain" | "router";
+  routed: boolean;
+  note: string | null;
+  providers: GatewayProvider[];
+};
+export type GatewayTopology = { namespace: string; generated_at: number; datasets: GatewayDataset[] };
+
 export type PoolSourceSummary = {
   source: string;
   row_count: number;

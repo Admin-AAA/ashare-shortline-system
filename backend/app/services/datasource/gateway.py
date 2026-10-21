@@ -56,8 +56,10 @@ BREAKER_KIND: dict[ErrorKind, str] = {
     ErrorKind.RATE_LIMIT: "rate_limit", ErrorKind.TIMEOUT: "timeout",
     ErrorKind.CONTRACT: "bad_data", ErrorKind.BAD_DATA: "bad_data",
 }
-# Not provider faults: never count toward a breaker.
-NON_BREAKER_KINDS = frozenset({ErrorKind.INVALID_REQUEST, ErrorKind.DATA_PENDING, ErrorKind.DISABLED})
+# Not provider faults: never count toward a breaker.  CIRCUIT_OPEN = an upstream (Tushare router)
+# breaker already refused the call; counting it here would keep this breaker open for another
+# cooldown after the upstream one has recovered (double-gating).
+NON_BREAKER_KINDS = frozenset({ErrorKind.INVALID_REQUEST, ErrorKind.DATA_PENDING, ErrorKind.DISABLED, ErrorKind.CIRCUIT_OPEN})
 
 # Datasets that must be non-empty during the trading session (empty => BAD_DATA, not success).
 EXPECT_NONEMPTY_IN_SESSION: frozenset[str] = frozenset({"quote.realtime", "quote.realtime_frame"})
@@ -235,9 +237,12 @@ class GatewayResult:
 
 
 def reset_all_breakers() -> None:
-    """Drop every gateway's in-process breaker objects (tests / admin reset)."""
+    """Drop every in-process breaker object — gateways and ``gw_call`` wrappers (tests / admin reset)."""
     for gw in list(_ALL_GATEWAYS):
         gw._breakers.clear()
+    from app.services.datasource import wrap
+
+    wrap._breakers.clear()
 
 
 class DatasetGateway:
@@ -482,8 +487,15 @@ def _flag_set(attr: str) -> set[str]:
     return {x.strip() for x in raw.split(",") if x.strip()}
 
 
-# New datasets with no legacy path: always routed through the gateway (no cutover flag needed).
-ALWAYS_GATEWAY: frozenset[str] = frozenset({"ann.search.cninfo"})
+# Every routed dataset goes through the gateway (owner, 2026-10-21): switch + breaker + metrics
+# apply everywhere.  ``ASHARE_DATASOURCE_CUTOVER`` now only carries the opt-in flags that ADD a
+# backup provider to a chain (quote.realtime.tencent, bar.minute.sina/tencent, ann.list.xiaoshi,
+# aux.eastmoney, eastmoney.alt); those change which upstreams get called, so they stay explicit.
+ALWAYS_GATEWAY: frozenset[str] = frozenset({
+    "ann.search.cninfo", "bar.minute", "quote.snapshot", "quote.daily", "bar.daily",
+    "aux.limit_up", "aux.concept_sector", "aux.capital_flow", "aux.dragon_tiger", "aux.news",
+    "ann.list", "xiaoshi.alt", "fina_indicator", "margin.detail", "float.unlock",
+})
 
 
 def is_cutover(dataset: str) -> bool:

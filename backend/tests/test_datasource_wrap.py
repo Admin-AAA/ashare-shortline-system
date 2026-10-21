@@ -68,3 +68,39 @@ def test_xiaoshi_ann_rows_filter_codes():
                     "stocks": [{"code": "000001"}, "600000"]}, ensure_ascii=False)
     rows = rows_from_payloads([p], {"600000"})
     assert [(r["code"], r["article_id"], r["is_risk_warning"], r["announce_date"]) for r in rows] == [("600000", "e1:600000", True, "2026-10-16")]
+
+
+def test_every_routed_dataset_is_gateway_only():
+    # 2026-10-21: 所有路由数据类型都走网关，不再依赖 ASHARE_DATASOURCE_CUTOVER。
+    for ds in ("quote.daily", "bar.daily", "aux.limit_up", "aux.concept_sector", "aux.capital_flow",
+               "aux.dragon_tiger", "aux.news", "ann.list", "xiaoshi.alt", "fina_indicator", "quote.snapshot"):
+        assert gw.is_cutover(ds), ds
+    # 加备用源的 flag 仍然显式开启
+    assert not gw.is_cutover("quote.realtime.tencent")
+
+
+@pytest.mark.parametrize("kind", [gw.ErrorKind.INVALID_REQUEST, gw.ErrorKind.DATA_PENDING, gw.ErrorKind.CIRCUIT_OPEN])
+def test_non_provider_faults_never_open_breaker(monkeypatch, kind):
+    monkeypatch.setattr(gw, "is_cutover", lambda d: True)
+
+    def bad():
+        raise gw.DataSourceError(kind, "x")
+
+    for _ in range(10):  # 远超阈值 5
+        with pytest.raises(gw.DataSourceError):
+            wrap.gw_call("aux.capital_flow", "tushare_capital_flow", bad)
+    assert wrap.gw_call("aux.capital_flow", "tushare_capital_flow", lambda: [1]) == [1]
+
+
+def test_upstream_failures_still_open_breaker(monkeypatch):
+    monkeypatch.setattr(gw, "is_cutover", lambda d: True)
+
+    def down():
+        raise ConnectionError("reset")
+
+    for _ in range(5):
+        with pytest.raises(ConnectionError):
+            wrap.gw_call("aux.capital_flow", "tushare_capital_flow", down)
+    with pytest.raises(gw.DataSourceError) as e:
+        wrap.gw_call("aux.capital_flow", "tushare_capital_flow", lambda: [1])
+    assert e.value.kind is gw.ErrorKind.CIRCUIT_OPEN

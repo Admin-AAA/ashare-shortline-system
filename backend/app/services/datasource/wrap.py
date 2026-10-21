@@ -89,11 +89,23 @@ def gw_call(dataset: str, provider: str, fn: Callable[..., Any], *args: Any, **k
     t0 = time.perf_counter()
     try:
         out = fn(*args, **kwargs)
-    except BaseException as exc:
-        breaker.record_failure(force_open=type(exc).__name__ in spec.force_open_on)
-        _metrics.inc("dataset_requests", dataset=dataset, provider=provider, outcome=_gw.classify_exception(exc).value)
+    except Exception as exc:
+        kind = _gw.classify_exception(exc)
+        # 与 DatasetGateway 同一套口径：请求本身无效 / 数据未发布不是源故障，不计熔断；
+        # 限流按上游 retry-after 立即熔断，超时 / 坏数据走各自阈值。
+        if type(exc).__name__ in spec.force_open_on:
+            breaker.record_failure(force_open=True)
+        elif kind not in _gw.NON_BREAKER_KINDS:
+            breaker.record_failure(kind=_gw.BREAKER_KIND.get(kind), recovery_seconds=getattr(exc, "retry_after_seconds", None))
+        _metrics.inc("dataset_requests", dataset=dataset, provider=provider, outcome=kind.value)
         raise
     breaker.record_success()
-    _metrics.inc("dataset_requests", dataset=dataset, provider=provider, outcome="success" if out else "empty")
+    _metrics.inc("dataset_requests", dataset=dataset, provider=provider, outcome="empty" if _is_empty(out) else "success")
     _metrics.observe("dataset_latency", time.perf_counter() - t0, dataset=dataset, provider=provider)
     return out
+
+
+def _is_empty(out: Any) -> bool:
+    """DataFrame 的真值判断会抛 ValueError，按 .empty 判空；其余按真值。"""
+    empty = getattr(out, "empty", None)
+    return bool(empty) if isinstance(empty, bool) else not out

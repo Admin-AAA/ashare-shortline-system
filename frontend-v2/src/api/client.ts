@@ -25,6 +25,7 @@ import type {
   DataSourceHealthRow,
   DataSourceProvider,
   DataSourceProvidersResponse,
+  GatewayTopology,
   ModelRoute,
   ModelRouteTestResult,
   ProviderTestResult,
@@ -366,6 +367,10 @@ export const api = {
     request<ProviderTestResult>(`/api/admin/data-sources/${providerName}/test`, json("POST"), { timeoutMs: 35_000 }),
   reorderProviders: (providerNames: string[]) =>
     request<DataSourceProvidersResponse>(`/api/admin/data-sources/reorder`, json("POST", { provider_names: providerNames })),
+  dataGateway: () =>
+    request<GatewayTopology>("/api/admin/data-gateway", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
+  setGatewaySwitch: (source: string, sourceType: string, enabled: boolean) =>
+    request<GatewayTopology>("/api/admin/data-gateway/switch", json("POST", { source, source_type: sourceType, enabled })),
 
   scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   scheduledTaskRuns: (limit = 100, taskId?: string) =>
