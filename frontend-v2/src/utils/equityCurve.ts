@@ -2,7 +2,7 @@ import { isOutcomeSettled } from "./display.ts";
 
 /** 复盘页收益曲线（纯函数，便于单测）。
  * 口径：同一平仓日「已买入且已结算」的票等权平均为当日收益，按平仓日单利累加（单位：百分点）。
- * - 不用逐笔累加做主曲线：当天推 10 只就占 10 份权重，曲线跟「推得多」相关而不是「选得准」。逐笔累加只作对照数字。
+ * - 不用逐笔累加做主曲线：当天推 10 只就占 10 份权重，曲线跟「推得多」相关而不是「选得准」。
  * - 不用逐日复利：持仓多为数天且互相重叠，逐日复利等于假设每天满仓，收益和回撤都被放大数倍。
  * 取消买入 / 未触发 / 过期 / 持有中（含 provisional 临时结果）不入曲线。 */
 export type CurveItem = {
@@ -11,7 +11,7 @@ export type CurveItem = {
 };
 export type CurvePoint = { date: string; n: number; dayRet: number; cum: number };
 export type Classified = { kind: "closed"; date: string; ret: number } | { kind: "holding" | "excluded" };
-export type EquityCurve = { points: CurvePoint[]; trades: number; sumPct: number; maxDrawdown: number; holding: number; excluded: number };
+export type EquityCurve = { points: CurvePoint[]; trades: number; maxDrawdown: number; holding: number; excluded: number };
 
 /** 与复盘页 statusOf 同序：先判取消/过期，再看是否成交、是否已结算 */
 export function classify(it: CurveItem): Classified {
@@ -37,20 +37,17 @@ export function buildEquityCurve<T = CurveItem>(items: T[], cls: (it: T) => Clas
   let cum = 0;
   let peak = 0;
   let maxDrawdown = 0;
-  let sumPct = 0;
   let trades = 0;
   const points: CurvePoint[] = [...byDay.keys()].sort().map((date) => {
     const rets = byDay.get(date)!;
-    const daySum = rets.reduce((a, r) => a + r, 0);
-    const dayRet = daySum / rets.length;
+    const dayRet = rets.reduce((a, r) => a + r, 0) / rets.length;
     cum += dayRet;
     peak = Math.max(peak, cum);
     maxDrawdown = Math.min(maxDrawdown, cum - peak);
-    sumPct += daySum;
     trades += rets.length;
     return { date, n: rets.length, dayRet, cum };
   });
-  return { points, trades, sumPct, maxDrawdown, holding, excluded };
+  return { points, trades, maxDrawdown, holding, excluded };
 }
 
 /** 中线 / 长线（/api/horizons/{h}/picks）：closed 且有收益与卖出日才入曲线；pending（还没买）与 skipped（开盘涨停取消）不入 */

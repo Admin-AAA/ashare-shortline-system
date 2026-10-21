@@ -14,7 +14,6 @@ test("same exit day is equal-weighted, days add up", () => {
   assert.ok(Math.abs(c.points[0].cum - 1) < 1e-9);
   assert.ok(Math.abs(c.points[1].cum - 11) < 1e-9);
   assert.equal(c.trades, 12);
-  assert.ok(Math.abs(c.sumPct - 30) < 1e-9);
 });
 
 test("points are sorted by exit date and drawdown is measured from peak", () => {

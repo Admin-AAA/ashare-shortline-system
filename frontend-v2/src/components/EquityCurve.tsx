@@ -43,8 +43,6 @@ export function EquityCurve<T = CurveItem>({ items, classify }: { items: T[]; cl
         <b className={`num ${last ? tone(last.cum) : ""}`}>{last ? signed(last.cum, 1) : "—"}</b>
         <span className="small muted">最大回撤</span>
         <b className="num down">{pts.length ? c.maxDrawdown.toFixed(1) : "—"}</b>
-        <span className="small muted" title="每笔固定金额简单相加；当天票越多权重越大，只作对照">逐笔累加</span>
-        <b className={`num ${tone(c.sumPct)}`}>{pts.length ? `${signed(c.sumPct, 1)} 个百分点` : "—"}</b>
       </div>
       {pts.length ? (
         <svg className="eq__svg" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`收益曲线：${pts[0].date} 至 ${last!.date}，${pts.length} 个平仓日，累计 ${signed(last!.cum, 1)} 个百分点，最大回撤 ${c.maxDrawdown.toFixed(1)}`} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
