@@ -73,6 +73,11 @@ exit_overrides:
   minimum_lock_gain_pct: 4.0
   profit_lock_ratio: 0.3
 
+# 破买入日最低价出场（Sprint4 §185，2026-10-25）：持仓中收盘 < 买入日最低价 → 当日收盘离场（app/services/entry_low_exit.py）。
+# EL_C 预注册通过：R12 +1.438→+1.469 PF1.94→1.99；N3 +1.088→+1.147 PF1.72→1.80 MDD−34.6→−28.3；被改约 43/88 笔。
+entry_low_exit:
+  mode: close
+
 phases:
   # 弱市停出（Sprint3 §72，2026-10-17）：上涨比 < 30%。
   # 面板（含震荡/过热停出，前3/线72）：12m n216 +1.66 PF2.07 → n96 +2.48 PF2.72 MDD−17.1→−16.9；

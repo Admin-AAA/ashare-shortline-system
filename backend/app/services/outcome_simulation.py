@@ -16,6 +16,9 @@ from typing import Any, Mapping
 
 from app.services.strategy_exit_overrides import exit_overrides_for, exit_strategy_id
 from app.services.ma_break_exit import MA_BREAK_REASON, first_break_date, ma_break_window_for
+from app.services.entry_low_exit import (
+    ENTRY_LOW_REASON, entry_low_enabled_for, first_entry_low_break,
+)
 
 from app.engine.board_rules import is_one_word_limit_down_bar, limit_pct_for_code
 from app.engine.execution_core import (
@@ -309,6 +312,22 @@ def _simulate_outcome(
                     exit_result = (
                         dataclasses.replace(_r2, reason=MA_BREAK_REASON)
                         if str(_r2.reason).startswith("horizon_close") else _r2
+                    )
+        # Sprint4 §185：逐策略破买入日最低价出场（与回测 _simulate_card 同口径）
+        if entry_low_enabled_for(exit_strategy_id(feature_snapshot)) and exit_result is not None:
+            _t2 = first_entry_low_break(str(rec.code), holding_bars, entry_date, str(exit_result.trade_date))
+            if _t2 is not None:
+                _cut2 = [b for b in holding_bars if str(b.trade_date) <= _t2]
+                _r3 = _resolve_exit_result(
+                    _cut2, stop_loss_price, take_profit_price, code=str(rec.code),
+                    entry_price=executed_entry_price,
+                    exit_overrides=exit_overrides_for(exit_strategy_id(feature_snapshot)),
+                )
+                if _r3 is not None and str(_r3.trade_date) == _t2:
+                    holding_bars = _cut2
+                    exit_result = (
+                        dataclasses.replace(_r3, reason=ENTRY_LOW_REASON)
+                        if str(_r3.reason).startswith("horizon_close") else _r3
                     )
         if exit_result is None:
             last = holding_bars[-1]

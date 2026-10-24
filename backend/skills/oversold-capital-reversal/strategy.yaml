@@ -59,6 +59,11 @@ exit_overrides:
   activation_gain_pct: 3.0
   profit_lock_ratio: 0.3
 
+# 破买入日最低价出场（Sprint4 §185，2026-10-25）：持仓中收盘 < 买入日最低价 → 当日收盘离场（app/services/entry_low_exit.py）。
+# EL_C 预注册通过：R12 +1.438→+1.469 PF1.94→1.99；N3 +1.088→+1.147 PF1.72→1.80 MDD−34.6→−28.3；被改约 43/88 笔。
+entry_low_exit:
+  mode: close
+
 phases:
   # 涨停反包不做（Sprint3 §72，2026-10-17）：信号日已涨停的反包次日溢价被吃掉。
   # 面板（前3/线72）：12m +3.03→+3.18 PF2.58→2.88 MDD−12.9→−11.3；EXT +0.44→+0.79；W0/W00 不变。

@@ -79,6 +79,11 @@ exit_overrides:
 ma_break_exit:
   window: 5
 
+# 破买入日最低价出场（Sprint4 §185，2026-10-25）：持仓中收盘 < 买入日最低价 → 当日收盘离场（app/services/entry_low_exit.py）。
+# EL_C 预注册通过：R12 +1.438→+1.469 PF1.94→1.99；N3 +1.088→+1.147 PF1.72→1.80 MDD−34.6→−28.3；被改约 43/88 笔。
+entry_low_exit:
+  mode: close
+
 phases:
   # 涨跌停差不足停出（Sprint3 §67，2026-10-16）：limit_up_count − limit_down_count < 40 = 赚钱效应不足，主线强度不延续。
   # 单策略面板（前3/线72）：近12月 n238 +1.12% PF1.67 MDD−58.5 → n115 +1.54% PF2.41 MDD−13.6；
