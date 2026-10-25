@@ -27,6 +27,7 @@ MID_LONG = {  # 策略 id -> 逐笔文件前缀（R12/N3 两个窗口）
     "mid-block-trade-premium": "r25__BTP_h20",
     "mid-lowprice-smallcap-weekly": "r104__LPS_W_h20",
     "mid-smallcap-dividend-weekly": "r118__SDY_W_h20",
+    "mid-smallcap-lowps-weekly": "r119__SPS_W_h20",
     "long-lowturn-lowvol": "r16__LTV_h60",
     "long-dividend-lowvol": "r19__DVLV_h60",
     "long-growth-streak": "r102__CG4_h60",

@@ -11,6 +11,8 @@ def test_annotate_each_kind():
                                          "price_rank": 12, "mv_rank": 1},
         "mid-smallcap-dividend-weekly": {"code": "1", "total_mv": 281000.0, "pe_ttm": 15.2, "dv_ttm": 5.4645,
                                          "mv_rank": 370, "dv_snap": "2026-10-23"},
+        "mid-smallcap-lowps-weekly": {"code": "1", "total_mv": 254000.0, "pe_ttm": 38.5, "ps_ttm": 0.3861,
+                                      "mv_rank": 210, "dv_snap": "2026-10-23"},
         "mid-repurchase-plan": {"code": "1", "ratio": 0.01157, "repurchase_amount": 6e7},
         "mid-earnings-accel": {"code": "1", "score": 300.0, "dt_netprofit_yoy": 592.1},
         "mid-forecast-beat": {"code": "1", "score": 300.0, "p_change_min": 3318.0},
@@ -19,7 +21,7 @@ def test_annotate_each_kind():
         "long-lowturn-lowvol": {"code": "1", "score": 12.0, "turn60": 0.5, "vol60": 1.1},
         "long-dividend-lowvol": {"code": "1", "score": 9.0, "dv_ttm": 5.2, "vol60": 1.0},
     }
-    expect = {"mid-small-cap-weekly": 16.64, "mid-lowprice-smallcap-weekly": 18.1, "mid-smallcap-dividend-weekly": 5.46, "mid-repurchase-plan": 1.157, "mid-incentive-option": -5.12,
+    expect = {"mid-small-cap-weekly": 16.64, "mid-lowprice-smallcap-weekly": 18.1, "mid-smallcap-dividend-weekly": 5.46, "mid-smallcap-lowps-weekly": 0.39, "mid-repurchase-plan": 1.157, "mid-incentive-option": -5.12,
               "mid-block-trade-premium": 0.61}
     for sid, p in cases.items():
         out = ms.annotate_pick(sid, dict(p), 1)
