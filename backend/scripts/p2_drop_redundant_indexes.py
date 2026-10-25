@@ -70,6 +70,8 @@ def main() -> int:
         return 2
     dropped = skipped = 0
     with SessionLocal() as db:
+        # ALTER 在等元数据锁时会堵住该表后续所有查询：最多等 10 秒，拿不到就放弃这一项（2026-10-25 曾遇到僵尸长查询持锁）。
+        db.execute(text("SET SESSION lock_wait_timeout = 10"))
         for table, names in CANDIDATES.items():
             idx = load_indexes(db, table)
             drop_set = {n for n in names if n in idx}
@@ -86,10 +88,16 @@ def main() -> int:
                     print(f"{table}.{n}{idx[n]['cols']}: 无覆盖索引，跳过")
                     skipped += 1
                     continue
-                print(f"{table}.{n}{idx[n]['cols']} ← 被 {cover}{idx[n]['cols'] and idx[cover]['cols']} 覆盖 {'DROP' if a.apply else '(dry-run)'}")
+                print(f"{table}.{n}{idx[n]['cols']} ← 被 {cover}{idx[n]['cols'] and idx[cover]['cols']} 覆盖 {'DROP' if a.apply else '(dry-run)'}", flush=True)
                 if a.apply:
-                    db.execute(text(f"ALTER TABLE `{table}` DROP INDEX `{n}`, ALGORITHM=INPLACE, LOCK=NONE"))
-                    db.commit()
+                    try:
+                        db.execute(text(f"ALTER TABLE `{table}` DROP INDEX `{n}`, ALGORITHM=INPLACE, LOCK=NONE"))
+                        db.commit()
+                    except Exception as exc:  # noqa: BLE001 - 锁等待超时等：跳过，下次再来
+                        db.rollback()
+                        print(f"  !! {table}.{n} 删除失败，已跳过: {type(exc).__name__}: {str(exc)[:100]}", flush=True)
+                        skipped += 1
+                        continue
                     drop_set.discard(n)
                     idx = load_indexes(db, table)
                     dropped += 1
