@@ -16,3 +16,16 @@
 - margin_data 2026-05-20 ~ 2026-07-08：31 个整日缺失 + 4 个仅 259 行的样本日，用同库 `margin_detail`（完整源；2026-10-22 对比 4484 行 rzye/rzmre/rqye 100% 一致）INSERT IGNORE 补缺，共 130,192 行，只补缺失 (code, trade_date)。
 - block_trades：2026-07-09 起停写是设计（线上读 auxiliary 快照，见 data_live_sources.py），不补。
 - daily_kbars 2021-05-26~12-31 的 750 行（000001~000007）与 2022–2024-10 的 920xxx 12.6 万行 **不是垃圾**：与 Tushare 逐日核对一致（000001/000006 2021-05-26~06-01 开高低收量额全等），920xxx 是北交所换码后的同一公司历史，库里无旧码行 → 保留，不清理。
+
+## 3. 运维清理（19:00 CST 前后）
+- 冗余索引：`scripts/p2_drop_redundant_indexes.py --apply` 删除 14 个（daily_kbars 3、minute_kbars 2、capital_flow 1、daily_basic 1、margin_data 2、auction_data 2、limit_up_board 1、stock_quotes 2）；
+  stk_limits 2 个（ix_stk_limits_code、idx_sl_code_td）因回填事务持元数据锁超时跳过，待回填结束后重跑脚本。
+  过程中发现并清除一条已死客户端遗留 6.9 小时的 SELECT（daily_kbars 自连接，持元数据锁，会让 ALTER 堵住整表）：`KILL QUERY 6289`，只读查询，无数据影响。
+- prefect.db：flow_run 仅保留自 2026-09-24（<30 天，无可删）；事件表已按 7 天自动修剪；真正的占用是空闲页 41%，
+  停 worker/server（无 RUNNING/到期任务）后 `VACUUM`：825MB → 463MB，随后 server、worker 重新拉起。
+- launchd：`ashare.lt12`、`ashare.ltbackfill{,2,3,4}` 5 个已完成的研究回补 plist 移至 `~/Library/LaunchAgents.disabled/`；
+  新增 `com.wangao.ashare-log-rotate`（每周日 03:30 copy-truncate 轮转）已加载。
+- Git：删除 41 个已合并分支、15 个 prunable worktree 记录及 wt-st-hist；保留他人 worktree 检出的分支与 `codex/*` 未合并分支。
+- 备份表 `recommendation_outcomes_bak_20261019`（590 行）导出 csv.gz 至 backend/data/runtime/cleanup/ 后 DROP。
+- MySQL：开启慢查询日志（>1s，my.cnf 已固化）；buffer pool 维持 2G（运行时=配置，修正原 my.cnf 的 512M 漂移），
+  因 Mac 交换区已用 7.8/8GB，未提到 4G。
