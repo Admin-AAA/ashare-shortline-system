@@ -255,6 +255,9 @@ def _pool_cache_key(include_details: bool) -> str:
 def invalidate_pool_status_cache() -> None:
     with _pool_status_lock:
         _pool_status_cache.clear()
+    from app.services.data_sources import clear_daily_bar_rows_cache
+
+    clear_daily_bar_rows_cache()
     invalidate_bootstrap_cache()
 
 
@@ -417,6 +420,9 @@ def set_enabled(source_type: str, source: str, payload: dict, db: Session = Depe
         raise HTTPException(status_code=404, detail="data source not found")
     with _pool_status_lock:
         _pool_status_cache.clear()
+    from app.services.data_sources import clear_daily_bar_rows_cache
+
+    clear_daily_bar_rows_cache()
     invalidate_bootstrap_cache()
     return result
 
@@ -426,6 +432,9 @@ def refresh_limit_up(db: Session = Depends(get_db)):
     result = run_auxiliary_application(db, instruments=(), trade_date=date.today(), refresh=True, datasets=("limit_up_board",))
     with _pool_status_lock:
         _pool_status_cache.clear()
+    from app.services.data_sources import clear_daily_bar_rows_cache
+
+    clear_daily_bar_rows_cache()
     invalidate_bootstrap_cache()
     item = result.orchestrated.result_for("limit_up_board")
     return {"refreshed": item.coverage.record_count, "audit": result.audit_payload["limit_up_board"]}
@@ -436,6 +445,9 @@ def refresh_sectors(db: Session = Depends(get_db)):
     result = run_auxiliary_application(db, instruments=(), trade_date=date.today(), refresh=True, datasets=("concept_sector", "concept_sector_stock"))
     with _pool_status_lock:
         _pool_status_cache.clear()
+    from app.services.data_sources import clear_daily_bar_rows_cache
+
+    clear_daily_bar_rows_cache()
     invalidate_bootstrap_cache()
     item = result.orchestrated.result_for("concept_sector")
     return {"refreshed": item.coverage.record_count, "audit": result.audit_payload["concept_sector"]}
@@ -446,6 +458,9 @@ def refresh_dt(db: Session = Depends(get_db)):
     result = run_auxiliary_application(db, instruments=(), trade_date=date.today(), refresh=True, datasets=("dragon_tiger",))
     with _pool_status_lock:
         _pool_status_cache.clear()
+    from app.services.data_sources import clear_daily_bar_rows_cache
+
+    clear_daily_bar_rows_cache()
     invalidate_bootstrap_cache()
     item = result.orchestrated.result_for("dragon_tiger")
     return {"refreshed": item.coverage.record_count, "audit": result.audit_payload["dragon_tiger"]}
