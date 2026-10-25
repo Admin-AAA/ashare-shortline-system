@@ -141,8 +141,37 @@ def get_cached_local_pool_status(
         compute_lock = _pool_compute_locks.setdefault(cache_key, threading.Lock())
     if fresh or cache_only:
         return _get_cached_local_pool_status_impl(db, **kwargs)
+    # stale-while-revalidate：缓存过期但不超过 _POOL_STALE_MAX_SECONDS 时先返回旧值（cache_stale=True），
+    # 后台单飞刷新。全量重算要 10 秒+（daily_kbars/capital_flow/stock_quotes 的全表聚合），不该压在请求线程上。
+    if cached and (time.monotonic() - cached["ts"]) < _POOL_STALE_MAX_SECONDS:
+        _pool_background_refresh(include_details, compute_lock, kwargs)
+        return _get_cached_local_pool_status_impl(db, **{**kwargs, "cache_only": True})
     with compute_lock:
         return _get_cached_local_pool_status_impl(db, **kwargs)
+
+
+_POOL_STALE_MAX_SECONDS = 3600.0
+
+
+def _pool_background_refresh(include_details: bool, compute_lock, kwargs: dict) -> None:
+    if not compute_lock.acquire(blocking=False):
+        return  # 已有刷新在跑
+
+    def _run() -> None:
+        from app.db.session import SessionLocal
+
+        session = SessionLocal()
+        try:
+            _get_cached_local_pool_status_impl(
+                session, **{**kwargs, "cache_ttl": 0, "cache_only": False, "include_paginated": False}
+            )
+        except Exception:  # noqa: BLE001 - 后台刷新失败保留旧缓存，下次请求重试
+            logger.warning("pool status background refresh failed", exc_info=True)
+        finally:
+            session.close()
+            compute_lock.release()
+
+    threading.Thread(target=_run, name="pool-status-refresh", daemon=True).start()
 
 
 def _get_cached_local_pool_status_impl(

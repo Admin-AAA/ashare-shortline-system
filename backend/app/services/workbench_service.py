@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import threading
 import time
 import uuid
@@ -409,8 +410,16 @@ def _select_latest_bootstrap_run(db: Session) -> RecommendationRun | None:
             RecommendationRun.run_id.in_(historical_run_ids),
         ),
     )
+    # defer 大字段：filter_audit_json 平均 5MB/行，首页只要摘要列（与 list_runs 同口径）；
+    # 否则排序 + 取行会把大 JSON 一起拖进 filesort，首页 bootstrap 白白多 6~7 秒。
     return db.scalar(
         select(RecommendationRun)
+        .options(
+            defer(RecommendationRun.params_json),
+            defer(RecommendationRun.market_snapshot_json),
+            defer(RecommendationRun.filter_audit_json),
+            defer(RecommendationRun.request_json),
+        )
         .where(
             or_(
                 and_(
@@ -490,10 +499,25 @@ def _auto_backfill_outcomes(db: Session, horizon_days: int = 5, min_interval_sec
         if (now - _outcome_backfill_ts) < min_interval_seconds:
             return
         _outcome_backfill_ts = now
-    try:
-        label_pending_outcomes_service(db, horizon_days=horizon_days)
-    except Exception:
-        logger.exception("automatic outcome backfill failed")
+    if os.environ.get("ASHARE_UNDER_PYTEST"):  # 测试要确定性：同步执行
+        try:
+            label_pending_outcomes_service(db, horizon_days=horizon_days)
+        except Exception:
+            logger.exception("automatic outcome backfill failed")
+        return
+
+    # 首页请求线程里同步跑 outcome 标注，每 10 分钟的第一个请求被拖慢几十秒（bootstrap 实测 39s）。
+    # 改成后台线程 + 自己的 Session（时间戳闸门保证同一时间只会起一个）。
+    def _run() -> None:
+        bg = SessionLocal()
+        try:
+            label_pending_outcomes_service(bg, horizon_days=horizon_days)
+        except Exception:
+            logger.exception("automatic outcome backfill failed")
+        finally:
+            bg.close()
+
+    threading.Thread(target=_run, name="outcome-backfill", daemon=True).start()
 
 
 def get_initial_workbench_state(db: Session, *, detail: str = "summary") -> dict[str, Any]:

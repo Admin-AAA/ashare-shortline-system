@@ -18,6 +18,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import select, tuple_
+from sqlalchemy.orm import defer
 from sqlalchemy.orm import Session
 
 from app.models.tables import (
@@ -211,8 +212,16 @@ def _load_recommendations(
     recs = db.scalars(stmt).all()
 
     run_ids = list(set(str(r.run_id) for r in recs))
+    # defer 大字段：filter_audit_json 平均 5MB/行，这里只要 run 的标量列；不 defer 会把全部 run 的审计 JSON 读进内存
     run_rows = db.scalars(
-        select(RecommendationRun).where(RecommendationRun.run_id.in_(run_ids))
+        select(RecommendationRun)
+        .options(
+            defer(RecommendationRun.filter_audit_json),
+            defer(RecommendationRun.market_snapshot_json),
+            defer(RecommendationRun.params_json),
+            defer(RecommendationRun.request_json),
+        )
+        .where(RecommendationRun.run_id.in_(run_ids))
     ).all()
     run_map = {r.run_id: r for r in run_rows}
     return recs, run_map
