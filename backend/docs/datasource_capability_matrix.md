@@ -1,50 +1,61 @@
 # 数据源能力矩阵
 
-实测时间：2026-10-18T21:20:56+0800，最近交易日 20261016。 由 `scripts/probe_datasource_capabilities.py` 生成（每 provider×api 1 次小调用），勿手改。
+实测时间：2026-10-24T11:32:40+0800，最近交易日 20261023。 由 `scripts/probe_datasource_capabilities.py` 生成（每 provider×api 1 次小调用），勿手改。
 
 图例：✅有数据 ⚪调用成功但空 ⛔无权限 ❌错误；格内为 行数/最新日期/字段完整度/延迟。
 
 | api | promax | quantdata |
 |---|---|---|
-| adj_factor | ✅ 15/20261016/100%/565ms | ✅ 15/20261016/100%/1289ms |
+| adj_factor | ✅ 16/20261023/100%/1162ms | ✅ 16/20261023/100%/394ms |
 | anns_d | ❌ unverified:http_client | ❌ unsupported:provider_error |
-| block_trade | ✅ 586/20261016/100%/3107ms | ✅ 628/20261016/100%/534ms |
-| broker_recommend | ❌ unverified:http_client | ✅ 237/202610/100%/2059ms |
-| cyq_perf | ✅ 15/20261016/100%/1007ms | ✅ 15/20261016/100%/1578ms |
-| daily | ✅ 15/20261016/100%/30ms | ✅ 15/20261016/100%/1503ms |
-| daily_basic | ✅ 15/20261016/100%/5819ms | ✅ 15/20261016/100%/572ms |
-| fina_indicator | ✅ 56/20260815/8%/21ms | ✅ 100/20260815/100%/895ms |
-| fina_indicator_vip | ❌ unsupported:http_client | ✅ 8115/20260902/100%/14949ms |
-| hk_hold | ✅ 1/20260930/100%/478ms | ✅ 1/20260930/100%/604ms |
-| hsgt_top10 | ✅ 70/20261016/100%/665ms | ✅ 70/20261016/100%/1082ms |
-| index_daily | ✅ 15/20261016/100%/1015ms | ✅ 15/20261016/100%/610ms |
-| limit_list_d | ✅ 120/20261016/100%/1894ms | ✅ 120/20261016/100%/865ms |
-| margin | ❌ unverified:http_client | ✅ 19/20261016/100%/557ms |
-| margin_detail | ✅ 14/20261015/100%/81ms | ✅ 14/20261015/100%/389ms |
-| moneyflow | ✅ 15/20261016/100%/677ms | ✅ 15/20261016/100%/616ms |
-| moneyflow_hsgt | ✅ 15/20261016/100%/193ms | ✅ 15/20261016/100%/544ms |
-| namechange | ✅ 4/20120120/100%/916ms | ✅ 4/20120120/100%/567ms |
-| pledge_stat | ❌ transient:http_rate_limit | ✅ 649/20261016/100%/1397ms |
-| repurchase | ✅ 588/20261017/100%/564ms | ✅ 588/20261017/100%/1613ms |
-| rt_k | ❌ transient:http_rate_limit | ❌ unsupported:provider_error |
-| rt_min | ✅ 1/-/100%/44ms | ✅ 1/-/89%/427ms |
-| share_float | ✅ 106/20150520/100%/157ms | ✅ 106/20150520/100%/824ms |
-| stk_auction | ❌ transient:http_rate_limit | ✅ 7/20261016/100%/819ms |
-| stk_factor | ❌ transient:http_rate_limit | ✅ 15/20261016/100%/1850ms |
-| stk_factor_pro | ✅ 15/20261016/8%/5095ms | ✅ 15/20261016/100%/864ms |
-| stk_holdernumber | ✅ 149/20260815/100%/74ms | ✅ 149/20260815/100%/1157ms |
-| stk_holdertrade | ✅ 2391/20261017/100%/28714ms | ✅ 2447/20261017/100%/2539ms |
-| stk_limit | ✅ 15/20261016/100%/542ms | ✅ 15/20261016/100%/566ms |
-| stk_mins | ⚪ 0/-/100%/50ms | ❌ unsupported:provider_error |
-| stock_basic | ✅ 1/-/100%/27ms | ✅ 1/-/67%/1053ms |
-| suspend_d | ❌ transient:http_rate_limit | ✅ 96/20261016/100%/546ms |
-| ths_index | ❌ unverified:http_client | ✅ 395/-/100%/745ms |
-| ths_member | ✅ 280/-/100%/959ms | ✅ 280/-/100%/700ms |
-| top_inst | ✅ 660/20261016/100%/5824ms | ✅ 660/20261016/100%/372ms |
-| top_list | ✅ 61/20261016/100%/15095ms | ✅ 61/20261016/100%/645ms |
-| trade_cal | ✅ 30/20261017/100%/262ms | ✅ 30/20261017/100%/300ms |
+| block_trade | ✅ 706/20261023/100%/1666ms | ✅ 787/20261023/100%/3717ms |
+| broker_recommend | ❌ unverified:http_client | ✅ 237/202610/100%/1475ms |
+| cyq_perf | ✅ 16/20261023/100%/99ms | ✅ 16/20261023/100%/583ms |
+| daily | ✅ 16/20261023/100%/999ms | ✅ 16/20261023/100%/1326ms |
+| daily_basic | ✅ 16/20261023/100%/2077ms | ✅ 16/20261023/100%/443ms |
+| fina_indicator | ✅ 235/20261024/47%/2025ms | ✅ 100/20261024/100%/648ms |
+| fina_indicator_vip | ❌ unsupported:http_client | ✅ 8117/20260902/100%/135449ms |
+| hk_hold | ✅ 1/20260930/100%/71ms | ✅ 1/20260930/100%/622ms |
+| hsgt_top10 | ⛔ unsupported:permission | ✅ 70/20261023/100%/1577ms |
+| index_daily | ✅ 16/20261023/100%/1625ms | ✅ 16/20261023/100%/2314ms |
+| limit_list_d | ✅ 100/20261023/100%/101ms | ✅ 100/20261023/100%/514ms |
+| margin | ❌ unverified:http_client | ✅ 22/20261023/100%/712ms |
+| margin_detail | ✅ 15/20261022/100%/86ms | ✅ 15/20261022/100%/620ms |
+| moneyflow | ✅ 16/20261023/100%/429ms | ✅ 16/20261023/100%/863ms |
+| moneyflow_hsgt | ⛔ unsupported:permission | ✅ 15/20261023/100%/1166ms |
+| namechange | ✅ 4/20120120/100%/67ms | ✅ 4/20120120/100%/419ms |
+| pledge_stat | ✅ 649/20261016/100%/5547ms | ✅ 649/20261016/100%/411ms |
+| repurchase | ❌ transient:http_rate_limit | ✅ 633/20261023/100%/403ms |
+| rt_k | ✅ 1/-/100%/142ms | ❌ unsupported:provider_error |
+| rt_min | ✅ 1/-/100%/314ms | ✅ 1/-/89%/909ms |
+| share_float | ✅ 106/20150520/100%/1057ms | ✅ 106/20150520/100%/450ms |
+| stk_auction | ✅ 8/20261023/100%/2805ms | ✅ 8/20261023/100%/882ms |
+| stk_factor | ✅ 16/20261023/100%/111ms | ✅ 16/20261023/100%/535ms |
+| stk_factor_pro | ✅ 16/20261023/100%/1470ms | ✅ 16/20261023/100%/510ms |
+| stk_holdernumber | ✅ 150/20261024/100%/641ms | ✅ 150/20261024/100%/1178ms |
+| stk_holdertrade | ✅ 1823/20261023/100%/2213ms | ✅ 1879/20261023/100%/626ms |
+| stk_limit | ✅ 16/20261023/100%/1208ms | ✅ 16/20261023/100%/559ms |
+| stk_mins | ✅ 13/-/100%/187ms | ❌ unsupported:provider_error |
+| stock_basic | ✅ 1/-/100%/165ms | ✅ 1/-/67%/476ms |
+| suspend_d | ✅ 84/20261023/100%/89ms | ✅ 84/20261023/100%/733ms |
+| ths_index | ❌ unverified:http_client | ✅ 395/-/100%/596ms |
+| ths_member | ✅ 280/-/100%/475ms | ✅ 280/-/100%/593ms |
+| top_inst | ✅ 1010/20261023/100%/1512ms | ✅ 1010/20261023/100%/390ms |
+| top_list | ✅ 101/20261023/100%/331ms | ✅ 101/20261023/100%/595ms |
+| trade_cal | ✅ 30/20261023/100%/146ms | ✅ 22/20261023/100%/329ms |
 
 ## 限速（配置值，次/分钟）
 
 - promax: 180
 - quantdata: 120
+
+## 与上次实测相比的漂移
+
+- promax/hsgt_top10: ok -> no_permission
+- promax/moneyflow_hsgt: ok -> no_permission
+- promax/pledge_stat: error -> ok
+- promax/repurchase: ok -> error
+- promax/rt_k: error -> ok
+- promax/stk_auction: error -> ok
+- promax/stk_factor: error -> ok
+- promax/suspend_d: error -> ok
