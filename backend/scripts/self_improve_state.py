@@ -34,9 +34,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-DEFAULT_MEMORY_DIR = Path(
-    "/Users/wangao/.claude/projects/-Users-wangao/memory"
-)
+DEFAULT_MEMORY_DIR = Path.home() / ".claude/projects/-Users-wangao/memory"
 
 HEARTBEAT_TIMEOUT_SECONDS = 30 * 60  # 30 min
 DEFAULT_DAEMON_INTERVAL_SECONDS = 900  # 15 min

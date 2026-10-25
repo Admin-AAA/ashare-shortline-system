@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -182,7 +183,7 @@ def _pool():
     if _FETCH_POOL is None:
         from concurrent.futures import ThreadPoolExecutor
 
-        _FETCH_POOL = ThreadPoolExecutor(max_workers=32, thread_name_prefix="gw-fetch")
+        _FETCH_POOL = ThreadPoolExecutor(max_workers=_POOL_WORKERS, thread_name_prefix="gw-fetch")
     return _FETCH_POOL
 
 
@@ -211,17 +212,46 @@ class _Budget:
         return self.until - time.monotonic()
 
 
+_POOL_WORKERS = 32
+ABANDONED_LIMIT = 24  # 留 8 个线程给正常请求
+_ABANDONED: set = set()
+_ABANDONED_LOCK = threading.Lock()
+
+
+def _forget_abandoned(fut: Any) -> None:
+    with _ABANDONED_LOCK:
+        _ABANDONED.discard(fut)
+
+
+def abandoned_call_count() -> int:
+    with _ABANDONED_LOCK:
+        return len(_ABANDONED)
+
+
 def _call_with_timeout(fn: Callable[[], Any], timeout: float) -> Any:
     """Run ``fn`` in the shared pool, give up after ``timeout`` (the worker is abandoned)."""
     import contextvars
     from concurrent.futures import TimeoutError as FutTimeout
 
+    # 超时的调用无法强杀，会一直占着线程直到上游返回；累计太多会把 32 线程池占满，
+    # 让所有后续请求排队超时（雪崩）。放弃数达到上限时直接快速失败，让熔断/降级接管。
+    abandoned = abandoned_call_count()
+    if abandoned >= ABANDONED_LIMIT:
+        raise DataSourceError(
+            ErrorKind.TIMEOUT,
+            f"gateway fetch pool saturated: {abandoned} timed-out calls still running (limit {ABANDONED_LIMIT})",
+        )
     ctx = contextvars.copy_context()
     fut = _pool().submit(ctx.run, fn)
     try:
         return fut.result(timeout=max(0.001, timeout))
     except FutTimeout:
-        fut.cancel()
+        if not fut.cancel():  # 已在运行：无法取消，记入"被放弃"集合，结束后自动移除
+            with _ABANDONED_LOCK:
+                _ABANDONED.add(fut)
+            fut.add_done_callback(_forget_abandoned)
+            logger.warning("gateway call abandoned after %.2fs; %d abandoned workers still running",
+                           timeout, abandoned_call_count())
         raise DataSourceError(ErrorKind.TIMEOUT, f"deadline {timeout:.2f}s exceeded") from None
 
 

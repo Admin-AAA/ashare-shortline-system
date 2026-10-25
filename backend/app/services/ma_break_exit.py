@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import logging
 from functools import lru_cache
 from typing import Any, Callable, Mapping, Sequence
 
@@ -15,6 +16,8 @@ import yaml
 
 from app.engine.board_rules import is_one_word_limit_down_bar
 from app.services.strategy_exit_overrides import SKILLS_DIR
+
+logger = logging.getLogger(__name__)
 
 MA_BREAK_REASON = "ma_break_close"
 
@@ -25,7 +28,8 @@ def load_ma_break_windows() -> dict[str, int]:
     for path in sorted(SKILLS_DIR.glob("*/strategy.yaml")):
         try:
             contract = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception:  # noqa: BLE001 - 坏 yaml 由 skill_loader 报错
+        except Exception:  # noqa: BLE001 - 坏 yaml 由 skill_loader 报错；这里至少留日志，避免出场规则静默失效
+            logger.warning("ma_break_exit: 读取 %s 失败，该策略出场规则未加载", path, exc_info=True)
             continue
         raw = contract.get("ma_break_exit") or {}
         if isinstance(raw, Mapping) and int(raw.get("window") or 0) in (5, 10):

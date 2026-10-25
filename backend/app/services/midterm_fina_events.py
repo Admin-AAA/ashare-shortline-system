@@ -308,6 +308,7 @@ def _local_div() -> tuple[pd.DataFrame, str]:
             try:
                 parts.append(pd.read_parquet(f, columns=cols))
             except Exception:  # noqa: BLE001
+                logger.warning("midterm_fina_events: 读取分红缓存 %s 失败，已跳过（DINC 覆盖可能缺该文件）", f, exc_info=True)
                 continue
         df = _clean_div(pd.concat(parts, ignore_index=True)) if parts else pd.DataFrame(columns=cols)
         mt = max((Path(f).stat().st_mtime for f in files), default=0.0)

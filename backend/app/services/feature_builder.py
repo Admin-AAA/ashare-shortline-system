@@ -156,6 +156,7 @@ def _risk_score(stock: dict[str, Any]) -> float:
 
 def _apply_dsa_context(item: dict[str, Any], profile: dict[str, Any], dsa_weights: dict[str, float] | None = None) -> None:
     price = _num(item.get("price") or item.get("close"))
+    item["profile_fields_defaulted"] = [k for k in _PROFILE_CORE_FIELDS if profile.get(k) in (None, "")]
     bias_ma5 = _num(profile.get("bias_ma5"), _default_bias_ma5(item))
     bias_ma10 = _num(profile.get("bias_ma10"), bias_ma5 + 2.5)
     bias_ma20 = _num(profile.get("bias_ma20"), _num(item.get("dist20"), bias_ma5 + 5.0))
@@ -193,10 +194,11 @@ def _apply_dsa_context(item: dict[str, Any], profile: dict[str, Any], dsa_weight
     item["volume_ratio_vs_5d"] = round(volume_ratio_5d, 2)
     item["volume_ratio_vs_20d"] = round(volume_ratio_20d, 2)
     item["volume_trend_pct"] = _num(profile.get("volume_trend_pct"), round((volume_ratio_5d - 1) * 100, 1))
-    item["avg_up_day_volume"] = _num(profile.get("avg_up_day_volume"), round(_num(item.get("amount_yi")) * 0.52, 2))
-    item["avg_down_day_volume"] = _num(profile.get("avg_down_day_volume"), round(_num(item.get("amount_yi")) * 0.39, 2))
+    # 上涨/下跌日均量、量价相关：画像缺失时不再用 0.52/0.39×成交额、±0.15~0.35 这类拍脑袋数充当数据（None = 未知，无下游消费方）。
+    item["avg_up_day_volume"] = _opt_num(profile.get("avg_up_day_volume"))
+    item["avg_down_day_volume"] = _opt_num(profile.get("avg_down_day_volume"))
     item["high_volume_days"] = int(_num(profile.get("high_volume_days"), 1 if volume_ratio_20d > 1.5 else 0))
-    item["volume_price_corr"] = _num(profile.get("volume_price_corr"), 0.35 if _num(item.get("pct")) > 0 else -0.15)
+    item["volume_price_corr"] = _opt_num(profile.get("volume_price_corr"))
     item["volume_pattern"] = str(profile.get("volume_pattern", "中性"))
 
     support_ma5 = _bool(profile.get("support_ma5"), abs(item["bias_ma5"]) <= 2 and price >= ma5)
@@ -613,6 +615,21 @@ def _default_profit_ratio(item: dict[str, Any]) -> float:
 
 def _ma_from_bias(price: float, bias_pct: float) -> float:
     return price / (1 + bias_pct / 100) if (1 + bias_pct / 100) else price
+
+
+def _opt_num(value: Any) -> float | None:
+    """缺失/非法 → None（不编造默认值）。"""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# 这些画像字段缺失时 _apply_dsa_context 会用推算值兜底（由乖离/现价反推均线等）；记录哪些被兜底，便于审计/排查。
+_PROFILE_CORE_FIELDS = ("ma5", "ma10", "ma20", "ma60", "bias_ma5", "bias_ma10", "bias_ma20", "bias_ma60",
+                        "volume_ratio_5d", "volume_ratio_vs_20d", "rsi_12")
 
 
 def _num(value: Any, default: float = 0.0) -> float:

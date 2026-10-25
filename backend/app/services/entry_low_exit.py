@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import dataclasses as dc
+import logging
 from functools import lru_cache
 from typing import Any, Callable, Mapping, Sequence
 
@@ -16,6 +17,8 @@ import yaml
 
 from app.engine.board_rules import is_one_word_limit_down_bar
 from app.services.strategy_exit_overrides import SKILLS_DIR
+
+logger = logging.getLogger(__name__)
 
 ENTRY_LOW_REASON = "entry_low_close"
 
@@ -26,7 +29,8 @@ def load_entry_low_modes() -> dict[str, str]:
     for path in sorted(SKILLS_DIR.glob("*/strategy.yaml")):
         try:
             contract = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 - 坏 yaml 由 skill_loader 报错；这里至少留日志，避免出场规则静默失效
+            logger.warning("entry_low_exit: 读取 %s 失败，该策略出场规则未加载", path, exc_info=True)
             continue
         raw = contract.get("entry_low_exit") or {}
         if isinstance(raw, Mapping) and str(raw.get("mode") or "").strip().lower() == "close":

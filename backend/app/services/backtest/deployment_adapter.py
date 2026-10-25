@@ -62,7 +62,7 @@ class LocalPolicyDeploymentAdapter:
         default_root = Path(
             os.environ.get(
                 "SELF_IMPROVE_DEPLOYMENT_DIR",
-                "/Users/wangao/.claude/projects/-Users-wangao/memory/policy-deployments",
+                str(Path.home() / ".claude/projects/-Users-wangao/memory/policy-deployments"),
             )
         )
         self.root = Path(root or default_root)

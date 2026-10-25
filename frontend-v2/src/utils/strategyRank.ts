@@ -16,7 +16,7 @@ export const SORT_KEYS: { key: SortKey; label: string; hint: string }[] = [
   { key: "return", label: "收益", hint: "中长线：近12月组合收益（折算到20仓位口径）；短线：近12月平均每笔收益" },
   { key: "winrate", label: "胜率", hint: "近12月胜率" },
   { key: "drawdown", label: "回撤", hint: "近12月最大回撤（降序 = 回撤小的在前）" },
-  { key: "recent", label: "近期", hint: "中长线：近12月平均每笔收益；短线：近期窗口（2026-05 起）平均每笔收益" },
+  { key: "recent", label: "近期", hint: "中长线：近12月平均每笔收益；短线：近期窗口（起点见 standalone-metrics 的 window.recent_start）平均每笔收益" },
 ];
 
 export interface RankFields {
