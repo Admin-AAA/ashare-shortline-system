@@ -4,7 +4,7 @@
 2018~2021 整段没有。上游 stk_limit 实测 2019-07-03 起就能取到全市场（3671 行），所以可以补。
 
 约束（不要抢日更的限流窗口 / quantdata 日额度）：
-- 只走 promax provider（不碰 quantdata 日额度）；两次请求间隔 --sleep 秒（默认 8）；
+- 默认只走 promax provider（不碰 quantdata 日额度；--provider quantdata 可提速，但受 --budget-fraction 日额度预算限制）；两次请求间隔 --sleep 秒（默认 8）；
 - 17:25-18:45、20:55-21:50 自动暂停（日更 17:35 / 晚间补数 21:00），工作日 09:10-15:10 也暂停；
 - 可断点续跑：已有 >= --min-rows 行的日期跳过；失败的日期稍后在下一轮重试。
 
@@ -51,12 +51,15 @@ def main() -> int:
     ap.add_argument("--sleep", type=float, default=8.0)
     ap.add_argument("--min-rows", type=int, default=3000)
     ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--provider", choices=("promax", "quantdata"), default="promax",
+                    help="quantdata 请求快（~0.5s）但吃日额度，受 --budget-fraction 限制，超过即停")
+    ap.add_argument("--budget-fraction", type=float, default=0.4)
     a = ap.parse_args()
 
     from app.services.tushare_client import _build_provider_router
 
     router, _ = _build_provider_router()
-    promax = router._providers["promax"]
+    promax = router._providers[a.provider]
     db = SessionLocal()
     # trade_calendar 表只有 2025-09 起；这里用中证500(000905.SH) 日线的日期当 2018 年以来的交易日历
     days = [r[0] for r in db.execute(text(
@@ -74,6 +77,13 @@ def main() -> int:
         ok = 0
         for d in todo:
             _wait_if_blocked()
+            if a.provider == "quantdata":
+                from app.core.provider_quota import backfill_budget_check
+
+                ok_budget, reason = backfill_budget_check(["quantdata"], a.budget_fraction)
+                if not ok_budget:
+                    print(f"额度预算用尽，停止：{reason}", flush=True)
+                    return 3
             compact = d.replace("-", "")
             try:
                 env = promax.request("stk_limit", params={"trade_date": compact}, fields="")
