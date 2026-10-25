@@ -146,7 +146,7 @@ function StrategyCard({ s }: { s: HorizonStrategy }) {
         {s.rank_components?.note ? <div className="hz-muted" title="收益/回撤排序与展示用折算后的 tot_20 / mdd_20">{s.rank_components.note}</div> : null}
         <div className="hz-tags">
           <span className="hz-tag"><CalendarClock size={12} /> {SCHEDULE_OVERRIDE[s.id] ?? `${SCHEDULE[s.schedule] ?? s.schedule}选股`}</span>
-          <span className="hz-tag">每次 Top {s.top_n}</span>
+          {s.top_n ? <span className="hz-tag">每次 Top {s.top_n}</span> : <span className="hz-tag">信号全买</span>}
           <span className="hz-tag">持有 {s.hold_days} 交易日</span>
         </div>
       </header>

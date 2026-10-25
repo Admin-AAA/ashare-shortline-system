@@ -218,7 +218,7 @@ export type HorizonStrategy = {
   id: string; name: string; horizon: string; summary: string; next_batch_note?: string | null;
   /** 当日出票状态（17:35 盘后才有）；缺失则不显示 */
   daily_status?: { status: "ok" | "no_signal" | "data_error" | "slots_full" | "not_signal_day" | string; reason?: string | null; date?: string | null } | string | null;
-  daily_status_reason?: string | null; schedule: string; hold_days: number; top_n: number;
+  daily_status_reason?: string | null; schedule: string; hold_days: number; top_n: number | null;
   metrics: { recent_12m?: HorizonMetrics; phases?: Record<string, HorizonMetrics>; window?: string; note?: string };
   /** 综合分（后端 strategy_rank.py，仅周期内比较）；沉底策略 rank_score/rank 为空，rank_flags 说明原因 */
   rank_score?: number | null; rank?: number | null; rank_flags?: string[]; rank_flag_labels?: string[];

@@ -35,11 +35,9 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         # §100 预注册 RP_r05（scripts/midterm/lt_research18.py，未调参）：在 §91 R_plan_h20 基础上只保留金额上限≥总市值0.5%的预案
         "name": "回购预案事件（金额≥市值0.5%，持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的股票回购「预案」公告（同一股票365天内只取第一次），只保留回购金额上限≥总市值0.5%的（剔除象征性小额回购），剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按回购金额上限占总市值比例从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的股票回购「预案」公告（同一股票365天内只取第一次），只保留回购金额上限≥总市值0.5%的（剔除象征性小额回购），剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按回购金额上限占总市值比例从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量，也不限每天新开数量，当天信号全部买入。",
         "kind": "repurchase",
         "min_ratio": 0.005,
-        "k_slots": 20,
-        "max_new": 5,
         "hold_days": 20,
         "schedule": "daily",
     },
@@ -47,10 +45,8 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-earnings-accel": {
         "name": "财报业绩加速（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（年报/季报，同一报告期只取第一次公告）：扣非净利同比≥50%、营收同比≥20%、扣非净利为正、且扣非同比高于上一期报告（加速）。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按扣非同比（封顶300%）从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（年报/季报，同一报告期只取第一次公告）：扣非净利同比≥50%、营收同比≥20%、扣非净利为正、且扣非同比高于上一期报告（加速）。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按扣非同比（封顶300%）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量，也不限每天新开数量，当天信号全部买入。",
         "kind": "earnings_accel",
-        "k_slots": 20,
-        "max_new": 5,
         "hold_days": 20,
         "schedule": "daily",
     },
@@ -58,10 +54,8 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-forecast-beat": {
         "name": "业绩预告首次预喜（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的业绩预告，同一报告期只认公司第一次预告（修正公告不算）：类型为预增/扭亏/略增、预告净利同比增幅下限>0、预告净利润下限>0。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按预告增幅下限（封顶300%）从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。信号集中在1/4/7/10月预告季。",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的业绩预告，同一报告期只认公司第一次预告（修正公告不算）：类型为预增/扭亏/略增、预告净利同比增幅下限>0、预告净利润下限>0。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按预告增幅下限（封顶300%）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量，也不限每天新开数量，当天信号全部买入。信号集中在1/4/7/10月预告季。",
         "kind": "forecast_beat",
-        "k_slots": 20,
-        "max_new": 5,
         "hold_days": 20,
         "schedule": "daily",
     },
@@ -69,10 +63,8 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-incentive-option": {
         "name": "股票期权激励草案首次公告（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今巨潮资讯新披露的股权激励计划「草案」（修订/更正/调整/终止类不算），只认公司180天内第一次披露、且计划含股票期权（期权或期权+限制性股票）的。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按公告前20日涨幅从低到高（优先还没提前大涨的），次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今巨潮资讯新披露的股权激励计划「草案」（修订/更正/调整/终止类不算），只认公司180天内第一次披露、且计划含股票期权（期权或期权+限制性股票）的。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按公告前20日涨幅从低到高（优先还没提前大涨的），次日开盘买入，各持有20个交易日。不限同时持有数量，也不限每天新开数量，当天信号全部买入。",
         "kind": "incentive_option",
-        "k_slots": 20,
-        "max_new": 5,
         "hold_days": 20,
         "schedule": "daily",
     },
@@ -81,21 +73,17 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-block-trade-premium": {
         "name": "大宗交易溢价成交（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日晚间（交易所/Tushare 约21:00 发布当日大宗交易后），汇总每只股票当天全部大宗成交：成交量加权的大宗成交价不低于当日收盘价（溢价或平价成交），且大宗成交总额≥流通市值0.5%。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按大宗成交额占流通市值比例从高到低，次日开盘买入，各持有20个交易日。最多同时持有20只、每天最多新开5只。",
+        "summary": "每个交易日晚间（交易所/Tushare 约21:00 发布当日大宗交易后），汇总每只股票当天全部大宗成交：成交量加权的大宗成交价不低于当日收盘价（溢价或平价成交），且大宗成交总额≥流通市值0.5%。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按大宗成交额占流通市值比例从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量，也不限每天新开数量，当天信号全部买入。",
         "kind": "block_trade_premium",
-        "k_slots": 20,
-        "max_new": 5,
         "hold_days": 20,
         "schedule": "daily",
     },
     "long-repurchase-big": {
         "name": "大额回购预案（持60日）",
         "horizon": "long",
-        "summary": "每个交易日盘后，扫描新发布的股票回购「预案」公告（同一股票365天内只取第一次），只保留回购金额上限≥总市值1%的，剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按金额占市值比例从高到低，次日开盘买入，各持有60个交易日。最多同时持有20只、每天最多新开5只。",
+        "summary": "每个交易日盘后，扫描新发布的股票回购「预案」公告（同一股票365天内只取第一次），只保留回购金额上限≥总市值1%的，剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按金额占市值比例从高到低，次日开盘买入，各持有60个交易日。不限同时持有数量，也不限每天新开数量，当天信号全部买入。",
         "kind": "repurchase",
         "min_ratio": 0.01,
-        "k_slots": 20,
-        "max_new": 5,
         "hold_days": 60,
         "schedule": "daily",
     },
@@ -143,6 +131,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "horizon": "long",
         "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：去年同期每股未分配利润（undist_profit_ps）>0、本期 ≥0.5 元/股，且同比增速 ≥30%；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按增速从大到小排序（增速封顶200%），次日开盘买，持有60个交易日（已持有不重复买）。",
         "kind": "udp_yoy",
+        "hold_days": 60,
+        "schedule": "daily",
+    },
+    # §261 净负债转为净现金（scripts/midterm/lt_research98.py NCS_h60，预注册、未调参；2026-10-25 起直接上线）
+    "long-net-cash-switch": {
+        "name": "净负债转为净现金（持60日）",
+        "horizon": "long",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：去年同期有息负债多于账上现金（净负债>0、有息负债>0），本期变成现金多于有息负债（净负债≤0，即净现金），且本期扣非净利润为正；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按「净负债减少额÷去年有息负债」从大到小排序（封顶3倍），次日开盘买，持有60个交易日（已持有不重复买）。",
+        "kind": "ncs_switch",
         "hold_days": 60,
         "schedule": "daily",
     },
@@ -797,15 +794,11 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             continue
         if meta.get("kind") == "earnings_accel":
             held = _held_codes(db, sid, as_of)
-            free = int(meta["k_slots"]) - len(held)
-            if free <= 0:
-                result[sid] = {"skipped": "slots_full", "held": len(held)}
-                continue
             ea = earnings_accel_candidates(db, as_of)
             if ea is None:
                 result[sid] = "no_data"
                 continue
-            picks = [p for p in ea if p["code"] not in held][:min(int(meta["max_new"]), free)]
+            picks = [p for p in ea if p["code"] not in held]
             if not picks:
                 result[sid] = 0
                 continue
@@ -817,15 +810,11 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
         if meta.get("kind") == "forecast_beat":
             from app.services.midterm_forecast import forecast_beat_candidates
             held = _held_codes(db, sid, as_of)
-            free = int(meta["k_slots"]) - len(held)
-            if free <= 0:
-                result[sid] = {"skipped": "slots_full", "held": len(held)}
-                continue
             fb = forecast_beat_candidates(db, as_of)
             if fb is None:
                 result[sid] = "no_data"
                 continue
-            picks = [p for p in fb if p["code"] not in held][:min(int(meta["max_new"]), free)]
+            picks = [p for p in fb if p["code"] not in held]
             if not picks:
                 result[sid] = 0
                 continue
@@ -837,15 +826,11 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
         if meta.get("kind") == "incentive_option":
             from app.services.midterm_incentive import incentive_candidates
             held = _held_codes(db, sid, as_of)
-            free = int(meta["k_slots"]) - len(held)
-            if free <= 0:
-                result[sid] = {"skipped": "slots_full", "held": len(held)}
-                continue
             ic = incentive_candidates(db, as_of)
             if ic is None:
                 result[sid] = "no_data"
                 continue
-            picks = [p for p in ic if p["code"] not in held][:min(int(meta["max_new"]), free)]
+            picks = [p for p in ic if p["code"] not in held]
             if not picks:
                 result[sid] = 0
                 continue
@@ -854,9 +839,10 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
             result[sid] = len(picks)
             continue
-        if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy"):
+        if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy", "ncs_switch"):
             from app.services import midterm_fina_events as fe
-            cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates}[meta["kind"]]
+            cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates,
+                       "ncs_switch": fe.ncs_candidates}[meta["kind"]]
             # 实盘推荐不设仓位上限（不限持仓只数/每日新进只数）：按排序全部出票，已持有的不重复买；回测指标按 20 仓位口径
             held = _held_codes(db, sid, as_of)
             cands = cand_fn(db, as_of)
@@ -877,17 +863,12 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             continue
         if meta.get("kind") == "repurchase":
             held = _held_codes(db, sid, as_of)
-            free = int(meta["k_slots"]) - len(held)
-            if free <= 0:
-                result[sid] = {"skipped": "slots_full", "held": len(held)}
-                continue
             if rp_cands == "unset":
                 rp_cands = repurchase_plan_candidates(db, as_of)
             if rp_cands is None:
                 result[sid] = "no_data"
                 continue
             picks = [p for p in rp_cands if p["ratio"] >= meta["min_ratio"] and p["code"] not in held]
-            picks = picks[:min(int(meta["max_new"]), free)]
             if not picks:
                 result[sid] = 0
                 continue
@@ -920,7 +901,7 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
         result[sid] = len(picks)
 
 
-DAILY_STATUS_VALUES = ("ok", "no_signal", "data_error", "slots_full", "not_signal_day")
+DAILY_STATUS_VALUES = ("ok", "no_signal", "data_error", "slots_full", "not_signal_day")  # slots_full 仅用于 10-22 前的旧状态文件（持仓名额上限已去掉）
 
 
 def classify_daily_status(raw: Any) -> str:
@@ -989,13 +970,10 @@ def _block_trade_picks(db, sid: str, meta: dict[str, Any], as_of: str) -> Any:
     """mid-block-trade-premium 出票（幂等：同一 as_of 重跑覆盖同一文件）。大宗数据未发布 -> "no_data"、不落盘。"""
     from app.services.midterm_block_trade import block_trade_candidates
     held = _held_codes(db, sid, as_of)
-    free = int(meta["k_slots"]) - len(held)
-    if free <= 0:
-        return {"skipped": "slots_full", "held": len(held)}
     bt = block_trade_candidates(db, as_of)
     if bt is None:
         return "no_data"
-    picks = [p for p in bt if p["code"] not in held][:min(int(meta["max_new"]), free)]
+    picks = [p for p in bt if p["code"] not in held]
     if not picks:
         return 0
     OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -1120,6 +1098,11 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["score"]) * 100, 1), "每股未分配利润同比增速(%)，封顶200", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：每股未分配利润 {_f(p.get('prev'), 2)} → "
                       f"{_f(p.get('cur'), 2)} 元，同比 +{_f(float(p.get('growth') or 0) * 100, 1)}%")
+        elif kind == "ncs_switch":
+            score, label, better = round(float(p["score"]), 2), "净负债减少额÷去年有息负债(倍，封顶3)", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：净负债 {_f(float(p.get('netdebt_prev') or 0) / 1e8, 2)} 亿 → "
+                      f"{_f(float(p.get('netdebt') or 0) / 1e8, 2)} 亿（转为净现金），去年同期有息负债 {_f(float(p.get('interestdebt_prev') or 0) / 1e8, 2)} 亿；"
+                      f"扣非净利 {_f(float(p.get('profit_dedt') or 0) / 1e8, 2)} 亿")
         elif kind == "dividend_lowvol":
             score, label, better = float(p["score"]), "股息率排名+60日波动排名(越低越好)", "lower"
             reason = f"市值第 {p.get('mv_rank', '')} 名；股息率(TTM) {_f(p.get('dv_ttm'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"
@@ -1303,7 +1286,7 @@ def strategies_overview(horizon: str | None = None, db=None) -> list[dict[str, A
                 "id": sid,
                 **{k: v for k, v in meta.items() if k not in ("top_n", "guard", "hold_days")},
                 "hold_days": _hold(sid),
-                "top_n": meta.get("top_n", meta.get("max_new")),
+                "top_n": meta.get("top_n"),
                 "metrics": metrics.get(sid, {}),
                 "next_batch_note": next_batch_note(sid, db),
                 "daily_status": latest_daily_status(sid),

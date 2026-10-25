@@ -4,6 +4,7 @@
   - CLD_h60  流动负债占比同比下降  scripts/midterm/lt_research88.py（§240）
   - DINC_h60 分红增加（派现同比≥30%）scripts/midterm/lt_research48.py（§158）
   - UDP_h60  每股未分配利润同比高增   scripts/midterm/lt_research94.py（§252）
+  - NCS_h60  净负债转为净现金         scripts/midterm/lt_research98.py（§261）
 事件时点：研究把公告日映射到「公告日起第一个交易日」当信号日；实盘 as_of 收盘后扫描公告日在 (上一交易日, as_of] 的首次公告
 （含周末/节假日期间的公告）。每个 (股票, 报告期) 只认第一次公告。股池：非ST、非北交所/B股(4/8/9 开头)、上市>250交易日、
 20日均成交额>5000万、当日有成交（midterm_service._liq_ok）。排序分同研究：封顶后降序，平手按代码升序（研究里 score−code×1e-10 与此等价）。
@@ -35,10 +36,13 @@ CLD_CUR_LO, CLD_CUR_HI, CLD_PREV_LO, CLD_PREV_HI = 30.0, 95.0, 20.0, 100.0
 CLD_DELTA_MIN, CLD_DELTA_CAP = 5.0, 40.0
 # UDP（§252）：去年同期 undist_profit_ps>0、本期≥0.5 元/股、增速=本期/去年−1≥30%，增速封顶 2.0
 UDP_PREV_MIN, UDP_FLOOR, UDP_G, UDP_CAP = 0.0, 0.5, 0.30, 2.0
+# NCS（§261）：去年同期 netdebt>0 且 interestdebt>0；本期 netdebt≤0（净现金）；本期 profit_dedt>0；
+# 排序分 =（去年 netdebt − 本期 netdebt）/ 去年 interestdebt，封顶 3.0
+NCS_CAP = 3.0
 # DINC（§158）：预案每股税前派现>0，较去年同报告期（优先实施记录，否则最早预案）提高≥30%（去年同期>0），不封顶
 DINC_INC_TH = 0.30
 
-FINA_FIELDS = "ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy"
+FINA_FIELDS = "ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt"
 _FINA_TTL = 1800.0
 _fina_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _div_local: dict[str, Any] = {}
@@ -93,8 +97,9 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     f = raw.copy()
     for k in ("ts_code", "ann_date", "end_date"):
         f[k] = f[k].astype(str).str.strip()
-    for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy"):
-        f[k] = pd.to_numeric(f[k], errors="coerce")
+    for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt"):
+        if k in f.columns:
+            f[k] = pd.to_numeric(f[k], errors="coerce")
     f = f[(f["ann_date"].str.len() == 8) & (f["end_date"].str.len() == 8)]
     _fina_cache[period] = (time.time(), f)
     if len(_fina_cache) > 24:
@@ -102,9 +107,9 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     return f
 
 
-def _first_ann(f: pd.DataFrame, metric: str) -> pd.DataFrame:
-    """研究口径：先丢掉指标为空的行，再每个 (股票, 报告期) 取最早公告。"""
-    g = f.dropna(subset=[metric])
+def _first_ann(f: pd.DataFrame, metric) -> pd.DataFrame:
+    """研究口径：先丢掉指标为空的行（metric 可为单列名或多列元组），再每个 (股票, 报告期) 取最早公告。"""
+    g = f.dropna(subset=[metric] if isinstance(metric, str) else list(metric))
     return g.sort_values(["ann_date", "ts_code"], kind="mergesort").drop_duplicates(["ts_code", "end_date"], keep="first")
 
 
@@ -168,6 +173,55 @@ def udp_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         g = cur / prev - 1.0
         return (g >= UDP_G and cur >= UDP_FLOOR), min(g, UDP_CAP), {"growth": g}
     return _fina_events(db, as_of, "undist_profit_ps", passes)
+
+
+def ncs_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """NCS_h60：去年同期净负债>0（有息负债>0）→ 本期净负债≤0（净现金），且本期扣非净利>0。
+    研究口径（lt_research98）：fina 先丢 netdebt/profit_dedt 为空的行，再每个 (股票, 报告期) 取最早公告；去年同期取同一张表。"""
+    from app.services import midterm_service as ms
+    w = _window(db, as_of)
+    if w is None:
+        return None
+    dates, start, end = w
+    key = ("netdebt", "profit_dedt")
+    out: dict[str, dict[str, Any]] = {}
+    for period in ms._quarter_ends(as_of, 4):
+        cur_all = _fina_period(period)
+        if cur_all is None:
+            return None
+        if not set(key) <= set(cur_all.columns):
+            continue
+        cur = _first_ann(cur_all, key)
+        today = cur[(cur["ann_date"] >= start) & (cur["ann_date"] <= end)]
+        today = today[today["ts_code"].map(_tradable_code)]
+        if today.empty:
+            continue
+        prev_all = _fina_period(_prev_period(period))
+        if prev_all is None:
+            return None
+        if not set(key) <= set(prev_all.columns) or "interestdebt" not in prev_all.columns:
+            continue
+        prev = _first_ann(prev_all, key).set_index("ts_code")
+        for _, r in today.iterrows():
+            ts = r["ts_code"]
+            if ts not in prev.index:
+                continue
+            ndp, idp = prev.at[ts, "netdebt"], prev.at[ts, "interestdebt"]
+            nd, pdd = float(r["netdebt"]), float(r["profit_dedt"])
+            if pd.isna(ndp) or pd.isna(idp) or not (ndp > 0 and idp > 0 and nd <= 0 and pdd > 0):
+                continue
+            score = min((float(ndp) - nd) / float(idp), NCS_CAP)
+            code = str(ts)[:6]
+            idc = r.get("interestdebt")
+            npy = r.get("netprofit_yoy")
+            item = {"code": code, "ann_date": str(r["ann_date"]), "end_date": period,
+                    "netdebt": nd, "netdebt_prev": float(ndp), "interestdebt_prev": float(idp),
+                    "interestdebt": None if idc is None or pd.isna(idc) else float(idc),
+                    "profit_dedt": pdd, "netprofit_yoy": None if npy is None or pd.isna(npy) else float(npy),
+                    "score": score}
+            if code not in out or item["score"] > out[code]["score"]:
+                out[code] = item
+    return _attach(db, as_of, dates, out)
 
 
 # ------------------------------------------------------------------ 分红（DINC）
