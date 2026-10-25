@@ -82,7 +82,7 @@ class DailyBasic(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     turnover_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     pe_ttm: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -103,7 +103,7 @@ class DailyKbar(Base):
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_daily_kbar_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
 
     # OHLCV
@@ -221,7 +221,7 @@ class StockQuote(Base):
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_stock_quote_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     name: Mapped[str] = mapped_column(String(80))
     price: Mapped[float] = mapped_column(Float, default=0)
@@ -256,7 +256,7 @@ class LimitUpBoard(Base):
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_limit_up_board_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     name: Mapped[str | None] = mapped_column(String(80))
     pct_chg: Mapped[float] = mapped_column(Float, default=0)
@@ -309,7 +309,7 @@ class CapitalFlow(Base):
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_capital_flow_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     main_net_inflow_yi: Mapped[float | None] = mapped_column(Float)
     super_large_net_inflow_yi: Mapped[float | None] = mapped_column(Float)
@@ -371,7 +371,7 @@ class MinuteKbar(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
     freq: Mapped[str] = mapped_column(String(5), default="1min")
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     trade_time: Mapped[str] = mapped_column(String(19))  # YYYY-MM-DD HH:MM:SS
@@ -419,7 +419,7 @@ class MarginData(Base):
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_margin_data_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     rzye: Mapped[float | None] = mapped_column(Float)   # 融资余额(亿)
     rqye: Mapped[float | None] = mapped_column(Float)   # 融券余额(亿)
@@ -554,7 +554,7 @@ class StkLimit(Base):
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_stk_limits_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     up_limit: Mapped[float | None] = mapped_column(Float)
     down_limit: Mapped[float | None] = mapped_column(Float)
@@ -567,7 +567,7 @@ class AuctionData(Base):
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_auction_data_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     vol: Mapped[float | None] = mapped_column(Float)
     price: Mapped[float | None] = mapped_column(Float)
