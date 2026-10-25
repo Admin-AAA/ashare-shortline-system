@@ -1,5 +1,5 @@
-"""[中线] §307「有分红的小市值」DSC_W_h20（邢不行小市值周度框架 + 新国九条/退市新规：连续不分红的小票有被 ST 风险，
-只在过去 12 个月有现金分红（dv_ttm>0）的盈利小票里选市值最小 10 只）— 预注册（docs/strategy-research.md §307，结果出来前写定，不调参）。
+"""[中线] §308「有分红的小市值」DSC_W_h20（邢不行小市值周度框架 + 新国九条/退市新规：连续不分红的小票有被 ST 风险，
+只在过去 12 个月有现金分红（dv_ttm>0）的盈利小票里选市值最小 10 只）— 预注册（docs/strategy-research.md §308，结果出来前写定，不调参）。
   复用 lt_research104.prep()（mvd 折算市值、小盘等权指数闸门 scid>scid20、SCW 参照列）；ST 口径 LPS_ST_SRC=db（stock_metadata_history.is_st）。
   Ud = amt20>3000万 & age>250 & 非ST & 非北交所 & mvd 非空 & pe_ttm>0 & dv_ttm>0；rk_d = Ud 内 mvd 升序名次。
   DSC_W：周五 & 小盘等权指数>MA20 & rk_d<=10；次日开盘买、持 20 日。K=20、max_new=10（仅回测，实盘不设仓位上限）。

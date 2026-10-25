@@ -1,11 +1,11 @@
-"""[短线研究 §306]「小盘股 5 日短期反转 → 次日买、持 5 日」SRV_h5（A 股短期反转效应在小盘股最强 + 邢不行小市值框架的小盘趋势闸门）。
-预注册 docs/strategy-research.md §306，结果出来前写定，不调参。
+"""[短线研究 §307]「小盘股 5 日短期反转 → 次日买、持 5 日」SRV_h5（A 股短期反转效应在小盘股最强 + 邢不行小市值框架的小盘趋势闸门）。
+预注册 docs/strategy-research.md §307，结果出来前写定，不调参。
   复用 lt_research104.prep()（mvd 折算市值、小盘等权指数 scid/scid20、rk_s = 「amt20>3000万、上市>250日、非ST、非北交所、pe_ttm>0」内市值升序名次；
   ST 口径 LPS_ST_SRC=db = stock_metadata_history.is_st）。
   r5 = ac/ac.shift(5) − 1（含 T，复权）。候选：rk_s ≤ 400 & scid > scid20 & r5 < 0 & T 非跌停收盘（close > 跌停价 + 0.005，缺跌停价按前收 −9.8%/−19.8%）。
   每个信号日按 r5 升序（跌最多）取前 5。引擎 realistic：T+1 开盘买（开盘涨停买不进、不递补）、持 5 日、跌停锁死顺延、0.3% 成本；
   K=20、max_new=5（仅回测，实盘不设仓位上限）。
-用法：cd backend/scripts/midterm && LPS_ST_SRC=db LT_START=.. LT_END=.. PYTHONPATH=../..:. python ../shortline_research/srv_s306.py "<phase>" out.json"""
+用法：cd backend/scripts/midterm && LPS_ST_SRC=db LT_START=.. LT_END=.. PYTHONPATH=../..:. python ../shortline_research/srv_s307.py "<phase>" out.json"""
 import sys, json, os
 import polars as pl
 from lt_research import fixed
