@@ -536,7 +536,7 @@ function BacktestReturnsBlock({ item }: { item: StrategyListItem }) {
           ? "—"
           : `${bt.avg_net_pct_mean >= 0 ? "+" : ""}${bt.avg_net_pct_mean.toFixed(2)}%`}
         {" · "}
-        组合基线{" "}
+        全策略组合基线（所有技能合在一起走生产选股，不是某一个技能）{" "}
         {["W1", "W2", "W3"]
           .map((w) => {
             const c = bt.combined?.[w];
