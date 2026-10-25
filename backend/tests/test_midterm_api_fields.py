@@ -59,8 +59,12 @@ def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
     monkeypatch.setattr(ms, "repurchase_plan_candidates", lambda db, d: None)
     monkeypatch.setattr(ms, "lowturn_lowvol_candidates", lambda db, d, n: None)
     monkeypatch.setattr(ms, "dividend_lowvol_candidates", lambda db, d, n: None)
+    from app.services import midterm_fina_events as fe
+    for fn in ("cld_candidates", "dinc_candidates", "udp_candidates"):
+        monkeypatch.setattr(fe, fn, lambda db, d: None)
     res = ms.generate_picks(None, "2026-10-16", horizon="long")
-    assert set(res) == {"long-repurchase-big", "long-lowturn-lowvol", "long-dividend-lowvol"}
+    assert set(res) == {"long-repurchase-big", "long-lowturn-lowvol", "long-dividend-lowvol",
+                        "long-current-debt-down", "long-dividend-increase", "long-undist-profit-growth"}
     res = ms.generate_picks(None, "2026-10-16", strategy_ids=["long-repurchase-big"])
     assert set(res) == {"long-repurchase-big"}
 

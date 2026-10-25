@@ -119,6 +119,39 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 60,
         "schedule": "month_end",
     },
+    # §240 流动负债占比同比下降（scripts/midterm/lt_research88.py CLD_h60，预注册、未调参；2026-10-25 起直接上线）
+    "long-current-debt-down": {
+        "name": "流动负债占比同比下降（持60日）",
+        "horizon": "long",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：流动负债/负债合计（currentdebt_to_debt）本期在 30%~95%、去年同期在 20%~100%，且较去年同期下降 ≥5 个百分点；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按降幅从大到小排序（降幅封顶40），次日开盘买，持有60个交易日（已持有不重复买）。",
+        "kind": "cld_yoy",
+        "k_slots": 20,
+        "max_new": 5,
+        "hold_days": 60,
+        "schedule": "daily",
+    },
+    # §158 分红增加（scripts/midterm/lt_research48.py DINC_h60，预注册、未调参；2026-10-25 起直接上线）
+    "long-dividend-increase": {
+        "name": "现金分红同比增加（持60日）",
+        "horizon": "long",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次公布的分红「预案」（同一报告期只取第一次预案）：每股税前派现>0，且较去年同一报告期（优先取实施记录，否则取最早预案）提高 ≥30%（去年同期>0）；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按增幅从大到小排序，次日开盘买，持有60个交易日（已持有不重复买）。",
+        "kind": "dinc_yoy",
+        "k_slots": 20,
+        "max_new": 5,
+        "hold_days": 60,
+        "schedule": "daily",
+    },
+    # §252 每股未分配利润同比高增（scripts/midterm/lt_research94.py UDP_h60，预注册、未调参；2026-10-25 起直接上线）
+    "long-undist-profit-growth": {
+        "name": "每股未分配利润同比高增（持60日）",
+        "horizon": "long",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：去年同期每股未分配利润（undist_profit_ps）>0、本期 ≥0.5 元/股，且同比增速 ≥30%；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按增速从大到小排序（增速封顶200%），次日开盘买，持有60个交易日（已持有不重复买）。",
+        "kind": "udp_yoy",
+        "k_slots": 20,
+        "max_new": 5,
+        "hold_days": 60,
+        "schedule": "daily",
+    },
 }
 
 
@@ -827,6 +860,27 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
             result[sid] = len(picks)
             continue
+        if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy"):
+            from app.services import midterm_fina_events as fe
+            cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates}[meta["kind"]]
+            held = _held_codes(db, sid, as_of)
+            free = int(meta["k_slots"]) - len(held)
+            if free <= 0:
+                result[sid] = {"skipped": "slots_full", "held": len(held)}
+                continue
+            cands = cand_fn(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held][:min(int(meta["max_new"]), free)]
+            if not picks:
+                result[sid] = 0
+                continue
+            OUT_DIR.mkdir(parents=True, exist_ok=True)
+            (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(
+                {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
+            result[sid] = len(picks)
+            continue
         if meta.get("kind") == "block_trade_premium":
             result[sid] = _block_trade_picks(db, sid, meta, as_of)
             continue
@@ -1063,6 +1117,18 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
         elif kind == "lowturn_lowvol":
             score, label, better = float(p["score"]), "60日换手排名+60日波动排名(越低越好)", "lower"
             reason = f"市值第 {p.get('mv_rank', '')} 名；60日均换手 {_f(p.get('turn60'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"
+        elif kind == "cld_yoy":
+            score, label, better = round(float(p["score"]), 2), "流动负债占比降幅(百分点，封顶40)", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：流动负债/负债合计 {_f(p.get('prev'), 1)}% → "
+                      f"{_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点")
+        elif kind == "dinc_yoy":
+            score, label, better = round(float(p["inc"]) * 100, 1), "每股派现同比增幅(%)", "higher"
+            reason = (f"{p.get('ann_date', '')} 首次公布 {p.get('end_date', '')} 分红预案：每股税前派现 {_f(p.get('cash_div_tax'), 3)} 元，"
+                      f"去年同期 {_f(p.get('prev_dps'), 3)} 元，同比 +{_f(score, 1)}%")
+        elif kind == "udp_yoy":
+            score, label, better = round(float(p["score"]) * 100, 1), "每股未分配利润同比增速(%)，封顶200", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：每股未分配利润 {_f(p.get('prev'), 2)} → "
+                      f"{_f(p.get('cur'), 2)} 元，同比 +{_f(float(p.get('growth') or 0) * 100, 1)}%")
         elif kind == "dividend_lowvol":
             score, label, better = float(p["score"]), "股息率排名+60日波动排名(越低越好)", "lower"
             reason = f"市值第 {p.get('mv_rank', '')} 名；股息率(TTM) {_f(p.get('dv_ttm'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"
