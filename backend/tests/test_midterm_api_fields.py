@@ -7,6 +7,8 @@ from app.services import midterm_service as ms
 def test_annotate_each_kind():
     cases = {
         "mid-small-cap-weekly": {"code": "1", "total_mv": 166416.0, "pe_ttm": 12.0},
+        "mid-lowprice-smallcap-weekly": {"code": "1", "total_mv": 181000.0, "close": 2.87, "pe_ttm": None,
+                                         "price_rank": 12, "mv_rank": 1},
         "mid-repurchase-plan": {"code": "1", "ratio": 0.01157, "repurchase_amount": 6e7},
         "mid-earnings-accel": {"code": "1", "score": 300.0, "dt_netprofit_yoy": 592.1},
         "mid-forecast-beat": {"code": "1", "score": 300.0, "p_change_min": 3318.0},
@@ -15,7 +17,7 @@ def test_annotate_each_kind():
         "long-lowturn-lowvol": {"code": "1", "score": 12.0, "turn60": 0.5, "vol60": 1.1},
         "long-dividend-lowvol": {"code": "1", "score": 9.0, "dv_ttm": 5.2, "vol60": 1.0},
     }
-    expect = {"mid-small-cap-weekly": 16.64, "mid-repurchase-plan": 1.157, "mid-incentive-option": -5.12,
+    expect = {"mid-small-cap-weekly": 16.64, "mid-lowprice-smallcap-weekly": 18.1, "mid-repurchase-plan": 1.157, "mid-incentive-option": -5.12,
               "mid-block-trade-premium": 0.61}
     for sid, p in cases.items():
         out = ms.annotate_pick(sid, dict(p), 1)

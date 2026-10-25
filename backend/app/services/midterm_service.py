@@ -30,6 +30,17 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "weekly",
     },
+    # §277 低价股×小市值（scripts/midterm/lt_research104.py LPS_W，邢不行文章，预注册、未调参；2026-10-25 起直接上线）
+    "mid-lowprice-smallcap-weekly": {
+        "name": "低价股×小市值周度（小盘趋势过滤，持20日）",
+        "horizon": "mid",
+        "summary": "每个周五收盘后，在全A（剔除ST/退市整理、北交所、上市不足一年、20日均成交额<3000万、收盘价≤2元；不要求盈利）里，同时满足「收盘价最低的200只之一」和「总市值最小的200只之一」的股票，按总市值从小到大取前10只，次日开盘买入、各持有20个交易日。与「小市值周度」相同：仅当小盘指数（最小400只等权）站上20日均线时开新仓。思路来自邢不行「低价股效应」：散户的「便宜错觉」+ 超跌反转。",
+        "kind": "lowprice_small",
+        "guard": True,
+        "top_n": 10,
+        "hold_days": 20,
+        "schedule": "weekly",
+    },
     # §91 事件型（scripts/midterm/lt_research12.py 预注册 6 版中达标的 2 版；同市值五分位对照算超额；mid 版 §100 加金额≥0.5%）
     "mid-repurchase-plan": {
         # §100 预注册 RP_r05（scripts/midterm/lt_research18.py，未调参）：在 §91 R_plan_h20 基础上只保留金额上限≥总市值0.5%的预案
@@ -214,6 +225,46 @@ def _universe(db, as_of: str, limit: int) -> list[dict[str, Any]]:
             continue
         out.append({"code": r["code"], "name": names.get(r["code"], ""), "total_mv": float(r["total_mv"]),
                     "pe_ttm": float(r["pe_ttm"]), "amt20": float(r["amt20"])})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _lowprice_universe(db, as_of: str, limit: int, rank_n: int = 200, min_close: float = 2.0) -> list[dict[str, Any]]:
+    """§277 LPS_W：合格池（非ST/退市、非北交所、上市≥250个交易日、20日均额>3000万、收盘价>2元，不要求盈利）里
+    收盘价最低 rank_n 只 ∩ 总市值最小 rank_n 只，按总市值升序取 limit 只。与 scripts/midterm/lt_research104.py 口径一致。"""
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 251"), {"d": as_of})]
+    if len(dates) < 251 or dates[0] != as_of:
+        return []
+    basic_date = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
+    rows = db.execute(text("""
+        SELECT b.code, b.total_mv, b.pe_ttm, a.amt20, today.close
+        FROM daily_basic b
+        JOIN (SELECT code, AVG(amount) amt20 FROM daily_kbars
+              WHERE trade_date> :d20x AND trade_date<=:d GROUP BY code) a ON a.code=b.code
+        JOIN (SELECT code FROM daily_kbars WHERE trade_date=:d250) old ON old.code=b.code
+        JOIN (SELECT code, close FROM daily_kbars WHERE trade_date=:d AND close>0) today ON today.code=b.code
+        WHERE b.trade_date=:bd AND b.total_mv>0 AND a.amt20>3e7 AND today.close> :mc
+          AND LEFT(b.code,1) NOT IN ('4','8','9')
+    """), {"d20x": dates[20], "d": as_of, "d250": dates[250], "bd": basic_date, "mc": min_close}).mappings().all()
+    st = {r[0] for r in db.execute(text(
+        "SELECT code FROM stock_metadata_history WHERE (is_st=1 OR name LIKE '%ST%' OR name LIKE '%退%') "
+        "AND effective_from<=:d AND (effective_to IS NULL OR effective_to>:d)"), {"d": as_of})}
+    pool = [r for r in rows if r["code"] not in st]
+    by_px = sorted(pool, key=lambda r: (float(r["close"]), r["code"]))[:rank_n]
+    by_mv = sorted(pool, key=lambda r: (float(r["total_mv"]), r["code"]))[:rank_n]
+    px_rank = {r["code"]: i + 1 for i, r in enumerate(by_px)}
+    mv_rank = {r["code"]: i + 1 for i, r in enumerate(by_mv)}
+    names = dict(db.execute(text("SELECT code,name FROM stocks")).all())
+    out = []
+    for r in by_mv:
+        if r["code"] not in px_rank:
+            continue
+        out.append({"code": r["code"], "name": names.get(r["code"], ""), "total_mv": float(r["total_mv"]),
+                    "close": float(r["close"]), "pe_ttm": (float(r["pe_ttm"]) if r["pe_ttm"] is not None else None),
+                    "amt20": float(r["amt20"]), "price_rank": px_rank[r["code"]], "mv_rank": mv_rank[r["code"]]})
         if len(out) >= limit:
             break
     return out
@@ -906,7 +957,10 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
         if not guard["on"]:
             result[sid] = {"skipped": "small_cap_below_ma20", **guard}
             continue
-        picks = _universe(db, as_of, meta["top_n"])
+        if meta.get("kind") == "lowprice_small":
+            picks = _lowprice_universe(db, as_of, meta["top_n"])
+        else:
+            picks = _universe(db, as_of, meta["top_n"])
         held = _held_codes(db, sid, as_of)
         picks = [p for p in picks if p["code"] not in held]  # 已持有不重复买、也不顺延补位（与回测一致）
         if not picks and held:
@@ -1085,6 +1139,11 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
         if kind == "small_cap":
             score, label, better = round(float(p["total_mv"]) / 1e4, 2), "总市值(亿元)", "lower"
             reason = f"总市值 {_f(score)} 亿，合格股（非ST/北交所、PE>0、上市≥1年、20日均额>3000万）里最小的10只之一；PE_ttm {_f(p.get('pe_ttm'), 1)}"
+        elif kind == "lowprice_small":
+            score, label, better = round(float(p["total_mv"]) / 1e4, 2), "总市值(亿元)", "lower"
+            pe = p.get("pe_ttm")
+            reason = (f"收盘价 {_f(p.get('close'))} 元（合格股里股价第 {p.get('price_rank', '')} 低）、总市值 {_f(score)} 亿（第 {p.get('mv_rank', '')} 小），"
+                      f"同时在「股价最低200只」和「市值最小200只」里；PE_ttm {_f(pe, 1) if pe is not None else '亏损/无'}")
         elif kind == "repurchase":
             score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
             reason = f"{p.get('ann_date', '')} 回购预案，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，占总市值 {_f(score)}%"
