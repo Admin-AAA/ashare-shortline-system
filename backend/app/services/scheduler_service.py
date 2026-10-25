@@ -1139,6 +1139,8 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
                 "status": _batch_sync_item_status(item.dataset_key, item.errors),
                 "count": item.coverage.record_count,
                 "errors": [error.code.value for error in item.errors],
+                # 此前只留错误码（fetch_failed / persist_failed），根因无从查起；补上阶段、异常类型与上游原文。
+                **({"error_details": [_aux_error_detail(error) for error in item.errors]} if item.errors else {}),
                 **({"known_gap": _KNOWN_AUX_SOURCE_GAPS[item.dataset_key]}
                    if item.errors and item.dataset_key in _KNOWN_AUX_SOURCE_GAPS else {}),
             }
@@ -1150,6 +1152,9 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
             logger.warning("[WARN:AUX_KNOWN_GAP] 已知数据源长期缺口（不计失败）：%s", ", ".join(known))
         # S4 application boundary 明确把事务所有权交给调用方；调度入口必须提交，
         # 否则 Session close 会把已经拉取和 upsert 的批量数据全部回滚。
+        db.commit()
+        # 先提交再等限流窗口，避免事务悬挂；重试成功的数据集会覆盖 batch_sync 里的失败条目
+        _retry_rate_limited_aux_datasets(db, auxiliary, result, trade_date, payload)
         db.commit()
         if any(item["status"] == "failed" for item in result["batch_sync"].values()):
             result["status"] = "partial_failed"
@@ -1182,6 +1187,63 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
         return result
     finally:
         db.close()
+
+
+def _aux_error_detail(error) -> dict[str, Any]:
+    return {
+        "code": error.code.value,
+        "stage": getattr(error.stage, "value", str(error.stage)),
+        "exception_type": error.exception_type,
+        "message": str(error.message)[:400],
+    }
+
+
+_AUX_RETRYABLE_MARKERS = ("rate_limit", "circuit", "timeout", "timed out", "temporarily")
+
+
+def _aux_error_is_rate_limited(error) -> bool:
+    text_ = str(error.message).lower()
+    return any(m in text_ for m in _AUX_RETRYABLE_MARKERS)
+
+
+def _retry_rate_limited_aux_datasets(db, auxiliary, result: dict, trade_date: str, payload: dict) -> None:
+    """辅助数据集因 promax 限流窗口（5 分钟/30 分钟/1 小时）/熔断失败时，等窗口滚动后只重试这些数据集一次。
+
+    quota_exhausted（quantdata 日额度）不是等一等能好的，不重试。重试成功的数据集覆盖原结果并记 retried=True。
+    """
+    import time as _time
+
+    failed = {
+        item.dataset_key: item for item in auxiliary.orchestrated.results
+        if result["batch_sync"].get(item.dataset_key, {}).get("status") == "failed"
+        and item.errors and all(_aux_error_is_rate_limited(e) for e in item.errors)
+    }
+    wait = float(payload.get("auxiliary_retry_wait_seconds", 330))
+    if not failed or wait < 0 or payload.get("skip_auxiliary_retry"):
+        return
+    logger.warning("辅助数据集限流失败 %s，%.0fs 后重试一次", sorted(failed), wait)
+    _time.sleep(wait)
+    from app.services.auxiliary.application import run_auxiliary_application
+
+    try:
+        retry = run_auxiliary_application(db, instruments=(), trade_date=trade_date, refresh=True,
+                                          datasets=tuple(failed))
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.warning("辅助数据集重试失败: %s", exc, exc_info=True)
+        for key in failed:
+            result["batch_sync"][key]["retry_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+        return
+    for item in retry.orchestrated.results:
+        entry = {
+            "status": _batch_sync_item_status(item.dataset_key, item.errors),
+            "count": item.coverage.record_count,
+            "errors": [e.code.value for e in item.errors],
+            "retried": True,
+        }
+        if item.errors:
+            entry["error_details"] = [_aux_error_detail(e) for e in item.errors]
+        result["batch_sync"][item.dataset_key] = entry
 
 
 def _backfill_auxiliary_window_gaps(

@@ -61,3 +61,40 @@ def test_flat_series_has_no_inf_or_zero_division():
     assert not np.isinf(r.to_numpy(dtype=float)).any()
     assert r["kdj_k"].iloc[-1] == 50.0  # 无波动时 RSV 取 50
     assert np.isnan(r["cci"].iloc[-1])  # AVEDEV=0 → NULL
+
+
+class _Err:
+    def __init__(self, msg, code="fetch_failed"):
+        self.message = msg
+        self.exception_type = "RuntimeError"
+        self.stage = type("S", (), {"value": "fetch"})()
+        self.code = type("C", (), {"value": code})()
+
+
+class _Item:
+    def __init__(self, key, errors=(), count=0):
+        self.dataset_key = key
+        self.errors = tuple(errors)
+        self.coverage = type("Cov", (), {"record_count": count})()
+
+
+def _aux(items):
+    return type("A", (), {"orchestrated": type("O", (), {"results": tuple(items)})()})()
+
+
+def test_retry_only_rate_limited_datasets(monkeypatch):
+    import app.services.auxiliary.application as app_mod
+    import time as time_mod
+
+    calls = []
+    monkeypatch.setattr(time_mod, "sleep", lambda s: calls.append(("sleep", s)))
+    monkeypatch.setattr(app_mod, "run_auxiliary_application",
+                        lambda db, **kw: calls.append(("run", kw["datasets"])) or _aux([_Item("margin_detail", (), 100)]))
+    rl = _Item("margin_detail", [_Err("providers=promax:http_rate_limit")])
+    quota = _Item("holder_number", [_Err("quantdata:quota_exhausted(skipped: daily quota exhausted today)")])
+    result = {"batch_sync": {"margin_detail": {"status": "failed"}, "holder_number": {"status": "failed"}}}
+    scheduler_service._retry_rate_limited_aux_datasets(None, _aux([rl, quota]), result, "2026-10-23", {})
+    assert ("run", ("margin_detail",)) in calls  # 配额耗尽的 holder_number 不重试
+    assert result["batch_sync"]["margin_detail"]["status"] == "success"
+    assert result["batch_sync"]["margin_detail"]["retried"] is True
+    assert result["batch_sync"]["holder_number"] == {"status": "failed"}
