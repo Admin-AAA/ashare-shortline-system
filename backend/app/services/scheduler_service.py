@@ -891,6 +891,16 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
             result["eastmoney_alt"] = sync_eastmoney_alt(db, str(payload.get("trade_date") or datetime.now().strftime("%Y%m%d")))
         except Exception as exc:  # pragma: no cover  # noqa: BLE001
             result["eastmoney_alt"] = {"errors": [str(exc)[:160]]}
+        # margin_detail 截断补缺（promax 分页上限 2001 行只有沪市）：独立于 eastmoney.alt 总开关，
+        # 只插缺失代码、不覆盖已有行；盘中只记待补，盘后处理。开关 ASHARE_MARGIN_FILL_ENABLED（默认开）。
+        try:
+            from app.services.margin_detail_fill import run_margin_detail_fill
+
+            result["margin_detail_fill"] = run_margin_detail_fill(
+                db, str(payload.get("trade_date") or datetime.now().strftime("%Y%m%d"))
+            )
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
+            result["margin_detail_fill"] = {"errors": [str(exc)[:160]]}
 
     # 4. 最终健康补数与诊断，确保后续推荐读取的是所有同步阶段之后的快照。
     if sync_scope in ("health_remediation", "all") and not bool(payload.get("skip_health_remediation")):

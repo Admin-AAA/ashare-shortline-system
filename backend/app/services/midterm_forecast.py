@@ -29,12 +29,15 @@ COLS = ["ts_code", "ann_date", "end_date", "type", "p_change_min", "net_profit_m
 def _fetch_forecast_day(day: str):
     """tushare forecast 按公告日（YYYYMMDD）拉全市场；失败返回 None。
 
-    必须带 ann_date：promax 只给 start_date/end_date 时回 50101「ann_date和ts_code至少输入一个参数」
-    （2026-10-19 22:40 实测 ann_date=20260108 返回 20 行；15:43 改成只传 start/end 后实盘与回放每天 no_data）。
-    上游全部瞬时失败（promax 连接池耗尽等）时等待重试，见 midterm_service._pro_fetch_with_wait。"""
+    主用 ann_date=day：promax 的 forecast 要求 ann_date 或 ts_code 至少一个（只给 start_date/end_date 回
+    50101「ann_date和ts_code至少输入一个参数」，2026-10-19 17:53 日跑实测，导致 mid-forecast-beat no_data）。
+    6059268 曾改成 start/end，依据是“promax 拒绝 ann_date”，复核为误判（ann_date=20261017 正常返回）。
+    若上游回参数错误，再用 start_date=end_date=day 试一次。上游全部瞬时失败时等待重试，见
+    midterm_service._pro_fetch_with_wait。"""
     from app.services.midterm_service import _pro_fetch_with_wait
 
-    return _pro_fetch_with_wait("forecast", f"ann_date={day}", ann_date=day, fields=",".join(COLS))
+    return _pro_fetch_with_wait("forecast", f"ann_date={day}", ann_date=day, fields=",".join(COLS),
+                                alt_params={"start_date": day, "end_date": day})
 
 
 def _store_live(new) -> None:
