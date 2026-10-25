@@ -230,6 +230,34 @@ def build_routing_table(matrix: Mapping[str, Any], previous: Mapping[str, Any] |
     return derived
 
 
+def routing_table_drift(matrix: Mapping[str, Any], table: Mapping[str, Any]) -> list[str]:
+    """最近一次探测矩阵 vs 当前 routing_table.json 的「可用性」差异（人读描述列表，空 = 一致）。
+
+    只看会让请求白白失败/漏用的两类：
+    1. 矩阵里 provider 对该 API 已 unsupported（no_permission），路由表却仍把它放在 order 里；
+    2. 路由表把 provider 标为 unsupported，而矩阵显示它现在可用。
+    order 的先后差异（按限速额度分流的结果）不算漂移。
+    """
+    expected = build_routing_table(matrix, table).get("apis", {})
+    current = table.get("apis", table)
+    out: list[str] = []
+    for api, exp in sorted(expected.items()):
+        cur = current.get(api)
+        exp_bad = set(exp.get("unsupported") or ())
+        if cur is None:
+            if exp_bad:
+                out.append(f"{api}: 路由表缺少该 API，矩阵显示 {sorted(exp_bad)} 不可用")
+            continue
+        cur_bad = set(cur.get("unsupported") or ())
+        stale = sorted(p for p in (cur.get("order") or ()) if p in exp_bad)
+        wrongly_excluded = sorted(cur_bad - exp_bad)
+        if stale:
+            out.append(f"{api}: 矩阵显示 {stale} 无权限，路由表仍在 order={cur.get('order')} 中")
+        if wrongly_excluded:
+            out.append(f"{api}: 路由表把 {wrongly_excluded} 标为 unsupported，矩阵显示其当前可用")
+    return out
+
+
 def resolve_routes(
     table: Mapping[str, Mapping[str, tuple[str, ...]]],
     defaults: Mapping[str, tuple[str, ...]],

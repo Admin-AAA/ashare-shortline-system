@@ -25,6 +25,7 @@ from app.services.datasource.capability import (  # noqa: E402
     diff_matrices,
     load_matrix,
     render_markdown,
+    routing_table_drift,
 )
 
 D = (date.today() - timedelta(days=1)).strftime("%Y%m%d")
@@ -71,6 +72,7 @@ PROBES: dict[str, dict] = {
     "stk_holdertrade": {"start_date": D30, "end_date": D},
     "pledge_stat": {"ts_code": S},
     "repurchase": {"start_date": D30, "end_date": D},
+    "stk_surv": {"start_date": D30, "end_date": D},
 }
 DATE_COLS = ("trade_date", "cal_date", "ann_date", "end_date", "month", "suspend_date", "float_date")
 
@@ -133,6 +135,8 @@ def main() -> int:
     ap.add_argument("--write-routes", action="store_true", help="regenerate app/services/datasource/routing_table.json")
     ap.add_argument("--from-existing", action="store_true", help="skip probing; re-render from the saved matrix")
     ap.add_argument("--dry-run", action="store_true", help="do not overwrite matrix files")
+    ap.add_argument("--fix-routes", action="store_true",
+                    help="路由表与矩阵漂移（provider 已无权限仍在 order 中等）时自动重写 routing_table.json（默认只告警）")
     a = ap.parse_args()
     apis = [x for x in a.apis.split(",") if x] or list(PROBES)
     old = load_matrix()
@@ -148,7 +152,32 @@ def main() -> int:
         prev = json.loads(ROUTING_TABLE.read_text()) if ROUTING_TABLE.exists() else None
         ROUTING_TABLE.write_text(json.dumps(build_routing_table(new, prev), ensure_ascii=False, indent=1) + "\n")
         print("routing table written:", ROUTING_TABLE)
-    return 1 if drift else 0
+    # 路由表漂移：矩阵显示某 provider 已无权限，路由表仍把它排前面 → 每个请求先白白失败一次。
+    # 之前只有矩阵自身的 DRIFT 打印，没人对照路由表（hsgt_top10/moneyflow_hsgt 的 promax 无权限却仍排第一）。
+    routing_drift: list[str] = []
+    if ROUTING_TABLE.exists():
+        routing_drift = routing_table_drift(new, json.loads(ROUTING_TABLE.read_text()))
+        for d in routing_drift:
+            print("ROUTING_DRIFT", d)
+        if routing_drift and a.fix_routes and not a.dry_run:
+            prev = json.loads(ROUTING_TABLE.read_text())
+            ROUTING_TABLE.write_text(json.dumps(build_routing_table(new, prev), ensure_ascii=False, indent=1) + "\n")
+            print("routing table auto-fixed:", ROUTING_TABLE)
+            routing_drift = routing_table_drift(new, json.loads(ROUTING_TABLE.read_text()))
+        try:
+            from app.core.alerts import active_alert_records, emit_alert, resolve_alert
+
+            for d in routing_drift:
+                emit_alert("routing_drift", d.split(":", 1)[0], d)
+            still = {d.split(":", 1)[0] for d in routing_drift}
+            for rec in active_alert_records("routing_drift"):
+                if str(rec["key"]) not in still:
+                    resolve_alert("routing_drift", str(rec["key"]), "路由表已与能力矩阵一致")
+        except Exception as exc:  # noqa: BLE001 - 告警失败不影响探测结果
+            print("routing drift alert failed:", exc)
+    # 退出码：矩阵漂移本身只是信息（已写日志与 docs），不该让 launchd 一直显示失败；
+    # 仍存在未处理的路由漂移才返回 1。
+    return 1 if routing_drift else 0
 
 
 if __name__ == "__main__":

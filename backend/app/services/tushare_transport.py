@@ -967,6 +967,24 @@ class TushareHttpProvider:
         message = raw_message.lower()
         # 上游业务错误码与原文一起保留，例如「40203: 抱歉，您没有接口(cyq_perf)访问权限」。
         upstream_detail = (f"{code}: {raw_message}" if code else raw_message)[:_UPSTREAM_DETAIL_MAX_CHARS] or None
+        # Tushare 把「访问频率超限（如 1次/小时）」也放在 40203 下，原文为「抱歉，您访问接口(x)频率超限(1次/小时)」；
+        # 只有「没有接口…访问权限」才是真无权限。否则限流会被判成 permission → 探测矩阵标 no_permission →
+        # 路由表把该 provider 永久排除（等一小时就能恢复的源被误判）。
+        _rate_text = any(term in message for term in ("频率超限", "频次超限", "访问接口") ) and (
+            "频率" in message or "频次" in message
+        )
+        _really_no_permission = "没有接口" in message or "访问权限" in message or "未开通" in message
+        if _rate_text and not _really_no_permission and not _is_daily_limit_text(f"{code} {raw_message}"):
+            _per_hour = "小时" in message or "/hour" in message
+            return ProviderFailure(
+                provider=self.name,
+                api_name=api_name,
+                category=FailureCategory.BUSINESS_RATE_LIMIT,
+                retryable=False,
+                fallback_allowed=True,
+                retry_after_seconds=3600.0 if _per_hour else 60.0,
+                upstream_detail=upstream_detail,
+            )
         if code in _PERMISSION_BUSINESS_CODES or any(
             term in message for term in _PERMISSION_MESSAGE_TERMS
         ):

@@ -435,3 +435,11 @@ def test_all_providers_failed_message_carries_each_upstream_detail() -> None:
     message = str(error)
     assert "quantdata:permission(40203: 抱歉，您没有接口(cyq_perf)访问权限)" in message
     assert "promax:http_rate_limit(upstream_pool_exhausted)" in message
+
+
+def test_business_code_40203_rate_limit_text_is_not_permission() -> None:
+    """40203 + 「频率超限(1次/小时)」是限流（等窗口恢复），不是无权限；真无权限原文含「没有接口…访问权限」。"""
+    rate = _business_envelope_category("40203", "抱歉，您访问接口(index_daily)频率超限(1次/小时)，具体频次详情：https://tushare.pro/document/1?doc_id=108。")
+    perm = _business_envelope_category("40203", "抱歉，您没有接口(hsgt_top10)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。")
+    assert rate is FailureCategory.BUSINESS_RATE_LIMIT
+    assert perm is FailureCategory.PERMISSION

@@ -142,3 +142,14 @@ def test_non_backup_api_unchanged(_iso):
     with pytest.raises(RuntimeError):
         tc._TushareSession(r).daily(trade_date="20261016")
     assert _iso.calls == []
+
+
+def test_stk_surv_backup_with_only_a_few_rows_is_not_success(_iso):
+    few = pd.DataFrame([{"代码": f"60000{i}", "名称": "x", "接待日期": "2026-10-16", "接待人员": "a", "接待地点": "b",
+                         "接待方式": "c", "接待机构数量": 3, "公告日期": "2026-10-17"} for i in range(3)])
+    _iso.reg("stock_jgdy_tj_em", lambda date: few)
+    params = {"params": {"start_date": "20261016", "end_date": "20261016"}}
+    assert ab.AkshareProvider().fetch("tushare.stk_surv", params) == []
+    # 带 ts_code 的逐股请求少量行是正常的
+    one = ab.AkshareProvider().fetch("tushare.stk_surv", {"params": {**params["params"], "ts_code": "600001.SH"}})
+    assert [r["ts_code"] for r in one] == ["600001.SH"]

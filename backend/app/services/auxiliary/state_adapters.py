@@ -589,13 +589,17 @@ class TushareStateProvider:
         if frame is None or frame.empty:
             return ()
         item = frame.iloc[0]
-        return ({
+        row = {
             "trade_date": _iso_day(item.get("trade_date") or target),
             "north_money": _number(item.get("north_money")) / 1e4,
             "south_money": _number(item.get("south_money")) / 1e4,
             "hgt": _number(item.get("hgt")),
             "sgt": _number(item.get("sgt")),
-        },)
+        }
+        # 四个资金口径全 0 不是真实数据（上游空值/非交易日被 _number 落成 0，库里曾留下 6 条）→ 视为缺失，不入库
+        if not any(row[k] for k in ("north_money", "south_money", "hgt", "sgt")):
+            return ()
+        return (row,)
 
     def hsgt_top10(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         target = _compact_day(request.trade_date)

@@ -45,6 +45,8 @@ EM_REPURCHASE_PROC = {"001": "预案", "002": "股东大会通过", "003": "股�
 AKSHARE_RPM = 30
 _CACHE_TTL = 600.0
 MAX_SURV_WINDOW_DAYS = 62
+# 全市场机构调研每个工作日通常上百条；akshare（东财统计页）偶发只回几行，那是「不完整」不是「成功」
+MIN_SURV_ROWS_MARKET = 20
 MAX_ANNS_DAYS = 7
 
 _cache: dict[tuple, tuple[float, list[dict[str, Any]]]] = {}
@@ -340,7 +342,19 @@ class AkshareProvider:
             raise DataSourceError(ErrorKind.INVALID_REQUEST, "stk_surv backup window too old",
                                   provider=PROVIDER_NAME)
         since = (_day(start) - timedelta(days=1)).strftime("%Y%m%d")
-        return map_surv(_call("stock_jgdy_tj_em", date=since), start, end)
+        rows = map_surv(_call("stock_jgdy_tj_em", date=since), start, end)
+        if params.get("ts_code"):
+            return [r for r in rows if r["ts_code"] == params["ts_code"]]
+        d0, d1 = _day(start), _day(end)
+        has_weekday = any((d0 + timedelta(days=i)).weekday() < 5 for i in range((d1 - d0).days + 1))
+        if has_weekday and len(rows) < MIN_SURV_ROWS_MARKET:
+            # 窗口含工作日却不足 MIN_SURV_ROWS_MARKET 条：当作失败/空，不能让半截数据被网关记成成功并写库
+            import logging as _logging
+            _logging.getLogger(__name__).warning(
+                "akshare stk_surv backup only %d rows for %s..%s (< %d); treated as incomplete",
+                len(rows), start, end, MIN_SURV_ROWS_MARKET)
+            return []
+        return rows
 
     def _anns_d(self, params: Mapping[str, Any]) -> list[dict[str, Any]]:
         start, end = _range(params, "ann_date")

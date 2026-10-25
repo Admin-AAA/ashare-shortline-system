@@ -98,3 +98,47 @@ def test_retry_only_rate_limited_datasets(monkeypatch):
     assert result["batch_sync"]["margin_detail"]["status"] == "success"
     assert result["batch_sync"]["margin_detail"]["retried"] is True
     assert result["batch_sync"]["holder_number"] == {"status": "failed"}
+
+
+def test_routing_table_drift_detects_unsupported_provider_still_in_order():
+    from app.services.datasource.capability import routing_table_drift
+
+    matrix = {"rows": [
+        {"provider": "promax", "api": "hsgt_top10", "status": "no_permission", "rate_limit_per_minute": 100},
+        {"provider": "quantdata", "api": "hsgt_top10", "status": "ok", "rate_limit_per_minute": 100, "field_completeness": 1},
+    ]}
+    stale = {"apis": {"hsgt_top10": {"order": ["promax", "quantdata"], "unsupported": []}}}
+    fixed = {"apis": {"hsgt_top10": {"order": ["quantdata"], "unsupported": ["promax"]}}}
+    assert any("hsgt_top10" in d and "promax" in d for d in routing_table_drift(matrix, stale))
+    assert routing_table_drift(matrix, fixed) == []
+
+
+def test_committed_routing_table_matches_known_permissions():
+    import json
+    from app.services.datasource.capability import ROUTING_TABLE
+
+    apis = json.loads(ROUTING_TABLE.read_text())["apis"]
+    for api in ("hsgt_top10", "moneyflow_hsgt"):
+        assert "promax" in apis[api]["unsupported"] and "promax" not in apis[api]["order"]
+    assert apis["stk_surv"]["order"]
+
+
+def test_hsgt_all_zero_row_is_treated_as_missing():
+    import pandas as pd
+    from app.services.auxiliary import state_adapters as sa
+
+    class _Client:
+        def moneyflow_hsgt(self, trade_date):
+            return pd.DataFrame([{"trade_date": trade_date, "north_money": None, "south_money": None, "hgt": None, "sgt": None}])
+
+    provider = sa.TushareStateProvider(_Client(), None)
+    req = type("R", (), {"trade_date": __import__("datetime").date(2026, 10, 19)})()
+    assert provider.hsgt_flow(req) == ()
+
+    class _Real(_Client):
+        def moneyflow_hsgt(self, trade_date):
+            return pd.DataFrame([{"trade_date": trade_date, "north_money": "277155.11", "south_money": "55441.78",
+                                  "hgt": "134535.72", "sgt": "142619.39"}])
+
+    rows = sa.TushareStateProvider(_Real(), None).hsgt_flow(req)
+    assert len(rows) == 1 and abs(rows[0]["north_money"] - 27.715511) < 1e-6
