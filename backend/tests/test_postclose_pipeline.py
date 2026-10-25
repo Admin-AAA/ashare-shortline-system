@@ -30,6 +30,10 @@ def _stub_ma250_fill(monkeypatch):
     import app.services.local_indicator_fill as local_indicator_fill
 
     monkeypatch.setattr(local_indicator_fill, "fill_local_indicators", lambda _db, **_kw: {"stub": True})
+    import app.services.kdj_boll_cci_fill as kdj_boll_cci_fill
+
+    # 流水线新增的 KDJ/BOLL/CCI/vol_ratio 本地复算步骤（P0-3）：测试用假 db，不能真跑
+    monkeypatch.setattr(kdj_boll_cci_fill, "fill_kdj_boll_cci", lambda _db, **_kw: {"stub": True})
     import app.services.daily_basic_ingest as daily_basic_ingest
 
     monkeypatch.setattr(daily_basic_ingest, "ingest_daily_basic_with_alert", lambda _db, _d: {"stub": True})
