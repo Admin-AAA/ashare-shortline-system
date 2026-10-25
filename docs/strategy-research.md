@@ -2623,3 +2623,19 @@ lt_research12.py 预注册 6 版（真实成交 k20/max_new5，同日同市值�
 - **数据问题（提请注意，未改）**：`backend/data/midterm/st_hist.parquet` 漏标部分 ST/退市股（如 000584、600200、300280、300300、688121 全部 st=False，而 `stock_metadata_history.is_st`=1），所有用 `lt_research.build()` 的中长线研究都受影响；要求 pe>0 的策略（SCW 等）影响小（SCW 复核后 R12 83 笔 +4.64%、N3 250 笔 +4.07%，仍达标）。建议由负责数据的 bot 重建 st_hist.parquet。
 - 局限（LPS_W）：收益与小盘 beta 高度相关（R12 超额只有 +0.36）；A 股退市新规后「垃圾股」的退市风险上升，2024-05 那种集中下跌可能重演；total_mv 周度快照最多约 1 周滞后；最近一年依赖少数大赢家。
 - 收尾（2026-10-25 14:02 CST）：commit 2ae062a 已推送；`active_work_check` idle → `safe_backend_restart.sh` 14:01:28 重启，新后端 PID 89353，8765 /api/health 200、5174 200；线上 /mid 7 个在跑（新增 mid-lowprice-smallcap-weekly）+ 120 否决，/long 8 + 160 否决（长线暂停，未动），短线 4 个不变。（本节与上方预注册里的时间以 git commit 时间为准：预注册 1cf89e0 13:47、复核预注册 7e28c3d 13:54、结果 2ae062a 14:00。）
+
+## §278 [中线/长线·数据保真复核] 现役中长线策略用重建后的 st_hist.parquet 重跑 — 预注册（2026-10-25 14:15 CST 写定，任何重跑开始前不改）
+- 背景：系统架构专家 14:09 按 DB `is_st` 重建 `backend/data/midterm/st_hist.parquet`（commit e6bbe19，已合入 main）。旧文件漏标 180,152 个股票-日（431 只，含大量退市股）、误标 486,702 个股票-日（326 只）。所有经 `lt_research.build()`（liq 股池里的 `~st`）或 lt_research16/19 自带 ST 读取的中长线研究，ST 过滤口径旧文件下是错的；新文件只对重新运行的脚本生效。§277 已对 LPS_W 与 SCW 做过 `LPS_ST_SRC=db` 复核（均仍达标），本节**跳过这两个**。
+- 范围（只做现役；长线研发仍暂停，这里只是已上线长线策略的健康复核）：
+  - /mid：`mid-repurchase-plan`（RP_r05）、`mid-earnings-accel`（EA_h20）、`mid-forecast-beat`（F_any_h20）、`mid-incentive-option`（INC_opt_h20）、`mid-block-trade-premium`（BT_prem_h20）。
+  - /long：`long-repurchase-big`（RP_big_h60）、`long-lowturn-lowvol`（LTV_h60）、`long-dividend-lowvol`（DVLV_h60）、`long-current-debt-down`（CLD_h60）、`long-dividend-increase`（DINC_h60）、`long-undist-profit-growth`（UDP_h60）、`long-net-cash-switch`（NCS_h60）、`long-growth-streak`（CG4_h60）。
+- 方法（写死，不改任何规则/参数/窗口）：原研究脚本原封不动，只让 `st_hist.parquet` 变成新文件。lt_research25（一次产出 RP_r05 / EA_h20 / F_any_h20 / INC_opt_h20 / BT_prem_h20 / RP_big_h60，及 SCW 参照，均为 realistic 引擎 k20/max_new5、cohort_bench 同日同市值五分位对照）、lt_research16（LTV_h60）、lt_research19（DVLV_h60）、lt_research88（CLD_h60）、lt_research48（DINC_h60）、lt_research94（UDP_h60）、lt_research98（NCS_h60）、lt_research102（CG4_h60）。阶段与 §261/§277 相同：P19/P20/P21/W0/W00/W1/W2/R12（截至 2026-10-16）+ N3（2024-01~2026-10），分阶段窗口加载、串行单进程、N3 单独、swap 空闲<400MB 则等待。只读本地数据，不联网，不写库。
+- 旧口径对照：给 `lt_research.py` / `lt_research16.py` / `lt_research19.py` 的 st 读取加环境变量 `ST_HIST_PATH`（默认不变=新文件）；lt_research25 族另用备份 `data/runtime/cleanup/st_hist_20261025.parquet` 在**今天的数据**上重跑一遍旧口径，这样新旧差异只来自 ST 文件、不混入其他数据漂移（其余策略旧值取上线时登记的 `midterm_backtest_metrics.json` / `output/research/sNNN/res.json`）。
+- 达标标准（沿用各策略上线时的预注册标准，不事后放宽；N3 指标在新口径下重新计算）：
+  - A 类（RP_r05、F_any_h20、INC_opt_h20、BT_prem_h20、RP_big_h60、CLD_h60、DINC_h60、UDP_h60、NCS_h60、CG4_h60，§91/§154 加严 5 条）：① 8 段（P19~R12）每笔超额>0 至少 6 段；② R12 与 W00 超额>0；③ 8 段每笔均值>0 至少 5 段；④ 8 段笔数中位 ≥15；⑤ N3 PF ≥1.3。
+  - B 类 EA_h20（§95 新权重 4 条）：① R12 每笔均值>0 且总收益>0；② N3 每笔均值>0、总收益>0、MDD>−35%；③ W1(2024) 与 W2(2025-01~09) 每笔均值均>−1%；④ 老阶段（P19/P20/P21/W0/W00）每笔均值>−5% 且 MDD>−40%。（同市值对照仅诊断。）
+  - C 类 LTV_h60 / DVLV_h60（§98/§102）：R12 每笔均值>0 且总收益>0；N3 每笔均值>0、总收益>0、MDD>−35%；W1 与 W2 每笔>−1%；每笔均值优于同池随机对照：R12 与 N3 均优于且 8 阶段中至少 5 段；老阶段每笔>−5% 且 MDD>−40%；R12 或 N3 PF≥1.3；R12/N3 笔数≥30。
+  - 补充（信息项，不作采纳条件）：R12/N3 的每笔、PF、MDD、超额，与上线时/旧口径对照的差。
+- 处理规则（用户 10-25 规则：不设观察档）：新口径下**不再满足**自己的上线标准 → 立即从现役下线（`midterm_service.STRATEGIES` 移出、`midterm_backtest_metrics.json` 移出，写入 MID_REJECTED / LONG_REJECTED，附理由），商议后提交推送并按规则重启；仍满足 → 只记录新数值、不改任何实盘代码。若旧口径对照同样不满足同一条（说明是标准口径近似、而非 ST 修复造成），照样按「当前不达标」处理并在结果里写明，不因此保留。
+- 局限：历史上 ST 漏标/误标对 liq 股池的影响只在股池内的 ST 边界股上；事件型策略信号本身不依赖 ST，只通过 liq 过滤受影响，预期变化小；实盘选股用 DB 当日 is_st/名称含 ST 剔除（midterm_service），本来就比旧研究文件严，所以本节只验证「回测数字与上线结论」，不涉及实盘候选口径。
+- 输出：`backend/output/research/s278/`（`r25_new.json`/`r25_old.json`、`r16_new.json` … `r102_new.json` 与各 `.log`）；脚本 `backend/scripts/midterm/run_s278.sh` / `run_s278_all.sh`。
