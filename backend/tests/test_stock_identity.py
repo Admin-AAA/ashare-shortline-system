@@ -138,7 +138,7 @@ def test_diff_is_idempotent_after_applying():
     assert d == {"insert": [], "update": [], "delete": [], "normalized": 0}
 
 
-def test_namechange_completed_years_are_cached_current_year_always_fetched(tmp_path):
+def test_namechange_old_years_are_cached_last_two_years_always_fetched(tmp_path):
     calls: list[str] = []
 
     class FakePro:
@@ -147,11 +147,11 @@ def test_namechange_completed_years_are_cached_current_year_always_fetched(tmp_p
             return pd.DataFrame([{"ts_code": "000001.SZ", "name": "x", "start_date": f"{start_date[:4]}0105", "end_date": None,
                                   "ann_date": None, "change_reason": "其他"}])
 
-    df, per_year = si.fetch_namechange(FakePro(), 2024, 2026, tmp_path)
-    assert calls == ["2024", "2025", "2026"] and len(df) == 3 and per_year == {2024: 1, 2025: 1, 2026: 1}
+    df, per_year = si.fetch_namechange(FakePro(), 2023, 2026, tmp_path)
+    assert calls == ["2023", "2024", "2025", "2026"] and len(df) == 4 and per_year == {2023: 1, 2024: 1, 2025: 1, 2026: 1}
     calls.clear()
-    df2, _ = si.fetch_namechange(FakePro(), 2024, 2026, tmp_path)
-    assert calls == ["2026"] and len(df2) == 3  # 2024/2025 命中缓存
+    df2, _ = si.fetch_namechange(FakePro(), 2023, 2026, tmp_path)
+    assert calls == ["2025", "2026"] and len(df2) == 4  # 2023/2024 命中缓存；上一年与当年每次重取（跨年行）
 
 
 def test_refresh_rejects_truncated_stock_basic():

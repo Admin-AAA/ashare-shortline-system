@@ -292,16 +292,21 @@ def _write_cache(df: pd.DataFrame, path: Path) -> None:
 def fetch_namechange(
     pro: Any, start_year: int, end_year: int, cache_dir: Path | None = CACHE_DIR
 ) -> tuple[pd.DataFrame, dict[int, int]]:
-    """逐年取 namechange。早于 end_year 的年份命中本地缓存就不再请求；end_year（当年）每次都请求。"""
+    """逐年取 namechange。
+
+    上游按「公告/起止日与区间有交集」返回行，跨年的行（如 12 月公告、次年 1 月生效）会出现在上一年的查询里，
+    所以 end_year 与 end_year-1 每次都重新请求（2 次调用），更早的年份命中本地缓存就不再请求。
+    """
     frames, per_year = [], {}
+    refetch_from = end_year - 1
     for yr in range(start_year, end_year + 1):
         path = cache_dir / f"namechange_{yr}.parquet" if cache_dir else None
-        if yr < end_year and path is not None and path.exists():
+        if yr < refetch_from and path is not None and path.exists():
             df = pd.read_parquet(path)
         else:
             df = pro.namechange(start_date=f"{yr}0101", end_date=f"{yr}1231")
-            if path is not None and df is not None and yr < end_year and len(df) > 0:
-                _write_cache(df, path)  # 已结束年份：落缓存
+            if path is not None and df is not None and yr < refetch_from and len(df) > 0:
+                _write_cache(df, path)  # 已结束且不会再有跨年补充的年份：落缓存
         per_year[yr] = 0 if df is None else len(df)
         if df is not None and len(df) > 0:
             frames.append(df)
