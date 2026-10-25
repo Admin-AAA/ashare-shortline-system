@@ -1996,3 +1996,45 @@ lt_research12.py 预注册 6 版（真实成交 k20/max_new5，同日同市值�
   - TBAp_h60：超额 5/8；R12 超额 +3.04、W00 -2.50；每笔>0 5/8；n中位50；N3 127.0笔 +5.88%/笔 PF1.97 超额 +0.74。最近12个月62.0笔 +5.59%/笔 PF1.85。✗✗✓✓✓ → 否（超额仅4/8：P21 -4.34/W00 -2.50/W2 -3.69）。
   - `_adopt=null`。解读：有形资产/总资产占比同比上升与 §234 tangibleasset_to_debt / §242 ca_to_assets 同病——近期 R12 绝对收益偶见可看，但多数历史阶段跑输同市值（尤其 W00/W1/P21），达不到预注册「≥6/8 段超额>0」。按预注册全部否决：TBA_h20 写入 /mid 否决，TBA_h60 / TBAp_h60 写入 /long 否决；本轮不改实盘 STRATEGIES。
 
+
+## §249 [短线] 现役4技能入场 VETO「信号日开盘相对昨收涨幅过大」（OG* Open-Gap Chase Veto）— 预注册（2026-10-25 10:03 CST 写定，结果出来前不改）
+- 思路：信号日若**开盘相对昨收的高开幅度 gap% = (开盘/昨收 − 1)×100 ≥ X**（追高开盘、开盘已把预期定价进去），对该票否决入场、不递补——赌「信号日高开追涨的票次日期望更差」。这是现役4技能**入场硬否决**，不是独立选股、不是出场叠加。独立短线选股（NR/突破/跳空/AXB）近期系统性负期望，本轮优先入场 VETO。
+- 去重：已测入场过滤含 §96/§97 蜡烛收盘位置/追高（用的是收盘位置/涨幅，**不是开盘相对昨收**）、§136 runup、§140 财报窗口、§208 过热拥挤、§221 AMT 高成交额、§223 DRY、§229 BB 阴线实体、§233 上影线占比、gap/LHB/unlock/WR70/turnover。已测出场含 EL_C/BE/ATR/D2/VA/VC/UX/CLV/§215 长上影出场/horizon。独立选股含跳空回补§171、跳空高开回落等；**从未测过「信号日开盘/昨收 − 1 ≥ 固定阈值 → 现役4技能入场否决」**。与 §208/§221/§229/§233 字段独立（本轮只用 open vs prior close，不看收盘位置/成交额/实体/上影）。
+- 口径同 §185/§208/§221/§229/§233（`backend/scripts/research_open_gap_entry_veto.py`，改自 research_upper_shadow_entry_veto.py / research_bear_body_entry_veto.py）：4 个现役短线策略单策略面板前 3/线 72，21 次选股（base+20 随机）平均；真实执行核 `_simulate_card`（含已上线 EL_C）；窗口 EXT/12m/W0/W00，N3=12m+EXT。特征只读本地 `data/cache/daily_kbar.parquet` 的 open/close（昨收=同代码前一交易日 close）；不调 promax/tushare/网关。
+- 版本（写死不调，无网格）：
+  - BASE：现行（含已上线 EL_C）。
+  - OG2：gap% ≥ 2.0 否决该票入场、不递补。
+  - OG3：gap% ≥ 3.0。
+  - OG5：gap% ≥ 5.0。
+  - CTRL：每个变体同一抽样、同一（策略,日）随机删同样张数（20 种子）作安慰剂。
+- 阶段：EXT / 12m(R12) / W0 / W00 + N3（12m+EXT）。
+- 采纳（同 §185/§208/§221/§229/§233 的 8 条，全部满足，最多 1 个，多个取 N3 每笔提升最大）：1) 每笔 R12/N3 > BASE；2) PF R12/N3 ≥ BASE 且 ≥1.3；3) MDD R12/N3 ≥ BASE；4) R12/N3 每笔 > CTRL，且被否单 Δ 均值 R12/N3 >0、trim10>0；5) W0/W00 MDD 不比 BASE 差 >3 点、每笔不低 0.3pp；6) 被否单 R12≥10、N3≥20；7) 最长连亏 R12/N3 ≤ BASE+1；8) 总 R12/N3>0、n R12≥30 / N3≥60。不达标不放宽、不调 2/3/5。若某版 aff R12<10 不可检验，按 §208 规则否决该版。通过则接线入场否决并按重启规则重启后端。
+- 输出：`backend/output/research/s249/`（open_gap_entry_veto.json / run.log）。脚本：`backend/scripts/research_open_gap_entry_veto.py`。
+
+
+
+- **结果（2026-10-25 10:06 CST，3 个版本全部否决）**：脚本 `backend/scripts/research_open_gap_entry_veto.py`，结果 `backend/output/research/s249/open_gap_entry_veto.json`、`run.log`。BASE 复现 R12 +1.469%/笔 PF1.99 MDD−25.9；N3 +1.147 PF1.80 MDD−28.3（与 EL_C 对齐）。被否单密度：R12 aff OG2/OG3/OG5 ≈30.0/16.8/7.7；N3 ≈45.3/26.3/10.7。
+  - OG2：R12 n=471 avg=+1.377 PF1.92 MDD−28.9（BASE +1.469/1.99/−25.9）；N3 n=708.3 avg=+1.031 PF1.71 MDD−32.2；被否 R12 avg=+2.91 Δ=−2.91 trim10=−3.90；N3 Δ=−2.95；连亏 7.1/9.8（BASE 6.1/8.5）。c1–c5/c7 不过（仅 c6/c8 过）。
+  - OG3：R12 n=484.1 avg=+1.463 PF2.00 MDD−28.9；N3 n=727.3 avg=+1.101 PF1.77 MDD−30.5；被否 R12 avg=+1.65 Δ=−1.65；N3 Δ=−2.41。c1–c5 不过。
+  - OG5：R12 aff=7.7 <10 → **不可检验**（按 §208 规则否决该版）；N3 aff=10.7 <20 亦不过 c6。R12/N3 每笔略高于 BASE 但 MDD 更差、Δ 为负。
+  - `_adopt=null`。解读：信号日开盘相对昨收高开 ≥2%/3%/5% 的票，事后短线平均**更赚**（被否单 R12 均值约 +1.0~+2.9%/笔）——否决它们系统性削弱每笔与 PF/MDD。与刚否的 §229 BB / §233 上影同向（蜡烛/开盘追高否决反而去掉赢家）。OG5 样本过稀不可检验。按预注册否决，线上入场不叠加开盘高开硬过滤。
+
+
+## §250 [中线/长线] 每股股权自由现金流同比改善（fcfe_ps, FCFE*）— 预注册（2026-10-25 10:03 CST 写定，结果出来前不改）
+- 思路：正式财报里 **FCFE_PS（每股股权自由现金流）相对去年同一报告期抬升**——「股权自由现金流改善事件」（股东可分配现金增多）。区别于已否的 FCFF_PS（§172 企业自由现金流，含债息前口径）；本轮测股权侧 fcfe_ps。
+- 去重：对照 LONG_REJECTED/MID_REJECTED（含 §153~§248）与现役：已测 FCFF_PS（§172）、OCF/ocfps 加速（§162）、q_ocf_to_sales、ocf_to_debt/ocf_to_shortdebt、毛利率/净利率/ΔROE/ΔROIC/费用率/周转/杠杆/偿债、CLD_h60 观察 /long 等。**从未单独测过 fcfe_ps 同比改善**（docs/strategy-research.md / midterm.py 0 hits）。本地 fina 覆盖 fcfe_ps ≈92.8%（≥90%）。
+- 数据：本地 fina parquet（fcfe_ps、netprofit_yoy）+ midterm 面板；realistic；liq；K=20；max_new=5；cohort_bench 同日同市值五分位。信号日=公告日当天或之后首个交易日，收盘出信号、次日开盘买。
+- 覆盖探针：本期−去年≥0.5 元/股且本期>0，每年约 1.7k~4.0k 条 → **冻结同 §172 边界，不网格**（this−prior ≥0.5、this>0，Δ 封顶 5.0；FCFEp + netprofit_yoy>0）。
+- 版本（写死不调；边界按 §172/覆盖探针冻结）：
+  - FCFE：本期 fcfe_ps − 去年同报告期 fcfe_ps ≥ 0.5（元/股），且本期 fcfe_ps > 0；按 ΔFCFE_PS（封顶 5.0）降序。
+  - FCFEp：再要求 netprofit_yoy > 0。
+  - 持仓：FCFE_h20 / FCFE_h60 / FCFEp_h60。
+- 阶段：P19..R12 + N3；cutoff 2026-10-16；serial；LT_END=stage end（+缓冲同 §248 run_s248.sh）。
+- 采纳标准（同 §234–§248 族那 5 条，全部满足才采纳）：① 8 段每笔超额>0 至少6段；② R12与W00超额>0；③ 每笔均值>0 至少5/8段；④ 各段笔数中位数≥15；⑤ N3 PF≥1.3。通过的只提议观察身份进 /mid 或 /long（本轮不改实盘 STRATEGIES / 不接候选函数，同 CLD_h60）；否决写入对应否决列表。不事后放宽、不调 0.5/5.0。
+- 输出：`backend/output/research/s250/`。脚本：`backend/scripts/midterm/lt_research93.py` + `_eval.py` + `backend/output/research/s250/run_s250.sh`（自 lt_research92/55 克隆改列）。
+
+- **结果（2026-10-25 10:09 CST，3 个版本全部否决）**：脚本 `backend/scripts/midterm/lt_research93.py`（评估 `_eval.py`），结果 `backend/output/research/s250/res.json`、`eval.txt`、`run.log`。
+  - FCFE_h20：超额 5/8；R12 超额 +2.48、W00 −0.07；每笔>0 5/8；n中位100；N3 275笔 +4.16%/笔 PF2.23 超额 +1.76 MDD−12.0。最近12个月98笔 +4.08%/笔 PF2.24。✗✗✓✓✓ → 否（超额仅5/8：P20 −0.42/W0 −2.01/W00 −0.07；W00 超额为负）。
+  - FCFE_h60：超额 3/8；R12 超额 +1.91、W00 +0.84；每笔>0 6/8；n中位48；N3 132笔 +5.59%/笔 PF2.01 超额 −0.13 MDD−16.3。最近12个月61笔 +2.96%/笔 PF1.48。✗✓✓✓✓ → 否（超额仅3/8：P19 −0.90/P21 −2.20/W0 −1.58/W1 −3.92/W2 −0.49；N3 超额 −0.13）。
+  - FCFEp_h60：超额 3/8；R12 超额 +0.69、W00 −0.56；每笔>0 6/8；n中位47；N3 128笔 +3.67%/笔 PF1.64 超额 −1.95 MDD−16.3。最近12个月60笔 +2.00%/笔 PF1.34。✗✗✓✓✓ → 否（超额仅3/8：P21 −1.98/W0 −3.57/W00 −0.56/W1 −7.60/W2 −3.49）。
+  - `_adopt=null`。解读：每股股权自由现金流同比改善与 §172 FCFF_PS / §162 OCF 加速同病——近期 R12 绝对收益与 PF 可看（FCFE_h20 R12 +4.08%/笔 PF2.24），但多数历史阶段跑输同市值（尤其 W0/W1/W2），达不到预注册「≥6/8 段超额>0」。按预注册全部否决：FCFE_h20 写入 /mid 否决，FCFE_h60 / FCFEp_h60 写入 /long 否决；本轮不改实盘 STRATEGIES。
