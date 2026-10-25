@@ -1788,3 +1788,41 @@ lt_research12.py 预注册 6 版（真实成交 k20/max_new5，同日同市值�
   - COGSp_h60：超额 3/8；R12 +3.64、W00 −1.35；每笔>0 6/8；n中位52；N3 141笔 +5.17 PF1.95 超额 +0.44。最近12个月60笔 +5.47 PF1.90。✗✗✓✓✓ → 否。
   - `_adopt=null`。解读：销售成本率同比下降与 §232 gc_of_gr / §164 毛利率同病——持60 绝对收益与 PF 偶见可看，但多数历史阶段跑输同市值，W00/W1 超额不稳。Δcogs_of_sales 事件不能稳定提供超额。已写入 /mid（持20日）与 /long（持60日两版）否决列表，不上线。
 
+## §239 [短线] 连跌后重新站上 MA5（Consecutive-Down MA5 Reclaim, CDR*）— 预注册（2026-10-25 08:45 CST 写定，结果出来前不改）
+- 思路：连续 N 日收盘下跌后，若今日收盘**重新站上 5 日均线**（昨收 ≤ 昨 MA5，今收 > 今 MA5），视为超跌后的短线均线收回——比「连跌末日本身买入」多一道趋势过滤。这是**独立短线选股**，不是现役 4 技能过滤，也不是出场改写。
+- 去重：§165 连跌反转（买在连跌末日，**不要求**站上均线）；§177 MA20 收回 / §231 MA60 收回（**不要求**先验连跌）；§212 MA5×MA20 金叉（均线交叉，不是价穿 MA5）；§204 连阴强收未破高、§227 BR 连跌放量破前高、§193 LL20、VCD/CQD/RC/VSB/BB/US/AMT/DRY/VC/UX/CLV/harami/NR7/Donchian/ATR-squeeze/horizon 均已测。**从未测过「先验连跌 + 收盘重新站上 MA5」**。Alt B 跳空低开收阳（无回补约束）与 §171 回补/§179 刺透相邻本轮不并行；Alt C 振幅扩张突破与 §219 压缩突破同族本轮不并行；时间止损收紧与 §132/§197 重叠本轮不测。
+- 数据：本地 `lt_data.prices` 长面板 + `realistic` 引擎（次日开盘涨停买不进、跌停锁死顺延、0.3% 成本）+ 本地 ST 历史。不调外部接口。
+- 股池（信号日当日判定，全部预注册不调）：非 ST、上市 ≥120 日、当日成交额 ≥1 亿、非北交所（代码不以 4/8/9 开头）、昨收有效、开盘 >0；信号日非一字涨停锁死；MA5 有值且 >0。
+- 定义（复权用 pct_chg 累乘得 ac 仅作出场价；MA5 = 近 5 日 raw close 均值，口径同 §231 MA60）：down = 收盘 < 昨收；连跌 N = 近 N 日（含今日之前的 N 日，即 shift1..N）均为 down；reclaim = 昨收 ≤ 昨 MA5 且 今收 > 今 MA5；VR = volume / 近 20 日均量（shift1）；prem = (收 − MA5)/MA5。
+- 版本（T 收盘出信号、T+1 开盘买；每天最多 3 只、最多同时持 15 只；按 |prem| 升序＝刚收回优先，score = −|prem|）：
+  - V1_CDR3：股池 + 前 3 日均 down + reclaim + 非一字涨停。
+  - V2_CDR3_VR12：V1 再要求 VR ≥ 1.2。
+  - V3_CDR5：股池 + 前 5 日均 down + reclaim + 非一字涨停。
+  - CTRL：同股池且**非**（前 3 日连跌 ∧ reclaim）的日子，按代码+日期哈希随机分排序。
+- 出场（所有版本相同）：持有 3 个交易日（第 3 个收盘后次日开盘卖）；期间任一天收盘价 < 买入价 × 0.93 次日开盘止损。
+- 阶段：P19 / P20 / P21 / W0 / W00 / W1 / W2 / R12（截到 2026-10-16）+ N3（2024-01~2026-10）。
+- 采纳标准（同 §231/§235 独立选股 5 条，全部满足才采纳）：① 8 段每笔均值 > 0 至少 6 段；② R12 与 W00 每笔均值 > 0；③ N3 PF ≥ 1.3；④ 每笔均值高于同段 CTRL 至少 5/8 段；⑤ 各段笔数中位数 ≥ 30。通过的取 N3 每笔最高的一个。不达标不事后放宽、不调 3/5 天、1.2、持有 3 天、0.93。
+- 输出：`backend/output/research/s239/`（res.json / eval.txt / run.log / trades_*.parquet）。脚本：`backend/scripts/shortline_research/cdr_s239.py` + `_eval.py`。
+
+- **结果（2026-10-25 08:47 CST，3 个版本全部否决）**：脚本 `backend/scripts/shortline_research/cdr_s239.py`（评估 `_eval.py`），结果 `backend/output/research/s239/res.json`、`run.log`、`trades_*.parquet`、`eval.txt`。信号每年约 0.4~1.1 万个（V1），不缺样本。
+  - 每笔%（P19/P20/P21/W0/W00/W1/W2/R12 | N3 笔数 每笔 PF）：V1_CDR3 −0.31/−0.33/−0.18/−0.19/−0.58/−0.24/+0.01/−0.29 | 1945 −0.19 PF0.91；V2_CDR3_VR12 −0.20/+0.11/−0.11/−0.25/−0.79/−0.11/+0.00/−0.53 | 1867 −0.24 PF0.89；V3_CDR5 −0.42/−0.03/−0.09/−0.26/−0.52/−0.03/−0.36/−0.28 | 1472 −0.23 PF0.89；CTRL +0.10/+0.20/−0.41/−0.19/−0.87/−0.35/−0.02/−0.38 | 2013 −0.27 PF0.88。
+  - R12：V1 740笔 −0.29 PF0.87；V2 726笔 −0.53 PF0.78；V3 619笔 −0.28 PF0.87。N3 MDD V1 −26.6 / V2 −30.5 / V3 −30.6。
+  - `_adopt=null`。解读：连跌后重新站上 MA5 在 A 股短线系统性近零/负期望（多数阶段负、PF≪1.3），与 §165 连跌 / §177 MA20 / §231 MA60 同病——「超跌收回均线」不能稳定赚钱；加量比或拉长连跌窗都不改方向。按预注册否决，不上线。
+
+## §240 [中线/长线] 流动负债占比同比下降（currentdebt_to_debt）— 预注册（2026-10-25 08:45 CST 写定，结果出来前不改）
+- 思路：正式财报里 **currentdebt_to_debt（流动负债/负债合计）相对去年同一报告期下降**——「债务期限结构改善事件」（短债占比下降、滚续压力减轻）。不是杠杆率水平，也不是利润率/费用率。
+- 去重：对照 LONG_REJECTED/MID_REJECTED（含 §153~§238）与现役：已测去杠杆 debt_to_assets（§166）、tangibleasset_to_debt/eqt_to_debt、速动/流动/现金比率、OCF/FCFF、毛利率/净利率/profit_to_gr/ebit_of_gr/gc_of_gr/cogs_of_sales、费用率、周转、or/op/ebt/cfps/bps/equity/q_roe/q_npta/q_op_qoq/q_sales_yoy 等。本地相关：currentdebt_to_debt 与 debt_to_assets corr≈−0.21（几乎无关）；q_dt_roe 与 q_roe corr≈0.92（本轮不测，无法论证≠§222）；assets_to_eqt 与 debt_to_eqt corr≈1.0 / 与 debt_to_assets ≈0.87（本轮不测，去杠杆族刚否一串）；op_of_gr/profit_to_op 与 profit_to_gr≈0.98（利润率链耗尽）。**从未单独测过 currentdebt_to_debt 同比下降**。本地 fina 覆盖 ≈96.7%（≥90%）。
+- 数据：本地 fina parquet（currentdebt_to_debt、netprofit_yoy）+ midterm 面板；realistic；liq；K=20；max_new=5；cohort_bench 同日同市值五分位对照。信号日 = 公告日当天或之后首个交易日，收盘出信号、次日开盘买。
+- 版本（写死不调）：
+  - CLD：本期 currentdebt_to_debt∈[30,95]、去年∈[20,100]（fina 百分数口径，同 cogs_of_sales），降幅=去年−本期 ≥5.0 百分点；按降幅（封顶 40.0）降序。
+  - CLDp：再要求 netprofit_yoy>0。
+  - 持仓：CLD_h20 / CLD_h60 / CLDp_h60。
+- 阶段：P19..R12 + N3；cutoff 2026-10-16；serial；LT_END=stage end（+缓冲同 §238 run_s238.sh）。
+- 采纳标准（同 §234–§238 族那 5 条，全部满足才采纳）：① 8 段每笔超额>0 至少6段；② R12与W00超额>0；③ 每笔均值>0 至少5/8段；④ 各段笔数中位数≥15；⑤ N3 PF≥1.3。通过的只提议观察身份进 /mid 或 /long；否决写入对应否决列表。不事后放宽、不调 30/95/5.0/40。
+- 输出：`backend/output/research/s240/`。脚本：`backend/scripts/midterm/lt_research88.py` + `_eval.py`（自 lt_research87 克隆改列）。
+
+- **结果（2026-10-25 08:53 CST）**：脚本 `backend/scripts/midterm/lt_research88.py`（评估 `_eval.py`），结果 `backend/output/research/s240/res.json`、`eval.txt`、`run.log`。
+  - CLD_h20：超额 4/8；R12 超额 +2.91、W00 +0.27；每笔>0 4/8；n中位98；N3 266笔 +3.79%/笔 PF2.07 超额 +0.79。最近12个月96笔 +5.20%/笔 PF2.66。✗✓✗✓✓ → 否。
+  - CLD_h60：超额 7/8；R12 超额 +1.29、W00 +0.12；每笔>0 6/8；n中位52；N3 136笔 +8.56%/笔 PF2.48 超额 +4.28 MDD−17.7。最近12个月60笔 +3.69%/笔 PF1.46。✓✓✓✓✓ → **采纳**。
+  - CLDp_h60：超额 6/8；R12 超额 +7.29、W00 −0.30；每笔>0 7/8；n中位50；N3 132笔 +8.70 PF2.38 超额 +4.71。最近12个月60笔 +9.82 PF2.37。✓✗✓✓✓ → 否（W00 超额负）。
+  - `_adopt=CLD_h60`。解读：流动负债/负债合计同比下降（债务期限结构改善）在持60日上满足预注册 5 条——多数阶段跑赢同市值、R12/W00 超额为正、N3 PF2.48。CLD_h20 绝对收益段不足；CLDp 加净利过滤后 W00 超额转负。按预注册：CLD_h60 **以观察身份提议进 /long**（本轮不改实盘 STRATEGIES / 不接候选函数）；CLD_h20 写入 /mid 否决、CLDp_h60 写入 /long 否决。
