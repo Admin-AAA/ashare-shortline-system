@@ -54,7 +54,7 @@ if __name__ == "__main__":
         if w.height:
             info = {"sigdays": w["trade_date"].n_unique(), "n_sig": w.height, "n_cand_all": a.height, "n_codes": w["code"].n_unique(),
                     "sig_pct_med": round(float(w["pct_chg"].median()), 2),
-                    "lu_share": round(float((w["close"] >= w["up_limit"] - 0.005).mean()), 3) if "up_limit" in w.columns else None,
+                    "lu_share": (lambda v: None if v is None else round(float(v), 3))((w["close"] >= w["up_limit"] - 0.005).mean()),
                     "r20_med": round(float(w["r20"].median()), 3), "r120_med": round(float(w["r120"].median()), 3),
                     "amt_ratio_med": round(float((w["amount"] / w["amt20p"]).median()), 3)}
         res.setdefault("_info", {})[ph] = info; print("INFO", ph, info, flush=True)
