@@ -29,3 +29,10 @@
 - 备份表 `recommendation_outcomes_bak_20261019`（590 行）导出 csv.gz 至 backend/data/runtime/cleanup/ 后 DROP。
 - MySQL：开启慢查询日志（>1s，my.cnf 已固化）；buffer pool 维持 2G（运行时=配置，修正原 my.cnf 的 512M 漂移），
   因 Mac 交换区已用 7.8/8GB，未提到 4G。
+
+## 4. stk_limits 历史回填（18:40–19:20 CST）
+- promax 通道限流/熔断严重（约 5 天/13 分钟）；改用 quantdata（0.5s/次，`--provider quantdata`，日额度预算 40%=368/920，用满自动停）。
+- 结果：2022 年补齐 242 个交易日；2023 年补到 165 个交易日（至 2023-08-30），剩余 85 个交易日由 promax 慢速链路（/tmp/stk_q.sh 第三步）继续；
+  2018–2021 共 973 个交易日未动（上游 2019-07-03 起有数据；需约 3 天的 quantdata 预算，建议次日 00:00 后每日 40% 预算分批，非必需）。
+- `stk_limits.parquet` 已 `--full` 原子重导：6,830,690 行，2022-01-04 ~ 2026-10-23（峰值内存 3.9GB）；回填完成后需再 `--only stk_limits --full` 一次。
+- 同时 `st_hist.parquet` 权限 600→644，供 owner 研究进程读取。
