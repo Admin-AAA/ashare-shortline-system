@@ -50,7 +50,7 @@ if __name__ == "__main__":
         info = {}
         if w.height:
             info = {"sigdays": w["trade_date"].n_unique(), "n_sig": w.height, "sig_pct_med": round(float(w["pct_chg"].median()), 2),
-                    "depth_med": round(float((w["neck"] / pl.max_horizontal(w["L1"], w["L2"]) - 1).median()), 3),
+                    "depth_med": round(float(w.select(c("neck") / pl.max_horizontal("L1", "L2") - 1).to_series().median()), 3),
                     "r20_med": round(float(w["r20"].median()), 3), "r60_med": round(float(w["r60"].median()), 3),
                     "amt_ratio_med": round(float((w["amount"] / w["amt20"]).median()), 3)}
         res.setdefault("_info", {})[ph] = info; print("INFO", ph, info, flush=True)
