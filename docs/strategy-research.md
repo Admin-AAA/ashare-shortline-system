@@ -2725,3 +2725,4 @@ lt_research12.py 预注册 6 版（真实成交 k20/max_new5，同日同市值�
   - §259 EQS_h20（lt_research97）：超额 4/8、W0 −0.06 / W00 −0.48，3 条不过；N3 211笔 +1.57% PF1.36。同次运行的 h60 版（长线研发暂停，只记录）：EQS_h60 超额 5/8、W00 −3.56，2 条不过；EQSp_h60 超额 4/8；SEXP/FCFE/FINA/IDE 的 h60 版也全部不过。
   - MID_REJECTED / LONG_REJECTED 对应条目已加注「ST 口径更正后仍不达标」。
 - 提醒：下线的 5 个 /long 策略如有已推荐过的持仓，历史 picks 保留在 `output/midterm/picks`，但 /long 页面将不再展示；建议用户自行核对仍持有的票。
+- 收尾（2026-10-25 14:58 CST）：commit 8867ffe 已推送（预注册 6601392 / a6425d5 / 4025182，时间以 commit 为准）；`import app.main` 通过、相关测试 51 passed（midterm_api_fields / horizon_analytics / midterm_fina_events / strategy_rank / forecast / incentive / block_trade，未跑全量 pytest）；`active_work_check` idle → `safe_backend_restart.sh` 14:56:18 重启，8765 /api/health ok、5174 200；线上 /mid 7 个在跑 + 120 否决，/long 3 个在跑（long-lowturn-lowvol、long-dividend-lowvol、long-growth-streak）+ 165 否决；短线 4 个未动。
