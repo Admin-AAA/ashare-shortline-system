@@ -6,6 +6,14 @@ import pandas as pd
 from app.services import midterm_fina_events as fe
 from app.services import midterm_service as ms
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _with_retired_strategies(monkeypatch):
+    """§278：CLD/DINC/UDP/NCS 已下线（RETIRED_STRATEGIES），这里仍测候选口径/出票逻辑，临时并回注册表。"""
+    monkeypatch.setattr(ms, "STRATEGIES", {**ms.STRATEGIES, **ms.RETIRED_STRATEGIES})
+
 
 def _dates(as_of="2026-10-23", n=251):
     d, out = dt.date.fromisoformat(as_of), []

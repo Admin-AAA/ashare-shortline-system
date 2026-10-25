@@ -39,7 +39,7 @@ def test_cancel_fields():
 def test_pagination_and_horizon(tmp_path, monkeypatch):
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     for d in ("2026-10-12", "2026-10-13", "2026-10-14"):
-        for sid in ("mid-repurchase-plan", "long-repurchase-big"):
+        for sid in ("mid-repurchase-plan", "long-lowturn-lowvol"):
             (tmp_path / f"{d}_{sid}.json").write_text(json.dumps(
                 {"strategy_id": sid, "signal_date": d, "picks": [{"code": "000001", "ratio": 0.02}]}))
     monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: {"status": "pending"})
@@ -50,7 +50,7 @@ def test_pagination_and_horizon(tmp_path, monkeypatch):
     out2 = ms.list_picks_page(None, None, "mid", page=2, page_size=2)
     assert len(out2["batches"]) == 1
     assert len(ms.list_picks(None, None, 30, horizon="long")) == 3
-    assert ms.list_picks_page(None, "long-repurchase-big", None, 1, 30)["total"] == 3
+    assert ms.list_picks_page(None, "long-lowturn-lowvol", None, 1, 30)["total"] == 3
 
 
 def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
@@ -65,11 +65,17 @@ def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
     for fn in ("cld_candidates", "dinc_candidates", "udp_candidates", "ncs_candidates", "cg_candidates"):
         monkeypatch.setattr(fe, fn, lambda db, d: None)
     res = ms.generate_picks(None, "2026-10-16", horizon="long")
-    assert set(res) == {"long-repurchase-big", "long-lowturn-lowvol", "long-dividend-lowvol",
-                        "long-current-debt-down", "long-dividend-increase", "long-undist-profit-growth",
-                        "long-net-cash-switch", "long-growth-streak"}
-    res = ms.generate_picks(None, "2026-10-16", strategy_ids=["long-repurchase-big"])
-    assert set(res) == {"long-repurchase-big"}
+    assert set(res) == {"long-lowturn-lowvol", "long-dividend-lowvol", "long-growth-streak"}
+    res = ms.generate_picks(None, "2026-10-16", strategy_ids=["long-lowturn-lowvol"])
+    assert set(res) == {"long-lowturn-lowvol"}
+
+
+def test_retired_strategies_not_live():
+    """§278：st_hist 重建后复核不达标的 /long 策略已下线，不在现役 STRATEGIES，也不出票。"""
+    retired = {"long-repurchase-big", "long-current-debt-down", "long-dividend-increase",
+               "long-undist-profit-growth", "long-net-cash-switch"}
+    assert set(ms.RETIRED_STRATEGIES) == retired
+    assert not retired & set(ms.STRATEGIES)
 
 
 def test_next_batch_note(tmp_path, monkeypatch):

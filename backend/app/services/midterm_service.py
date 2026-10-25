@@ -89,15 +89,6 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    "long-repurchase-big": {
-        "name": "大额回购预案（持60日）",
-        "horizon": "long",
-        "summary": "每个交易日盘后，扫描新发布的股票回购「预案」公告（同一股票365天内只取第一次），只保留回购金额上限≥总市值1%的，剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按金额占市值比例从高到低，次日开盘买入，各持有60个交易日。不限同时持有数量，也不限每天新开数量，当天信号全部买入。",
-        "kind": "repurchase",
-        "min_ratio": 0.01,
-        "hold_days": 60,
-        "schedule": "daily",
-    },
     # §98 防御型异象（scripts/midterm/lt_research16.py LTV_h60，预注册 3 版中唯一达标，未调参）
     "long-lowturn-lowvol": {
         "name": "低换手+低波动月度组合（持60日）",
@@ -117,6 +108,30 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "top_n": 10,
         "hold_days": 60,
         "schedule": "month_end",
+    },
+    # §269 营收与扣非净利连续多期双增长（scripts/midterm/lt_research102.py CG4_h60，预注册、未调参；2026-10-25 起直接上线）
+    "long-growth-streak": {
+        "name": "营收与扣非净利连续4期双增长（持60日）",
+        "horizon": "long",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：本期及之前连续至少4个报告期（逐期相连、不跳期），营业收入同比和扣非净利润同比都≥5%（稳健增长、不看一次性大涨）；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按连续双增期数（封顶12期）从多到少排序、同期数再按扣非净利同比（封顶100%）从高到低，次日开盘买，持有60个交易日（已持有不重复买）。",
+        "kind": "cg_streak",
+        "hold_days": 60,
+        "schedule": "daily",
+    },
+}
+
+
+# §278（2026-10-25）st_hist.parquet 重建后复核：以下 /long 策略在新 ST 口径下不再满足各自上线标准，按「不设观察档」下线——
+# 不再出票、不再在 /long 展示；仅保留定义（候选函数/历史 picks 文件/测试）以便复现与追溯，原因见 app/api/midterm.py LONG_REJECTED 与 docs/strategy-research.md §278。
+RETIRED_STRATEGIES: dict[str, dict[str, Any]] = {
+    "long-repurchase-big": {
+        "name": "大额回购预案（持60日）",
+        "horizon": "long",
+        "summary": "每个交易日盘后，扫描新发布的股票回购「预案」公告（同一股票365天内只取第一次），只保留回购金额上限≥总市值1%的，剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按金额占市值比例从高到低，次日开盘买入，各持有60个交易日。不限同时持有数量，也不限每天新开数量，当天信号全部买入。",
+        "kind": "repurchase",
+        "min_ratio": 0.01,
+        "hold_days": 60,
+        "schedule": "daily",
     },
     # §240 流动负债占比同比下降（scripts/midterm/lt_research88.py CLD_h60，预注册、未调参；2026-10-25 起直接上线）
     "long-current-debt-down": {
@@ -151,15 +166,6 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "horizon": "long",
         "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：去年同期有息负债多于账上现金（净负债>0、有息负债>0），本期变成现金多于有息负债（净负债≤0，即净现金），且本期扣非净利润为正；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按「净负债减少额÷去年有息负债」从大到小排序（封顶3倍），次日开盘买，持有60个交易日（已持有不重复买）。",
         "kind": "ncs_switch",
-        "hold_days": 60,
-        "schedule": "daily",
-    },
-    # §269 营收与扣非净利连续多期双增长（scripts/midterm/lt_research102.py CG4_h60，预注册、未调参；2026-10-25 起直接上线）
-    "long-growth-streak": {
-        "name": "营收与扣非净利连续4期双增长（持60日）",
-        "horizon": "long",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：本期及之前连续至少4个报告期（逐期相连、不跳期），营业收入同比和扣非净利润同比都≥5%（稳健增长、不看一次性大涨）；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按连续双增期数（封顶12期）从多到少排序、同期数再按扣非净利同比（封顶100%）从高到低，次日开盘买，持有60个交易日（已持有不重复买）。",
-        "kind": "cg_streak",
         "hold_days": 60,
         "schedule": "daily",
     },
