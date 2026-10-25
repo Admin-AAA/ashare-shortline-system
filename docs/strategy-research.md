@@ -2653,3 +2653,12 @@ lt_research12.py 预注册 6 版（真实成交 k20/max_new5，同日同市值�
 - 采纳标准（与这些研究原预注册完全一致，不事后放宽）：① 8 段（P19~R12）每笔超额>0 至少 6 段；② R12 与 W00 超额>0；③ 8 段每笔均值>0 至少 5 段；④ 8 段笔数中位 ≥15；⑤ N3 PF ≥1.3。全部满足才采纳。
 - 处理：/mid（h20）变体达标 → 直接上线 /mid（`midterm_service.STRATEGIES` 新 kind、实盘不设仓位上限、回测指标写入 `midterm_backtest_metrics.json` 并注明 k_slots=20/max_new=5 仅回测口径）+ 补最近 3 个月 replay（`origin: replay`，`REPLAY_AUTO_BACKFILL_ENABLED=1 scripts/rebuild_replay_picks.py --onboard <id> --execute`）；不达标 → 维持否决（原否决理由加注「ST 口径更正后仍不达标」）。若多个 /mid 变体同时达标，按 N3 每笔最高者优先、与现役的同期选股平均重叠 ≥50% 的视为重复不上线（同 §277 ⑦）。
 - 输出：`backend/output/research/s279/`；脚本 `backend/scripts/midterm/run_s279.sh` / `run_s279_all.sh`。
+
+### §278 补充：按「各策略上线时的原标准」判定（2026-10-25 14:21 CST 写定；此时已看到 r25 新口径数字，**但尚未看任何旧口径对照、也未看 r16/r19/r88… 新口径结果**；更正的是预注册里 A 类的适用范围，不是放宽数字）
+- 更正原因：预注册里把 A 类 5 条（含「W00 超额>0」「N3 PF≥1.3」）套给了 RP_r05 / F_any_h20 / INC_opt_h20 / BT_prem_h20，但这四个策略并非按 A 类上线：上线登记里 F_any_h20 的 W00 超额本来就是 −2.01、BT_prem_h20 的 R12 PF 本来就是 1.28，它们当时就不满足 A 类。用户要判的是「是否不再满足**其上线标准**」，所以改按各自上线时的原标准判（来源：`midterm_backtest_metrics.json` 各条 note、`lt_research12/15/16/18/19` 头注释、MID_REJECTED 里同批被否版本的否决理由）：
+  - EA_h20 / F_any_h20 / INC_opt_h20 / BT_prem_h20（2026-10-18 新权重预注册，B 类）：① R12 每笔均值>0 且总收益>0；② N3 每笔均值>0、总收益>0、MDD>−35%；③ 2024（W1）与 2025-01~09（W2）每笔均值均>−1%；④ 老阶段（P19/P20/P21/W0/W00）每笔均值>−5% 且 MDD>−40%。F_any_h20 / INC_opt_h20 / BT_prem_h20 另有「8 段超额>0 至少 5 段」（BT_prem2 被否理由写明「预设要求 ≥5/8」）。EA_h20 无对照项。
+  - RP_r05（§100）：与基线 RP（R_plan_h20）对比：N3 每笔 ≥ 基线、R12 每笔 ≥ 基线、8 段中每笔不低于基线的至少 5 段、N3 PF ≥ 基线、N3 MDD 不比基线深，且 R12 PF ≥ 1.3（质量线，被否的 RP_prem 就因 R12 PF 1.29 否决）。用 lt_research18 原脚本新口径重跑（含 base 与 RP_r05）。
+  - RP_big_h60（§91 R_big_h60）：A 类 5 条里的 ①（8 段超额>0 至少 6 段）、②（R12 与 W00 超额>0）、③（每笔>0 至少 5/8）、④（n 中位≥15）；N3 PF 不是当时的条件，作信息项。
+  - A 类（CLD/DINC/UDP/NCS/CG4，§158 起的 5 条）与 C 类（LTV/DVLV）不变。
+- 追加运行（同样只换 st 文件、串行、排在 §279 之后）：lt_research18（RP_r05 与基线）。判定规则（下线/只记录）不变。
+- 同时保留 A 类 5 条的新旧结果作信息项一并汇报，但**下线只看上线时的原标准**。
