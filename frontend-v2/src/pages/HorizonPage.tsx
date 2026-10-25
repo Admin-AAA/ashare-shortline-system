@@ -133,7 +133,7 @@ function StrategyCard({ s }: { s: HorizonStrategy }) {
         <DailyChip s={s} />
         <div className="hz-tags">
           <span className="hz-tag"><CalendarClock size={12} /> {SCHEDULE_OVERRIDE[s.id] ?? `${SCHEDULE[s.schedule] ?? s.schedule}选股`}</span>
-          <span className="hz-tag">每次 Top {s.top_n}</span>
+          {s.top_n ? <span className="hz-tag">每次 Top {s.top_n}</span> : <span className="hz-tag">信号全买</span>}
           <span className="hz-tag">持有 {s.hold_days} 交易日</span>
         </div>
       </header>

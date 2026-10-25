@@ -220,8 +220,11 @@ export function HorizonPositionsPage({ horizon }: { horizon: H }) {
   if (res.loading) return <PageSkeleton title={`${hzName(horizon)}持仓加载中`} />;
   if (res.error) return <ErrorPage title="持仓加载失败" message={res.error} onRetry={res.refetch} />;
   const all = res.data?.trades ?? [];
-  const holding = all.filter((t) => t.status === "holding").sort((a, b) => (b.days ?? 0) - (a.days ?? 0));
-  const pending = all.filter((t) => t.status === "pending");
+  // 按信号日倒序（最新在上），同一天按策略、代码排，表格从上到下就是时间线。
+  const byDate = (a: HorizonTrade, b: HorizonTrade) =>
+    b.signal_date.localeCompare(a.signal_date) || a.strategy_name.localeCompare(b.strategy_name) || a.code.localeCompare(b.code);
+  const holding = all.filter((t) => t.status === "holding").sort(byDate);
+  const pending = all.filter((t) => t.status === "pending").sort(byDate);
   const due = holding.filter((t) => (t.days ?? 0) >= t.hold_days - 1);
   const avg = holding.length ? holding.reduce((s, t) => s + (t.ret ?? 0), 0) / holding.length : null;
   return (
