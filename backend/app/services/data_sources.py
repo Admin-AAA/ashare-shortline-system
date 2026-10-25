@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
@@ -695,8 +696,33 @@ def _unified_quote_rows(db: Session, limit: int = 50, offset: int = 0) -> list[d
     ]
 
 
+_DAILY_BAR_ROWS_CACHE: dict[tuple, tuple[float, list[dict[str, Any]]]] = {}
+_DAILY_BAR_ROWS_TTL = 300.0
+_DAILY_BAR_ROWS_LOCK = threading.Lock()
+
+
+def clear_daily_bar_rows_cache() -> None:
+    with _DAILY_BAR_ROWS_LOCK:
+        _DAILY_BAR_ROWS_CACHE.clear()
+
+
 def _daily_bar_rows(db: Session, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    """分页的日 K 概览。对 580 万行 daily_kbars 做 GROUP BY code 约 3 秒，/api/data-sources/pool 每次请求都会走到，
+    因此按 (limit, offset, 允许的最新日期) 做 5 分钟缓存；数据池刷新/补缺时通过 cache_hooks 清空。"""
     latest_allowed_bar_date = _latest_allowed_bar_date()
+    key = (int(limit), int(offset), str(latest_allowed_bar_date))
+    now = time.monotonic()
+    with _DAILY_BAR_ROWS_LOCK:
+        hit = _DAILY_BAR_ROWS_CACHE.get(key)
+        if hit and now - hit[0] < _DAILY_BAR_ROWS_TTL:
+            return [dict(r) for r in hit[1]]
+    result = _daily_bar_rows_uncached(db, latest_allowed_bar_date, limit, offset)
+    with _DAILY_BAR_ROWS_LOCK:
+        _DAILY_BAR_ROWS_CACHE[key] = (time.monotonic(), result)
+    return [dict(r) for r in result]
+
+
+def _daily_bar_rows_uncached(db: Session, latest_allowed_bar_date: Any, limit: int, offset: int) -> list[dict[str, Any]]:
     rows = db.execute(
         select(
             DailyKbar.code,
@@ -1257,3 +1283,8 @@ def _record_source_test(
     row.latency_ms = latency_ms
     row.updated_at = now
     db.commit()
+
+
+from app.services.cache_hooks import register as _register_cache_hook  # noqa: E402
+
+_register_cache_hook("daily_bar_rows", clear_daily_bar_rows_cache)
