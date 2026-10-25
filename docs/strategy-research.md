@@ -1661,3 +1661,40 @@ lt_research12.py 预注册 6 版（真实成交 k20/max_new5，同日同市值�
   - GCp_h60：超额 4/8；R12 +3.59、W00 −2.60；每笔>0 5/8；n中位54；N3 138笔 +5.98 PF2.13 超额 +1.21。最近12个月61笔 +5.47 PF1.85。✗✗✓✓✓ → 否。
   - `_adopt=null`。解读：营业成本/营收同比下降与 §164 毛利率 / §228 profit_to_gr / §230 ebit_of_gr 同病——持60 绝对收益与 PF 在 R12/N3 可看，但多数历史阶段跑输同市值，W00/W1 超额不稳。Δgc_of_gr 事件不能稳定提供超额。已写入 /mid（持20日）与 /long（持60日两版）否决列表，不上线。
 
+
+## §233 [短线] 现役4技能入场 VETO「信号日上影线占振幅」（Upper-Shadow Entry Veto）— 预注册（2026-10-25 08:06 CST 写定，结果出来前不改）
+- 思路：信号日若**上影线占当日振幅比例 ≥ X**（盘中冲高回落、收在区间偏下的抛压信号日），对该票否决入场、不递补——赌「信号日已遇上影抛压的票次日期望更差」。这是现役4技能**入场硬否决**，不是独立选股、不是出场叠加。与刚否的 §229 BB（阴线实体占比）同属蜡烛否决族但字段独立：本轮用上影=(high−max(open,close))/(high−low)，不要求收阴。
+- 去重：已测入场过滤含 §96/§97 蜡烛收盘位置/追高、§136 runup、§140 财报窗口、§208 过热拥挤、§221 AMT、§223 DRY、§229 BB 阴线实体、gap/LHB/unlock/WR70/turnover。已测出场含 EL_C/BE/ATR/D2/VA/VC/UX/CLV/**§215 长上影出场**/horizon。独立选股含 MA60 reclaim§231/BR/VCD/CQD/harami/NR7/Donchian/ATR-squeeze/MA金叉/连跌反转等；upper_shadow_probe 是「放量长上影作多试盘」独立选股（机制相反）。**从未测过「信号日上影/振幅 ≥ 固定阈值 → 现役4技能入场否决」**。Alt B「持仓跌破近10日最低」与已上线止损/EL_C 族重叠本轮不测；Alt C 锤头§163 已否。
+- 口径同 §185/§208/§221/§229（`backend/scripts/research_upper_shadow_entry_veto.py`，改自 research_bear_body_entry_veto.py）：4 个现役短线策略单策略面板前 3/线 72，21 次选股（base+20 随机）平均；真实执行核 `_simulate_card`（含已上线 EL_C）；窗口 EXT/12m/W0/W00，N3=12m+EXT。特征只读本地 `data/cache/daily_kbar.parquet` 的 OHLC；不调 promax/tushare/网关。
+- 定义（写死）：`range = high − low`；仅当 `range > 0` 时 `us_ratio = (high − max(open, close)) / range`，否则不计否决。变体：
+  - BASE：现行（含 EL_C）
+  - US50：us_ratio ≥ 0.50 → 否决
+  - US60：us_ratio ≥ 0.60 → 否决
+  - US70：us_ratio ≥ 0.70 → 否决
+  - CTRL：每个变体同一抽样、同一（策略,日）随机删同样张数（20 种子）
+- 采纳（同 §185/§208/§221/§229 的 8 条，全部满足，最多 1 个，多个取 N3 每笔提升最大）：1) 每笔 R12/N3 > BASE；2) PF R12/N3 ≥ BASE 且 ≥1.3；3) MDD R12/N3 ≥ BASE；4) R12/N3 每笔 > CTRL，且被否单 Δ 均值 R12/N3 >0、trim10>0；5) W0/W00 MDD 不比 BASE 差 >3 点、每笔不低 0.3pp；6) 被否单 R12≥10、N3≥20；7) 最长连亏 R12/N3 ≤ BASE+1；8) 总 R12/N3>0、n R12≥30 / N3≥60。不达标不放宽、不调 0.50/0.60/0.70。若某版 aff R12<10 不可检验，按 §208 规则否决该版。
+
+
+- **结果（2026-10-25 08:20 CST，3 个版本全部否决）**：脚本 `backend/scripts/research_upper_shadow_entry_veto.py`，结果 `backend/output/research/s233/upper_shadow_entry_veto.json`、`run.log`。BASE 复现 R12 +1.469%/笔 PF1.99 MDD−25.9；N3 +1.147 PF1.80 MDD−28.3（与 EL_C 对齐）。被否单密度可检验：R12 aff US50/60/70 ≈82.0/40.5/16.0（≥10）；N3 ≈116.0/59.4/23.4（≥20）。
+  - US50：R12 每笔 +1.296 PF1.85 MDD−26.2（<BASE）；N3 +0.987 PF1.66 MDD−32.8；被否 Δ 均值 R12/N3 −2.35/−2.02（trim10 −3.24）；崩盘窗 W00 每笔 −1.020 MDD−89.8；`_adopt` 条件 c1/c2/c3/c4 未过。
+  - US60：R12 +1.436 PF1.95 MDD−31.3；N3 +1.111 PF1.76 MDD−33.4；Δ −1.84/−1.56；W00 −1.112 MDD−103.0。
+  - US70：R12 +1.417 PF1.94 MDD−29.5；N3 +1.110 PF1.76 MDD−31.2；Δ −3.03/−2.29；W00 −1.125 MDD−105.8。
+  - `_adopt=null`。解读：信号日上影线占振幅 ≥0.50/0.60/0.70 的票，事后短线平均**更赚**（被否单 R12 均值约 +1.8~+3.0%/笔）——否决它们系统性削弱每笔与 N3 PF。与刚否的 §229 BB 阴线实体同向。按预注册否决，线上入场不叠加上影线占比硬过滤。
+
+
+## §234 [中线/长线] 有形资产/负债同比改善（tangibleasset_to_debt）— 预注册（2026-10-25 08:06 CST 写定，结果出来前不改）
+- 思路：正式财报里 **tangibleasset_to_debt（有形资产/负债）相对去年同一报告期抬升**，且本期仍处合理区间——「资产负债表质量改善事件」（有形资产相对负债增厚）。利润率/费用率链（毛利率§164 / profit_to_gr§228 / ebit_of_gr§230 / gc_of_gr§232 / 费用率族）连续失效后，本轮测**未用过的 balance-sheet 质量字段**。本地覆盖 ≈96.4%。
+- 去重：对照 LONG_REJECTED/MID_REJECTED（含 §153~§232）与现役：已测去杠杆 debt_to_assets（§166）、速动/流动/现金比率、OCF/FCFF、毛利率/净利率/profit_to_gr/ebit_of_gr/gc_of_gr、费用率、周转、or/op/ebt/cfps/bps/equity/q_roe/q_npta/q_op_qoq/q_sales_yoy 等；**从未单独测过 tangibleasset_to_debt 同比改善**。不并行 eqt_to_debt（同族留后；且与 debt_to_assets 去杠杆口径相关）；不测 op_of_gr（利润率链刚否）；不测 q_dt_roe（与 q_roe§222 高度相关，留给后续）。
+- 数据：本地 fina parquet（tangibleasset_to_debt、netprofit_yoy）+ midterm 面板；realistic；liq；K=20；max_new=5；cohort_bench 同日同市值五分位。信号日=公告日当天或之后首个交易日，收盘出信号、次日开盘买。脚本 `backend/scripts/midterm/lt_research85.py`（由 lt_research84 克隆）。
+- 版本（阈值写死，无网格；覆盖率探测后冻结）：
+  - TAD_h20：本期 tangibleasset_to_debt ∈[0.3,5]、去年同报告期 ∈[0.2,8]；升幅=本期−去年 ≥0.20；按升幅（封顶 2.0）降序；持20日 → 候选 /mid。
+  - TAD_h60：同上，持60日 → 候选 /long。
+  - TADp_h60：再要求 netprofit_yoy>0；持60日 → 候选 /long。
+- 阶段：P19/P20/P21/W0/W00/W1/W2/R12 + N3（2024-01~2026-10）；R12/N3 截止 2026-10-16。每个阶段单独进程，LT_END=阶段终点。
+- 采纳标准（同 §209/§211/§214/§216/§218/§220/§222/§224/§226/§228/§230/§232 那 5 条，全部满足才采纳）：① 8 段每笔超额>0 至少6段；② R12与W00超额>0；③ 每笔均值>0 至少5/8段；④ 各段笔数中位数≥15；⑤ N3 PF≥1.3。通过的只提议观察身份进 /mid 或 /long；否决写入对应否决列表。不事后放宽、不调 0.20/0.3/5/0.2/8/2.0。
+
+- **结果（2026-10-25 08:22 CST，3 个版本全部否决）**：脚本 `backend/scripts/midterm/lt_research85.py`（评估 `_eval.py`），结果 `backend/output/research/s234/res.json`、`eval.txt`、`run.log`。
+  - TAD_h20：超额 4/8；R12 超额 −1.82、W00 +0.02；每笔>0 5/8；n中位96；N3 259笔 +2.26%/笔 PF1.57 超额 −0.58。最近12个月94笔 +0.20%/笔 PF1.05。✗✗✓✓✓ → 否。
+  - TAD_h60：超额 3/8；R12 超额 +3.75、W00 −4.14；每笔>0 7/8；n中位49；N3 128笔 +2.32 PF1.35 超额 −1.62。最近12个月61笔 +4.95%/笔 PF1.61。✗✗✓✓✓ → 否（W00 深负、超额段不足6）。
+  - TADp_h60：超额 3/8；R12 −2.30、W00 −2.99；每笔>0 6/8；n中位47；N3 126笔 +2.94 PF1.43 超额 −2.12。最近12个月61笔 +0.40 PF1.05。✗✗✓✓✓ → 否。
+  - `_adopt=null`。解读：有形资产/负债同比改善与债务/利润率链同病——持60 绝对收益偶见可看，但多数历史阶段跑输同市值，W00/R12 超额不稳。Δtangibleasset_to_debt 事件不能稳定提供超额。已写入 /mid（持20日）与 /long（持60日两版）否决列表，不上线。
