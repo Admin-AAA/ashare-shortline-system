@@ -1,24 +1,30 @@
-"""策略综合分（rank_score）：只在同一周期（短 / 中 / 长）内比较，不跨周期。
+"""策略综合分（rank_score，0~100）：只在同一周期（短 / 中 / 长）内比较，不跨周期。
 
 纯函数、不连库、不联网，只读策略已有的回测指标（中长线 midterm_backtest_metrics.json 的
 recent_12m / phases；短线 standalone_metrics.json 的 last_12m / recent，即“口径 A”）。
 不使用历史重建回放（口径 B）的指标——其 benchmark_excess_return、max_drawdown 口径异常。
 
-综合分 = 100 × Σ 权重 × 周期内百分位（0~1，并列取平均名次；仅在“可排序”的策略里算百分位）。
+【按实际数值缩放（v2，取代旧的“周期内百分位”）】
+每个指标先在“可排序”的策略里取中位数 med 与稳健尺度 scale = max(1.4826×MAD, floor)，
+z = clip((x − med)/scale, −3, 3)，指标分 = 50 + z × 50/3（0~100，中位数策略 50 分）。
+floor 是该指标的“最小有意义差距”，保证几个策略数值很接近时不会被放大成大分差，分差反映真实差距；
+策略少（甚至只有 1~2 个）时也不会因为排名而拉开。综合分 = Σ 权重 × 指标分。
 
-中线 / 长线（四项）：
-  35%  c1 = R12 平均每笔收益 × n/(n+K)            （K=30，样本少向 0 收缩）
-  25%  c2 = R12 组合收益 tot / max(|mdd|, 1)       （折算到 20 仓位口径后；比值本身对线性折算不变）
-  25%  c3 = N3（2024-01 至今）平均每笔收益；没有 N3 的用 R12 平均每笔收益
-  15%  c4 = 历史阶段里平均每笔收益>0 的占比        （不含与其他阶段重叠的 N3 汇总）
+中线 / 长线（五项）：
+  25%  均值  = R12 平均每笔收益 × n/(n+K)                     （K=30，样本少向 0 收缩；floor 1.0 个百分点）
+  25%  收益/回撤 = R12 组合收益 tot_20 / max(|mdd_20|, 1)       （折算到 20 仓位口径后；floor 0.5）
+  20%  盈亏比 = 收缩后 PF = 1 + (PF − 1) × n/(n+K)              （floor 0.25）
+  15%  N3 均值 = 2024-01 至今平均每笔收益；无 N3 用 R12 均值      （floor 1.0 个百分点）
+  15%  阶段稳定 = 历史阶段里平均每笔收益>0 的占比（不含 N3 汇总）    （floor 0.15）
 
 仓位口径折算：tot 与 mdd 的“权益”按 k_slots 个等额仓位计，多数策略 20 仓位（每笔 1/20 名义）。
 long-lowturn-lowvol / long-dividend-lowvol 按每笔 1/30 名义计，实际权益偏小：
     tot_20 = tot × (30/20)，mdd_20 = mdd × (30/20)      （一阶线性近似，忽略复利；已用 n×avg/30 对账）
-折算后的 tot_20 / mdd_20 用于展示与“收益 / 回撤”排序；c2 是 tot/mdd 比值，折算前后相同。
+折算后的 tot_20 / mdd_20 用于展示与“收益 / 回撤”排序；收益/回撤是比值，折算前后相同。
 
-短线（口径 A，两个窗口各半；窗口缺失时另一窗口权重为 1）：
-  每个窗口内：40% 收缩后均值 + 30% 收缩后均值/max(|mdd|,1) + 15% 收缩后 PF + 15% 收缩后胜率
+短线（口径 A，两个窗口各半；窗口缺失时另一窗口权重为 1），每个窗口内：
+  30% 收缩后均值（floor 0.5）+ 30% 收缩后均值/max(|mdd|,1)（floor 0.02）+ 25% 收缩后 PF（floor 0.3）
+  + 15% 收缩后胜率（floor 5 个百分点）
   收缩（w = n/(n+K)，K=30）：avg×w；PF → 1+(PF−1)×w；胜率 → 50+(胜率−50)×w
 
 沉底（不进综合分、rank_score=None、排在可排序策略之后、彼此保持传入的原始顺序）：
@@ -41,8 +47,13 @@ BASE_SLOTS = 20
 # 权益按每笔 1/30 名义计的策略（见各自 metrics.note）；其余按 20 仓位
 NOTIONAL_SLOTS: dict[str, int] = {"long-lowturn-lowvol": 30, "long-dividend-lowvol": 30}
 
-HORIZON_WEIGHTS = {"c1": 0.35, "c2": 0.25, "c3": 0.25, "c4": 0.15}
-SHORT_WINDOW_WEIGHTS = {"avg": 0.40, "avg_dd": 0.30, "pf": 0.15, "win": 0.15}
+# 指标权重与“最小有意义差距”floor（见模块文档）
+HORIZON_WEIGHTS = {"avg": 0.25, "calmar": 0.25, "pf": 0.20, "n3": 0.15, "pos": 0.15}
+HORIZON_FLOORS = {"avg": 1.0, "calmar": 0.5, "pf": 0.25, "n3": 1.0, "pos": 0.15}
+SHORT_WINDOW_WEIGHTS = {"avg": 0.30, "avg_dd": 0.30, "pf": 0.25, "win": 0.15}
+SHORT_FLOORS = {"avg": 0.5, "avg_dd": 0.02, "pf": 0.3, "win": 5.0}
+Z_CLIP = 3.0
+MAD_TO_SIGMA = 1.4826
 
 FLAG_LABELS = {
     "insufficient_sample": "样本不足（n<30）",
@@ -67,18 +78,24 @@ def shrink_weight(n: float, k: float = SHRINK_K) -> float:
     return n / (n + k) if n > 0 else 0.0
 
 
-def percentile_ranks(values: list[float]) -> list[float]:
-    """0~1 百分位；并列取平均名次；仅 1 个值时给 0.5。"""
-    m = len(values)
-    if m == 0:
+def _median(xs: list[float]) -> float:
+    ys = sorted(xs)
+    m = len(ys)
+    return ys[m // 2] if m % 2 else (ys[m // 2 - 1] + ys[m // 2]) / 2.0
+
+
+def robust_scores(values: list[float], floor: float) -> list[float]:
+    """按实际数值缩放到 0~100：50 + 50/3 × clip((x−中位数)/max(1.4826×MAD, floor), ±3)。
+    分差反映真实差距：scale 不会小于 floor，所以数值接近的策略分数也接近；空列表返回 []，单个值给 50。"""
+    if not values:
         return []
-    if m == 1:
-        return [0.5]
+    med = _median(values)
+    mad = _median([abs(v - med) for v in values])
+    scale = max(MAD_TO_SIGMA * mad, floor)
     out = []
     for v in values:
-        less = sum(1 for x in values if x < v)
-        eq = sum(1 for x in values if x == v)
-        out.append((less + (eq - 1) / 2.0) / (m - 1))
+        z = max(-Z_CLIP, min(Z_CLIP, (v - med) / scale))
+        out.append(50.0 + z * 50.0 / Z_CLIP)
     return out
 
 
@@ -147,13 +164,16 @@ def rank_horizon_strategies(items: Iterable[dict[str, Any]], today: _dt.date | N
         else:
             if n < MIN_SAMPLE:
                 flags.append("insufficient_sample")
-            c["c1"] = avg * shrink_weight(n)
-            c["c2"] = (tot * scale) / max(abs(mdd * scale), MDD_FLOOR)
+            wt = shrink_weight(n)
+            pf = _num(r12.get("pf"))
+            c["avg_shrunk"] = avg * wt
+            c["calmar"] = (tot * scale) / max(abs(mdd * scale), MDD_FLOOR)
+            c["pf_shrunk"] = 1.0 + ((pf if pf is not None else 1.0) - 1.0) * wt
             n3_avg = _num((n3 or {}).get("avg"))
-            c["c3"] = n3_avg if n3_avg is not None else avg
-            c["c3_source"] = "N3" if n3_avg is not None else "R12"
+            c["n3_avg"] = n3_avg if n3_avg is not None else avg
+            c["n3_source"] = "N3" if n3_avg is not None else "R12"
             pos_cnt = sum(1 for v in non_n3.values() if (_num((v or {}).get("avg")) or 0) > 0)
-            c["c4"] = pos_cnt / len(non_n3)
+            c["pos_ratio"] = pos_cnt / len(non_n3)
         if _is_stale(window_end(m.get("window")), today):
             flags.append("stale_data")
         if scale != 1:
@@ -162,10 +182,11 @@ def rank_horizon_strategies(items: Iterable[dict[str, Any]], today: _dt.date | N
         flags_of.append(flags)
     eligible = [i for i, f in enumerate(flags_of) if not f]
     scores: dict[int, float] = {}
-    pcts = {key: percentile_ranks([comps[i][key] for i in eligible]) for key in HORIZON_WEIGHTS}
+    src = {"avg": "avg_shrunk", "calmar": "calmar", "pf": "pf_shrunk", "n3": "n3_avg", "pos": "pos_ratio"}
+    sc = {key: robust_scores([comps[i][src[key]] for i in eligible], HORIZON_FLOORS[key]) for key in HORIZON_WEIGHTS}
     for j, i in enumerate(eligible):
-        comps[i]["pct"] = {key: round(pcts[key][j], 3) for key in HORIZON_WEIGHTS}
-        scores[i] = 100.0 * sum(HORIZON_WEIGHTS[key] * pcts[key][j] for key in HORIZON_WEIGHTS)
+        comps[i]["metric_scores"] = {key: round(sc[key][j], 1) for key in HORIZON_WEIGHTS}
+        scores[i] = sum(HORIZON_WEIGHTS[key] * sc[key][j] for key in HORIZON_WEIGHTS)
     return _finish(items, flags_of, scores, comps)
 
 
@@ -219,7 +240,7 @@ def rank_short_strategies(rows: Iterable[dict[str, Any]], window_end_date: Any =
         idxs = [i for i in idxs if comps[i][which]["avg"] is not None]
         res: dict[int, float] = {i: 0.0 for i in idxs}
         for key, wgt in SHORT_WINDOW_WEIGHTS.items():
-            pr = percentile_ranks([comps[i][which][key] for i in idxs])
+            pr = robust_scores([comps[i][which][key] for i in idxs], SHORT_FLOORS[key])
             for j, i in enumerate(idxs):
                 res[i] += wgt * pr[j]
         return res
@@ -229,9 +250,9 @@ def rank_short_strategies(rows: Iterable[dict[str, Any]], window_end_date: Any =
     scores: dict[int, float] = {}
     for i in eligible:
         if i in s_b:
-            scores[i] = 100.0 * (0.5 * s_a[i] + 0.5 * s_b[i])
+            scores[i] = 0.5 * s_a[i] + 0.5 * s_b[i]
         else:
-            scores[i] = 100.0 * s_a[i]
-        comps[i]["window_scores"] = {"last_12m": round(100 * s_a[i], 1),
-                                     "recent": round(100 * s_b[i], 1) if i in s_b else None}
+            scores[i] = s_a[i]
+        comps[i]["window_scores"] = {"last_12m": round(s_a[i], 1),
+                                     "recent": round(s_b[i], 1) if i in s_b else None}
     return _finish(rows, flags_of, scores, comps)

@@ -12,7 +12,7 @@ export interface SortState { key: SortKey; dir: SortDir }
 export const DEFAULT_SORT: SortState = { key: "composite", dir: "desc" };
 
 export const SORT_KEYS: { key: SortKey; label: string; hint: string }[] = [
-  { key: "composite", label: "综合", hint: "综合分（风险调整后收益 + 样本收缩 + 长期稳健 + 阶段稳定性）" },
+  { key: "composite", label: "综合", hint: "综合分（均值 + 收益/回撤 + 盈亏比 + N3 均值 + 阶段稳定性，按指标实际数值缩放、样本少向中性收缩）" },
   { key: "return", label: "收益", hint: "中长线：近12月组合收益（折算到20仓位口径）；短线：近12月平均每笔收益" },
   { key: "winrate", label: "胜率", hint: "近12月胜率" },
   { key: "drawdown", label: "回撤", hint: "近12月最大回撤（降序 = 回撤小的在前）" },

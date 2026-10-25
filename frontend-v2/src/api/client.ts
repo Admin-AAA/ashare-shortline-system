@@ -223,8 +223,9 @@ export type HorizonStrategy = {
   /** 综合分（后端 strategy_rank.py，仅周期内比较）；沉底策略 rank_score/rank 为空，rank_flags 说明原因 */
   rank_score?: number | null; rank?: number | null; rank_flags?: string[]; rank_flag_labels?: string[];
   rank_components?: { n?: number | null; avg?: number | null; win?: number | null; pf?: number | null; mdd?: number | null; tot?: number | null;
-    notional_scale?: number; tot_20?: number | null; mdd_20?: number | null; c1?: number; c2?: number; c3?: number; c3_source?: "N3" | "R12"; c4?: number;
-    pct?: Record<"c1" | "c2" | "c3" | "c4", number>; note?: string };
+    notional_scale?: number; tot_20?: number | null; mdd_20?: number | null; avg_shrunk?: number; calmar?: number; pf_shrunk?: number;
+    n3_avg?: number; n3_source?: "N3" | "R12"; pos_ratio?: number;
+    metric_scores?: Record<"avg" | "calmar" | "pf" | "n3" | "pos", number>; note?: string };
 };
 export type HorizonStrategiesResponse = { horizon: string; strategies: HorizonStrategy[]; rejected?: { name: string; reason: string }[] };
 export type HorizonPick = { code: string; name: string; total_mv: number; status: string; entry_date?: string; exit_date?: string; mark_date?: string; ret?: number; days?: number;

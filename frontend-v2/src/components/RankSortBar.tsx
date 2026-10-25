@@ -1,7 +1,7 @@
 import "../styles/rank.css";
 import { SORT_KEYS, formatRankScore, type RankFields, type SortState } from "../utils/strategyRank";
 
-export const RANK_DISCLAIMER = "综合分基于回测，偏乐观，不代表未来表现；只在同一周期内比较，中 / 长 / 短线之间不可比。";
+export const RANK_DISCLAIMER = "综合分基于回测，偏乐观，不代表未来表现；按各指标实际数值缩放（不是名次），只在同一周期内比较，中 / 长 / 短线之间不可比。";
 
 /** 排序栏：综合 / 收益 / 胜率 / 回撤 / 近期 + 升降序；默认综合降序。 */
 export function RankSortBar({ sort, onChange }: { sort: SortState; onChange: (s: SortState) => void }) {
@@ -30,7 +30,7 @@ export function RankBadge({ r }: { r: RankFields | undefined | null }) {
   const labels = r.rank_flag_labels ?? r.rank_flags ?? [];
   return (
     <span className="rk-badge" data-testid="rank-badge">
-      {r.rank_score != null && <span className="rk-score" title="综合分（周期内百分位加权，0~100）">综合分 {formatRankScore(r.rank_score)}{r.rank ? ` · #${r.rank}` : ""}</span>}
+      {r.rank_score != null && <span className="rk-score" title="综合分（各指标按实际数值缩放后加权，0~100，周期内中位数≈50）">综合分 {formatRankScore(r.rank_score)}{r.rank ? ` · #${r.rank}` : ""}</span>}
       {labels.map((l) => <span key={l} className="rk-flag">{l}（沉底）</span>)}
     </span>
   );
