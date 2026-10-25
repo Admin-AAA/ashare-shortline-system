@@ -20,3 +20,9 @@ launchctl load -w ~/Library/LaunchAgents/com.wangao.ashare-prefect-worker.plist
 
 注意：plist 内的 `.venv` 路径、`PREFECT_API_URL`（4200）与当前后端端口（8765）写死，
 换机器/换路径需同步修改。
+
+## 日志轮转（2026-10-25）
+
+launchd 直接写文件的日志（`~/Library/Logs/ashare-*.log` 等）无法 rename 轮转，改用 copy-truncate：
+`rotate_ashare_logs.sh`（>=20MB 压缩存档后清空，留 3 份）+ `com.wangao.ashare-log-rotate.plist`（每周日 03:30）。
+安装：`cp scripts/launchd/com.wangao.ashare-log-rotate.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.wangao.ashare-log-rotate.plist`
