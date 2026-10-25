@@ -159,3 +159,45 @@ def test_new_strategies_registered_and_pick_written(monkeypatch, tmp_path):
     assert [p["code"] for p in got["picks"]] == ["000001", "000003", "000004", "000005", "000006", "000007", "000008"]
     ann = ms.annotate_pick("long-current-debt-down", got["picks"][0], 1)
     assert ann["rule_score"] == 9.0 and "同比下降 15.0 个百分点" in ann["selection_reason"]
+
+
+def _n(ts, ann, end, nd=None, idt=None, pdd=None):
+    return {"ts_code": ts, "ann_date": ann, "end_date": end, "currentdebt_to_debt": None, "undist_profit_ps": None,
+            "netprofit_yoy": 5.0, "netdebt": nd, "interestdebt": idt, "profit_dedt": pdd}
+
+
+def test_ncs_rules_and_order(monkeypatch):
+    """NCS_h60（§261）：去年净负债>0 且有息负债>0 → 本期净负债≤0，扣非>0；分=(去年nd−本期nd)/去年有息负债，封顶3。"""
+    cur = pd.DataFrame([
+        _n("000001.SZ", "20261023", "20260930", nd=-50.0, idt=10.0, pdd=1.0),    # (100+50)/100=1.5 -> 入选
+        _n("000002.SZ", "20261023", "20260930", nd=10.0, idt=10.0, pdd=1.0),     # 本期仍净负债 -> 不要
+        _n("000003.SZ", "20261023", "20260930", nd=-50.0, idt=10.0, pdd=-1.0),   # 扣非<=0 -> 不要
+        _n("000004.SZ", "20261023", "20260930", nd=-500.0, idt=0.0, pdd=1.0),    # (10+500)/10=51 -> 封顶 3
+        _n("000005.SZ", "20261023", "20260930", nd=-5.0, idt=1.0, pdd=1.0),      # 去年净负债<=0 -> 不要
+        _n("000006.SZ", "20261023", "20260930", nd=0.0, idt=5.0, pdd=1.0),       # nd=0 算净现金；去年有息负债 0 -> 不要
+        _n("000007.SZ", "20261023", "20260930", nd=None, idt=5.0, pdd=1.0),      # 本期 netdebt 空 -> 不要
+    ])
+    prev = pd.DataFrame([
+        _n("000001.SZ", "20251025", "20250930", nd=100.0, idt=100.0, pdd=1.0),
+        _n("000002.SZ", "20251025", "20250930", nd=100.0, idt=100.0, pdd=1.0),
+        _n("000003.SZ", "20251025", "20250930", nd=100.0, idt=100.0, pdd=1.0),
+        _n("000004.SZ", "20251025", "20250930", nd=10.0, idt=10.0, pdd=1.0),
+        _n("000005.SZ", "20251025", "20250930", nd=-1.0, idt=10.0, pdd=1.0),
+        _n("000006.SZ", "20251025", "20250930", nd=10.0, idt=0.0, pdd=1.0),
+        _n("000007.SZ", "20251025", "20250930", nd=10.0, idt=10.0, pdd=1.0),
+    ])
+    empty = pd.DataFrame(columns=cur.columns)
+    _setup(monkeypatch, {"20260930": cur, "20250930": prev, "20260630": empty, "20250630": empty,
+                         "20260331": empty, "20250331": empty, "20251231": empty, "20241231": empty})
+    res = fe.ncs_candidates(None, "2026-10-23")
+    assert [p["code"] for p in res] == ["000004", "000001"]
+    assert res[0]["score"] == 3.0 and res[1]["score"] == 1.5
+    ms_p = {**res[1], "name": "x"}
+    ann = ms.annotate_pick("long-net-cash-switch", ms_p, 1)
+    assert ann["rule_score"] == 1.5 and "转为净现金" in ann["selection_reason"]
+
+
+def test_ncs_registered_no_caps():
+    meta = ms.STRATEGIES["long-net-cash-switch"]
+    assert meta["horizon"] == "long" and meta["hold_days"] == 60 and meta["schedule"] == "daily"
+    assert meta["kind"] == "ncs_switch" and "k_slots" not in meta and "max_new" not in meta

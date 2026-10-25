@@ -146,6 +146,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 60,
         "schedule": "daily",
     },
+    # §261 净负债转为净现金（scripts/midterm/lt_research98.py NCS_h60，预注册、未调参；2026-10-25 起直接上线）
+    "long-net-cash-switch": {
+        "name": "净负债转为净现金（持60日）",
+        "horizon": "long",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：去年同期有息负债多于账上现金（净负债>0、有息负债>0），本期变成现金多于有息负债（净负债≤0，即净现金），且本期扣非净利润为正；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按「净负债减少额÷去年有息负债」从大到小排序（封顶3倍），次日开盘买，持有60个交易日（已持有不重复买）。",
+        "kind": "ncs_switch",
+        "hold_days": 60,
+        "schedule": "daily",
+    },
 }
 
 
@@ -854,9 +863,10 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
             result[sid] = len(picks)
             continue
-        if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy"):
+        if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy", "ncs_switch"):
             from app.services import midterm_fina_events as fe
-            cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates}[meta["kind"]]
+            cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates,
+                       "ncs_switch": fe.ncs_candidates}[meta["kind"]]
             # 实盘推荐不设仓位上限（不限持仓只数/每日新进只数）：按排序全部出票，已持有的不重复买；回测指标按 20 仓位口径
             held = _held_codes(db, sid, as_of)
             cands = cand_fn(db, as_of)
@@ -1120,6 +1130,11 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["score"]) * 100, 1), "每股未分配利润同比增速(%)，封顶200", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：每股未分配利润 {_f(p.get('prev'), 2)} → "
                       f"{_f(p.get('cur'), 2)} 元，同比 +{_f(float(p.get('growth') or 0) * 100, 1)}%")
+        elif kind == "ncs_switch":
+            score, label, better = round(float(p["score"]), 2), "净负债减少额÷去年有息负债(倍，封顶3)", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：净负债 {_f(float(p.get('netdebt_prev') or 0) / 1e8, 2)} 亿 → "
+                      f"{_f(float(p.get('netdebt') or 0) / 1e8, 2)} 亿（转为净现金），去年同期有息负债 {_f(float(p.get('interestdebt_prev') or 0) / 1e8, 2)} 亿；"
+                      f"扣非净利 {_f(float(p.get('profit_dedt') or 0) / 1e8, 2)} 亿")
         elif kind == "dividend_lowvol":
             score, label, better = float(p["score"]), "股息率排名+60日波动排名(越低越好)", "lower"
             reason = f"市值第 {p.get('mv_rank', '')} 名；股息率(TTM) {_f(p.get('dv_ttm'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"
