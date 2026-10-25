@@ -82,7 +82,7 @@ def main():
             r = ref[ph]
             assert abs(tm["n"] - r["n"]) < 0.5 and abs(tm["avg"] - r["avg"]) < 0.02, (sid, ph, tm["n"], tm["avg"], r["n"], r["avg"])
             res[ph] = {"n": int(r["n"]), "avg": r["avg"], "pf": r["pf"], "mdd": r["mdd"], "win": r.get("win"),
-                       "streak": tm["streak"], "median": round(tm["median"], 2), "trim5": round(tm["trim5"], 2),
+                       "streak": tm["streak"], "median": round(tm["median"], 2), "trim5": round(tm["trim5"], 2), "trim_both5": round(tm["trim_both5"], 2),
                        "top10_share": None if tm["top10_share"] is None else round(tm["top10_share"], 3),
                        "top10_red": tm["top10_red"], "robust": tm["robust"], "label": tm["label"],
                        "excess": r.get("excess"), "capture": nm}

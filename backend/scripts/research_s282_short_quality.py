@@ -34,19 +34,19 @@ def one(rows, days):
     seq = [r["net"] for r in sorted(rows, key=lambda r: (r["ex"], r["dt"], r["code"]))]
     t = tail_metrics(seq)
     return {"n": m["n"], "avg": m["avg"], "pf": m["pf"], "mdd": m["mdd"], "streak_m": m["streak"], "median": t["median"],
-            "trim5": t["trim5"], "top10_share": t["top10_share"], "robust": t["robust"], "streak": t["streak"]}
+            "trim5": t["trim5"], "trim_both5": t["trim_both5"], "top10_share": t["top10_share"], "robust": t["robust"], "streak": t["streak"]}
 
 
 def avg_draws(per_draw):
     per_draw = [x for x in per_draw if x]
     if not per_draw: return None
     out = {}
-    for k in ("n", "avg", "pf", "mdd", "streak_m", "median", "trim5", "streak"):
+    for k in ("n", "avg", "pf", "mdd", "streak_m", "median", "trim5", "trim_both5", "streak"):
         out[k] = round(statistics.fmean(x[k] for x in per_draw if x[k] is not None), 3)
     sh = [x["top10_share"] for x in per_draw if x["top10_share"] is not None]
     out["top10_share"] = round(statistics.fmean(sh), 3) if sh else None
     out["top10_red"] = bool(out["top10_share"] is not None and out["top10_share"] > 0.5)
-    out["robust"] = bool(out["trim5"] > 0 and out["median"] > 0)
+    out["robust"] = bool(out["trim_both5"] > 0 and out["median"] > 0)  # §285
     out["robust_draw_share"] = round(sum(1 for x in per_draw if x["robust"]) / len(per_draw), 2)
     return out
 

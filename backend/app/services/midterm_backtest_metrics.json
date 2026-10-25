@@ -99,6 +99,7 @@
     "streak": 6,
     "median": 3.33,
     "trim5": 3.02,
+    "trim_both5": 4.17,
     "top10_share": 0.691,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
@@ -114,6 +115,7 @@
     "streak": 14,
     "median": 4.25,
     "trim5": 2.43,
+    "trim_both5": 3.75,
     "top10_share": 0.375,
     "top10_red": false,
     "label": "稳健型：多数交易都赚一点",
@@ -138,7 +140,8 @@
     "W1": 4.03,
     "W2": 3.52,
     "R12": 4.64
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  },
  "mid-repurchase-plan": {
@@ -250,10 +253,11 @@
     "streak": 12,
     "median": 0.05,
     "trim5": -1.13,
+    "trim_both5": 0.05,
     "top10_share": 1.794,
     "top10_red": true,
-    "label": "彩票型：靠少数暴涨，多数时候原地踏步",
-    "robust": false,
+    "label": "稳健型：多数交易都赚一点",
+    "robust": true,
     "excess": 1.17
    },
    "N3": {
@@ -265,13 +269,14 @@
     "streak": 12,
     "median": 1.06,
     "trim5": 0.25,
+    "trim_both5": 1.51,
     "top10_share": 0.501,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
     "robust": true,
     "excess": 0.74
    },
-   "label": "彩票型：靠少数暴涨，多数时候原地踏步",
+   "label": "稳健型：多数交易都赚一点",
    "pass": true,
    "fail": [],
    "pos_phases": 7,
@@ -289,7 +294,8 @@
     "W1": 2.63,
     "W2": 4.44,
     "R12": 1.35
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  },
  "mid-earnings-accel": {
@@ -401,6 +407,7 @@
     "streak": 7,
     "median": 2.14,
     "trim5": 2.84,
+    "trim_both5": 4.16,
     "top10_share": 0.862,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
@@ -416,6 +423,7 @@
     "streak": 23,
     "median": 0.05,
     "trim5": 0.73,
+    "trim_both5": 1.87,
     "top10_share": 0.675,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
@@ -440,7 +448,8 @@
     "W1": 0.13,
     "W2": 0.28,
     "R12": 5.78
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  },
  "mid-forecast-beat": {
@@ -572,6 +581,7 @@
     "streak": 11,
     "median": -0.12,
     "trim5": 0.28,
+    "trim_both5": 1.7,
     "top10_share": 1.114,
     "top10_red": true,
     "label": "彩票型：靠少数暴涨，多数时候原地踏步",
@@ -587,6 +597,7 @@
     "streak": 12,
     "median": -0.37,
     "trim5": -0.59,
+    "trim_both5": 0.94,
     "top10_share": 0.919,
     "top10_red": true,
     "label": "彩票型：靠少数暴涨，多数时候原地踏步",
@@ -611,7 +622,8 @@
     "W1": -0.35,
     "W2": 6.59,
     "R12": 3.7
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  },
  "mid-incentive-option": {
@@ -743,6 +755,7 @@
     "streak": 10,
     "median": 0.38,
     "trim5": 1.55,
+    "trim_both5": 3.09,
     "top10_share": 0.954,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
@@ -758,6 +771,7 @@
     "streak": 10,
     "median": 0.47,
     "trim5": 1.57,
+    "trim_both5": 2.93,
     "top10_share": 0.581,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
@@ -782,7 +796,8 @@
     "W1": 2.64,
     "W2": 8.64,
     "R12": 4.53
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  },
  "long-lowturn-lowvol": {
@@ -914,6 +929,7 @@
     "streak": 9,
     "median": -0.41,
     "trim5": -1.31,
+    "trim_both5": -0.49,
     "top10_share": 2.377,
     "top10_red": true,
     "label": "彩票型：靠少数暴涨，多数时候原地踏步",
@@ -929,6 +945,7 @@
     "streak": 9,
     "median": 0.86,
     "trim5": 1.55,
+    "trim_both5": 2.4,
     "top10_share": 0.67,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
@@ -953,7 +970,8 @@
     "W1": 5.54,
     "W2": 2.12,
     "R12": 1.57
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  },
  "long-dividend-lowvol": {
@@ -1085,6 +1103,7 @@
     "streak": 6,
     "median": 0.36,
     "trim5": 0.64,
+    "trim_both5": 1.25,
     "top10_share": 1.383,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
@@ -1100,6 +1119,7 @@
     "streak": 10,
     "median": 3.1,
     "trim5": 2.93,
+    "trim_both5": 3.74,
     "top10_share": 0.43,
     "top10_red": false,
     "label": "稳健型：多数交易都赚一点",
@@ -1124,7 +1144,8 @@
     "W1": 7.4,
     "W2": 3.34,
     "R12": 1.45
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  },
  "mid-block-trade-premium": {
@@ -1256,6 +1277,7 @@
     "streak": 11,
     "median": -0.95,
     "trim5": -0.58,
+    "trim_both5": 0.82,
     "top10_share": 2.384,
     "top10_red": true,
     "label": "彩票型：靠少数暴涨，多数时候原地踏步",
@@ -1271,10 +1293,11 @@
     "streak": 13,
     "median": 0.4,
     "trim5": -0.21,
+    "trim_both5": 1.42,
     "top10_share": 0.718,
     "top10_red": true,
-    "label": "彩票型：靠少数暴涨，多数时候原地踏步",
-    "robust": false,
+    "label": "稳健型：多数交易都赚一点",
+    "robust": true,
     "excess": 0.75
    },
    "label": "彩票型：靠少数暴涨，多数时候原地踏步",
@@ -1295,7 +1318,8 @@
     "W1": 1.89,
     "W2": 3.95,
     "R12": 1.27
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  },
  "long-growth-streak": {
@@ -1437,6 +1461,7 @@
     "streak": 6,
     "median": 5.55,
     "trim5": 3.02,
+    "trim_both5": 4.67,
     "top10_share": 1.257,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
@@ -1452,6 +1477,7 @@
     "streak": 8,
     "median": 2.05,
     "trim5": 2.01,
+    "trim_both5": 3.85,
     "top10_share": 0.832,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
@@ -1478,7 +1504,8 @@
     "W1": 8.64,
     "W2": 4.83,
     "R12": 6.56
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  },
  "mid-lowprice-smallcap-weekly": {
@@ -1620,6 +1647,7 @@
     "streak": 5,
     "median": 2.45,
     "trim5": 1.14,
+    "trim_both5": 2.52,
     "top10_share": 1.152,
     "top10_red": true,
     "label": "稳健型：多数交易都赚一点",
@@ -1635,6 +1663,7 @@
     "streak": 17,
     "median": 4.24,
     "trim5": 3.05,
+    "trim_both5": 4.79,
     "top10_share": 0.454,
     "top10_red": false,
     "label": "稳健型：多数交易都赚一点",
@@ -1659,7 +1688,8 @@
     "W1": 5.28,
     "W2": 8.32,
     "R12": 2.5
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  },
  "long-net-cash-switch": {
@@ -1801,6 +1831,7 @@
     "streak": 9,
     "median": -4.32,
     "trim5": -1.89,
+    "trim_both5": -0.55,
     "top10_share": 2.601,
     "top10_red": true,
     "label": "彩票型：靠少数暴涨，多数时候原地踏步",
@@ -1816,6 +1847,7 @@
     "streak": 9,
     "median": -0.32,
     "trim5": 2.21,
+    "trim_both5": 3.85,
     "top10_share": 0.942,
     "top10_red": true,
     "label": "彩票型：靠少数暴涨，多数时候原地踏步",
@@ -1840,7 +1872,8 @@
     "W1": 12.72,
     "W2": 7.47,
     "R12": 3.64
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  }
 }

@@ -16,7 +16,8 @@
     "top10_share": 0.48,
     "top10_red": false,
     "robust": true,
-    "label": "稳健型：多数交易都赚一点"
+    "label": "稳健型：多数交易都赚一点",
+    "trim_both5": 0.628
    },
    "N3": {
     "n": 754,
@@ -28,10 +29,11 @@
     "trim5": -0.001,
     "top10_share": 0.412,
     "top10_red": false,
-    "robust": false,
-    "label": "彩票型：靠少数暴涨，多数时候原地踏步"
+    "robust": true,
+    "label": "稳健型：多数交易都赚一点",
+    "trim_both5": 0.391
    },
-   "label": "彩票型：靠少数暴涨，多数时候原地踏步",
+   "label": "稳健型：多数交易都赚一点",
    "pass": true,
    "fail": [],
    "pos_phases": 3,
@@ -45,7 +47,8 @@
     "12m": 1.469,
     "W0": 0.166,
     "W00": -1.153
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   },
   "chao-gu-yang-jia-skill": {
    "standard": "§282",
@@ -61,7 +64,8 @@
     "top10_share": 1.055,
     "top10_red": true,
     "robust": true,
-    "label": "稳健型：多数交易都赚一点"
+    "label": "稳健型：多数交易都赚一点",
+    "trim_both5": 1.041
    },
    "N3": {
     "n": 161,
@@ -74,7 +78,8 @@
     "top10_share": 0.998,
     "top10_red": true,
     "robust": true,
-    "label": "稳健型：多数交易都赚一点"
+    "label": "稳健型：多数交易都赚一点",
+    "trim_both5": 0.605
    },
    "label": "稳健型：多数交易都赚一点",
    "pass": false,
@@ -92,7 +97,8 @@
     "12m": 2.018,
     "W0": -0.09,
     "W00": -0.752
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   },
   "chen-xiaoqun-skill": {
    "standard": "§282",
@@ -107,8 +113,9 @@
     "trim5": -0.252,
     "top10_share": 1.189,
     "top10_red": true,
-    "robust": false,
-    "label": "彩票型：靠少数暴涨，多数时候原地踏步"
+    "robust": true,
+    "label": "稳健型：多数交易都赚一点",
+    "trim_both5": 0.142
    },
    "N3": {
     "n": 347,
@@ -121,7 +128,8 @@
     "top10_share": 1.155,
     "top10_red": true,
     "robust": false,
-    "label": "彩票型：靠少数暴涨，多数时候原地踏步"
+    "label": "彩票型：靠少数暴涨，多数时候原地踏步",
+    "trim_both5": -0.027
    },
    "label": "彩票型：靠少数暴涨，多数时候原地踏步",
    "pass": false,
@@ -139,7 +147,8 @@
     "12m": 0.884,
     "W0": 0.216,
     "W00": -1.572
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   },
   "oversold-capital-reversal": {
    "standard": "§282",
@@ -155,7 +164,8 @@
     "top10_share": 1.121,
     "top10_red": true,
     "robust": true,
-    "label": "稳健型：多数交易都赚一点"
+    "label": "稳健型：多数交易都赚一点",
+    "trim_both5": 2.073
    },
    "N3": {
     "n": 79,
@@ -168,7 +178,8 @@
     "top10_share": 0.994,
     "top10_red": true,
     "robust": true,
-    "label": "稳健型：多数交易都赚一点"
+    "label": "稳健型：多数交易都赚一点",
+    "trim_both5": 1.725
    },
    "label": "稳健型：多数交易都赚一点",
    "pass": true,
@@ -184,7 +195,8 @@
     "12m": 3.215,
     "W0": 0.084,
     "W00": 0.629
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   },
   "sector-relative-strength-leader": {
    "standard": "§282",
@@ -200,7 +212,8 @@
     "top10_share": 0.893,
     "top10_red": true,
     "robust": true,
-    "label": "稳健型：多数交易都赚一点"
+    "label": "稳健型：多数交易都赚一点",
+    "trim_both5": 0.831
    },
    "N3": {
     "n": 167,
@@ -213,7 +226,8 @@
     "top10_share": 0.821,
     "top10_red": true,
     "robust": true,
-    "label": "稳健型：多数交易都赚一点"
+    "label": "稳健型：多数交易都赚一点",
+    "trim_both5": 0.678
    },
    "label": "稳健型：多数交易都赚一点",
    "pass": true,
@@ -229,7 +243,8 @@
     "12m": 1.318,
     "W0": 0.755,
     "W00": -1.498
-   }
+   },
+   "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）"
   }
  }
 }

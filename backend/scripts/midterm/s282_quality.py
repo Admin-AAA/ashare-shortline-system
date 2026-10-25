@@ -7,13 +7,14 @@ LABEL_LOTTERY = "彩票型：靠少数暴涨，多数时候原地踏步"
 
 
 def tail_metrics(rets: list[float]) -> dict:
-    """rets：按入场/出场时间排序的逐笔收益（%）。返回 n/avg/median/trim5/top10_share/top10_red/label/streak。"""
+    """rets：按入场/出场时间排序的逐笔收益（%）。返回 n/avg/median/trim5(只去最赚5%)/trim_both5(两头各去5%)/top10_share/top10_red/label/streak。"""
     n = len(rets)
     if n == 0:
         return {"n": 0}
     xs = sorted(rets)
     k = max(1, round(0.05 * n))
-    trim5 = statistics.fmean(xs[: n - k]) if n > k else None
+    trim5 = statistics.fmean(xs[: n - k]) if n > k else None          # 压力测试：只去最赚 5%
+    trim_both5 = statistics.fmean(xs[k: n - k]) if n > 2 * k else None  # 正常水平：两头各去 5%（§285，标签依据）
     tot = sum(xs)
     top10 = sum(xs[-10:])
     share = (top10 / tot) if tot > 0 else None
@@ -22,8 +23,8 @@ def tail_metrics(rets: list[float]) -> dict:
     for x in rets:
         streak = streak + 1 if x <= 0 else 0
         best = max(best, streak)
-    robust = trim5 is not None and trim5 > 0 and med > 0
-    return {"n": n, "avg": statistics.fmean(xs), "median": med, "trim5": trim5, "top10_share": share,
+    robust = trim_both5 is not None and trim_both5 > 0 and med > 0  # §285：标签按两头各去 5%
+    return {"n": n, "avg": statistics.fmean(xs), "median": med, "trim5": trim5, "trim_both5": trim_both5, "top10_share": share,
             "top10_red": bool(share is not None and share > 0.5), "streak": best,
             "label": LABEL_ROBUST if robust else LABEL_LOTTERY, "robust": robust}
 

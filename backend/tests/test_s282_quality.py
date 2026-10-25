@@ -15,6 +15,17 @@ def test_tail_metrics_robust_and_lottery():
     assert tail_metrics([-1, -1, 2, -1, -1, -1])["streak"] == 3
 
 
+def test_label_uses_both_ends_trim():
+    """§285：标签按两头各去 5% 的均值 + 中位数；只去最赚 5% 的 trim5 仅为压力测试。"""
+    xs = [-30.0] + [1.0] * 38 + [30.0]  # 1 笔大亏 + 1 笔大赚，k=2 -> 两头各去 2 笔
+    t = tail_metrics(xs)
+    assert t["trim_both5"] is not None and abs(t["trim_both5"] - 1.0) < 1e-9
+    assert t["trim5"] < t["trim_both5"]  # 只去最赚更苛刻
+    assert t["label"] == LABEL_ROBUST
+    only_top = tail_metrics([-1.0] * 10 + [1.0] * 10 + [-50.0, 60.0])  # 两头去后中位数 0 -> 彩票
+    assert only_top["median"] <= 0 and only_top["label"] == LABEL_LOTTERY
+
+
 def test_verdict_clauses():
     ok = {"n": 60, "avg": 1.0, "pf": 1.5, "mdd": -10.0}
     ph = {"P19": 1, "P20": 1, "P21": 1, "W0": -1.0, "W00": -2.0, "W1": 1, "W2": 1, "R12": 1}
@@ -31,6 +42,6 @@ def test_live_strategies_have_quality_block():
     for sid in ms.STRATEGIES:
         q = data[sid].get("quality")
         assert q and q["standard"] == "§282" and {"R12", "N3", "label", "pass"} <= set(q), sid
-        assert {"trim5", "top10_share", "median", "streak"} <= set(q["R12"]), sid
+        assert {"trim5", "trim_both5", "top10_share", "median", "streak"} <= set(q["R12"]), sid
     short = json.loads((Path(ms.__file__).resolve().parents[1] / "policies" / "short_quality_metrics.json").read_text())
     assert "oversold-capital-reversal" in short["skills"]
