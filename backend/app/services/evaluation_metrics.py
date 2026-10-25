@@ -43,7 +43,13 @@ MIN_SIGNAL_SAMPLE = 30
 DEFAULT_BENCHMARK_NAME = "沪深300"
 """默认基准指数名称。"""
 
-MAX_PORTFOLIO_TRADES_FOR_SEQUENTIAL = 200
+MAX_PORTFOLIO_TRADES_FOR_SEQUENTIAL = 200  # 已弃用：组合口径不再按笔数分叉，保留常量仅为兼容旧 import
+PORTFOLIO_CALIBRE_DAILY = "daily_equal_weight"
+PORTFOLIO_CALIBRE_SEQUENTIAL = "sequential_trades"
+PORTFOLIO_CALIBRE_LABELS = {
+    PORTFOLIO_CALIBRE_DAILY: "同日推荐等权成当日组合，按日复利（max_drawdown / strategy_compound_return / benchmark_* 同口径）",
+    PORTFOLIO_CALIBRE_SEQUENTIAL: "逐笔顺序复利（仅在所有交易都缺 trade_date、无法按日分组时使用）",
+}
 """超过此笔数时，顺序投资组合计算不再有意义（回测序列过长），改用等权分组法。"""
 
 ACCURACY_REQUIRED_CONDITIONS = (
@@ -247,13 +253,17 @@ def compute_full_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
     # ── 月度/回撤/基准 ──
     month_ratio = _positive_month_ratio(chronological)
 
-    # 大量交易（>200笔）按日分组，等权计算组合净值曲线，避免天文数字
-    if trade_count > MAX_PORTFOLIO_TRADES_FOR_SEQUENTIAL:
-        daily_returns, daily_bench_returns = _grouped_portfolio_returns(chronological)
+    # 组合口径统一：无论样本多少，一律「同一交易日的推荐等权成当日组合 → 按日复利」。
+    # 旧实现 ≤200 笔走逐笔顺序复利、>200 笔走按日分组，同一策略跨过 200 笔门槛时回撤/累计收益/超额收益
+    # 口径会突变（2026-10-25 审计）。仅当所有交易都缺 trade_date（无法分组）时才退回逐笔顺序并如实标注。
+    daily_returns, daily_bench_returns = _grouped_portfolio_returns(chronological)
+    if daily_returns:
+        portfolio_calibre = PORTFOLIO_CALIBRE_DAILY
         portfolio_dd = _equity_max_drawdown(daily_returns)
         strategy_cum = _compound_return(daily_returns)
         benchmark_cum = _compound_return(daily_bench_returns) if daily_bench_returns else 0.0
     else:
+        portfolio_calibre = PORTFOLIO_CALIBRE_SEQUENTIAL
         portfolio_dd = _equity_max_drawdown(returns)
         strategy_cum = _compound_return(returns)
         benchmark_cum = _compound_return(benchmark_returns)
@@ -311,6 +321,8 @@ def compute_full_metrics(trades: list[dict[str, Any]]) -> dict[str, Any]:
         "low_confidence": confidence == "low",
         "accuracy_basis": "labeled_recommendations",
         "flat_count": len(flat),
+        "portfolio_calibre": portfolio_calibre,
+        "portfolio_calibre_label": PORTFOLIO_CALIBRE_LABELS[portfolio_calibre],
     }
 
 
@@ -359,6 +371,8 @@ def _empty_metrics() -> dict[str, Any]:
         "low_confidence": True,
         "accuracy_basis": "labeled_recommendations",
         "flat_count": 0,
+        "portfolio_calibre": PORTFOLIO_CALIBRE_DAILY,
+        "portfolio_calibre_label": PORTFOLIO_CALIBRE_LABELS[PORTFOLIO_CALIBRE_DAILY],
     }
 
 

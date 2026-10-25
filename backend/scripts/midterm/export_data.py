@@ -9,8 +9,15 @@ st_hist.parquet 以 DB `stock_metadata_history.is_st` 为唯一权威（按 effe
   python -m scripts.midterm.export_data                      # 导出全部表
   python -m scripts.midterm.export_data --only st_hist       # 仅重建 st_hist.parquet（含与 DB 的一致性校验）
   python -m scripts.midterm.export_data --only st_hist --out /path/to/midterm
+  python -m scripts.midterm.export_data --only daily_basic,index_daily   # 增量：只重取「已有最大日期-7天」之后的行
+  python -m scripts.midterm.export_data --full                           # 强制全量重导（默认对有日期列的表走增量）
+
+增量导出（2026-10-25）：daily_basic(600万行)/stk_limits(480万行) 全量导出耗时耗内存（16GB Mac），且 parquet 长期停在
+10-09/10-16/06-30。现在默认读已有 parquet 的最大日期，回看 OVERLAP_DAYS 天（覆盖补数/修正）后只从 DB 取新行拼接，
+临时文件写完再 os.replace 原子替换（owner 的研究进程可能正读该文件）。
 """
 import argparse
+import datetime as dt
 import os
 import tempfile
 from pathlib import Path
@@ -20,6 +27,16 @@ from sqlalchemy import create_engine
 
 ROOT = Path(__file__).resolve().parents[2]
 OUT = ROOT / "data" / "midterm"
+
+OVERLAP_DAYS = 7
+
+# name -> (表, 列, 日期列, 日期列是否需 cast 成 Utf8)
+TABLES = {
+    "daily_basic": ("daily_basic", "code,trade_date,pe_ttm,total_mv,circ_mv", "trade_date", False),
+    "index_daily": ("index_daily", "ts_code,trade_date,close", "trade_date", False),
+    "stk_limits": ("stk_limits", "code,trade_date,up_limit,down_limit", "trade_date", True),
+    "hk_holdings": ("hk_holdings", "code,trade_date,ratio", "trade_date", True),
+}
 
 ST_META_SQL = (
     "select code, cast(effective_from as char) as effective_from, "
@@ -106,23 +123,62 @@ def write_st_hist(c, out_dir: Path) -> dict:
     return stats
 
 
+def _atomic_write_parquet(df: pl.DataFrame, target: Path) -> None:
+    fd, tmp = tempfile.mkstemp(prefix=f".{target.stem}.", suffix=".parquet.tmp", dir=target.parent)
+    os.close(fd)
+    try:
+        df.write_parquet(tmp)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, target)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def export_table(c, name: str, out_dir: Path, *, full: bool = False, overlap_days: int = OVERLAP_DAYS) -> dict:
+    """导出一张表；已有 parquet 且非 full 时增量：保留 < cutoff 的旧行，用 DB 里 >= cutoff 的行替换其后部分。"""
+    table, cols, date_col, _ = TABLES[name]
+    target = out_dir / f"{name}.parquet"
+
+    def read(where: str = "") -> pl.DataFrame:
+        df = pl.read_database(f"select {cols} from {table}{where}", c)
+        return df.with_columns(pl.col(date_col).cast(pl.Utf8))  # 日期统一为字符串，与历史 parquet 一致
+
+    if full or not target.exists():
+        df = read()
+        _atomic_write_parquet(df, target)
+        return {"table": name, "mode": "full", "rows": df.height, "max_date": df[date_col].max()}
+    old = pl.read_parquet(target)
+    max_old = old[date_col].max()
+    cutoff = (dt.date.fromisoformat(str(max_old)[:10]) - dt.timedelta(days=overlap_days)).isoformat()  # 自算 ISO 日期，无注入面
+    new = read(f" where {date_col} >= '{cutoff}'").select(old.columns).cast(old.schema)
+    keep = old.filter(pl.col(date_col) < cutoff)
+    merged = pl.concat([keep, new])
+    _atomic_write_parquet(merged, target)
+    return {"table": name, "mode": "incremental", "cutoff": cutoff, "old_rows": old.height, "new_rows": new.height,
+            "rows": merged.height, "old_max": max_old, "max_date": merged[date_col].max()}
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--only", choices=["st_hist"], default=None)
+    ap.add_argument("--only", default=None, help="逗号分隔：st_hist,daily_basic,index_daily,stk_limits,hk_holdings")
+    ap.add_argument("--full", action="store_true", help="强制全量重导（默认增量）")
     ap.add_argument("--out", type=Path, default=OUT)
     a = ap.parse_args()
     out = a.out
     out.mkdir(parents=True, exist_ok=True)
     url = os.environ.get("ASHARE_DATABASE_URL") or [l.split("=", 1)[1].strip() for l in open(ROOT / ".env") if l.startswith("ASHARE_DATABASE_URL")][0]
     with create_engine(url).connect() as c:
-        if a.only == "st_hist":
-            print("st_hist ok:", write_st_hist(c, out))
-            return
-        pl.read_database("select code,trade_date,pe_ttm,total_mv,circ_mv from daily_basic", c).write_parquet(out / "daily_basic.parquet")
-        print("st_hist ok:", write_st_hist(c, out))
-        pl.read_database("select ts_code,trade_date,close from index_daily", c).write_parquet(out / "index_daily.parquet")
-        pl.read_database("select code,trade_date,up_limit,down_limit from stk_limits", c).with_columns(pl.col("trade_date").cast(pl.Utf8)).write_parquet(out / "stk_limits.parquet")
-        pl.read_database("select code,trade_date,ratio from hk_holdings", c).with_columns(pl.col("trade_date").cast(pl.Utf8)).write_parquet(out / "hk_holdings.parquet")
+        wanted = [x for x in (a.only or "st_hist," + ",".join(TABLES)).split(",") if x]
+        bad = [x for x in wanted if x != "st_hist" and x not in TABLES]
+        if bad:
+            raise SystemExit(f"unknown table(s): {bad}")
+        for name in wanted:
+            if name == "st_hist":
+                print("st_hist ok:", write_st_hist(c, out))
+            else:
+                print(export_table(c, name, out, full=a.full), flush=True)
     print("exported to", out)
 
 if __name__ == "__main__":

@@ -1241,6 +1241,8 @@ def _overview_metrics(
         "accuracy_gate_summary": full_metrics.get("accuracy_gate_summary", {}),
         "strategy_compound_return": full_metrics.get("strategy_compound_return", 0.0),
         "benchmark_compound_return": full_metrics.get("benchmark_compound_return", 0.0),
+        "portfolio_calibre": full_metrics.get("portfolio_calibre", "daily_equal_weight"),
+        "portfolio_calibre_label": full_metrics.get("portfolio_calibre_label", ""),
         "trade_accuracy": full_metrics.get("trade_accuracy", 0.0),
         "accuracy_numerator": full_metrics.get("accuracy_numerator", 0),
         "accuracy_denominator": full_metrics.get("accuracy_denominator", n),

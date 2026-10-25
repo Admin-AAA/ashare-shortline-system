@@ -142,3 +142,25 @@ def test_hsgt_all_zero_row_is_treated_as_missing():
 
     rows = sa.TushareStateProvider(_Real(), None).hsgt_flow(req)
     assert len(rows) == 1 and abs(rows[0]["north_money"] - 27.715511) < 1e-6
+
+
+def test_portfolio_calibre_is_same_below_and_above_200_trades():
+    """同一批「每天 2 笔」的交易，100 笔和 300 笔都按日等权口径，并带口径标签。"""
+    from app.services.evaluation_metrics import PORTFOLIO_CALIBRE_DAILY, compute_full_metrics
+
+    def trades(n_days):
+        out = []
+        for d in range(n_days):
+            day = f"2026-01-{(d % 28) + 1:02d}" if n_days <= 28 else f"2025-{(d // 28) % 12 + 1:02d}-{(d % 28) + 1:02d}"
+            for r in (4.0, -2.0):
+                out.append({"trade_date": day, "code": f"{600000 + d % 90}", "net_return_pct": r, "gross_return_pct": r,
+                            "benchmark_return_pct": 0.0, "resolved": True, "holding_days": 1, "executed": True})
+        return out
+
+    small = compute_full_metrics(trades(20))      # 40 笔
+    large = compute_full_metrics(trades(150))     # 300 笔
+    for m in (small, large):
+        assert m["portfolio_calibre"] == PORTFOLIO_CALIBRE_DAILY and m["portfolio_calibre_label"]
+    # 每日组合收益都是 +1%（(4-2)/2）：小样本 20 天复利 (1.01^20-1)=22.019%，与大样本口径同一公式
+    assert abs(small["strategy_compound_return"] - ((1.01 ** 20 - 1) * 100)) < 0.01
+    assert small["max_drawdown"] == 0.0
