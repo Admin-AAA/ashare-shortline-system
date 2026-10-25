@@ -125,8 +125,6 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "horizon": "long",
         "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：流动负债/负债合计（currentdebt_to_debt）本期在 30%~95%、去年同期在 20%~100%，且较去年同期下降 ≥5 个百分点；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按降幅从大到小排序（降幅封顶40），次日开盘买，持有60个交易日（已持有不重复买）。",
         "kind": "cld_yoy",
-        "k_slots": 20,
-        "max_new": 5,
         "hold_days": 60,
         "schedule": "daily",
     },
@@ -136,8 +134,6 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "horizon": "long",
         "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次公布的分红「预案」（同一报告期只取第一次预案）：每股税前派现>0，且较去年同一报告期（优先取实施记录，否则取最早预案）提高 ≥30%（去年同期>0）；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按增幅从大到小排序，次日开盘买，持有60个交易日（已持有不重复买）。",
         "kind": "dinc_yoy",
-        "k_slots": 20,
-        "max_new": 5,
         "hold_days": 60,
         "schedule": "daily",
     },
@@ -147,8 +143,6 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "horizon": "long",
         "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：去年同期每股未分配利润（undist_profit_ps）>0、本期 ≥0.5 元/股，且同比增速 ≥30%；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按增速从大到小排序（增速封顶200%），次日开盘买，持有60个交易日（已持有不重复买）。",
         "kind": "udp_yoy",
-        "k_slots": 20,
-        "max_new": 5,
         "hold_days": 60,
         "schedule": "daily",
     },
@@ -863,16 +857,13 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
         if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy"):
             from app.services import midterm_fina_events as fe
             cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates}[meta["kind"]]
+            # 实盘推荐不设仓位上限（不限持仓只数/每日新进只数）：按排序全部出票，已持有的不重复买；回测指标按 20 仓位口径
             held = _held_codes(db, sid, as_of)
-            free = int(meta["k_slots"]) - len(held)
-            if free <= 0:
-                result[sid] = {"skipped": "slots_full", "held": len(held)}
-                continue
             cands = cand_fn(db, as_of)
             if cands is None:
                 result[sid] = "no_data"
                 continue
-            picks = [p for p in cands if p["code"] not in held][:min(int(meta["max_new"]), free)]
+            picks = [p for p in cands if p["code"] not in held]
             if not picks:
                 result[sid] = 0
                 continue

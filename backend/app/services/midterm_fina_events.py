@@ -11,6 +11,7 @@
   - 财报：Tushare fina_indicator_vip(period=…) 经网关，整期一次调用，进程内缓存（历史回放同一期只拉一次）。
   - 分红：本地 data/midterm/dividend/*.parquet（到本地缓存截止日）+ 截止日之后的公告日经网关 dividend(ann_date=…)；
     候选个股的历史分红记录本地优先，缓存截止日之后的信号日再经网关 dividend(ts_code=…) 补全。
+实盘推荐不设仓位上限（k_slots/max_new 仅是回测口径，回测指标按 20 仓位、每日最多新进 5 只计算）。
 数据拉取失败返回 None（上层记 no_data），不会静默出空票。"""
 from __future__ import annotations
 

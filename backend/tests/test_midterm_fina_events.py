@@ -142,7 +142,7 @@ def test_new_strategies_registered_and_pick_written(monkeypatch, tmp_path):
     for sid in ("long-current-debt-down", "long-dividend-increase", "long-undist-profit-growth"):
         meta = ms.STRATEGIES[sid]
         assert meta["horizon"] == "long" and meta["hold_days"] == 60 and meta["schedule"] == "daily"
-        assert meta["k_slots"] == 20 and meta["max_new"] == 5
+        assert "k_slots" not in meta and "max_new" not in meta  # 实盘推荐不设仓位上限
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path / "picks")
     monkeypatch.setattr(ms, "_held_codes", lambda db, sid, d: {"000002"})
     cands = [{"code": f"00000{i}", "name": "x", "score": 10.0 - i, "ann_date": "20261023", "end_date": "20260930",
@@ -152,10 +152,10 @@ def test_new_strategies_registered_and_pick_written(monkeypatch, tmp_path):
     monkeypatch.setattr(fe2, "dinc_candidates", lambda db, d: None)
     monkeypatch.setattr(fe2, "udp_candidates", lambda db, d: [])
     res = ms.generate_picks(None, "2026-10-23", force=True, strategy_ids=["long-current-debt-down", "long-dividend-increase", "long-undist-profit-growth"])
-    assert res["long-current-debt-down"] == 5            # max_new=5，已持有的 000002 不重复买也不递补
+    assert res["long-current-debt-down"] == 7            # 不设每日新进上限：8 只候选去掉已持有的 000002，其余全出
     assert res["long-dividend-increase"] == "no_data" and res["long-undist-profit-growth"] == 0
     import json
     got = json.loads((tmp_path / "picks" / "2026-10-23_long-current-debt-down.json").read_text())
-    assert [p["code"] for p in got["picks"]] == ["000001", "000003", "000004", "000005", "000006"]
+    assert [p["code"] for p in got["picks"]] == ["000001", "000003", "000004", "000005", "000006", "000007", "000008"]
     ann = ms.annotate_pick("long-current-debt-down", got["picks"][0], 1)
     assert ann["rule_score"] == 9.0 and "同比下降 15.0 个百分点" in ann["selection_reason"]
