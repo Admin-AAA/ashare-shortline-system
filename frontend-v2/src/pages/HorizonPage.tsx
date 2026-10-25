@@ -7,6 +7,8 @@ import "../styles/horizon.css";
 import { RunPanel, PickDrawer, PickStatusLine } from "./HorizonExtras";
 import { EquityCurve } from "../components/EquityCurve";
 import { classifyHorizon } from "../utils/equityCurve";
+import { RankBadge, RankSortBar } from "../components/RankSortBar";
+import { DEFAULT_SORT, horizonMetrics, sortStrategies, type SortState } from "../utils/strategyRank";
 
 type Target = { sid: string; date: string; code: string };
 const SCHEDULE_OVERRIDE: Record<string, string> = { "mid-block-trade-premium": "每晚约 21:00 大宗数据发布后选股" };
@@ -23,6 +25,12 @@ export function HorizonPage({ horizon, view = "strategies" }: { horizon: H; view
   const [runOpen, setRunOpen] = useState(false);
   const [target, setTarget] = useState<Target | null>(null);
   const [rev, setRev] = useState(0);
+  // 策略页排序：默认综合分降序（后端已按此返回）；沉底（样本不足/缺指标/数据过期）永远在最后
+  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
+  const rankedList = useMemo(
+    () => sortStrategies(strategies.data?.strategies ?? [], (s) => s, horizonMetrics, sort),
+    [strategies.data, sort],
+  );
 
   if (strategies.loading) return <PageSkeleton title={`${hz}加载中`} />;
   if (strategies.error) return <ErrorPage title={`${hz}策略加载失败`} message={strategies.error} onRetry={strategies.refetch} />;
@@ -43,7 +51,10 @@ export function HorizonPage({ horizon, view = "strategies" }: { horizon: H; view
         <>
           {list.length === 0
             ? <section className="panel hz-pad"><EmptyState icon={<Layers size={32} />} title={`暂无通过回测的${hz}策略`} reason="候选思路在最近12个月或历史分段回测中不达标，未上线；淘汰原因见下方。" /></section>
-            : <div className="hz-grid">{list.map((s) => <StrategyCard key={s.id} s={s} />)}</div>}
+            : (<>
+                <section className="panel hz-pad"><RankSortBar sort={sort} onChange={setSort} /></section>
+                <div className="hz-grid">{rankedList.map((s) => <StrategyCard key={s.id} s={s} />)}</div>
+              </>)}
           <Rejected items={rejected} />
         </>
       )}
@@ -131,6 +142,8 @@ function StrategyCard({ s }: { s: HorizonStrategy }) {
       <header className="hz-card__head">
         <h3>{s.name}</h3>
         <DailyChip s={s} />
+        <RankBadge r={s} />
+        {s.rank_components?.note ? <div className="hz-muted" title="收益/回撤排序与展示用折算后的 tot_20 / mdd_20">{s.rank_components.note}</div> : null}
         <div className="hz-tags">
           <span className="hz-tag"><CalendarClock size={12} /> {SCHEDULE_OVERRIDE[s.id] ?? `${SCHEDULE[s.schedule] ?? s.schedule}选股`}</span>
           <span className="hz-tag">每次 Top {s.top_n}</span>

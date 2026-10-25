@@ -315,11 +315,16 @@ def standalone_metrics(db: Session = Depends(get_db)):
         if sid in WATCH_STRATEGY_IDS and row.get("status") == "positive":
             row["status"] = "watch"
         rows.append(row)
+    from app.services.strategy_rank import rank_short_strategies
+
+    window = stored.get("window")
+    # 综合分（口径 A，仅短线周期内比较）；默认综合分降序，沉底的在后保持原序
+    ranked = rank_short_strategies(rows, (window or {}).get("end") if isinstance(window, dict) else None)
     return {
         "generated_at": _bj_offset(stored.get("generated_at")),
-        "window": stored.get("window"),
+        "window": window,
         "method": stored.get("method"),
-        "strategies": rows,
+        "strategies": ranked,
     }
 
 

@@ -2995,6 +2995,11 @@ export interface StandaloneStrategyMetrics {
   last_12m?: StandaloneWindowMetrics;
   recent?: StandaloneWindowMetrics;
   tuned_filter_emulated?: boolean;
+  /** 综合分（后端 strategy_rank.py，口径 A，仅短线周期内比较）；沉底策略 rank_score/rank 为空 */
+  rank_score?: number | null;
+  rank?: number | null;
+  rank_flags?: string[];
+  rank_flag_labels?: string[];
 }
 
 export interface StandaloneMetricsResponse {

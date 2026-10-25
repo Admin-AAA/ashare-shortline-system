@@ -10,6 +10,7 @@ from app.api.contracts import ContractRouter as APIRouter
 from app.db.session import get_db
 from app.services import horizon_analytics as analytics
 from app.services import midterm_service as svc
+from app.services.strategy_rank import rank_horizon_strategies
 
 router = APIRouter(prefix="/api/horizons", tags=["horizons"])
 
@@ -331,7 +332,9 @@ def _detail(db, horizon, strategy_id, signal_date, code, before, after):
 
 @router.get("/mid/strategies")
 def mid_strategies(db: Session = Depends(get_db)):
-    return {"horizon": "mid", "strategies": svc.strategies_overview("mid", db), "rejected": MID_REJECTED}
+    # 默认按综合分降序（周期内排序，沉底的在后）；rank_* 字段见 services/strategy_rank.py
+    return {"horizon": "mid", "strategies": rank_horizon_strategies(svc.strategies_overview("mid", db)),
+            "rejected": MID_REJECTED}
 
 
 @router.get("/mid/picks")
@@ -343,7 +346,8 @@ def mid_picks(strategy_id: str | None = Query(None), limit: int = Query(30, ge=1
 
 @router.get("/long/strategies")
 def long_strategies(db: Session = Depends(get_db)):
-    return {"horizon": "long", "strategies": svc.strategies_overview("long", db), "rejected": LONG_REJECTED}
+    return {"horizon": "long", "strategies": rank_horizon_strategies(svc.strategies_overview("long", db)),
+            "rejected": LONG_REJECTED}
 
 
 @router.get("/long/picks")

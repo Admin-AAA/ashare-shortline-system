@@ -1,8 +1,9 @@
-import { useState, type CSSProperties, type ReactNode } from "react";
+import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileText, History, Layers, Target } from "lucide-react";
 import { api } from "../api/client";
 import type {
   StandaloneMetricsResponse,
+  StandaloneStrategyMetrics,
   StandaloneWindowMetrics,
   PresetStatsRow,
   StrategyBacktestReturns,
@@ -15,6 +16,8 @@ import { ScopedStrategyStats } from "../ui/ScopedStrategyStats";
 import { useApi } from "../app/useApi";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { formatBj } from "../utils/time";
+import { RankBadge, RankSortBar } from "../components/RankSortBar";
+import { DEFAULT_SORT, sortStrategies, standaloneMetrics, type RankFields, type SortState } from "../utils/strategyRank";
 
 type StrategyWindowDays = 30 | 180;
 
@@ -36,6 +39,16 @@ export function StrategiesPage() {
   );
   // 预设表现：后端 /api/stats/by-preset 已有完整数据，此前无任何页面消费（T7-C 缺口）。
   const presets = useApi<PresetStatsRow[]>(() => api.statsByPreset());
+  // 短线综合分排序（口径 A：/api/strategies/standalone-metrics）。三块（策略表现 / 每日独立运行策略 / 策略卡片）共用同一顺序；
+  // 卡片排序不依赖 performance 字段（它在当前版本未回测时为空）。
+  const standalone = useApi<StandaloneMetricsResponse>(() => api.standaloneMetrics());
+  const [sort, setSort] = useState<SortState>(DEFAULT_SORT);
+  const rankedRows = useMemo(
+    () => sortStrategies(standalone.data?.strategies ?? [], (r) => r, standaloneMetrics, sort),
+    [standalone.data, sort],
+  );
+  const order = useMemo(() => rankedRows.map((r) => r.strategy_id), [rankedRows]);
+  const rankById = useMemo(() => new Map(rankedRows.map((r) => [r.strategy_id, r as RankFields])), [rankedRows]);
 
   return (
     <Panel
@@ -48,10 +61,15 @@ export function StrategiesPage() {
         </div>
       }
     >
-      <ScopedStrategyStats />
-      <StandaloneMetricsSection />
+      {standalone.data && (
+        <div style={{ marginBottom: "var(--space-4)" }}>
+          <RankSortBar sort={sort} onChange={setSort} />
+        </div>
+      )}
+      <ScopedStrategyStats order={order} />
+      <StandaloneMetricsSection res={standalone} rows={rankedRows} />
       {tab === "skills" ? (
-        <SkillsView skills={skills} windowDays={windowDays} onWindowDaysChange={setWindowDays} />
+        <SkillsView skills={skills} windowDays={windowDays} onWindowDaysChange={setWindowDays} order={order} rankById={rankById} />
       ) : (
         <PresetsView presets={presets} />
       )}
@@ -85,10 +103,14 @@ function SkillsView({
   skills,
   windowDays,
   onWindowDaysChange,
+  order,
+  rankById,
 }: {
   skills: { data: StrategyListItem[] | null; loading: boolean; error: string };
   windowDays: StrategyWindowDays;
   onWindowDaysChange: (value: StrategyWindowDays) => void;
+  order: string[];
+  rankById: Map<string, RankFields>;
 }) {
   if (skills.loading) return <PageSkeleton title="策略清单" hint="加载策略与胜率" rowCount={8} />;
   if (skills.error) return <ErrorPage title="策略加载失败" message={skills.error} />;
@@ -98,8 +120,12 @@ function SkillsView({
     return <EmptyState icon={<Layers size={32} />} title="暂无策略" reason="系统尚未注册任何策略" />;
   }
 
-  const ready = data.filter((s) => s.performance);
-  const pending = data.filter((s) => !s.performance);
+  // 顺序由综合分排序栏决定（与上方两张表一致）；不在综合分名单里的排最后、保持接口顺序。已调用/待回测只影响卡片样式，不影响顺序。
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const ordered = data
+    .map((s, i) => ({ s, i, p: pos.get(s.skill_id) ?? Number.MAX_SAFE_INTEGER }))
+    .sort((a, b) => a.p - b.p || a.i - b.i)
+    .map((x) => x.s);
 
   return (
     <>
@@ -115,12 +141,9 @@ function SkillsView({
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))", gap: "var(--space-4)" }}>
-        {ready.map((s) => (
-          <CalledCard key={s.skill_id} item={s} windowDays={windowDays} />
-        ))}
-        {pending.map((s) => (
-          <DormantCard key={s.skill_id} item={s} />
-        ))}
+        {ordered.map((s) => (s.performance
+          ? <CalledCard key={s.skill_id} item={s} windowDays={windowDays} rank={rankById.get(s.skill_id)} />
+          : <DormantCard key={s.skill_id} item={s} rank={rankById.get(s.skill_id)} />))}
       </div>
     </>
   );
@@ -198,7 +221,7 @@ function PresetTable({ rows }: { rows: PresetStatsRow[] }) {
 }
 
 /** 当前版本策略画像：每个信号日按评分取 Top 10，不含仓位或资金模型。 */
-function CalledCard({ item, windowDays }: { item: StrategyListItem; windowDays: StrategyWindowDays }) {
+function CalledCard({ item, windowDays, rank }: { item: StrategyListItem; windowDays: StrategyWindowDays; rank?: RankFields }) {
   const perf = item.performance as StrategyPerformance;
   const { navigate } = useUrlRoute();
   const [open, setOpen] = useState(false);
@@ -223,6 +246,7 @@ function CalledCard({ item, windowDays }: { item: StrategyListItem; windowDays: 
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 650, fontSize: "var(--text-lg)", color: "var(--text)", lineHeight: 1.2 }}>{item.name}</div>
           <div style={{ color: "var(--muted)", fontSize: "var(--text-sm)", marginTop: 2, fontFamily: "var(--font-mono)" }}>{item.skill_id}</div>
+          {rank && <div style={{ marginTop: 6 }}><RankBadge r={rank} /></div>}
         </div>
         <StatusPill enabled={item.enabled} />
       </div>
@@ -394,13 +418,14 @@ function Metric({ label, value, color }: { label: string; value: string; color: 
 }
 
 /** 当前版本画像未生成：明确 pending，不用旧版本真实收益补位。 */
-function DormantCard({ item }: { item: StrategyListItem }) {
+function DormantCard({ item, rank }: { item: StrategyListItem; rank?: RankFields }) {
   return (
     <div className="strat-card" style={{ ...cardStyle, opacity: 0.82 }}>
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "var(--space-2)" }}>
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 650, fontSize: "var(--text-lg)", color: "var(--text)", lineHeight: 1.2 }}>{item.name}</div>
           <div style={{ color: "var(--muted)", fontSize: "var(--text-sm)", marginTop: 2, fontFamily: "var(--font-mono)" }}>{item.skill_id}</div>
+          {rank && <div style={{ marginTop: 6 }}><RankBadge r={rank} /></div>}
         </div>
         <span style={pillStyle("var(--muted)", "color-mix(in srgb, var(--muted) 14%, transparent)")}>待回测</span>
       </div>
@@ -634,8 +659,13 @@ function MetricCells({ m }: { m?: StandaloneWindowMetrics }) {
 }
 
 /** 每日独立运行策略的单策略口径表现（后端落盘指标，随重算自动更新）。 */
-function StandaloneMetricsSection() {
-  const res = useApi<StandaloneMetricsResponse>(() => api.standaloneMetrics());
+function StandaloneMetricsSection({
+  res,
+  rows,
+}: {
+  res: { data: StandaloneMetricsResponse | null; loading: boolean; error: string };
+  rows: StandaloneStrategyMetrics[];
+}) {
   if (res.loading && !res.data) return <PageSkeleton title="单策略指标" />;
   if (res.error && !res.data) return <EmptyState title="单策略指标暂不可用" reason={String(res.error)} />;
   const d = res.data;
@@ -655,6 +685,7 @@ function StandaloneMetricsSection() {
             <tr>
               <th style={{ ...th, textAlign: "left" }} rowSpan={2}>策略</th>
               <th style={{ ...th, textAlign: "left" }} rowSpan={2}>状态</th>
+              <th style={{ ...th, textAlign: "left" }} rowSpan={2}>综合分</th>
               <th style={th} colSpan={5}>近 12 个月</th>
               <th style={th} colSpan={5}>近期窗口</th>
             </tr>
@@ -663,10 +694,11 @@ function StandaloneMetricsSection() {
             </tr>
           </thead>
           <tbody>
-            {d.strategies.map((s) => (
+            {rows.map((s) => (
               <tr key={s.strategy_id} style={{ borderTop: "1px solid var(--color-border)", textAlign: "right" }}>
                 <td style={{ textAlign: "left", padding: "4px 8px" }}>{s.name}</td>
                 <td style={{ textAlign: "left", padding: "4px 8px" }}>{STATUS_LABEL[s.status] ?? s.status}</td>
+                <td style={{ textAlign: "left", padding: "4px 8px" }}><RankBadge r={s} /></td>
                 <MetricCells m={s.last_12m} />
                 <MetricCells m={s.recent} />
               </tr>
