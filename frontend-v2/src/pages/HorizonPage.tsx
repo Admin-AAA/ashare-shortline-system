@@ -1,4 +1,4 @@
-import { ReturnSourceBlock } from "../components/ReturnSourceBlock";
+import { ReturnSourceBlock, HS300_HINT } from "../components/ReturnSourceBlock";
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, CalendarClock, Layers, Archive } from "lucide-react";
 import { api, type HorizonBatch, type HorizonMetrics, type HorizonPick, type HorizonStrategy, type HorizonStrategiesResponse, type HorizonPicksResponse } from "../api/client";
@@ -127,8 +127,8 @@ function Hero({ horizon, view, list, batches, onRun }: { horizon: H; view: View;
     </section>
   );
 }
-const Kpi = ({ label, value, tone, cls }: { label: string; value: string; tone?: string; cls?: string }) => (
-  <div className={`hz-kpi${tone ? ` hz-kpi--${tone}` : ""}`}><div className="hz-kpi__l">{label}</div><div className={`hz-kpi__v ${cls ?? ""}`}>{value}</div></div>
+const Kpi = ({ label, value, tone, cls, title }: { label: string; value: string; tone?: string; cls?: string; title?: string }) => (
+  <div className={`hz-kpi${tone ? ` hz-kpi--${tone}` : ""}`} title={title}><div className="hz-kpi__l">{label}</div><div className={`hz-kpi__v ${cls ?? ""}`}>{value}</div></div>
 );
 
 /* ---------- 策略卡 ---------- */
@@ -143,6 +143,7 @@ function StrategyCard({ s }: { s: HorizonStrategy }) {
   const maxAbs = Math.max(1, ...phases.map(([, p]) => Math.abs(p.avg ?? 0)));
   void 0;
   const positive = phases.filter(([, p]) => (p.avg ?? 0) > 0).length;
+  const hs = { r12: s.metrics.quality?.R12?.excess_hs300, n3: s.metrics.quality?.N3?.excess_hs300 };
   return (
     <article className="panel hz-card">
       <header className="hz-card__head">
@@ -165,8 +166,12 @@ function StrategyCard({ s }: { s: HorizonStrategy }) {
         <Kpi label="PF" value={m.pf != null ? m.pf.toFixed(2) : "—"} />
         <Kpi label="组合收益" value={pct(m.tot, 1)} cls={pnl(m.tot)} />
         <Kpi label="最大回撤" value={m.mdd != null ? `${m.mdd.toFixed(1)}%` : "—"} />
-        {ex.excess != null && <Kpi label="每笔超额" value={pct(ex.excess)} cls={pnl(ex.excess)} />}
+        {ex.excess != null && <Kpi label="每笔超额（同市值对照）" value={pct(ex.excess)} cls={pnl(ex.excess)} title="比同日同市值五分位的股票平均多赚多少（已扣掉小盘风格的行情，看选股本事）" />}
+        {hs.r12 != null && <Kpi label="比沪深300多赚·近12个月" value={pct(hs.r12)} cls={pnl(hs.r12)} title={HS300_HINT} />}
+        {hs.n3 != null && <Kpi label="比沪深300多赚·近3年" value={pct(hs.n3)} cls={pnl(hs.n3)} title={HS300_HINT} />}
       </div>
+      {(hs.r12 != null || hs.n3 != null) && <div className="hz-muted" style={{ fontSize: "var(--text-xs)", marginTop: 4 }}>
+        「比沪深300多赚」＝每笔收益减同期买沪深300的涨幅；「每笔超额」比的是同市值的股票，已扣掉小盘风格，两者不一样。只展示，不参与达标判定。</div>}
       <ReturnSourceBlock quality={s.metrics.quality} />
       {phases.length > 0 && (
         <>

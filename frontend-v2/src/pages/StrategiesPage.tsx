@@ -398,7 +398,7 @@ function CalledCard({ item, windowDays, rank }: { item: StrategyListItem; window
       </button>
 
       <BacktestReturnsBlock item={item} />
-      <ReturnSourceBlock quality={(item as { quality?: ReturnSourceQuality | null }).quality} />
+      <ReturnSourceBlock showHs300 quality={(item as { quality?: ReturnSourceQuality | null }).quality} />
 
       <StrategyDetailLink item={item} />
 

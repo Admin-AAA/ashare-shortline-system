@@ -4,6 +4,8 @@ import type { CSSProperties } from "react";
 export type ReturnSourceWindow = {
   n?: number; avg?: number; pf?: number; mdd?: number; streak?: number; median?: number; trim5?: number; trim_both5?: number;
   top10_share?: number | null; top10_red?: boolean; label?: string; robust?: boolean;
+  /** §309：每笔策略净收益 − 同持有期沪深300涨幅（按笔平均）；hs300_avg=指数同期平均涨幅；beat_hs300=跑赢沪深300的笔占比% */
+  excess_hs300?: number; hs300_avg?: number; beat_hs300?: number;
 };
 export type ReturnSourceQuality = {
   standard?: string; basis?: string; R12?: ReturnSourceWindow; N3?: ReturnSourceWindow; label?: string;
@@ -33,7 +35,24 @@ function Row({ title, w }: { title: string; w?: ReturnSourceWindow }) {
   );
 }
 
-export function ReturnSourceBlock({ quality }: { quality?: ReturnSourceQuality | null }) {
+export const HS300_HINT = "比沪深300多赚＝每笔策略收益（已扣成本）减去同一持有期（买入日到卖出日）买沪深300的涨幅，按笔取平均。" +
+  "和「每笔超额（同市值对照）」不同：同市值对照比的是同日同市值的股票，已把小盘风格的行情扣掉，看选股本事；沪深300没扣这个风格，小盘股行情好时这个数会偏大。只展示，不参与达标判定。";
+
+export function Hs300Line({ quality }: { quality?: ReturnSourceQuality | null }) {
+  const a = quality?.R12?.excess_hs300, b = quality?.N3?.excess_hs300;
+  if (a == null && b == null) return null;
+  const col = (v?: number) => (v == null ? "var(--muted)" : v >= 0 ? "var(--market-up)" : "var(--market-down)");
+  return (
+    <div style={{ ...muted, marginTop: 4 }} title={HS300_HINT}>
+      比沪深300多赚（每笔）：近12个月 <b style={{ color: col(a) }}>{pct(a)}</b>
+      {quality?.R12?.beat_hs300 != null ? `（${Math.round(quality.R12.beat_hs300)}%的笔跑赢）` : ""}
+      ，近3年 <b style={{ color: col(b) }}>{pct(b)}</b>
+      {quality?.N3?.beat_hs300 != null ? `（${Math.round(quality.N3.beat_hs300)}%的笔跑赢）` : ""}
+    </div>
+  );
+}
+
+export function ReturnSourceBlock({ quality, showHs300 = false }: { quality?: ReturnSourceQuality | null; showHs300?: boolean }) {
   if (!quality || !quality.R12) return null;
   const robust = (quality.label ?? "").startsWith("稳健");
   const tone = robust ? "var(--market-up)" : "var(--amber, #d97706)";
@@ -53,6 +72,7 @@ export function ReturnSourceBlock({ quality }: { quality?: ReturnSourceQuality |
         <Row title="近12个月" w={quality.R12} />
         <Row title="近3年" w={quality.N3} />
       </div>
+      {showHs300 && <Hs300Line quality={quality} />}
       {over100.length > 0 && <div style={{ ...muted, marginTop: 4 }}>※ {over100.join("、")}「前10笔占比」超过100%：最赚的10笔比全部净利润还多，说明其余交易合计是亏的。</div>}
       {nearZero.length > 0 && <div style={{ ...muted, marginTop: 4 }}>※ 典型一笔几乎不赚钱（{nearZero.join("；")}）：标签按规则判为稳健型，但赚钱主要靠平均数。</div>}
       <div style={{ ...muted, marginTop: 4 }} title={quality.basis}>
