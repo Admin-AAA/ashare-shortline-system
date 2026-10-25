@@ -1,3 +1,4 @@
+import { ReturnSourceBlock } from "../components/ReturnSourceBlock";
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, CalendarClock, Layers, Archive } from "lucide-react";
 import { api, type HorizonBatch, type HorizonMetrics, type HorizonPick, type HorizonStrategy, type HorizonStrategiesResponse, type HorizonPicksResponse } from "../api/client";
@@ -161,6 +162,7 @@ function StrategyCard({ s }: { s: HorizonStrategy }) {
         <Kpi label="最大回撤" value={m.mdd != null ? `${m.mdd.toFixed(1)}%` : "—"} />
         {ex.excess != null && <Kpi label="每笔超额" value={pct(ex.excess)} cls={pnl(ex.excess)} />}
       </div>
+      <ReturnSourceBlock quality={s.metrics.quality} />
       {phases.length > 0 && (
         <>
           <div className="hz-card__sec">历史分段 · 平均收益/笔 <span className="hz-muted">（{phases.length} 个独立阶段，{positive}/{phases.length} 段为正）</span></div>

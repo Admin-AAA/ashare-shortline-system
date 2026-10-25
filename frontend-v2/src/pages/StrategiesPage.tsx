@@ -1,3 +1,4 @@
+import { ReturnSourceBlock, type ReturnSourceQuality } from "../components/ReturnSourceBlock";
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileText, History, Layers, Target } from "lucide-react";
 import { api } from "../api/client";
@@ -397,6 +398,7 @@ function CalledCard({ item, windowDays, rank }: { item: StrategyListItem; window
       </button>
 
       <BacktestReturnsBlock item={item} />
+      <ReturnSourceBlock quality={(item as { quality?: ReturnSourceQuality | null }).quality} />
 
       <StrategyDetailLink item={item} />
 

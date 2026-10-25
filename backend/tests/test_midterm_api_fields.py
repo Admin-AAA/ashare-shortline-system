@@ -65,15 +65,15 @@ def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
     for fn in ("cld_candidates", "dinc_candidates", "udp_candidates", "ncs_candidates", "cg_candidates"):
         monkeypatch.setattr(fe, fn, lambda db, d: None)
     res = ms.generate_picks(None, "2026-10-16", horizon="long")
-    assert set(res) == {"long-lowturn-lowvol", "long-dividend-lowvol", "long-growth-streak"}
+    assert set(res) == {"long-lowturn-lowvol", "long-dividend-lowvol", "long-growth-streak", "long-net-cash-switch"}
     res = ms.generate_picks(None, "2026-10-16", strategy_ids=["long-lowturn-lowvol"])
     assert set(res) == {"long-lowturn-lowvol"}
 
 
 def test_retired_strategies_not_live():
-    """§278：st_hist 重建后复核不达标的 /long 策略已下线，不在现役 STRATEGIES，也不出票。"""
+    """§278/§282：新标准重评仍不达标的 /long 策略已下线（long-net-cash-switch 已于 §282 恢复上线），不在现役 STRATEGIES，也不出票。"""
     retired = {"long-repurchase-big", "long-current-debt-down", "long-dividend-increase",
-               "long-undist-profit-growth", "long-net-cash-switch"}
+               "long-undist-profit-growth"}
     assert set(ms.RETIRED_STRATEGIES) == retired
     assert not retired & set(ms.STRATEGIES)
 

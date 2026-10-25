@@ -1,0 +1,235 @@
+{
+ "schema": "§282",
+ "generated": "2026-10-25",
+ "skills": {
+  "ALL": {
+   "standard": "§282",
+   "basis": "21 次选股抽样平均、EL_C 离场、真实成交口径；回撤为该技能逐笔等权口径（短线框架 §270/§276）",
+   "R12": {
+    "n": 501,
+    "avg": 1.469,
+    "pf": 1.994,
+    "mdd": -25.946,
+    "streak": 6.143,
+    "median": 1.114,
+    "trim5": 0.208,
+    "top10_share": 0.48,
+    "top10_red": false,
+    "robust": true,
+    "label": "稳健型：多数交易都赚一点"
+   },
+   "N3": {
+    "n": 754,
+    "avg": 1.147,
+    "pf": 1.802,
+    "mdd": -28.282,
+    "streak": 8.524,
+    "median": 0.858,
+    "trim5": -0.001,
+    "top10_share": 0.412,
+    "top10_red": false,
+    "robust": false,
+    "label": "彩票型：靠少数暴涨，多数时候原地踏步"
+   },
+   "label": "彩票型：靠少数暴涨，多数时候原地踏步",
+   "pass": true,
+   "fail": [],
+   "pos_phases": 3,
+   "n_phases": 4,
+   "bear": {
+    "W0": 0.166,
+    "W00": -1.153
+   },
+   "phase_avg": {
+    "EXT": 0.508,
+    "12m": 1.469,
+    "W0": 0.166,
+    "W00": -1.153
+   }
+  },
+  "chao-gu-yang-jia-skill": {
+   "standard": "§282",
+   "basis": "21 次选股抽样平均、EL_C 离场、真实成交口径；回撤为该技能逐笔等权口径（短线框架 §270/§276）",
+   "R12": {
+    "n": 94,
+    "avg": 2.018,
+    "pf": 2.4,
+    "mdd": -14.2,
+    "streak": 3.952,
+    "median": 1.356,
+    "trim5": 0.554,
+    "top10_share": 1.055,
+    "top10_red": true,
+    "robust": true,
+    "label": "稳健型：多数交易都赚一点"
+   },
+   "N3": {
+    "n": 161,
+    "avg": 1.454,
+    "pf": 2.065,
+    "mdd": -17.856,
+    "streak": 5.238,
+    "median": 0.872,
+    "trim5": 0.181,
+    "top10_share": 0.998,
+    "top10_red": true,
+    "robust": true,
+    "label": "稳健型：多数交易都赚一点"
+   },
+   "label": "稳健型：多数交易都赚一点",
+   "pass": false,
+   "fail": [
+    "3a_phases"
+   ],
+   "pos_phases": 2,
+   "n_phases": 4,
+   "bear": {
+    "W0": -0.09,
+    "W00": -0.752
+   },
+   "phase_avg": {
+    "EXT": 0.658,
+    "12m": 2.018,
+    "W0": -0.09,
+    "W00": -0.752
+   }
+  },
+  "chen-xiaoqun-skill": {
+   "standard": "§282",
+   "basis": "21 次选股抽样平均、EL_C 离场、真实成交口径；回撤为该技能逐笔等权口径（短线框架 §270/§276）",
+   "R12": {
+    "n": 236,
+    "avg": 0.884,
+    "pf": 1.57,
+    "mdd": -32.983,
+    "streak": 4.524,
+    "median": 0.79,
+    "trim5": -0.252,
+    "top10_share": 1.189,
+    "top10_red": true,
+    "robust": false,
+    "label": "彩票型：靠少数暴涨，多数时候原地踏步"
+   },
+   "N3": {
+    "n": 347,
+    "avg": 0.688,
+    "pf": 1.452,
+    "mdd": -46.219,
+    "streak": 6.095,
+    "median": 0.627,
+    "trim5": -0.388,
+    "top10_share": 1.155,
+    "top10_red": true,
+    "robust": false,
+    "label": "彩票型：靠少数暴涨，多数时候原地踏步"
+   },
+   "label": "彩票型：靠少数暴涨，多数时候原地踏步",
+   "pass": false,
+   "fail": [
+    "2b_mdd"
+   ],
+   "pos_phases": 3,
+   "n_phases": 4,
+   "bear": {
+    "W0": 0.216,
+    "W00": -1.572
+   },
+   "phase_avg": {
+    "EXT": 0.27,
+    "12m": 0.884,
+    "W0": 0.216,
+    "W00": -1.572
+   }
+  },
+  "oversold-capital-reversal": {
+   "standard": "§282",
+   "basis": "21 次选股抽样平均、EL_C 离场、真实成交口径；回撤为该技能逐笔等权口径（短线框架 §270/§276）",
+   "R12": {
+    "n": 59,
+    "avg": 3.215,
+    "pf": 3.021,
+    "mdd": -11.329,
+    "streak": 3.0,
+    "median": 1.813,
+    "trim5": 1.53,
+    "top10_share": 1.121,
+    "top10_red": true,
+    "robust": true,
+    "label": "稳健型：多数交易都赚一点"
+   },
+   "N3": {
+    "n": 79,
+    "avg": 2.708,
+    "pf": 2.845,
+    "mdd": -11.329,
+    "streak": 3.0,
+    "median": 1.874,
+    "trim5": 1.228,
+    "top10_share": 0.994,
+    "top10_red": true,
+    "robust": true,
+    "label": "稳健型：多数交易都赚一点"
+   },
+   "label": "稳健型：多数交易都赚一点",
+   "pass": true,
+   "fail": [],
+   "pos_phases": 4,
+   "n_phases": 4,
+   "bear": {
+    "W0": 0.084,
+    "W00": 0.629
+   },
+   "phase_avg": {
+    "EXT": 1.207,
+    "12m": 3.215,
+    "W0": 0.084,
+    "W00": 0.629
+   }
+  },
+  "sector-relative-strength-leader": {
+   "standard": "§282",
+   "basis": "21 次选股抽样平均、EL_C 离场、真实成交口径；回撤为该技能逐笔等权口径（短线框架 §270/§276）",
+   "R12": {
+    "n": 112,
+    "avg": 1.318,
+    "pf": 2.049,
+    "mdd": -14.115,
+    "streak": 3.857,
+    "median": 1.41,
+    "trim5": 0.415,
+    "top10_share": 0.893,
+    "top10_red": true,
+    "robust": true,
+    "label": "稳健型：多数交易都赚一点"
+   },
+   "N3": {
+    "n": 167,
+    "avg": 1.064,
+    "pf": 1.851,
+    "mdd": -14.299,
+    "streak": 4.19,
+    "median": 0.995,
+    "trim5": 0.319,
+    "top10_share": 0.821,
+    "top10_red": true,
+    "robust": true,
+    "label": "稳健型：多数交易都赚一点"
+   },
+   "label": "稳健型：多数交易都赚一点",
+   "pass": true,
+   "fail": [],
+   "pos_phases": 3,
+   "n_phases": 4,
+   "bear": {
+    "W0": 0.755,
+    "W00": -1.498
+   },
+   "phase_avg": {
+    "EXT": 0.548,
+    "12m": 1.318,
+    "W0": 0.755,
+    "W00": -1.498
+   }
+  }
+ }
+}

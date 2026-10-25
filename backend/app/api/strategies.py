@@ -24,6 +24,7 @@ from app.services.outcome_service import exposure_sample_counts
 from app.services.registry.backtest_metrics import (
     backtest_returns_for,
     load_backtest_metrics,
+    short_quality_for,
 )
 from app.services.strategy_center_service import (
     StrategyVersionNotFoundError,
@@ -253,6 +254,7 @@ def list_strategies(
             ),
             "performance": perf,
             "backtest_returns": backtest_returns_for(sid, backtest_metrics),
+            "quality": short_quality_for(sid),
         }
         if gate is not None:
             item["last_exp_gate"] = gate

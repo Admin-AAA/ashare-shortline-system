@@ -74,4 +74,15 @@ def backtest_returns_for(
     }
 
 
-__all__ = ["load_backtest_metrics", "backtest_returns_for"]
+def short_quality_for(skill_id: str) -> dict[str, Any] | None:
+    """§282 收益来源指标与新标准结论（app/policies/short_quality_metrics.json，纯展示，不参与选股/判定）。"""
+    target = _ARTIFACT.with_name("short_quality_metrics.json")
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    q = (data.get("skills") or {}).get(str(skill_id))
+    return q if isinstance(q, dict) else None
+
+
+__all__ = ["load_backtest_metrics", "backtest_returns_for", "short_quality_for"]
