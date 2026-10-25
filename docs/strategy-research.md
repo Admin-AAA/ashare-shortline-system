@@ -2639,3 +2639,17 @@ lt_research12.py 预注册 6 版（真实成交 k20/max_new5，同日同市值�
 - 处理规则（用户 10-25 规则：不设观察档）：新口径下**不再满足**自己的上线标准 → 立即从现役下线（`midterm_service.STRATEGIES` 移出、`midterm_backtest_metrics.json` 移出，写入 MID_REJECTED / LONG_REJECTED，附理由），商议后提交推送并按规则重启；仍满足 → 只记录新数值、不改任何实盘代码。若旧口径对照同样不满足同一条（说明是标准口径近似、而非 ST 修复造成），照样按「当前不达标」处理并在结果里写明，不因此保留。
 - 局限：历史上 ST 漏标/误标对 liq 股池的影响只在股池内的 ST 边界股上；事件型策略信号本身不依赖 ST，只通过 liq 过滤受影响，预期变化小；实盘选股用 DB 当日 is_st/名称含 ST 剔除（midterm_service），本来就比旧研究文件严，所以本节只验证「回测数字与上线结论」，不涉及实盘候选口径。
 - 输出：`backend/output/research/s278/`（`r25_new.json`/`r25_old.json`、`r16_new.json` … `r102_new.json` 与各 `.log`）；脚本 `backend/scripts/midterm/run_s278.sh` / `run_s278_all.sh`。
+
+## §279 [中线] 近达标被否研究用新 st_hist 口径重跑一次（IDE / SEXP / FCFE / FINA / EQS）— 预注册（2026-10-25 14:17 CST 写定，结果出来前不改）
+- 背景：同 §278——旧 `st_hist.parquet` 漏标/误标 ST 与退市股，已由 e6bbe19 重建；此前所有经 `lt_research.build()` 的被否中线研究都是在旧 ST 口径下判的。用户 10-25 规则：不设观察档，回测达标直接上线。本节只做「同一规则、新数据口径、重跑一次」，**不改任何标准、不改任何参数、不换变体**。
+- 选取方法（写死）：扫描 `backend/output/research/s*/eval*.txt` 里所有「5 条预注册标准」被否的 /mid（持 20 日）变体，按「不过的条数」升序、再看 R12/N3 的每笔与 PF，取最接近达标的最多 5 个研究；短线研究（入场 veto/离场/形态）的被否都是整体为负或大幅劣于基线，没有「差一点」的，不重跑。选中（旧口径下各自不过的条数）：
+  - §265 IDE_h20（有息负债/EBITDA 大降，lt_research100）：旧 1 条不过（8 段超额>0 仅 5 段，需 6）；
+  - §198 SEXP_h20（销售费用率同比下降，lt_research68）：旧 1 条不过（W00 超额 −1.94）；
+  - §250 FCFE_h20（每股股权自由现金流同比改善，lt_research93）：旧 2 条不过（超额 5/8、W00 −0.07），N3 PF2.23；
+  - §203 FINA_h20（财务费用率同比下降，lt_research70）：旧 2 条不过（超额 5/8、R12 −1.06），N3 PF1.77；
+  - §259 EQS_h20（盈利质量切换，lt_research97）：旧 3 条不过，但这是用户点名的方向，h20 版放进来。
+  - 同一次运行会顺带算出各脚本的 h60 版（含用户点名的 §259 EQS_h60 5/8 超额）。**长线研发仍暂停**：h60 版只记录数字，不上线，不改 /long；如达标，留待用户决定是否恢复长线上线。
+- 方法：每个研究用其原脚本原参数原窗口（同 §278：P19/P20/P21/W0/W00/W1/W2/R12 截至 2026-10-16 + N3 2024-01~2026-10，分阶段窗口加载、串行单进程、swap 空闲<400MB 等待），realistic 引擎 k20/max_new5、cohort_bench 对照，0.3% 成本，开盘涨停不买、跌停锁死顺延；只读本地数据。st 为新文件。排在 §278 队列之后（一次只跑一个 heavy 进程）。
+- 采纳标准（与这些研究原预注册完全一致，不事后放宽）：① 8 段（P19~R12）每笔超额>0 至少 6 段；② R12 与 W00 超额>0；③ 8 段每笔均值>0 至少 5 段；④ 8 段笔数中位 ≥15；⑤ N3 PF ≥1.3。全部满足才采纳。
+- 处理：/mid（h20）变体达标 → 直接上线 /mid（`midterm_service.STRATEGIES` 新 kind、实盘不设仓位上限、回测指标写入 `midterm_backtest_metrics.json` 并注明 k_slots=20/max_new=5 仅回测口径）+ 补最近 3 个月 replay（`origin: replay`，`REPLAY_AUTO_BACKFILL_ENABLED=1 scripts/rebuild_replay_picks.py --onboard <id> --execute`）；不达标 → 维持否决（原否决理由加注「ST 口径更正后仍不达标」）。若多个 /mid 变体同时达标，按 N3 每笔最高者优先、与现役的同期选股平均重叠 ≥50% 的视为重复不上线（同 §277 ⑦）。
+- 输出：`backend/output/research/s279/`；脚本 `backend/scripts/midterm/run_s279.sh` / `run_s279_all.sh`。
