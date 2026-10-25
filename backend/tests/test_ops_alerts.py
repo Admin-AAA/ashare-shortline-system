@@ -42,3 +42,22 @@ def test_llm_transient_below_threshold_no_alert(caplog):
     with caplog.at_level(logging.ERROR, logger="ashare.alerts"):
         cb.record_result("m", False, error_type="timeout")
     assert not caplog.records
+
+
+def test_alert_registry_emit_resolve_and_active_records():
+    from app.core import alerts
+
+    alerts.reset_alerts()
+    assert alerts.active_alert_records() == []
+    alerts.emit_alert("data_freshness", "capital_flow", "滞后 1 个交易日")
+    alerts.emit_alert("data_freshness", "capital_flow", "滞后 1 个交易日")  # 冷却内重复：不新增也不丢
+    alerts.emit_alert("task_status", "t1", "partial_failed")
+    recs = alerts.active_alert_records("data_freshness")
+    assert [(r["kind"], r["key"]) for r in recs] == [("data_freshness", "capital_flow")]
+    assert alerts.resolve_alert("data_freshness", "capital_flow", "ok") is True
+    assert alerts.resolve_alert("data_freshness", "capital_flow", "ok") is False  # 已解除：不重复记
+    assert alerts.active_alert_records("data_freshness") == []
+    assert [r["key"] for r in alerts.active_alert_records()] == ["t1"]
+    # 解除后同 key 再次告警不受旧冷却影响
+    assert alerts.emit_alert("data_freshness", "capital_flow", "再次滞后") is True
+    alerts.reset_alerts()

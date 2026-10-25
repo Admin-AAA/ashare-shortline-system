@@ -401,11 +401,32 @@ def _run_stock_identity_refresh(db) -> dict:
     return out
 
 
+_BAD_TASK_STATUSES = frozenset({"failed", "partial_failed", "diagnosis_failed", "post_diagnosis_failed"})
+
+
+def _sync_task_status_alert(task_id: str, task_run_id: str | None, status: str, summary: str) -> None:
+    """partial_failed / failed 作为一等告警：任务业务状态不好就 emit_alert，恢复（completed）后自动解除。
+
+    skipped 不改变告警状态。告警写入失败不影响任务本身。
+    """
+    try:
+        from app.core.alerts import emit_alert, resolve_alert
+
+        if status in _BAD_TASK_STATUSES:
+            emit_alert("task_status", task_id, f"调度任务 {task_id} 状态 {status}: {summary[:300]}（task_run_id={task_run_id}）")
+        elif status in {"completed", "partial_completed"}:
+            resolve_alert("task_status", task_id, f"调度任务 {task_id} 恢复为 {status}")
+    except Exception:  # noqa: BLE001
+        logger.warning("任务状态告警同步失败: %s", task_id, exc_info=True)
+
+
 def _run_data_freshness_check(db) -> dict:
     from app.services.data_freshness import run_freshness_check
 
     out = run_freshness_check(db)
     problems = out.get("problems") or {}
+    if problems:
+        out["status"] = "partial_failed"  # 巡检发现问题即业务状态 partial_failed（同时每张问题表已 emit_alert）
     out["summary_text"] = (
         "数据新鲜度正常" if not problems
         else f"数据新鲜度异常 {len(problems)} 张表: " + "；".join(f"{t}: {v[0]}" for t, v in list(problems.items())[:8])
@@ -541,6 +562,7 @@ def _execute_task(
             result=result,
         )
         logger.info("调度任务完成: %s", task_id)
+        _sync_task_status_alert(task_id, task_run_id, _task_result_status(result), str(result.get("summary_text") or ""))
     except RetryablePostcloseReadinessError as exc:
         # 只把结构化确认的当日辅助数据滞后传播给 Prefect。每次重试都会重新进入
         # _execute_task、创建新 Session；这里先完整落盘本次同步/刷新证据。
@@ -1576,6 +1598,18 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         db.rollback()
         indicator_fill["local_indicators"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
         logger.warning("local indicator fill failed: %s", exc)
+
+    # KDJ/BOLL/CCI/vol_ratio_5/20：quantdata 额度耗尽 / promax 回退只给部分列时整列 NULL（10-20~10-23 事故）。
+    # 本地精确复算（已用源数据逐行核对），只填 NULL；失败只告警。窗口取近 15 天以覆盖补数/重跑。
+    try:
+        from app.services.kdj_boll_cci_fill import fill_kdj_boll_cci
+
+        _kb_since = (_dt_mod.date.fromisoformat(str(trade_date)[:10]) - _dt_mod.timedelta(days=15)).isoformat()
+        indicator_fill["kdj_boll_cci"] = fill_kdj_boll_cci(db, since=_kb_since, end=str(trade_date)[:10])
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        indicator_fill["kdj_boll_cci"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        logger.warning("kdj/boll/cci fill failed: %s", exc)
 
     # daily_basic（市值/PE/换手）此前从未接入日更，2026-10-09 后停更；补当日 + 停更告警。
     try:

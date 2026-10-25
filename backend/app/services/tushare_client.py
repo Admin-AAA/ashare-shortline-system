@@ -843,7 +843,7 @@ def fetch_daily_kbars(
     except MarketFrameContractError:
         raise
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars: 非阻断数据集 stk_factor 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # 3. daily_basic — turnover_rate, pe_ttm, total_mv
     basic_map: dict[str, dict] = {}
@@ -854,7 +854,7 @@ def fetch_daily_kbars(
             for _, r in basic.iterrows():
                 basic_map[str(r["trade_date"])] = dict(r)
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars: 非阻断数据集 daily_basic 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # 4. cyq_perf — 筹码分布
     chip_map: dict[str, dict] = {}
@@ -865,7 +865,7 @@ def fetch_daily_kbars(
             for _, r in chips.iterrows():
                 chip_map[str(r["trade_date"])] = dict(r)
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars: 非阻断数据集 cyq_perf 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # 5. stk_factor_pro — 扩展因子（ASI/ATR/BBI/DPO/OBV/PSY/VR/WR 等）
     factor_pro_map: dict[str, dict] = {}
@@ -876,7 +876,7 @@ def fetch_daily_kbars(
             for _, r in fp.iterrows():
                 factor_pro_map[str(r["trade_date"])] = dict(r)
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars: 非阻断数据集 stk_factor_pro 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     bars: list[dict[str, Any]] = []
     for td, row in daily_rows.items():
@@ -1007,7 +1007,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
             for _, row in basic.iterrows():
                 basic_map[str(row.get("ts_code") or "")] = dict(row)
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars_for_trade_date: 非阻断数据集 daily_basic 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # 2026-10-19：17:35 盘后写入时 stk_factor 常未发布 → factor_map 为空 → adj_factor 被 _f 写成 0.0
     # （214 个交易日全市场 adj_factor=0）。adj_factor 改从专用 adj_factor 接口补（盘前即发布），
@@ -1021,7 +1021,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
                 if value > 0:
                     adj_map[str(row.get("ts_code") or "")] = value
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars_for_trade_date: adj_factor fetch failed: %s", exc)
+        logger.warning("fetch_daily_kbars_for_trade_date: 非阻断数据集 adj_factor 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     factor_map: dict[str, dict[str, Any]] = {}
     try:
@@ -1033,7 +1033,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     except MarketFrameContractError:
         raise
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars_for_trade_date: 非阻断数据集 stk_factor 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # 筹码分布（cyq_perf）——按 trade_date 批量一次拉全市场。此前批量补数只拉
     # daily/daily_basic/stk_factor，导致盘后写入的 DailyKbar 行 chip_cost_50/15/85
@@ -1053,7 +1053,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
             for _, row in chips.iterrows():
                 chip_map[str(row.get("ts_code") or "")] = dict(row)
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars_for_trade_date: 非阻断数据集 cyq_perf 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # stk_factor 指标列缺失时写 None（上游 upsert 对 0/NULL 都保留旧值），不再写 0（2026-10-19）
     bars: list[dict[str, Any]] = []

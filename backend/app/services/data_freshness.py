@@ -255,9 +255,19 @@ def run_freshness_check(db, *, alert: bool = True, chip_frozen_since: str | None
         db.rollback()
         results.append({"table": "snapshot:*", "issues": [f"检查失败 {type(exc).__name__}: {str(exc)[:120]}"]})
     problems = {r["table"]: r["issues"] for r in results if r["issues"]}
+    resolved: list[str] = []
     if alert:
+        from app.core.alerts import active_alert_records, resolve_alert
+
         for table, issues in problems.items():
-            emit_alert("data_freshness", f"{table}:{dates[-1]}", f"{table}: " + "；".join(issues[:5]))
+            # key 只用表名（不再带日期）：同一张表的同一类问题跨天只算一条活跃告警，恢复后可精确解除
+            emit_alert("data_freshness", table, f"{table}:{dates[-1]}: " + "；".join(issues[:5]))
+        checked = {r["table"] for r in results}
+        for rec in active_alert_records("data_freshness"):
+            key = str(rec["key"])
+            if key in checked and key not in problems:  # 只解除「本轮检查过且已无问题」的表
+                if resolve_alert("data_freshness", key, f"{key} 已恢复（最新交易日 {dates[-1]}）"):
+                    resolved.append(key)
     daily_basic = check_daily_basic_staleness(db, latest=dates[-1]) if alert else None
     return {"latest_trade_date": dates[-1], "problems": problems, "tables": results, "daily_basic": daily_basic,
-            "ok": not problems}
+            "resolved_alerts": resolved, "ok": not problems}

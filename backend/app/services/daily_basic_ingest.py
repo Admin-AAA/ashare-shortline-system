@@ -72,7 +72,7 @@ def ingest_daily_basic(db, trade_date: str, pro: Any = None) -> dict[str, Any]:
 
 def check_daily_basic_staleness(db, latest: str | None = None) -> dict[str, Any]:
     """daily_basic 最新日期落后于最近交易日即告警（同 ivol_coverage 写法，走 emit_alert）。"""
-    from app.core.alerts import emit_alert
+    from app.core.alerts import emit_alert, resolve_alert
 
     latest = latest or latest_trade_date(db)
     basic = db.execute(text("SELECT MAX(trade_date) FROM daily_basic")).scalar()
@@ -81,10 +81,12 @@ def check_daily_basic_staleness(db, latest: str | None = None) -> dict[str, Any]
     if not ok:
         emit_alert(
             "daily_basic_stale",
-            f"daily_basic:{latest}",
+            "daily_basic",
             f"daily_basic 最新日期 {basic} 落后于最近交易日 {latest}，"
             "回购市值占比/中长线市值排名将读到陈旧 total_mv/circ_mv",
         )
+    else:
+        resolve_alert("daily_basic_stale", "daily_basic", f"daily_basic 已更新到 {basic}")
     return {"latest_trade_date": latest, "daily_basic_max": basic, "ok": ok}
 
 

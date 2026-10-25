@@ -266,6 +266,11 @@ def _data_health_remediation_summary(result: dict) -> str:
     empty_count = int(summary.get("empty_count") or 0)
     comparison = result.get("comparison") if isinstance(result, dict) else None
     empty_suffix = f"，空结果待重试 {empty_count}" if empty_count else ""
+    # 结果状态是 partial_failed / failed 而 action 计数为 0 时（失败发生在 action 之外），摘要不能写「失败 0」
+    result_status = str(result.get("status") or "") if isinstance(result, dict) else ""
+    if result_status in {"partial_failed", "failed"} and not failed_count:
+        failed_count = 1
+        empty_suffix += f"（状态 {result_status}，失败发生在 action 之外）"
     if isinstance(comparison, dict) and comparison.get("status") != "skipped":
         resolved = int(comparison.get("resolved_missing_day_count") or 0)
         target = int(comparison.get("target_missing_day_count") or 0)
@@ -453,8 +458,11 @@ def _sync_step_summary(label: str, result: dict) -> str:
     batch = result.get("batch_sync") if isinstance(result.get("batch_sync"), dict) else {}
     failed_sets = sorted(k for k, v in batch.items() if isinstance(v, dict) and v.get("status") == "failed")
     known_sets = sorted(k for k, v in batch.items() if isinstance(v, dict) and v.get("status") == "known_gap")
-    parts.append(f"失败 {failed + len(failed_sets)}")
+    step_bad = str(result.get("status") or "") in {"partial_failed", "failed"} and not (failed or failed_sets)
+    parts.append(f"失败 {failed + len(failed_sets) + (1 if step_bad else 0)}")
     text = " / ".join(parts)
+    if step_bad:
+        text += f"（步骤状态 {result.get('status')}，失败发生在 action 之外）"
     if failed_sets:
         text += f"（失败数据集: {','.join(failed_sets)}）"
     if known_sets:
