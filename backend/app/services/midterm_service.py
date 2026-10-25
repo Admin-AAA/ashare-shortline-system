@@ -41,6 +41,17 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "weekly",
     },
+    # §312 小盘高股息（scripts/midterm/lt_research118.py SDY_W，邢不行小市值框架+红利，预注册、未调参；2026-10-25 起直接上线）
+    "mid-smallcap-dividend-weekly": {
+        "name": "小盘高股息周度（小盘趋势过滤，持20日）",
+        "horizon": "mid",
+        "summary": "每个周五收盘后，先取与「小市值周度」相同的合格股（剔除ST、北交所、亏损股、上市不足一年、20日均成交额<3000万）里总市值最小的400只（即小盘指数成分），再在其中挑股息率TTM（过去12个月现金分红/市值）最高的10只，次日开盘买入、各持有20个交易日。与「小市值周度」相同：仅当小盘指数站上20日均线时开新仓。思路：同样吃小盘溢价，但挑小票里分红最多、最像现金奶牛的，避开不分红小票的ST/退市风险；与「小市值周度」选股几乎不重叠。",
+        "kind": "smallcap_div",
+        "guard": True,
+        "top_n": 10,
+        "hold_days": 20,
+        "schedule": "weekly",
+    },
     # §91 事件型（scripts/midterm/lt_research12.py 预注册 6 版中达标的 2 版；同市值五分位对照算超额；mid 版 §100 加金额≥0.5%）
     "mid-repurchase-plan": {
         # §100 预注册 RP_r05（scripts/midterm/lt_research18.py，未调参）：在 §91 R_plan_h20 基础上只保留金额上限≥总市值0.5%的预案
@@ -280,6 +291,49 @@ def _lowprice_universe(db, as_of: str, limit: int, rank_n: int = 200, min_close:
         if len(out) >= limit:
             break
     return out
+
+
+def _smallcap_div_universe(db, as_of: str, limit: int, pool_n: int = 400) -> list[dict[str, Any]] | None:
+    """§312 SDY_W：合格池（非ST/退市、非北交所、上市≥250个交易日、20日均额>3000万、PE_ttm>0）按总市值升序前 pool_n 只
+    （小盘指数成分口径）里，dv_ttm（周度快照，同 dividend_lowvol）>0 的按 dv_ttm 降序取 limit 只。与 scripts/midterm/lt_research118.py 口径一致。
+    dv_ttm 快照取不到返回 None（data_error）。"""
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 251"), {"d": as_of})]
+    if len(dates) < 251 or dates[0] != as_of:
+        return []
+    basic_date = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
+    rows = db.execute(text("""
+        SELECT b.code, b.total_mv, b.pe_ttm, a.amt20
+        FROM daily_basic b
+        JOIN (SELECT code, AVG(amount) amt20 FROM daily_kbars
+              WHERE trade_date> :d20x AND trade_date<=:d GROUP BY code) a ON a.code=b.code
+        JOIN (SELECT code FROM daily_kbars WHERE trade_date=:d250) old ON old.code=b.code
+        JOIN (SELECT code FROM daily_kbars WHERE trade_date=:d AND close>0) today ON today.code=b.code
+        WHERE b.trade_date=:bd AND b.total_mv>0 AND b.pe_ttm>0 AND a.amt20>3e7
+          AND LEFT(b.code,1) NOT IN ('4','8','9')
+    """), {"d20x": dates[20], "d": as_of, "d250": dates[250], "bd": basic_date}).mappings().all()
+    st = {r[0] for r in db.execute(text(
+        "SELECT code FROM stock_metadata_history WHERE (is_st=1 OR name LIKE '%ST%' OR name LIKE '%退%') "
+        "AND effective_from<=:d AND (effective_to IS NULL OR effective_to>:d)"), {"d": as_of})}
+    pool = sorted([r for r in rows if r["code"] not in st], key=lambda r: (float(r["total_mv"]), r["code"]))[:pool_n]
+    snap = _weekly_snapshot_date(db, as_of, dates)
+    wb = _weekly_basic(snap) if snap else None
+    if wb is None or len(wb) == 0:
+        return None
+    dv = {}
+    for code, v in zip(wb["ts_code"].astype(str).str[:6], wb["dv_ttm"]):
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv == fv and fv > 0:
+            dv[code] = fv
+    mv_rank = {r["code"]: i + 1 for i, r in enumerate(pool)}
+    cand = sorted([r for r in pool if r["code"] in dv], key=lambda r: (-dv[r["code"]], float(r["total_mv"]), r["code"]))[:limit]
+    names = dict(db.execute(text("SELECT code,name FROM stocks")).all())
+    return [{"code": r["code"], "name": names.get(r["code"], ""), "total_mv": float(r["total_mv"]), "pe_ttm": float(r["pe_ttm"]),
+             "amt20": float(r["amt20"]), "dv_ttm": dv[r["code"]], "mv_rank": mv_rank[r["code"]], "dv_snap": snap} for r in cand]
 
 
 def small_cap_guard(db, as_of: str, window: int = 20) -> dict[str, Any]:
@@ -971,6 +1025,11 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             continue
         if meta.get("kind") == "lowprice_small":
             picks = _lowprice_universe(db, as_of, meta["top_n"])
+        elif meta.get("kind") == "smallcap_div":
+            picks = _smallcap_div_universe(db, as_of, meta["top_n"])
+            if picks is None:
+                result[sid] = "no_data"
+                continue
         else:
             picks = _universe(db, as_of, meta["top_n"])
         held = _held_codes(db, sid, as_of)
@@ -1156,6 +1215,10 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             pe = p.get("pe_ttm")
             reason = (f"收盘价 {_f(p.get('close'))} 元（合格股里股价第 {p.get('price_rank', '')} 低）、总市值 {_f(score)} 亿（第 {p.get('mv_rank', '')} 小），"
                       f"同时在「股价最低200只」和「市值最小200只」里；PE_ttm {_f(pe, 1) if pe is not None else '亏损/无'}")
+        elif kind == "smallcap_div":
+            score, label, better = round(float(p["dv_ttm"]), 2), "股息率TTM(%)", "higher"
+            reason = (f"股息率TTM {_f(score)}%（{p.get('dv_snap', '')} 周度快照），总市值 {_f(float(p['total_mv']) / 1e4)} 亿"
+                      f"（合格股里第 {p.get('mv_rank', '')} 小，在最小400只内）；PE_ttm {_f(p.get('pe_ttm'), 1)}")
         elif kind == "repurchase":
             score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
             reason = f"{p.get('ann_date', '')} 回购预案，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，占总市值 {_f(score)}%"
