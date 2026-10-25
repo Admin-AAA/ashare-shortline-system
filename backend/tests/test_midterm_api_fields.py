@@ -13,6 +13,7 @@ def test_annotate_each_kind():
                                          "mv_rank": 370, "dv_snap": "2026-10-23"},
         "mid-smallcap-lowps-weekly": {"code": "1", "total_mv": 254000.0, "pe_ttm": 38.5, "ps_ttm": 0.3861,
                                       "mv_rank": 210, "dv_snap": "2026-10-23"},
+        "mid-smallcap-reversal-weekly": {"code": "1", "total_mv": 254000.0, "pe_ttm": 38.5, "r20": -25.317, "mv_rank": 210},
         "mid-repurchase-plan": {"code": "1", "ratio": 0.01157, "repurchase_amount": 6e7},
         "mid-earnings-accel": {"code": "1", "score": 300.0, "dt_netprofit_yoy": 592.1},
         "mid-forecast-beat": {"code": "1", "score": 300.0, "p_change_min": 3318.0},
@@ -21,7 +22,7 @@ def test_annotate_each_kind():
         "long-lowturn-lowvol": {"code": "1", "score": 12.0, "turn60": 0.5, "vol60": 1.1},
         "long-dividend-lowvol": {"code": "1", "score": 9.0, "dv_ttm": 5.2, "vol60": 1.0},
     }
-    expect = {"mid-small-cap-weekly": 16.64, "mid-lowprice-smallcap-weekly": 18.1, "mid-smallcap-dividend-weekly": 5.46, "mid-smallcap-lowps-weekly": 0.39, "mid-repurchase-plan": 1.157, "mid-incentive-option": -5.12,
+    expect = {"mid-small-cap-weekly": 16.64, "mid-lowprice-smallcap-weekly": 18.1, "mid-smallcap-dividend-weekly": 5.46, "mid-smallcap-lowps-weekly": 0.39, "mid-smallcap-reversal-weekly": -25.32, "mid-repurchase-plan": 1.157, "mid-incentive-option": -5.12,
               "mid-block-trade-premium": 0.61}
     for sid, p in cases.items():
         out = ms.annotate_pick(sid, dict(p), 1)
@@ -122,3 +123,23 @@ def test_retired_strategies_not_in_horizon_lists(tmp_path, monkeypatch):
     ghost = ms.list_picks_page(None, "mystery-strategy", None, 1, 30)["batches"][0]
     assert ghost["strategy_name"] == "已下线策略" and "mystery" not in ghost["strategy_name"]
     assert ghost["horizon"] == "mid"
+
+
+def test_r20_map_compounds_last_20_rows_and_skips_short_or_stale():
+    class _R:
+        def __init__(self, rows): self.rows = rows
+        def all(self): return self.rows
+
+    class _DB:
+        def __init__(self, rows): self.rows = rows
+        def execute(self, *a, **k): return _R(self.rows)
+
+    d = [f"2026-09-{i:02d}" for i in range(1, 29)]
+    rows = [("A", x, -1.0) for x in d[-20:]] + [("A", d[0], 50.0)]         # 只取最近20行：0.99**20-1
+    rows += [("B", x, 1.0) for x in d[-19:]]                                # 不足20行
+    rows += [("C", x, 1.0) for x in d[:20]]                                 # 最后一行不是 as_of（停牌）
+    rows += [("D", x, -50.0) for x in d[-20:]]                              # 单日跌幅限幅 −35%
+    out = ms._r20_map(_DB(rows), ["A", "B", "C", "D"], [d[-1]] * 251, d[-1])
+    assert set(out) == {"A", "D"}
+    assert abs(out["A"] - round((0.99 ** 20 - 1) * 100, 3)) < 1e-6
+    assert abs(out["D"] - round((0.65 ** 20 - 1) * 100, 3)) < 1e-6

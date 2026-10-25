@@ -63,6 +63,17 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "weekly",
     },
+    # §315-D 小盘反转（scripts/midterm/lt_research120.py SMR_W，小市值周度框架+近20日跌幅最大，预注册、未调参；2026-10-25 起直接上线）
+    "mid-smallcap-reversal-weekly": {
+        "name": "小盘超跌反转周度（小盘趋势过滤，持20日）",
+        "horizon": "mid",
+        "summary": "每个周五收盘后，先取与「小市值周度」相同的合格股（剔除ST、北交所、亏损股、上市不足一年、20日均成交额<3000万）里总市值最小的400只（即小盘指数成分），再在其中挑近20个交易日跌幅最大的10只（小盘里被错杀、最可能反弹的一批，与「最小10只」「低价」「高股息」「低市销率」几乎不重合），下周一开盘买入、持有20个交易日；小盘指数在20日均线下方时不开新仓。",
+        "kind": "smallcap_rev",
+        "guard": True,
+        "top_n": 10,
+        "hold_days": 20,
+        "schedule": "weekly",
+    },
     # §91 事件型（scripts/midterm/lt_research12.py 预注册 6 版中达标的 2 版；同市值五分位对照算超额；mid 版 §100 加金额≥0.5%）
     "mid-repurchase-plan": {
         # §100 预注册 RP_r05（scripts/midterm/lt_research18.py，未调参）：在 §91 R_plan_h20 基础上只保留金额上限≥总市值0.5%的预案
@@ -304,6 +315,28 @@ def _lowprice_universe(db, as_of: str, limit: int, rank_n: int = 200, min_close:
     return out
 
 
+def _r20_map(db, codes: list[str], dates: list[str], as_of: str) -> dict[str, float]:
+    """§315-D：每只股票最近 20 个自身交易日的复权涨跌幅（%，逐日 pct_chg 限 ±35% 连乘，与 lt_research.build 的 ac 口径一致）。
+    停牌导致近 20 个自身交易日不足、或 as_of 当日无行情的不返回。dates 为最近 251 个交易日（降序）。"""
+    if not codes:
+        return {}
+    rows = db.execute(text("SELECT code, trade_date, pct_chg FROM daily_kbars WHERE trade_date>=:d0 AND trade_date<=:d AND code IN :cs")
+                      .bindparams(bindparam("cs", expanding=True)), {"d0": dates[min(59, len(dates) - 1)], "d": as_of, "cs": list(codes)}).all()
+    by: dict[str, list[tuple[str, float]]] = {}
+    for code, td, pc in rows:
+        by.setdefault(code, []).append((str(td)[:10], float(pc or 0)))
+    out: dict[str, float] = {}
+    for code, lst in by.items():
+        lst.sort()
+        if len(lst) < 20 or lst[-1][0] != as_of:
+            continue
+        v = 1.0
+        for _, pc in lst[-20:]:
+            v *= 1 + max(-35.0, min(35.0, pc)) / 100
+        out[code] = round((v - 1) * 100, 3)
+    return out
+
+
 def _smallcap_div_universe(db, as_of: str, limit: int, pool_n: int = 400, factor: str = "dv_ttm") -> list[dict[str, Any]] | None:
     """§312 SDY_W：合格池（非ST/退市、非北交所、上市≥250个交易日、20日均额>3000万、PE_ttm>0）按总市值升序前 pool_n 只
     （小盘指数成分口径）里，dv_ttm（周度快照，同 dividend_lowvol）>0 的按 dv_ttm 降序取 limit 只。与 scripts/midterm/lt_research118.py 口径一致。
@@ -329,6 +362,13 @@ def _smallcap_div_universe(db, as_of: str, limit: int, pool_n: int = 400, factor
         "SELECT code FROM stock_metadata_history WHERE (is_st=1 OR name LIKE '%ST%' OR name LIKE '%退%') "
         "AND effective_from<=:d AND (effective_to IS NULL OR effective_to>:d)"), {"d": as_of})}
     pool = sorted([r for r in rows if r["code"] not in st], key=lambda r: (float(r["total_mv"]), r["code"]))[:pool_n]
+    if factor == "r20":  # §315-D SMR_W：池内近20个交易日涨跌幅（复权，逐日 pct_chg 限 ±35% 连乘）升序取 limit 只
+        r20 = _r20_map(db, [r["code"] for r in pool], dates, as_of)
+        mv_rank = {r["code"]: i + 1 for i, r in enumerate(pool)}
+        cand = sorted([r for r in pool if r["code"] in r20], key=lambda r: (r20[r["code"]], float(r["total_mv"]), r["code"]))[:limit]
+        names = dict(db.execute(text("SELECT code,name FROM stocks")).all())
+        return [{"code": r["code"], "name": names.get(r["code"], ""), "total_mv": float(r["total_mv"]), "pe_ttm": float(r["pe_ttm"]),
+                 "amt20": float(r["amt20"]), "r20": r20[r["code"]], "mv_rank": mv_rank[r["code"]], "dv_snap": as_of} for r in cand]
     snap = _weekly_snapshot_date(db, as_of, dates)
     wb = _weekly_basic(snap, extra=("ps_ttm",) if factor == "ps_ttm" else ()) if snap else None
     if wb is None or len(wb) == 0 or factor not in wb.columns:
@@ -1038,8 +1078,8 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             continue
         if meta.get("kind") == "lowprice_small":
             picks = _lowprice_universe(db, as_of, meta["top_n"])
-        elif meta.get("kind") in ("smallcap_div", "smallcap_lowps"):
-            picks = _smallcap_div_universe(db, as_of, meta["top_n"], factor="ps_ttm" if meta["kind"] == "smallcap_lowps" else "dv_ttm")
+        elif meta.get("kind") in ("smallcap_div", "smallcap_lowps", "smallcap_rev"):
+            picks = _smallcap_div_universe(db, as_of, meta["top_n"], factor={"smallcap_lowps": "ps_ttm", "smallcap_rev": "r20"}.get(meta["kind"], "dv_ttm"))
             if picks is None:
                 result[sid] = "no_data"
                 continue
@@ -1235,6 +1275,10 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
         elif kind == "smallcap_lowps":
             score, label, better = round(float(p["ps_ttm"]), 2), "市销率PS_TTM", "lower"
             reason = (f"市销率PS_TTM {_f(score)}（{p.get('dv_snap', '')} 周度快照，最小400只小票里最低的一批），总市值 {_f(float(p['total_mv']) / 1e4)} 亿"
+                      f"（合格股里第 {p.get('mv_rank', '')} 小）；PE_ttm {_f(p.get('pe_ttm'), 1)}")
+        elif kind == "smallcap_rev":
+            score, label, better = round(float(p["r20"]), 2), "近20日涨跌幅(%)", "lower"
+            reason = (f"近20个交易日涨跌幅 {_f(score)}%（最小400只小票里跌得最多的一批），总市值 {_f(float(p['total_mv']) / 1e4)} 亿"
                       f"（合格股里第 {p.get('mv_rank', '')} 小）；PE_ttm {_f(p.get('pe_ttm'), 1)}")
         elif kind == "repurchase":
             score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
