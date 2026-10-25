@@ -193,3 +193,13 @@ def test_strategy_profile_refresh_only_runs_pending_and_caps_runs(monkeypatch):
     out = scheduler_service._run_strategy_profile_refresh(None, {"max_runs": 1})
     assert FakeProfiles.refreshed == ["b"]  # 每次最多 1 个，已有画像的 a 不跑
     assert out["pending_before"] == 2 and out["deferred"] == 1 and "status" not in out
+
+
+def test_stamp_code_revision_records_start_and_flags_change(monkeypatch):
+    monkeypatch.setattr(scheduler_service, "_current_code_revision", lambda: "bbb")
+    r = {}
+    scheduler_service._stamp_code_revision(r, "aaa")
+    assert r["code_revision"] == "aaa" and r["code_revision_end"] == "bbb" and r["code_revision_changed_during_run"]
+    r2 = {}
+    scheduler_service._stamp_code_revision(r2, "bbb")
+    assert r2 == {"code_revision": "bbb"}

@@ -516,6 +516,31 @@ def ensure_scheduled_task_registrations() -> None:
     _ensure_strategy_profile_task()
 
 
+def _current_code_revision() -> str:
+    """当前主工作树 git HEAD（不走进程缓存：worker 每个任务从磁盘加载代码，HEAD 可能在任务运行中移动）。"""
+    try:
+        from app.core.deployment_identity import _git_head_revision
+
+        return _git_head_revision() or "unknown"
+    except Exception:  # noqa: BLE001 - 观测字段，失败不影响任务
+        return "unknown"
+
+
+def _stamp_code_revision(result: dict, start_revision: str) -> None:
+    """把任务开始/结束时的 code_revision 写进 result_json（scheduled_task_runs），暴露 worker 版本混用。
+
+    worker 常驻，每个任务从磁盘主工作树加载代码；合并/切分支发生在任务中间时，同一次运行前后半段会跑不同版本。
+    """
+    if not isinstance(result, dict):
+        return
+    end_revision = _current_code_revision()
+    result.setdefault("code_revision", start_revision)
+    if end_revision != start_revision:
+        result["code_revision_end"] = end_revision
+        result["code_revision_changed_during_run"] = True
+        logger.warning("调度任务运行期间 code_revision 变化: %s -> %s", start_revision[:12], end_revision[:12])
+
+
 def _execute_task(
     task_id: str,
     *,
@@ -534,7 +559,8 @@ def _execute_task(
         logger.warning("调度任务 %s 正在执行中，跳过重复触发", task_id)
         return
 
-    logger.info("调度任务开始: %s", task_id)
+    start_revision = _current_code_revision()
+    logger.info("调度任务开始: %s（code_revision=%s）", task_id, start_revision[:12])
     _mark_running(task_id)
 
     db = SessionLocal()
@@ -620,6 +646,7 @@ def _execute_task(
             if task_id in BLOCK_TRADE_HOOK_TASK_IDS and isinstance(result, dict):
                 result["midterm_block_trade"] = _run_block_trade_picks_hook(db, task_id)
 
+        _stamp_code_revision(result, start_revision)
         finish_task_run(
             db,
             task_run_id,
