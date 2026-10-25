@@ -32,6 +32,7 @@ def _bar(*, open, high, low, close, pct_chg):
         ("688001", 20.0),
         ("830799", 30.0),  # 北交 8 开头
         ("430047", 30.0),  # 北交 4 开头
+        ("920285", 30.0),  # 北交所 2024 起的 920 新代码段
         ("", 10.0),
     ],
 )
@@ -184,3 +185,79 @@ def test_is_twenty_cm_stock_missing_board_info_false():
     flag, basis = br.is_twenty_cm_stock({"code": "600000"})
     assert flag is False
     assert basis == "缺少板块信息，按代码前缀未识别为 20cm"
+
+
+# ── 2026-07-06 起主板 ST 涨跌停 5% → 10%（stk_limits 实测）；创业/科创 ST 一直 20%，北交所 30% ──
+@pytest.mark.parametrize(
+    "stock, trade_date, expected",
+    [
+        ({"code": "600165", "name": "ST宁科"}, "2026-07-03", 5.0),   # 变更前最后一个交易日
+        ({"code": "600165", "name": "ST宁科"}, "2026-07-06", 10.0),  # 变更生效日
+        ({"code": "600165", "name": "ST宁科"}, "20261023", 10.0),    # compact 日期
+        ({"code": "000504", "name": "*ST生物", "is_st": True}, "2025-01-02", 5.0),
+        ({"code": "000001", "name": "平安银行", "is_st": True}, "2026-08-01", 10.0),  # is_st 标记优先于名称
+        ({"code": "600000", "name": "浦发银行"}, "2026-08-01", 10.0),
+        ({"code": "300506", "name": "ST名家汇"}, "2026-01-14", 20.0),  # 创业板 ST 仍 20%
+        ({"code": "300506", "name": "ST名家汇"}, "2026-09-01", 20.0),
+        ({"code": "688001", "name": "*ST华兴", "is_st": True}, "2024-05-06", 20.0),
+        ({"code": "830799", "name": "ST艾融", "is_st": True}, "2026-09-01", 30.0),  # 北交所 ST 30%
+        ({"code": "920285", "name": "远大健科"}, "2026-10-23", 30.0),
+        ({"code": "600001", "name": "测试", "market": "北交所"}, "2026-10-23", 30.0),
+    ],
+)
+def test_limit_pct_for_stock_by_trade_date(stock, trade_date, expected):
+    assert br.limit_pct_for_stock(stock, trade_date) == expected
+
+
+def test_limit_pct_for_stock_reads_trade_date_from_stock_dict():
+    st = {"code": "600165", "name": "ST宁科"}
+    assert br.limit_pct_for_stock({**st, "trade_date": "2026-07-03"}) == 5.0
+    assert br.limit_pct_for_stock({**st, "trade_date": "2026-07-06"}) == 10.0
+    assert br.limit_pct_for_stock(st, "2026-07-03") == 5.0  # 显式参数优先
+
+
+def test_limit_pct_for_stock_without_date_uses_current_rule():
+    assert br.limit_pct_for_stock({"code": "600165", "name": "ST宁科"}) == 10.0
+
+
+def test_st_main_board_pct_on_boundaries():
+    assert br.st_main_board_pct_on("2026-07-05") == 5.0
+    assert br.st_main_board_pct_on("2026-07-06") == 10.0
+    assert br.st_main_board_pct_on("garbage") == 10.0  # 无法解析 → 当前规则
+
+
+def test_is_price_limit_move_st_main_board_regime():
+    st = {"code": "600165", "name": "ST宁科", "pct_chg": 9.9}
+    assert br.is_price_limit_move(st, up=True, trade_date="2026-07-07") is True
+    assert br.is_price_limit_move(st, up=True, trade_date="2026-07-03") is True   # 5% 口径下 9.9 更是涨停
+    st5 = {**st, "pct_chg": 5.0}
+    assert br.is_price_limit_move(st5, up=True, trade_date="2026-07-03") is True
+    assert br.is_price_limit_move(st5, up=True, trade_date="2026-07-07") is False  # 10% 口径下 5% 不是涨停
+    assert br.is_price_limit_move({**st, "pct_chg": -10.0}, up=False, trade_date="2026-07-07") is True
+
+
+@pytest.mark.parametrize(
+    "up, down, expected",
+    [
+        (11.0, 9.0, 10.0),     # 1.222
+        (10.5, 9.5, 5.0),      # 1.105
+        (12.0, 8.0, 20.0),     # 1.5
+        (13.0, 7.0, 30.0),     # 1.857
+        (14.4, 6.4, None),     # 新股 44%/-36%，不吸附
+        (0, 9.0, None),
+        (9.0, 11.0, None),
+    ],
+)
+def test_limit_pct_from_limit_prices(up, down, expected):
+    assert br.limit_pct_from_limit_prices(up, down) == expected
+
+
+def test_research_runner_limit_pct_follows_board_rules():
+    from app.services.backtest.research_runner import _limit_pct_for_bar
+
+    row = SimpleNamespace(code="600165", trade_date="2026-07-03")
+    meta = {"name": "ST宁科", "is_st": True}
+    assert _limit_pct_for_bar(row, meta) == 5.0
+    assert _limit_pct_for_bar(SimpleNamespace(code="600165", trade_date="2026-07-06"), meta) == 10.0
+    assert _limit_pct_for_bar(SimpleNamespace(code="300506", trade_date="2026-07-06"), {"name": "ST名家汇", "is_st": True}) == 20.0
+    assert _limit_pct_for_bar(SimpleNamespace(code="920285", trade_date="2026-07-06"), {"name": "远大健科"}) == 30.0

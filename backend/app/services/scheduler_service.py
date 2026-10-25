@@ -39,7 +39,10 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     BLOCK_TRADE_BACKUP_CRON,
     DATA_FRESHNESS_CRON,
     DATA_FRESHNESS_TASK_ID,
+    STOCK_IDENTITY_CRON,
+    STOCK_IDENTITY_TASK_ID,
     TASK_TYPE_DATA_FRESHNESS_CHECK,
+    TASK_TYPE_STOCK_IDENTITY_REFRESH,
     BLOCK_TRADE_BACKUP_TASK_ID,
     TASK_TYPE_BLOCK_TRADE_BACKUP,
     EXPOSURE_TASK_ID,
@@ -344,6 +347,60 @@ def _ensure_data_freshness_task() -> None:
         logger.exception("注册数据新鲜度巡检任务失败")
 
 
+def _ensure_stock_identity_task() -> None:
+    """注册每日股票身份刷新任务（幂等，不覆盖手动调整）。"""
+    try:
+        db = SessionLocal()
+        try:
+            if db.get(ScheduledTask, STOCK_IDENTITY_TASK_ID) is None:
+                db.add(
+                    ScheduledTask(
+                        task_id=STOCK_IDENTITY_TASK_ID,
+                        name="股票身份每日刷新（stocks + 元数据区间：新股 / ST 状态 / 有效期）",
+                        task_type=TASK_TYPE_STOCK_IDENTITY_REFRESH,
+                        cron_expression=STOCK_IDENTITY_CRON,
+                        payload_json=json.dumps({}),
+                        enabled=True,
+                    )
+                )
+                db.commit()
+                logger.info("已注册股票身份刷新任务: %s (cron=%s)", STOCK_IDENTITY_TASK_ID, STOCK_IDENTITY_CRON)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册股票身份刷新任务失败")
+
+
+def _run_stock_identity_refresh(db) -> dict:
+    """刷新 stocks / stock_metadata_history，并立即做三方对账；对账有问题走 emit_alert。"""
+    from app.core.alerts import emit_alert
+    from app.services.stock_identity import StockIdentityError, reconcile_stock_identity, refresh_stock_identity
+
+    try:
+        out = refresh_stock_identity(db)
+    except StockIdentityError as exc:
+        emit_alert("stock_identity_refresh_failed", datetime.now().strftime("%Y-%m-%d %H"), f"股票身份刷新放弃: {exc}")
+        return {"status": "failed", "error": str(exc), "summary_text": f"股票身份刷新放弃: {exc}"}
+    except Exception as exc:  # noqa: BLE001 - 取数/写库异常：告警并让任务记失败
+        db.rollback()
+        emit_alert("stock_identity_refresh_failed", datetime.now().strftime("%Y-%m-%d %H"), f"股票身份刷新失败: {exc}")
+        return {"status": "failed", "error": f"{type(exc).__name__}: {exc}", "summary_text": f"股票身份刷新失败: {exc}"}
+    rec = reconcile_stock_identity(db)
+    out["reconcile"] = rec
+    for warning in out.get("warnings") or []:
+        emit_alert("stock_identity_refresh_warning", datetime.now().strftime("%Y-%m-%d %H"), warning)
+    if rec["issues"]:
+        emit_alert("data_freshness", f"stock_identity:{rec['latest']}", "stock_identity:reconcile: " + "；".join(rec["issues"][:5]))
+    stocks, intervals = out["stocks"], out["intervals"]
+    out["summary_text"] = (
+        f"股票身份刷新：stocks +{stocks['insert']}/~{stocks['update']}，区间 +{intervals['insert']}/~{intervals['update']}/-{intervals['delete']}；"
+        f"对账 {'正常' if not rec['issues'] else '异常 ' + str(len(rec['issues'])) + ' 项'}"
+    )
+    if out.get("warnings"):
+        out["status"] = "partial_completed"
+    return out
+
+
 def _run_data_freshness_check(db) -> dict:
     from app.services.data_freshness import run_freshness_check
 
@@ -370,6 +427,7 @@ def ensure_scheduled_task_registrations() -> None:
     _ensure_intraday_lock_tasks()
     _ensure_formal_safety_net_task()
     _ensure_data_freshness_task()
+    _ensure_stock_identity_task()
 
 
 def _execute_task(
@@ -460,6 +518,8 @@ def _execute_task(
                 result = _run_outcome_label(db, payload)
             elif task_type == TASK_TYPE_DATA_FRESHNESS_CHECK:
                 result = _run_data_freshness_check(db)
+            elif task_type == TASK_TYPE_STOCK_IDENTITY_REFRESH:
+                result = _run_stock_identity_refresh(db)
             elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
                 result = _run_intraday_lock_shadow(db, payload)
             elif task_type in ("data_sync", "pool_refresh", "data_backfill"):

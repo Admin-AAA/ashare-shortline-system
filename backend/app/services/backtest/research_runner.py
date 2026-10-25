@@ -1990,23 +1990,22 @@ def _upper_shadow_ratio(item: DailyKbar) -> float | None:
 
 
 def _limit_pct_for_bar(row: DailyKbar, metadata: Mapping[str, Any]) -> float:
-    """按证券身份返回回测板的涨跌停幅度：ST 优先，其次北交所/代码板位。
+    """按证券身份 + 交易日返回回测板的涨跌停幅度，直接复用生产 `board_rules.limit_pct_for_stock`。
 
-    与生产 `board_rules.limit_pct_for_stock` 一致：ST/北交所用更低幅度，
-    创业/科创用 20cm，其余主板 10cm。回测信号行没有 quote 的 exchange
-    字段，用 Stock 元数据里的名字与 ST 标记近似。
+    主板 ST：2026-07-06 前 5%、之后 10%；创业/科创 ST 仍 20%；北交所 30%；其余主板 10%。
+    回测信号行没有 quote 的 exchange 字段，用 Stock 元数据里的名字与 ST 标记近似。
     """
-    name = str(metadata.get("name") or "").upper()
-    if bool(metadata.get("is_st")) or "ST" in name:
-        return 5.0
-    code = str(row.code)
-    if code.startswith(("300", "301")):
-        return 20.0
-    if code.startswith(("688", "689")):
-        return 20.0
-    if code.startswith(("8", "4")):
-        return 30.0
-    return 10.0
+    from app.engine.board_rules import limit_pct_for_stock
+
+    return limit_pct_for_stock(
+        {
+            "code": str(row.code),
+            "name": metadata.get("name"),
+            "is_st": metadata.get("is_st"),
+            "market": metadata.get("market"),
+        },
+        row.trade_date,
+    )
 
 
 def _rows_by_trade_date(rows: Sequence[DailyKbar]) -> dict[str, list[DailyKbar]]:

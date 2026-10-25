@@ -1276,7 +1276,7 @@ def _normalize_code(code: str) -> str:
 def _exchange_from_code(code: str) -> str:
     if code.startswith(("60", "68", "900")):
         return "SH"
-    if code.startswith(("8", "4")):
+    if code.startswith(("8", "4", "920")):  # 920xxx 是北交所 2024 起的新代码段
         return "BJ"
     return "SZ"
 

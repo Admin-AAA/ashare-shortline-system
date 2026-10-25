@@ -23,14 +23,19 @@
 """
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
 
 __all__ = [
     "MAIN_BOARD_LIMIT_UP_PCT",
+    "ST_MAIN_BOARD_RULE_CHANGE_DATE",
+    "ST_MAIN_BOARD_PCT_AFTER_CHANGE",
     "limit_pct_for_code",
     "limit_pct_for_stock",
+    "limit_pct_from_limit_prices",
+    "st_main_board_pct_on",
     "is_price_limit_move",
     "limit_price",
     "previous_close_from_price",
@@ -48,6 +53,16 @@ _BOARD_LIMITS = DEFAULT_EXECUTION_POLICY.board_limits
 _LIMIT_TOLERANCE = _BOARD_LIMITS.limit_detection_tolerance_ratio
 MAIN_BOARD_LIMIT_UP_PCT = _BOARD_LIMITS.main_board_pct / 100.0
 
+# 主板 ST 涨跌停幅度的制度变更：自 2026-07-06 起由 5% 放宽为 10%（stk_limits 实测：该日起
+# 180 只主板 ST 的 up/down 比值由约 1.105 变为约 1.222）。创业板 / 科创板 ST 一直是 20%、
+# 北交所 ST 一直是 30%，不受此影响。
+# 注意：execution policy 工件（v1..v5，fingerprint 已锁定）里的 `st_pct=5.0` 保持不动，
+# 语义是「变更前的主板 ST 幅度」；变更后的幅度在这里按交易日取，避免为一个常量重发策略版本。
+ST_MAIN_BOARD_RULE_CHANGE_DATE = "2026-07-06"
+ST_MAIN_BOARD_PCT_AFTER_CHANGE = 10.0
+
+_CST = timezone(timedelta(hours=8))
+
 
 def limit_pct_for_code(code: str) -> float:
     """按证券代码前缀返回 canonical policy 的板位涨跌停幅度。"""
@@ -56,24 +71,80 @@ def limit_pct_for_code(code: str) -> float:
         return _BOARD_LIMITS.growth_board_pct
     if normalized.startswith(("688", "689")):
         return _BOARD_LIMITS.star_market_pct
-    if normalized.startswith(("8", "4")):
+    if normalized.startswith(("8", "4", "920")):  # 920xxx 是北交所 2024 起的新代码段
         return _BOARD_LIMITS.beijing_exchange_pct
     return _BOARD_LIMITS.main_board_pct
 
 
-def limit_pct_for_stock(stock: dict[str, Any]) -> float:
-    """按股票完整身份返回涨跌停幅度；ST 优先，其次北交所和代码板位。"""
+def _iso_trade_date(value: Any) -> str | None:
+    """把 trade_date（str / date / datetime / 'YYYYMMDD'）归一成 ISO 日期串；无法识别返回 None。"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    text = str(value).strip()[:10]
+    if len(text) == 8 and text.isdigit():
+        text = f"{text[:4]}-{text[4:6]}-{text[6:8]}"
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError:
+        return None
+
+
+def st_main_board_pct_on(trade_date: Any = None) -> float:
+    """主板 ST 股在 trade_date 的涨跌停幅度（百分数）：2026-07-06 前 5%，之后 10%。
+
+    trade_date 缺失或无法解析时按「今天」（Asia/Shanghai）取，即当前生效规则。
+    """
+    iso = _iso_trade_date(trade_date) or datetime.now(_CST).date().isoformat()
+    if iso >= ST_MAIN_BOARD_RULE_CHANGE_DATE:
+        return ST_MAIN_BOARD_PCT_AFTER_CHANGE
+    return _BOARD_LIMITS.st_pct
+
+
+def limit_pct_for_stock(stock: dict[str, Any], trade_date: Any = None) -> float:
+    """按股票完整身份 + 交易日返回涨跌停幅度（百分数）。
+
+    先定板位：北交所 30%、创业板 / 科创板 20%（ST 同样 20%，ST 的特殊幅度只适用于主板）；
+    主板且为 ST 时按交易日取 `st_main_board_pct_on`（2026-07-06 前 5%，之后 10%）；其余主板 10%。
+    trade_date 取参数，其次 stock 里的 trade_date，都没有则按今天。
+    """
     name = str(stock.get("name") or "").upper()
-    if bool(stock.get("is_st")) or "ST" in name:
-        return _BOARD_LIMITS.st_pct
+    is_st = bool(stock.get("is_st")) or "ST" in name
+    code = str(stock.get("code") or "")
     if str(stock.get("exchange") or "").upper() == "BJ" or str(stock.get("market") or "") == "北交所":
         return _BOARD_LIMITS.beijing_exchange_pct
-    return limit_pct_for_code(str(stock.get("code") or ""))
+    board_pct = limit_pct_for_code(code)
+    if board_pct != _BOARD_LIMITS.main_board_pct:
+        return board_pct  # 创业 / 科创 / 北交代码：ST 不改变幅度
+    if is_st:
+        return st_main_board_pct_on(trade_date if trade_date is not None else stock.get("trade_date"))
+    return board_pct
 
 
-def is_price_limit_move(stock: dict[str, Any], *, up: bool) -> bool:
-    """按板位判断涨跌幅是否已触及涨/跌停，保留 0.2 个百分点的行情舍入容差。"""
-    threshold = limit_pct_for_stock(stock) - 0.2
+_CANONICAL_LIMIT_PCTS = (5.0, 10.0, 20.0, 30.0)
+
+
+def limit_pct_from_limit_prices(up_limit: Any, down_limit: Any, *, tolerance: float = 0.6) -> float | None:
+    """由 stk_limits 的实际涨停价 / 跌停价反推幅度（百分数）：p = (up/down - 1) / (up/down + 1)。
+
+    结果吸附到 5/10/20/30，偏差超过 tolerance 个百分点（如新股前几日无幅度护栏）返回 None，
+    由调用方回退到规则。涨跌停价四舍五入到分，故比值有微小误差，吸附即可吸收。
+    """
+    up, down = _as_float(up_limit), _as_float(down_limit)
+    if up <= 0 or down <= 0 or up <= down:
+        return None
+    ratio = up / down
+    pct = (ratio - 1.0) / (ratio + 1.0) * 100.0
+    nearest = min(_CANONICAL_LIMIT_PCTS, key=lambda cand: abs(cand - pct))
+    return nearest if abs(nearest - pct) <= tolerance else None
+
+
+def is_price_limit_move(stock: dict[str, Any], *, up: bool, trade_date: Any = None) -> bool:
+    """按板位 / 交易日判断涨跌幅是否已触及涨/跌停，保留 0.2 个百分点的行情舍入容差。"""
+    threshold = limit_pct_for_stock(stock, trade_date) - 0.2
     pct = _as_float(stock.get("pct", stock.get("pct_chg", 0)))
     return pct >= threshold if up else pct <= -threshold
 
@@ -218,7 +289,7 @@ def is_twenty_cm_stock(stock: dict[str, Any]) -> tuple[bool, str]:
         return True, "创业板 20cm 标的"
     if "科创" in market or code.startswith(("688", "689")):
         return True, "科创板 20cm 标的"
-    if "北交" in market or exchange == "BJ" or code.startswith(("8", "4")):
+    if "北交" in market or exchange == "BJ" or code.startswith(("8", "4", "920")):
         return True, "北交所高波动标的"
     if not exchange and not market:
         return False, "缺少板块信息，按代码前缀未识别为 20cm"

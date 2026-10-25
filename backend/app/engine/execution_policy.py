@@ -200,6 +200,8 @@ class BoardLimitPolicy(CanonicalValue):
     growth_board_pct: float = 20.0
     star_market_pct: float = 20.0
     beijing_exchange_pct: float = 30.0
+    # 主板 ST 在 2026-07-06 之前的幅度；之后改为 10%，按交易日取，见 board_rules.st_main_board_pct_on。
+    # 这里不改：policy 工件 fingerprint 已锁定，改默认值会让全部 v1..v5 工件校验失败。
     st_pct: float = 5.0
     limit_detection_tolerance_ratio: float = 0.005
     block_one_word_limit_up_entry: bool = True

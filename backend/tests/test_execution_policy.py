@@ -433,7 +433,8 @@ def test_runtime_config_and_documentation_projections_match_policy_snapshot() ->
     assert limit_pct_for_code("300001") == policy.board_limits.growth_board_pct
     assert limit_pct_for_code("688001") == policy.board_limits.star_market_pct
     assert limit_pct_for_code("830001") == policy.board_limits.beijing_exchange_pct
-    assert limit_pct_for_stock({"code": "600000", "name": "ST 测试"}) == policy.board_limits.st_pct
+    # policy 工件里的 st_pct=5.0 是 2026-07-06 之前的主板 ST 幅度；之后按交易日取（见 test_board_rules）。
+    assert limit_pct_for_stock({"code": "600000", "name": "ST 测试"}, "2026-07-03") == policy.board_limits.st_pct
     assert _resolve_position_size({"final_score": 90}) == policy.position.single_name_cap
     # current=v2（min_all_applicable）：弱势 regime 的 market cap 不再被 legacy bypass 绕过。
     assert _resolve_position_size({

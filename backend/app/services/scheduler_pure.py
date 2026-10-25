@@ -101,6 +101,11 @@ BLOCK_TRADE_BACKUP_TASK_ID = "midterm_block_trade_premarket"
 BLOCK_TRADE_BACKUP_CRON = "3 8 * * mon-fri"  # 周一到周五 08:03（开盘前，T=上一交易日）
 TASK_TYPE_DATA_FRESHNESS_CHECK = "data_freshness_check"
 DATA_FRESHNESS_TASK_ID = "data_freshness_check_daily"
+# 股票身份（stocks + stock_metadata_history）每日增量刷新：08:10 盘前一次（新股 / ST 戴帽摘帽通常前一晚公告），
+# 17:10 盘后一次（在 17:35 日更之前补齐当天新股，让日更和 18:00 对账看到最新身份）。只读上游、只写 stocks / 元数据区间。
+TASK_TYPE_STOCK_IDENTITY_REFRESH = "stock_identity_refresh"
+STOCK_IDENTITY_TASK_ID = "stock_identity_refresh_daily"
+STOCK_IDENTITY_CRON = "10 8,17 * * mon-fri"
 DATA_FRESHNESS_CRON = "0 18 * * mon-fri"  # 周一到周五 18:00 只读巡检（允许在 16:35–18:35 日更窗口内跑）
 
 

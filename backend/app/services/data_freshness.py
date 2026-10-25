@@ -214,6 +214,13 @@ def check_repurchase_events() -> dict[str, Any]:
     return {"table": "events:repurchase", "latest": mx, "age_days": age, "rows": n, "issues": issues}
 
 
+def check_stock_identity(db, trade_date: str) -> dict[str, Any]:
+    """stocks / stock_metadata_history / daily_kbars 活跃代码三方对账（只读），见 stock_identity.reconcile_stock_identity。"""
+    from app.services.stock_identity import reconcile_stock_identity
+
+    return reconcile_stock_identity(db, trade_date)
+
+
 def run_freshness_check(db, *, alert: bool = True, chip_frozen_since: str | None = None) -> dict[str, Any]:
     from app.core.alerts import emit_alert
     from app.services.daily_basic_ingest import check_daily_basic_staleness
@@ -235,7 +242,8 @@ def run_freshness_check(db, *, alert: bool = True, chip_frozen_since: str | None
     # chip_frozen_since 给定时，筹码冻结巡检覆盖该日起的全部历史交易日（如 2025-01-01），否则只看近 30 日
     chip_check = ((lambda: check_chip_frozen_since(db, chip_frozen_since)) if chip_frozen_since
                   else (lambda: check_chip_frozen(db, dates)))
-    for fn in (lambda: check_indicator_columns(db, dates[-1]), chip_check, check_repurchase_events):
+    for fn in (lambda: check_indicator_columns(db, dates[-1]), chip_check, check_repurchase_events,
+               lambda: check_stock_identity(db, dates[-1])):
         try:
             results.append(fn())
         except Exception as exc:  # noqa: BLE001
