@@ -97,3 +97,24 @@ def test_next_batch_note(tmp_path, monkeypatch):
     notes2 = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("mid", db=None)}
     assert notes2["mid-repurchase-plan"] == "每个交易日盘后（17:35）选股，次日开盘买"
     assert notes2["mid-incentive-option"].startswith("尚未出票；")
+
+
+def test_retired_strategies_not_in_horizon_lists(tmp_path, monkeypatch):
+    """§306：已下线策略（RETIRED_STRATEGIES）与查不到的 id 不进 /mid、/long 批次列表，也不再默认当 mid；
+    名称查「现役→已下线」表，不显示英文 id；历史文件按 strategy_id 显式查询仍可读，持有期按 60 日。"""
+    monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
+    d = "2026-10-14"
+    for sid in ("mid-repurchase-plan", "long-lowturn-lowvol", "long-repurchase-big", "mystery-strategy"):
+        (tmp_path / f"{d}_{sid}.json").write_text(json.dumps(
+            {"strategy_id": sid, "signal_date": d, "picks": [{"code": "000001", "ratio": 0.02}]}))
+    monkeypatch.setattr(ms, "_realize", lambda db, c, dd, h: {"status": "pending"})
+    mid = ms.list_picks_page(None, None, "mid", page=1, page_size=30)
+    assert [b["strategy_id"] for b in mid["batches"]] == ["mid-repurchase-plan"]
+    lng = ms.list_picks_page(None, None, "long", page=1, page_size=30)
+    assert [b["strategy_id"] for b in lng["batches"]] == ["long-lowturn-lowvol"]
+    old = ms.list_picks_page(None, "long-repurchase-big", None, 1, 30)["batches"][0]
+    assert old["strategy_name"] == ms.RETIRED_STRATEGIES["long-repurchase-big"]["name"]
+    assert old["horizon"] == "long" and old["hold_days"] == 60
+    ghost = ms.list_picks_page(None, "mystery-strategy", None, 1, 30)["batches"][0]
+    assert ghost["strategy_name"] == "已下线策略" and "mystery" not in ghost["strategy_name"]
+    assert ghost["horizon"] == "mid"

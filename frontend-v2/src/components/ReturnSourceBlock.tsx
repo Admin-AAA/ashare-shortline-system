@@ -38,6 +38,11 @@ export function ReturnSourceBlock({ quality }: { quality?: ReturnSourceQuality |
   const robust = (quality.label ?? "").startsWith("稳健");
   const tone = robust ? "var(--market-up)" : "var(--amber, #d97706)";
   const reasons = (quality.fail ?? []).map((k) => FAIL_TEXT[k] ?? k).join("、");
+  const wins: [string, ReturnSourceWindow | undefined][] = [["近12个月", quality.R12], ["近3年", quality.N3]];
+  // 前10笔占比 >100%：最赚的 10 笔就超过了全部净利润，说明其余交易合计是亏的
+  const over100 = wins.filter(([, w]) => (w?.top10_share ?? 0) > 1).map(([t]) => t);
+  // 稳健型但中位数几乎为 0：标签按规则成立，但典型的一笔几乎不赚钱
+  const nearZero = robust ? wins.filter(([, w]) => w?.median != null && w.median > 0 && w.median < 0.1).map(([t, w]) => `${t}中位数仅${pct(w?.median)}`) : [];
   return (
     <div style={{ marginTop: "var(--space-3)", paddingTop: "var(--space-3)", borderTop: "1px dashed var(--border)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
@@ -48,6 +53,8 @@ export function ReturnSourceBlock({ quality }: { quality?: ReturnSourceQuality |
         <Row title="近12个月" w={quality.R12} />
         <Row title="近3年" w={quality.N3} />
       </div>
+      {over100.length > 0 && <div style={{ ...muted, marginTop: 4 }}>※ {over100.join("、")}「前10笔占比」超过100%：最赚的10笔比全部净利润还多，说明其余交易合计是亏的。</div>}
+      {nearZero.length > 0 && <div style={{ ...muted, marginTop: 4 }}>※ 典型一笔几乎不赚钱（{nearZero.join("；")}）：标签按规则判为稳健型，但赚钱主要靠平均数。</div>}
       <div style={{ ...muted, marginTop: 4 }} title={quality.basis}>
         新标准（{quality.standard ?? "§282"}）：{quality.pass ? "达标" : `未达标（${reasons}）`}
         {quality.pos_phases != null ? ` · ${quality.pos_phases}/${quality.n_phases} 段为正` : ""}

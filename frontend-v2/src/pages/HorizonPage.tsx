@@ -100,9 +100,13 @@ const fmtDate = (d?: string) => (!d ? "—" : /^\d{8}$/.test(d) ? `${d.slice(0, 
 function Hero({ horizon, view, list, batches, onRun }: { horizon: H; view: View; list: HorizonStrategy[]; batches: HorizonBatch[]; onRun: () => void }) {
   const hz = horizon === "mid" ? "中线" : "长线";
   const sub = { today: "今日待买 · 持有中", review: "按批次复盘", strategies: "策略画像" }[view];
-  const pending = batches.filter((b) => b.status === "pending").reduce((n, b) => n + b.picks.filter((p) => p.status === "pending").length, 0);
-  const holding = batches.reduce((n, b) => n + b.picks.filter((p) => p.status === "holding").length, 0);
-  const closed = batches.filter((b) => b.status === "closed").length;
+  // 顶部 KPI 只统计真实选股（live_forward）；回放（origin=replay）是历史补算，不是真实持仓，单独列出、不计入。
+  const real = batches.filter((b) => b.origin !== "replay");
+  const replay = batches.filter((b) => b.origin === "replay");
+  const pending = real.filter((b) => b.status === "pending").reduce((n, b) => n + b.picks.filter((p) => p.status === "pending").length, 0);
+  const holding = real.reduce((n, b) => n + b.picks.filter((p) => p.status === "holding").length, 0);
+  const replayHolding = replay.reduce((n, b) => n + b.picks.filter((p) => p.status === "holding").length, 0);
+  const closed = real.filter((b) => b.status === "closed").length;
   const holdRange = list.length ? [...new Set(list.map((s) => s.hold_days))].sort((a, b) => a - b).join(" / ") : null;
   return (
     <section className="panel hz-hero">
@@ -115,9 +119,10 @@ function Hero({ horizon, view, list, batches, onRun }: { horizon: H; view: View;
       <div className="hz-hero__kpis">
         <Kpi label="现役策略" value={String(list.length)} />
         <Kpi label="持有期（交易日）" value={holdRange ?? "—"} />
-        <Kpi label="待买入" value={`${pending} 只`} tone="amber" />
-        <Kpi label="持有中" value={`${holding} 只`} tone="blue" />
+        <Kpi label="待买入（真实）" value={`${pending} 只`} tone="amber" />
+        <Kpi label="持有中（真实）" value={`${holding} 只`} tone="blue" />
         <Kpi label="已平仓批次（近期）" value={String(closed)} />
+        <Kpi label="回放持有中（不计入左侧）" value={`${replayHolding} 只`} />
       </div>
     </section>
   );

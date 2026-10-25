@@ -187,8 +187,13 @@ def _formal_entry(fn):
     return wrapper
 
 
+def _strategy_meta(strategy_id: str) -> dict[str, Any]:
+    """现役优先，其次已下线（RETIRED_STRATEGIES，只为历史 picks 文件保留名称/持有期），都没有返回空 dict。"""
+    return STRATEGIES.get(strategy_id) or RETIRED_STRATEGIES.get(strategy_id) or {}
+
+
 def _hold(strategy_id: str) -> int:
-    return int(STRATEGIES.get(strategy_id, {}).get("hold_days", HOLD_DAYS))
+    return int(_strategy_meta(strategy_id).get("hold_days", HOLD_DAYS))
 
 
 def is_signal_day(strategy_id: str, d: _dt.date) -> bool:
@@ -1210,6 +1215,8 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
 
 
 def _pick_files(strategy_id: str | None, horizon: str | None) -> list[Path]:
+    """列出 picks 文件。指定 horizon 时只返回「现役且 horizon 匹配」的策略：已下线策略（RETIRED_STRATEGIES）
+    和查不到的 id 都不进 /mid、/long 列表（历史文件保留不删，按 strategy_id 显式查询仍可读到）。"""
     if not OUT_DIR.exists():
         return []
     out = []
@@ -1217,10 +1224,18 @@ def _pick_files(strategy_id: str | None, horizon: str | None) -> list[Path]:
         sid = f.stem.split("_", 1)[1] if "_" in f.stem else ""
         if strategy_id and sid != strategy_id:
             continue
-        if horizon and STRATEGIES.get(sid, {}).get("horizon", "mid") != horizon:
+        if horizon and STRATEGIES.get(sid, {}).get("horizon") != horizon:
             continue
         out.append(f)
     return out
+
+
+def _horizon_of(strategy_id: str) -> str:
+    """策略所属周期：现役/已下线表优先；都查不到按 id 前缀（long-* → long，其余 mid），不再一律当 mid。"""
+    h = _strategy_meta(strategy_id).get("horizon")
+    if h:
+        return h
+    return "long" if strategy_id.startswith("long-") else "mid"
 
 
 def _load_batch(db, f: Path) -> dict[str, Any]:
@@ -1230,8 +1245,8 @@ def _load_batch(db, f: Path) -> dict[str, Any]:
         p.update(_realize(db, p["code"], data["signal_date"], _hold(sid)))
         annotate_pick(sid, p, i)
     closed = [p["ret"] for p in data["picks"] if p.get("status") in ("closed", "holding")]
-    data["strategy_name"] = STRATEGIES.get(sid, {}).get("name", sid)
-    data["horizon"] = STRATEGIES.get(sid, {}).get("horizon", "mid")
+    data["strategy_name"] = _strategy_meta(sid).get("name") or "已下线策略"
+    data["horizon"] = _horizon_of(sid)
     data["hold_days"] = _hold(sid)
     data["avg_ret"] = round(sum(closed) / len(closed), 2) if closed else None
     data["status"] = ("closed" if all(p.get("status") in ("closed", "skipped") for p in data["picks"])
@@ -1280,10 +1295,12 @@ def pick_detail(db, horizon: str, strategy_id: str, signal_date: str, code: str,
         sd, _, sid = g.stem.partition("_")
         if (sd, sid) == (signal_date, strategy_id):
             continue
+        if sid not in STRATEGIES:  # 已下线策略的历史批次不进「同股其它信号」（详情接口只认现役策略，链接会 404）
+            continue
         if any(q.get("code") == code for q in json.loads(g.read_text()).get("picks", [])):
             others.append({"signal_date": sd, "strategy_id": sid,
-                           "strategy_name": STRATEGIES.get(sid, {}).get("name", sid),
-                           "horizon": STRATEGIES.get(sid, {}).get("horizon", "mid")})
+                           "strategy_name": _strategy_meta(sid).get("name") or "已下线策略",
+                           "horizon": _horizon_of(sid)})
     return {"horizon": horizon, "strategy_id": strategy_id, "strategy_name": meta.get("name"),
             "strategy_summary": meta.get("summary"), "hold_days": _hold(strategy_id),
             "signal_date": signal_date, "code": code, "name": pick.get("name"),
