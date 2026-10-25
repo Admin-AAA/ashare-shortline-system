@@ -106,6 +106,12 @@ DATA_FRESHNESS_TASK_ID = "data_freshness_check_daily"
 TASK_TYPE_STOCK_IDENTITY_REFRESH = "stock_identity_refresh"
 STOCK_IDENTITY_TASK_ID = "stock_identity_refresh_daily"
 STOCK_IDENTITY_CRON = "10 8,17 * * mon-fri"
+# 策略版本回测画像补跑：策略出新版本后 current_target 的 strategy_version 变了，旧版本画像不能跨版本复用，
+# 页面会一直 pending_backtest（2026-10-25 审计：5 个短线策略里 4 个）。每个交易日 19:40（18:35 日更窗口之后、
+# 21:00 晚间补数之前）只给「没有任何可用画像」的当前版本补跑，每次最多 1 个，避免 16GB 内存下批量回测。
+TASK_TYPE_STRATEGY_PROFILE_REFRESH = "strategy_profile_refresh"
+STRATEGY_PROFILE_TASK_ID = "strategy_profile_refresh_daily"
+STRATEGY_PROFILE_CRON = "40 19 * * mon-fri"
 DATA_FRESHNESS_CRON = "0 18 * * mon-fri"  # 周一到周五 18:00 只读巡检（允许在 16:35–18:35 日更窗口内跑）
 
 

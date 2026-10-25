@@ -164,3 +164,32 @@ def test_portfolio_calibre_is_same_below_and_above_200_trades():
     # 每日组合收益都是 +1%（(4-2)/2）：小样本 20 天复利 (1.01^20-1)=22.019%，与大样本口径同一公式
     assert abs(small["strategy_compound_return"] - ((1.01 ** 20 - 1) * 100)) < 0.01
     assert small["max_drawdown"] == 0.0
+
+
+def test_strategy_profile_refresh_only_runs_pending_and_caps_runs(monkeypatch):
+    import app.services.backtest.strategy_profile as sp
+
+    class T:
+        def __init__(self, sid):
+            self.strategy_id, self.strategy_version = sid, "v2"
+
+    class FakeProfiles:
+        refreshed = []
+
+        def __init__(self, db):
+            pass
+
+        def current_targets(self):
+            return [T("a"), T("b"), T("c")]
+
+        def read_rolled(self, t):
+            return {"ok": 1} if t.strategy_id == "a" else None  # a 已有画像
+
+        def refresh(self, t):
+            FakeProfiles.refreshed.append(t.strategy_id)
+            return {"status": "completed", "reused": False}
+
+    monkeypatch.setattr(sp, "StrategyBacktestProfiles", FakeProfiles)
+    out = scheduler_service._run_strategy_profile_refresh(None, {"max_runs": 1})
+    assert FakeProfiles.refreshed == ["b"]  # 每次最多 1 个，已有画像的 a 不跑
+    assert out["pending_before"] == 2 and out["deferred"] == 1 and "status" not in out

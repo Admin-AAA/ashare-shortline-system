@@ -41,6 +41,9 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     DATA_FRESHNESS_TASK_ID,
     STOCK_IDENTITY_CRON,
     STOCK_IDENTITY_TASK_ID,
+    STRATEGY_PROFILE_CRON,
+    STRATEGY_PROFILE_TASK_ID,
+    TASK_TYPE_STRATEGY_PROFILE_REFRESH,
     TASK_TYPE_DATA_FRESHNESS_CHECK,
     TASK_TYPE_STOCK_IDENTITY_REFRESH,
     BLOCK_TRADE_BACKUP_TASK_ID,
@@ -371,6 +374,62 @@ def _ensure_stock_identity_task() -> None:
         logger.exception("注册股票身份刷新任务失败")
 
 
+def _ensure_strategy_profile_task() -> None:
+    """注册每日策略回测画像补跑任务（幂等，不覆盖手动调整）。"""
+    try:
+        db = SessionLocal()
+        try:
+            if db.get(ScheduledTask, STRATEGY_PROFILE_TASK_ID) is None:
+                db.add(
+                    ScheduledTask(
+                        task_id=STRATEGY_PROFILE_TASK_ID,
+                        name="策略回测画像补跑（新策略版本无画像时，每次最多补 1 个）",
+                        task_type=TASK_TYPE_STRATEGY_PROFILE_REFRESH,
+                        cron_expression=STRATEGY_PROFILE_CRON,
+                        payload_json=json.dumps({"max_runs": 1}),
+                        enabled=True,
+                    )
+                )
+                db.commit()
+                logger.info("已注册策略画像补跑任务: %s (cron=%s)", STRATEGY_PROFILE_TASK_ID, STRATEGY_PROFILE_CRON)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册策略画像补跑任务失败")
+
+
+def _run_strategy_profile_refresh(db, payload: dict | None = None) -> dict:
+    """给「当前版本没有任何可用画像（精确或向后滚动）」的策略补跑 180 天 canonical 回测，每次最多 max_runs 个。
+
+    已有画像的策略（含窗口随日滚动的）不重跑，所以稳态下这个任务几乎是空操作。
+    """
+    from app.services.backtest.strategy_profile import StrategyBacktestProfiles
+
+    max_runs = max(0, int((payload or {}).get("max_runs", 1)))
+    profiles = StrategyBacktestProfiles(db)
+    pending = [t for t in profiles.current_targets() if profiles.read_rolled(t) is None]
+    results = []
+    for target in pending[:max_runs]:
+        try:
+            outcome = profiles.refresh(target)
+            results.append({"strategy_id": target.strategy_id, "strategy_version": target.strategy_version,
+                            "status": outcome.get("status"), "reused": bool(outcome.get("reused"))})
+        except Exception as exc:  # noqa: BLE001 - 单个策略失败不影响其余，记入结果
+            db.rollback()
+            logger.warning("策略画像补跑失败 %s: %s", target.strategy_id, exc, exc_info=True)
+            results.append({"strategy_id": target.strategy_id, "strategy_version": target.strategy_version,
+                            "status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
+    failed = [r for r in results if r["status"] != "completed"]
+    deferred = max(0, len(pending) - len(results))
+    out = {
+        "pending_before": len(pending), "executed": len(results), "deferred": deferred, "results": results,
+        "summary_text": f"策略画像补跑：待补 {len(pending)}，本次执行 {len(results)}，失败 {len(failed)}，顺延 {deferred}",
+    }
+    if failed:
+        out["status"] = "partial_failed"
+    return out
+
+
 def _run_stock_identity_refresh(db) -> dict:
     """刷新 stocks / stock_metadata_history，并立即做三方对账；对账有问题走 emit_alert。"""
     from app.core.alerts import emit_alert
@@ -389,8 +448,13 @@ def _run_stock_identity_refresh(db) -> dict:
     out["reconcile"] = rec
     for warning in out.get("warnings") or []:
         emit_alert("stock_identity_refresh_warning", datetime.now().strftime("%Y-%m-%d %H"), warning)
+    # key 不带日期，与 run_freshness_check 的「每表一条」一致；对账恢复正常自动解除
     if rec["issues"]:
-        emit_alert("data_freshness", f"stock_identity:{rec['latest']}", "stock_identity:reconcile: " + "；".join(rec["issues"][:5]))
+        emit_alert("data_freshness", "stock_identity:reconcile", f"stock_identity:{rec['latest']}: " + "；".join(rec["issues"][:5]))
+    else:
+        from app.core.alerts import resolve_alert
+
+        resolve_alert("data_freshness", "stock_identity:reconcile", f"stock_identity 对账恢复正常（{rec['latest']}）")
     stocks, intervals = out["stocks"], out["intervals"]
     out["summary_text"] = (
         f"股票身份刷新：stocks +{stocks['insert']}/~{stocks['update']}，区间 +{intervals['insert']}/~{intervals['update']}/-{intervals['delete']}；"
@@ -449,6 +513,7 @@ def ensure_scheduled_task_registrations() -> None:
     _ensure_formal_safety_net_task()
     _ensure_data_freshness_task()
     _ensure_stock_identity_task()
+    _ensure_strategy_profile_task()
 
 
 def _execute_task(
@@ -541,6 +606,8 @@ def _execute_task(
                 result = _run_data_freshness_check(db)
             elif task_type == TASK_TYPE_STOCK_IDENTITY_REFRESH:
                 result = _run_stock_identity_refresh(db)
+            elif task_type == TASK_TYPE_STRATEGY_PROFILE_REFRESH:
+                result = _run_strategy_profile_refresh(db, payload)
             elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
                 result = _run_intraday_lock_shadow(db, payload)
             elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
