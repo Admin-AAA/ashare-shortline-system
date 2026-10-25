@@ -201,3 +201,53 @@ def test_ncs_registered_no_caps():
     meta = ms.STRATEGIES["long-net-cash-switch"]
     assert meta["horizon"] == "long" and meta["hold_days"] == 60 and meta["schedule"] == "daily"
     assert meta["kind"] == "ncs_switch" and "k_slots" not in meta and "max_new" not in meta
+
+
+def _g(ts, ann, end, ory=None, npy=None):
+    return {"ts_code": ts, "ann_date": ann, "end_date": end, "currentdebt_to_debt": None, "undist_profit_ps": None,
+            "netprofit_yoy": npy, "netdebt": None, "interestdebt": None, "profit_dedt": None,
+            "or_yoy": ory, "dt_netprofit_yoy": npy}
+
+
+def test_cg_streak_rules_and_order(monkeypatch):
+    """CG4_h60（§269）：营收/扣非同比各≥5% 连续≥4期（逐期相连，跳期即断）；分=min(streak,12)+min(扣非同比,100)/1000。"""
+    ends = ["20260930", "20260630", "20260331", "20251231", "20250930", "20250630"]
+    rows = {e: [] for e in ends}
+    ann = {e: "20261023" if e == "20260930" else "2026010" + str(i) for i, e in enumerate(ends)}
+    # 000001: 6 期全双增 -> streak 6；000002: 4 期 -> 4；000003: 3 期 -> 不要；000004: 中间一期营收 4% -> 断 -> 不要
+    # 000005: 中间缺一期（跳期）-> 断；000006: 本期扣非空 -> 不要；000007: 4 期、扣非 300 -> 封顶 100
+    spec = {"000001.SZ": [1, 1, 1, 1, 1, 1], "000002.SZ": [1, 1, 1, 1, 0, 0], "000003.SZ": [1, 1, 1, 0, 1, 1],
+            "000004.SZ": [1, 1, "low", 1, 1, 1], "000005.SZ": [1, 1, None, 1, 1, 1], "000006.SZ": ["nan", 1, 1, 1, 1, 1],
+            "000007.SZ": [300, 1, 1, 1, 0, 0]}
+    for ts, flags in spec.items():
+        for e, f in zip(ends, flags):
+            if f is None:
+                continue
+            if f == 1:
+                rows[e].append(_g(ts, ann[e], e, 10.0, 20.0))
+            elif f == 300:
+                rows[e].append(_g(ts, ann[e], e, 10.0, 300.0))
+            elif f == "low":
+                rows[e].append(_g(ts, ann[e], e, 4.0, 20.0))
+            elif f == "nan":
+                rows[e].append(_g(ts, ann[e], e, 10.0, None))
+            else:
+                rows[e].append(_g(ts, ann[e], e, -3.0, -10.0))
+    fina = {e: pd.DataFrame(v, columns=list(_g("x", "", "").keys())) for e, v in rows.items()}
+    for e in ["20250331", "20241231", "20240930", "20240630", "20240331", "20231231"]:
+        fina[e] = pd.DataFrame(columns=list(_g("x", "", "").keys()))
+    _setup(monkeypatch, fina)
+    res = fe.cg_candidates(None, "2026-10-23")
+    assert [p["code"] for p in res] == ["000001", "000007", "000002"]
+    assert res[0]["streak"] == 6 and abs(res[0]["score"] - 6.02) < 1e-9
+    assert res[1]["streak"] == 4 and abs(res[1]["score"] - 4.1) < 1e-9
+    assert res[2]["streak"] == 4 and abs(res[2]["score"] - 4.02) < 1e-9
+    ann_p = ms.annotate_pick("long-growth-streak", {**res[0], "name": "x"}, 1)
+    assert "连续 6 个报告期" in ann_p["selection_reason"]
+
+
+def test_cg_registered_no_caps():
+    meta = ms.STRATEGIES["long-growth-streak"]
+    assert meta["horizon"] == "long" and meta["hold_days"] == 60 and meta["schedule"] == "daily"
+    assert meta["kind"] == "cg_streak" and "k_slots" not in meta and "max_new" not in meta
+    assert fe._shift_period("20260331", 1) == "20251231" and fe._shift_period("20260930", 5) == "20250630"

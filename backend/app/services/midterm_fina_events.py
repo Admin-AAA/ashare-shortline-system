@@ -5,6 +5,7 @@
   - DINC_h60 分红增加（派现同比≥30%）scripts/midterm/lt_research48.py（§158）
   - UDP_h60  每股未分配利润同比高增   scripts/midterm/lt_research94.py（§252）
   - NCS_h60  净负债转为净现金         scripts/midterm/lt_research98.py（§261）
+  - CG4_h60  营收与扣非净利连续≥4期双增 scripts/midterm/lt_research102.py（§269）
 事件时点：研究把公告日映射到「公告日起第一个交易日」当信号日；实盘 as_of 收盘后扫描公告日在 (上一交易日, as_of] 的首次公告
 （含周末/节假日期间的公告）。每个 (股票, 报告期) 只认第一次公告。股池：非ST、非北交所/B股(4/8/9 开头)、上市>250交易日、
 20日均成交额>5000万、当日有成交（midterm_service._liq_ok）。排序分同研究：封顶后降序，平手按代码升序（研究里 score−code×1e-10 与此等价）。
@@ -39,10 +40,14 @@ UDP_PREV_MIN, UDP_FLOOR, UDP_G, UDP_CAP = 0.0, 0.5, 0.30, 2.0
 # NCS（§261）：去年同期 netdebt>0 且 interestdebt>0；本期 netdebt≤0（净现金）；本期 profit_dedt>0；
 # 排序分 =（去年 netdebt − 本期 netdebt）/ 去年 interestdebt，封顶 3.0
 NCS_CAP = 3.0
+# CG4（§269）：双增 = or_yoy≥5 且 dt_netprofit_yoy≥5（累计同比，%）；streak = 以本期为终点、报告期逐期相连（跳期即断）且每期双增的期数；
+# 入选 streak≥4；排序分 = min(streak,12) + min(dt_netprofit_yoy,100)/1000
+CG_MIN_YOY, CG_STREAK, CG_STREAK_CAP, CG_NPY_CAP = 5.0, 4, 12, 100.0
 # DINC（§158）：预案每股税前派现>0，较去年同报告期（优先实施记录，否则最早预案）提高≥30%（去年同期>0），不封顶
 DINC_INC_TH = 0.30
 
-FINA_FIELDS = "ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt"
+FINA_FIELDS = ("ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt,"
+               "or_yoy,dt_netprofit_yoy")
 _FINA_TTL = 1800.0
 _fina_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _div_local: dict[str, Any] = {}
@@ -97,7 +102,8 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     f = raw.copy()
     for k in ("ts_code", "ann_date", "end_date"):
         f[k] = f[k].astype(str).str.strip()
-    for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt"):
+    for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt",
+              "or_yoy", "dt_netprofit_yoy"):
         if k in f.columns:
             f[k] = pd.to_numeric(f[k], errors="coerce")
     f = f[(f["ann_date"].str.len() == 8) & (f["end_date"].str.len() == 8)]
@@ -219,6 +225,73 @@ def ncs_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
                     "interestdebt": None if idc is None or pd.isna(idc) else float(idc),
                     "profit_dedt": pdd, "netprofit_yoy": None if npy is None or pd.isna(npy) else float(npy),
                     "score": score}
+            if code not in out or item["score"] > out[code]["score"]:
+                out[code] = item
+    return _attach(db, as_of, dates, out)
+
+
+def _shift_period(period: str, k: int) -> str:
+    """报告期往前推 k 个季度（YYYYMMDD，季末）。"""
+    ends = ["0331", "0630", "0930", "1231"]
+    idx = int(period[:4]) * 4 + ends.index(period[4:]) - k
+    return f"{idx // 4}{ends[idx % 4]}"
+
+
+def _cg_ok(row) -> bool:
+    o, n = row.get("or_yoy"), row.get("dt_netprofit_yoy")
+    return o is not None and n is not None and not pd.isna(o) and not pd.isna(n) and o >= CG_MIN_YOY and n >= CG_MIN_YOY
+
+
+def cg_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """CG4_h60：营收与扣非净利同比连续≥4个报告期双增（各≥5%），本期为窗口内首次披露。
+    研究口径（lt_research102）：每个 (股票, 报告期) 取最早公告（不先丢空值；空值=不双增），报告期逐期相连，跳期即断。"""
+    from app.services import midterm_service as ms
+    w = _window(db, as_of)
+    if w is None:
+        return None
+    dates, start, end = w
+    out: dict[str, dict[str, Any]] = {}
+    hist: dict[str, pd.DataFrame | None] = {}
+
+    def table(per: str):
+        if per not in hist:
+            f = _fina_period(per)
+            if f is None:
+                hist[per] = None
+            elif not {"or_yoy", "dt_netprofit_yoy"} <= set(f.columns):
+                hist[per] = pd.DataFrame(columns=["ts_code"]).set_index("ts_code")
+            else:
+                hist[per] = _first_ann(f, "end_date").set_index("ts_code")
+        return hist[per]
+
+    for period in ms._quarter_ends(as_of, 4):
+        cur = table(period)
+        if cur is None:
+            return None
+        if cur.empty:
+            continue
+        today = cur[(cur["ann_date"] >= start) & (cur["ann_date"] <= end)]
+        today = today[today.index.map(_tradable_code)]
+        if today.empty:
+            continue
+        for ts, r in today.iterrows():
+            if not _cg_ok(r):
+                continue
+            streak = 1
+            for k in range(1, CG_STREAK_CAP):
+                t = table(_shift_period(period, k))
+                if t is None:
+                    return None
+                if ts not in t.index or not _cg_ok(t.loc[ts]):
+                    break
+                streak += 1
+            if streak < CG_STREAK:
+                continue
+            npy = float(r["dt_netprofit_yoy"])
+            score = min(streak, CG_STREAK_CAP) + min(npy, CG_NPY_CAP) / 1000.0
+            code = str(ts)[:6]
+            item = {"code": code, "ann_date": str(r["ann_date"]), "end_date": period, "streak": streak,
+                    "or_yoy": float(r["or_yoy"]), "dt_netprofit_yoy": npy, "score": score}
             if code not in out or item["score"] > out[code]["score"]:
                 out[code] = item
     return _attach(db, as_of, dates, out)

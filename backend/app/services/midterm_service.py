@@ -143,6 +143,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 60,
         "schedule": "daily",
     },
+    # §269 营收与扣非净利连续多期双增长（scripts/midterm/lt_research102.py CG4_h60，预注册、未调参；2026-10-25 起直接上线）
+    "long-growth-streak": {
+        "name": "营收与扣非净利连续4期双增长（持60日）",
+        "horizon": "long",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：本期及之前连续至少4个报告期（逐期相连、不跳期），营业收入同比和扣非净利润同比都≥5%（稳健增长、不看一次性大涨）；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按连续双增期数（封顶12期）从多到少排序、同期数再按扣非净利同比（封顶100%）从高到低，次日开盘买，持有60个交易日（已持有不重复买）。",
+        "kind": "cg_streak",
+        "hold_days": 60,
+        "schedule": "daily",
+    },
 }
 
 
@@ -850,10 +859,10 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 {"strategy_id": sid, "signal_date": as_of, "picks": picks}, ensure_ascii=False, indent=1))
             result[sid] = len(picks)
             continue
-        if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy", "ncs_switch"):
+        if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy", "ncs_switch", "cg_streak"):
             from app.services import midterm_fina_events as fe
             cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates,
-                       "ncs_switch": fe.ncs_candidates}[meta["kind"]]
+                       "ncs_switch": fe.ncs_candidates, "cg_streak": fe.cg_candidates}[meta["kind"]]
             # 实盘推荐不设仓位上限（不限持仓只数/每日新进只数）：按排序全部出票，已持有的不重复买；回测指标按 20 仓位口径
             held = _held_codes(db, sid, as_of)
             cands = cand_fn(db, as_of)
@@ -1114,6 +1123,10 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：净负债 {_f(float(p.get('netdebt_prev') or 0) / 1e8, 2)} 亿 → "
                       f"{_f(float(p.get('netdebt') or 0) / 1e8, 2)} 亿（转为净现金），去年同期有息负债 {_f(float(p.get('interestdebt_prev') or 0) / 1e8, 2)} 亿；"
                       f"扣非净利 {_f(float(p.get('profit_dedt') or 0) / 1e8, 2)} 亿")
+        elif kind == "cg_streak":
+            score, label, better = round(float(p["score"]), 3), "连续双增期数(封顶12)+扣非同比/1000", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：营收同比 +{_f(p.get('or_yoy'), 1)}%、"
+                      f"扣非净利同比 +{_f(p.get('dt_netprofit_yoy'), 1)}%，已连续 {p.get('streak', '')} 个报告期营收和扣非净利双增（各≥5%）")
         elif kind == "dividend_lowvol":
             score, label, better = float(p["score"]), "股息率排名+60日波动排名(越低越好)", "lower"
             reason = f"市值第 {p.get('mv_rank', '')} 名；股息率(TTM) {_f(p.get('dv_ttm'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"
