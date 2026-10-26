@@ -4,6 +4,8 @@
 新日K 时，后端进程内的变量看不到。所以缓存键里带一份从 MySQL 现算的「版本指纹」，指纹一变缓存立刻失效。
 
 指纹怎么算（实测 1049 个 run / 536 条推荐时全部合计约 40ms）：
+- recommendation_runs / recommendations 在迁移 0028 之后：只读 (主键, updated_at) 二级索引（见 _row_version_sql），
+  不再读大字段；迁移前没有这一列时自动退回下面的全列算法。
 - 小表（推荐、运行、结算、执行确认、重建批次、预设、关注）：COUNT(*) + 全部列拼接后 CRC32 的 BIT_XOR。
   任何一行任何一列的增删改都会改变指纹（CRC32 碰撞概率 ~2^-32，可忽略）。
   recommendation_runs 跳过 4 个大字段（params/market_snapshot/filter_audit/request，平均 5MB/行，
@@ -23,6 +25,7 @@ from typing import Any, Callable, Hashable, Iterable
 
 from sqlalchemy import event, text
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import TextClause
 
 # 大表：只看新增（主键自增 + 最新交易日）
 _APPEND_ONLY_TABLES = {"daily_kbars", "stk_limits"}
@@ -54,9 +57,44 @@ def _table_columns(db: Session, table: str) -> list[str]:
     return cols
 
 
+_ROW_VERSION_COLUMN = "updated_at"
+_row_version_sql_cache: dict[str, str | None] = {}
+
+
+def _row_version_sql(db: Session, table: str) -> str | None:
+    """表上有迁移 0028 加的 updated_at（MySQL 自动维护）及其索引时，指纹只读这个二级索引：
+    行数 + 每行 (主键, updated_at) 的 CRC 异或。二级索引自带主键，所以不回表、不碰大字段，
+    缓冲池再挤也只是几十 KB。没有这一列（迁移前）返回 None，退回全列指纹。"""
+    with _columns_lock:
+        if table in _row_version_sql_cache:
+            return _row_version_sql_cache[table]
+    sql = None
+    if _ROW_VERSION_COLUMN in _table_columns(db, table):
+        index = f"ix_{table}_{_ROW_VERSION_COLUMN}"
+        has_index = db.execute(text(
+            "SELECT COUNT(*) FROM information_schema.statistics "
+            "WHERE table_schema = DATABASE() AND table_name = :t AND index_name = :i"
+        ), {"t": table, "i": index}).scalar()
+        pk = [str(r[0]) for r in db.execute(text(
+            "SELECT column_name FROM information_schema.key_column_usage "
+            "WHERE table_schema = DATABASE() AND table_name = :t AND constraint_name = 'PRIMARY' "
+            "ORDER BY ordinal_position"
+        ), {"t": table}).all()]
+        if has_index and pk:
+            keys = ",".join(f"`{c}`" for c in pk)
+            sql = (f"SELECT COUNT(*), BIT_XOR(CRC32(CONCAT_WS('|',{keys},`{_ROW_VERSION_COLUMN}`))) "
+                   f"FROM `{table}` FORCE INDEX (`{index}`)")
+    with _columns_lock:
+        _row_version_sql_cache[table] = sql
+    return sql
+
+
 def _fingerprint_sql(db: Session, table: str) -> str:
     if table in _APPEND_ONLY_TABLES:
         return f"SELECT MAX(id), MAX(trade_date) FROM `{table}`"
+    row_version = _row_version_sql(db, table)
+    if row_version is not None:
+        return row_version
     cols = _table_columns(db, table)
     if not cols:
         return f"SELECT COUNT(*) FROM `{table}`"
@@ -93,6 +131,17 @@ def _drop_memo(session, *_args) -> None:
     session.info.pop(_SESSION_KEY, None)
 
 
+def _drop_memo_on_write(orm_execute_state) -> None:
+    # session.execute(text("UPDATE ...")) / core update() 不经过 flush，也要清掉本事务里记下的指纹
+    if orm_execute_state.is_select:
+        return
+    stmt = orm_execute_state.statement
+    if isinstance(stmt, TextClause) and str(stmt).lstrip().upper().startswith(("SELECT", "SHOW", "EXPLAIN")):
+        return  # 原生 SQL 的只读查询（包括指纹查询本身）
+    orm_execute_state.session.info.pop(_SESSION_KEY, None)
+
+
+event.listen(Session, "do_orm_execute", _drop_memo_on_write)
 event.listen(Session, "after_flush", _drop_memo)
 event.listen(Session, "after_commit", _drop_memo)
 event.listen(Session, "after_rollback", _drop_memo)

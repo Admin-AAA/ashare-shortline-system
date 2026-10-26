@@ -6,7 +6,7 @@ import pytest
 from app.db.alembic_runtime import get_alembic_health, upgrade_database
 
 
-HEAD_REVISION = "0027_gateway_item_switch"
+HEAD_REVISION = "0028_row_updated_at"
 
 
 def test_upgrade_database_creates_schema_and_is_idempotent() -> None:
