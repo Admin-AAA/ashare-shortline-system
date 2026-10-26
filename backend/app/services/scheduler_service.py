@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import datetime as _dt_mod
 import logging
 import threading
@@ -423,9 +424,31 @@ def _run_strategy_profile_refresh(db, payload: dict | None = None) -> dict:
     """
     from app.services.backtest.strategy_profile import StrategyBacktestProfiles
 
+    from app.engine.skill_loader import lenient_missing_manifest
+
     max_runs = max(0, int((payload or {}).get("max_runs", 1)))
     profiles = StrategyBacktestProfiles(db)
-    pending = [t for t in profiles.current_targets() if profiles.read_rolled(t) is None]
+    # 缺 manifest.json 的策略目录（退役残留空壳/半成品，2026-10-26 main-line-leader-resonance 曾令整个任务 failed 并让
+    # /api/presets 500）：本任务里跳过并告警，其余策略照常补画像；主链路加载器的严格契约不变。
+    skipped_dirs: list[str] = []
+    with lenient_missing_manifest(skipped_dirs):
+        pending = [t for t in profiles.current_targets() if profiles.read_rolled(t) is None]
+        results = _refresh_pending_profiles(db, profiles, pending, max_runs)
+    skipped_dirs = sorted(set(skipped_dirs))
+    try:
+        from app.core.alerts import emit_alert, resolve_alert
+
+        if skipped_dirs:
+            names = ",".join(os.path.basename(p) for p in skipped_dirs)
+            emit_alert("strategy_profile_missing_manifest", "skills", f"策略目录缺少 manifest.json，已跳过其画像补跑：{names}")
+        else:
+            resolve_alert("strategy_profile_missing_manifest", "skills", "所有策略目录均有 manifest.json")
+    except Exception:  # noqa: BLE001 - 告警失败不影响任务
+        logger.warning("缺 manifest 告警同步失败", exc_info=True)
+    return _summarize_profile_refresh(pending, results, skipped_dirs)
+
+
+def _refresh_pending_profiles(db, profiles, pending, max_runs) -> list[dict]:
     results = []
     for target in pending[:max_runs]:
         try:
@@ -437,11 +460,19 @@ def _run_strategy_profile_refresh(db, payload: dict | None = None) -> dict:
             logger.warning("策略画像补跑失败 %s: %s", target.strategy_id, exc, exc_info=True)
             results.append({"strategy_id": target.strategy_id, "strategy_version": target.strategy_version,
                             "status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
+    return results
+
+
+def _summarize_profile_refresh(pending, results, skipped_dirs) -> dict:
     failed = [r for r in results if r["status"] != "completed"]
     deferred = max(0, len(pending) - len(results))
+    summary = f"策略画像补跑：待补 {len(pending)}，本次执行 {len(results)}，失败 {len(failed)}，顺延 {deferred}"
+    if skipped_dirs:
+        summary += f"，跳过缺 manifest 目录 {len(skipped_dirs)}"
     out = {
         "pending_before": len(pending), "executed": len(results), "deferred": deferred, "results": results,
-        "summary_text": f"策略画像补跑：待补 {len(pending)}，本次执行 {len(results)}，失败 {len(failed)}，顺延 {deferred}",
+        "skipped_missing_manifest": sorted(skipped_dirs),
+        "summary_text": summary,
     }
     if failed:
         out["status"] = "partial_failed"

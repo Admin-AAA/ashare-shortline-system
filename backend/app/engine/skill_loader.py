@@ -1,6 +1,8 @@
 """Manifest-backed StrategySkill loading and validation."""
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import hashlib
 import json
 from dataclasses import dataclass
@@ -115,7 +117,33 @@ def load_skills(skills_dir: Path) -> list[StrategySkill]:
     if not skills_dir.exists():
         return []
     paths = sorted(path for path in skills_dir.iterdir() if path.is_dir())
-    return [load_skill(path) for path in paths + _research_skill_paths(skills_dir)]
+    return _load_paths(paths + _research_skill_paths(skills_dir))
+
+
+# 宽容加载（仅定时画像补跑等后台任务显式开启）：缺 manifest.json 的策略目录跳过并把路径记入 sink，其余照常加载。
+# 默认关闭（sink 为 None）：主链路 / 启动 / API 仍按契约对缺 manifest 的目录直接报错。
+_LENIENT_SINK: "contextvars.ContextVar[list[str] | None]" = contextvars.ContextVar("skill_loader_lenient_sink", default=None)
+
+
+@contextlib.contextmanager
+def lenient_missing_manifest(skipped: list[str]):
+    """with 块内 load_skills 跳过「缺少 manifest.json」的目录（不含 manifest 存在但内容非法的情况），路径追加到 skipped。"""
+    token = _LENIENT_SINK.set(skipped)
+    try:
+        yield skipped
+    finally:
+        _LENIENT_SINK.reset(token)
+
+
+def _load_paths(paths: list[Path]) -> list[StrategySkill]:
+    sink = _LENIENT_SINK.get()
+    out: list[StrategySkill] = []
+    for path in paths:
+        if sink is not None and not (path / "manifest.json").is_file():
+            sink.append(str(path))
+            continue
+        out.append(load_skill(path))
+    return out
 
 
 def load_skill(path: Path) -> StrategySkill:
