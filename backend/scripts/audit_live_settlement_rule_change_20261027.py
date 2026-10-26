@@ -8,6 +8,9 @@
   stored    ：库里现在的结算（含执行状态投影：入场前取消/过期 → missed）
   settle_new：新结算规则下的行情模拟（_simulate_outcome，不叠加执行状态——新确认逻辑下这些都会被确认买入，见 19 只回归）
   backtest  ：§282 回测路径（PE._simulate_card，同一根 K 线）
+样本含 10-14/10-15 的单技能补跑 run（它们带着 preset_formal_opening 的 preset_id，classify_era 已按技能数判 single）。
+回测卡片带上封存快照（exit_strategy_id 等），否则逐策略出场微调 / 破买入日最低价出场不生效（第一版的假差异来源）。
+末尾再输出 19 只回归样本「确认买入日/价 vs 结算成交日/价」对照。
 只读：不写库、不调外部数据源。用法：cd backend && .venv/bin/python scripts/audit_live_settlement_rule_change_20261027.py
 """
 from __future__ import annotations
@@ -70,7 +73,9 @@ def main() -> None:
         snap = json.loads(rec.feature_snapshot_json or "{}")
         day = Day(); day.signal_date = str(rec.trade_date)
         day.outcome_bars = {str(rec.code): tuple(rbars[str(rec.trade_date)].get(str(rec.code), ())[:lim])}
-        card = {"code": rec.code, "recommend_price": rec.recommend_price, "bucket": rec.bucket, "entry_mode": snap.get("entry_mode")}
+        # 回测卡片带上封存快照（exit_strategy_id / strategy_signals），否则逐策略出场微调与破买入日最低价出场不生效
+        card = {**snap, "code": rec.code, "recommend_price": rec.recommend_price, "bucket": rec.bucket,
+                "entry_mode": snap.get("entry_mode")}
         tr = (PE._simulate_card(day, card, ep) or {}).get("trade")
         bt = {"entry": str(tr.entry_date) if tr and tr.executed else None, "entry_price": getattr(tr, "entry_price", None) if tr and tr.executed else None,
               "exit": str(tr.exit_date) if tr and tr.exit_date else None,
@@ -102,5 +107,39 @@ def main() -> None:
     print(f"\n共 {len(out)} 条单策略已结算记录（{SINCE} 起），按新规则会变 {len(changed)} 条", flush=True)
 
 
+def nineteen_table() -> None:
+    """19 只回归样本：确认买入日/价（入场日检查，按真实日 K）对照 结算成交日/价（_resolve_entry，同一组日 K）。"""
+    from tests.test_entry_confirmation_regression_19 import CASES
+
+    from app.models.tables import DailyKbar
+    from app.services.entry_day_checks import check_entry_bar
+    from app.services.entry_window_state import open_days_after
+    from app.services.outcome_simulation import _rec_is_st, _resolve_entry
+
+    print("\n19 只对照：确认买入日/价 vs 结算成交日/价", flush=True)
+    with SessionLocal() as db:
+        for signal_date, code, name, _price, _ohlc in CASES:
+            recs = db.scalars(select(Recommendation).where(
+                Recommendation.code == code, Recommendation.trade_date == signal_date)).all()
+            rec = recs[0]
+            snap = json.loads(rec.feature_snapshot_json or "{}")
+            days = open_days_after(db, signal_date, "2026-12-31")[:2]
+            bars = [db.scalar(select(DailyKbar).where(DailyKbar.code == code, DailyKbar.trade_date == d)) for d in days]
+            bars = [b for b in bars if b is not None]
+            confirm = ("—", None)
+            for b in bars:  # 确认：按窗口逐日入场日检查，第一日不挡就当日开盘买
+                chk = check_entry_bar(code, b, float(rec.recommend_price), session_closed=True,
+                                      is_st=_rec_is_st(rec, snap))
+                if not chk.blocked:
+                    confirm = (str(b.trade_date), round(float(b.open), 2))
+                    break
+            entry = _resolve_entry(rec, snap, bars, 5)
+            settle = (entry.get("date") or "—", round(float(entry["price"]), 2) if entry.get("price") else None)
+            same = "一致" if confirm == settle else "不一致"
+            print(f"{signal_date} {code} {name} {rec.bucket} | 确认 {confirm[0]} {confirm[1]} | 结算 {settle[0]} {settle[1]} | {same}",
+                  flush=True)
+
+
 if __name__ == "__main__":
     main()
+    nineteen_table()
