@@ -249,7 +249,30 @@ def _fetch_first_kline(
     settings: Any,
     disabled_sources: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
-    """获取单只股票的日K线（local-pool 优先，按配置的数据源顺序兜底）。"""
+    """获取单只股票的日K线（local-pool 优先，按配置的数据源顺序兜底）。
+
+    盘中（09:15–15:05）同一只股票当日只真实回退一次，结果（含「仍不足30根」）跨进程缓存，并受日上限约束，
+    见 kline_fallback_cache（2026-10-26：每 5 分钟的买入确认轮询把当日额度吃光）；窗口外行为不变。"""
+    from app.services import kline_fallback_cache as _kfc
+
+    code = str(quote.get("code") or "")
+    hit = _kfc.lookup(code) if code else None
+    if hit is not None:
+        return hit
+    if code and not _kfc.budget_allows_fetch():
+        return [], "", ["盘中逐股K线回退当日额度已用尽（kline_fallback_cache），跳过"]
+    result = _fetch_first_kline_uncached(quote, sources, settings, disabled_sources)
+    if code:
+        _kfc.store(code, *result)
+    return result
+
+
+def _fetch_first_kline_uncached(
+    quote: dict[str, Any],
+    sources: list[str],
+    settings: Any,
+    disabled_sources: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], str, list[str]]:
     errors: list[str] = []
     for source in sources:
         if disabled_sources and source in disabled_sources:
