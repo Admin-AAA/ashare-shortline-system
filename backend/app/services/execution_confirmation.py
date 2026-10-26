@@ -40,7 +40,7 @@ from app.services.intraday_cumulative_policy import (
     hard_veto_intraday_inconclusive,
     intraday_cumulative_inconclusive,
 )
-from app.services.outcome_simulation import _is_intraday_recommendation, _resolve_stop_loss_price
+from app.services.outcome_simulation import _is_intraday_recommendation, _rec_is_st, _resolve_stop_loss_price
 
 
 def _decision(code: str, label: str, reason: str) -> dict[str, str]:
@@ -318,8 +318,11 @@ def confirm_with_prepared_context(
     adjusted_stop_loss = _adjust_stop_loss_for_ex_right(db, code, str(rec.trade_date), data_as_of, stop_loss)
     recommend_price = float(rec.recommend_price or 0)
     bar = entry_bar or _same_day_bar(current, data_as_of)
+    rec_is_st = _rec_is_st(rec, original_snapshot) or bool(current.get("is_st"))
     entry_check = (
-        check_entry_bar(code, bar, recommend_price, session_closed=entry_window_closed)
+        check_entry_bar(
+            code, bar, recommend_price, session_closed=entry_window_closed, is_st=rec_is_st, trade_date=data_as_of,
+        )
         if bar is not None else None
     )
     window_days = entry_window_days_for_rec(rec)
@@ -434,12 +437,14 @@ def _first_trade_day_status(
     signal_date: str,
     data_as_of: str,
     recommend_price: float,
+    *,
+    is_st: bool = False,
 ) -> tuple[str, str | None]:
     """推荐后第 1 个交易日（按交易所日历）的状态：buyable / blocked / suspended / missing_market / missing_code / none。
 
     决定 2 天窗口的第 2 日能否再确认；缺数据（missing_*）时调用方判「数据未就绪」并告警。
     """
-    return first_day_status(db, code, signal_date, data_as_of, recommend_price)
+    return first_day_status(db, code, signal_date, data_as_of, recommend_price, is_st=is_st)
 
 
 def day1_status_in_window(
@@ -456,7 +461,8 @@ def day1_status_in_window(
     if signal_age_trade_days > window_days:
         return "past_window", None
     return _first_trade_day_status(
-        db, str(rec.code), str(rec.trade_date), data_as_of, float(rec.recommend_price or 0)
+        db, str(rec.code), str(rec.trade_date), data_as_of, float(rec.recommend_price or 0),
+        is_st=_rec_is_st(rec, _json_mapping(getattr(rec, "feature_snapshot_json", None))),
     )
 
 

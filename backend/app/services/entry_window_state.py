@@ -99,6 +99,8 @@ def first_day_status(
     signal_date: str,
     data_as_of: str,
     recommend_price: float,
+    *,
+    is_st: bool = False,
 ) -> tuple[str, str | None]:
     """返回 (状态, 第 1 个交易日)。只在 data_as_of 已是第 2 个及以后交易日时有意义。"""
     days = [d for d in open_days_after(db, signal_date, data_as_of) if d < data_as_of]
@@ -107,7 +109,7 @@ def first_day_status(
     day1 = days[0]
     bar = db.scalar(select(DailyKbar).where(DailyKbar.code == code, DailyKbar.trade_date == day1))
     if bar is not None:
-        return ("blocked" if first_day_blocked(code, bar, recommend_price) else "buyable"), day1
+        return ("blocked" if first_day_blocked(code, bar, recommend_price, is_st=is_st) else "buyable"), day1
     market_rows = db.scalar(select(func.count()).select_from(DailyKbar).where(DailyKbar.trade_date == day1)) or 0
     if market_rows < MARKET_MIN_ROWS:
         return "missing_market", day1

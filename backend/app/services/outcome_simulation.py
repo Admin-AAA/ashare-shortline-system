@@ -597,6 +597,7 @@ def _resolve_entry(
         feature_snapshot.get("entry_mode"),
         legacy_strategy_id=getattr(rec, "bucket", None),
     )
+    rec_is_st = _rec_is_st(rec, feature_snapshot)
     candidate_bars = tuple(
         CausalEntryBar(
             code=str(getattr(bar, "code", "") or rec.code),
@@ -604,7 +605,7 @@ def _resolve_entry(
             open=_as_float(bar.open),
             low=_as_float(bar.low),
             close=_as_float(bar.close),
-            block_reason=_entry_execution_block_reason(str(rec.code), bar),
+            block_reason=_entry_execution_block_reason(str(rec.code), bar, is_st=rec_is_st),
         )
         for bar in future_bars
     )
@@ -983,8 +984,16 @@ def _resolve_position_size(
     return round(decision.approved_size, 4)
 
 
-def _entry_execution_block_reason(code: str, bar: DailyKbar) -> str | None:
-    return entry_execution_block_reason_from_bar(code, bar)
+def _entry_execution_block_reason(code: str, bar: DailyKbar, *, is_st: bool = False) -> str | None:
+    return entry_execution_block_reason_from_bar(code, bar, is_st=is_st)
+
+
+def _rec_is_st(rec: Any, feature_snapshot: dict[str, Any] | None = None) -> bool:
+    """推荐时点是否 ST：推荐名称带 ST/退，或封存快照标了 is_st（一字涨停按日期取 ST 幅度用）。"""
+    from app.services.stock_identity import is_st_name
+
+    snap = feature_snapshot or {}
+    return bool(snap.get("is_st")) or is_st_name(getattr(rec, "name", None))
 
 
 def _exit_execution_block_reason(code: str, bar: DailyKbar) -> str | None:

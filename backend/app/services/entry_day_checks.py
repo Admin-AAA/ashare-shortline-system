@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from types import SimpleNamespace
 from typing import Any
 
-from app.engine.board_rules import is_one_word_limit_up_values, previous_close_from_price
+from app.engine.board_rules import is_one_word_limit_up_values, limit_pct_on, previous_close_from_price
 from app.engine.execution_constraints import no_liquidity_reason_from_bar
 from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
 
@@ -94,10 +94,14 @@ def check_entry_bar(
     recommend_price: float,
     *,
     session_closed: bool,
+    is_st: bool = False,
+    trade_date: Any = None,
 ) -> EntryDayCheck:
     """按回测买入规则检查入场日这一根 K（盘中为开盘至今的实时 K）。
 
     bar 需含 open/high/low/close/volume/amount，以及 pre_close（或 pct_chg，用于反推前收）。
+    一字涨停的幅度：ST 股按 trade_date（缺省取 bar 的 trade_date）用 limit_pct_on 取（2026-07-06 起主板 ST 10%，
+    之前 5%），与结算 outcome_simulation 同一个函数。
     """
     get = (lambda k: bar.get(k)) if isinstance(bar, dict) else (lambda k: getattr(bar, k, None))
     open_price, high, low, close = _f(get("open")), _f(get("high")), _f(get("low")), _f(get("close"))
@@ -113,8 +117,9 @@ def check_entry_bar(
     shim = SimpleNamespace(open=open_price, close=close, volume=volume, amount=amount)
     if no_liquidity_reason_from_bar(shim, side="entry"):
         return EntryDayCheck(True, RULE_UNTRADABLE, "入场日无成交量或价格无效，回测口径当日不买", observed=observed)
+    limit_pct = limit_pct_on(code, trade_date or get("trade_date"), is_st=True) if is_st else None
     if DEFAULT_EXECUTION_POLICY.board_limits.block_one_word_limit_up_entry and is_one_word_limit_up_values(
-        code, prev_close=pre_close, open_price=open_price, high=high, low=low, close=close,
+        code, prev_close=pre_close, open_price=open_price, high=high, low=low, close=close, limit_pct=limit_pct,
     ):
         if session_closed:
             return EntryDayCheck(True, RULE_ONE_WORD, "入场日一字涨停，回测口径买不进", observed=observed)
@@ -125,14 +130,14 @@ def check_entry_bar(
     return EntryDayCheck(False, RULE_PASS, f"入场日检查通过：非一字涨停、可成交、开盘相对推荐价 {gap_text}（≤{MAX_ENTRY_GAP_PCT:.0f}%）", observed=observed)
 
 
-def first_day_blocked(code: str, day_one_bar: Any, recommend_price: float) -> bool:
+def first_day_blocked(code: str, day_one_bar: Any, recommend_price: float, *, is_st: bool = False) -> bool:
     """推荐后第 1 个交易日（已收盘的日 K）是否被回测买入规则挡住——决定第 2 个交易日还能不能买。
 
     没有日 K 时不在这里猜（停牌和缺数据要区分），由 entry_window_state.first_day_status 判定。
     """
     if day_one_bar is None:
         raise ValueError("first_day_blocked 需要第 1 个交易日的日 K；缺 K 请用 entry_window_state.first_day_status 区分停牌/缺数据")
-    return check_entry_bar(code, day_one_bar, recommend_price, session_closed=True).blocked
+    return check_entry_bar(code, day_one_bar, recommend_price, session_closed=True, is_st=is_st).blocked
 
 
 __all__ = [
