@@ -359,8 +359,8 @@ def test_entry_waits_when_entry_bar_missing():
     assert entry["code"] == "wait"
 
 
-def test_breached_cumulative_upper_bound_still_cancels():
-    """累计成交额已越过 15 亿上限，当日只增不减，立即取消。"""
+def test_breached_cumulative_upper_bound_does_not_block_entry_only_reduces_holding():
+    """累计成交额已越过 15 亿上限：回测没有入场日重判 prefilter，买入确认照常 buy；只影响持仓提示（reduce）。"""
     entry, holding = _derive_decisions(
         fresh=True,
         signal_age_trade_days=1,

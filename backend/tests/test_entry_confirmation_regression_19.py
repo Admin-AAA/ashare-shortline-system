@@ -5,9 +5,13 @@
 回测会在推荐后第 1 个交易日按开盘价买入，盘中确认也应确认买入。没有一只会被入场日检查拦下。
 数据为 daily_kbars 入场日（推荐后首个交易日）的 open/high/low/close 与前收。
 """
+import json
+from types import SimpleNamespace
+
 import pytest
 
-from app.services.entry_day_checks import check_entry_bar
+from app.services import outcome_simulation as osim
+from app.services.entry_day_checks import check_entry_bar, entry_window_days
 from app.services.execution_confirmation import _derive_decisions
 
 #   信号日,      代码,     名称,       推荐价, (open, high, low, close, pre_close)
@@ -52,3 +56,57 @@ def test_regression_entry_day_confirms_buy(signal_date, code, name, rec_price, o
 
 def test_regression_count_is_nineteen():
     assert len(CASES) == 19
+    assert set(STRATEGY) == {(c[0], c[1]) for c in CASES}
+
+
+# 推荐的封存字段（生产库 recommendations 只读核对）：策略、entry_mode、理想/次级买点
+STRATEGY = {
+    ("2026-09-23", "002897"): ("chao-gu-yang-jia-skill", "next_open", 69.36, 65.81),
+    ("2026-10-08", "603978"): ("daily-stock-analysis-skill", "next_open", 25.86, 25.46),
+    ("2026-10-14", "300444"): ("chao-gu-yang-jia-skill", "next_open", 8.86, 8.86),
+    ("2026-10-14", "603626"): ("chao-gu-yang-jia-skill", "next_open", 23.23, 21.94),
+    ("2026-10-14", "688099"): ("sector-relative-strength-leader", "target_touch", 93.69, 90.48),
+    ("2026-10-14", "688578"): ("oversold-capital-reversal", "next_open", 97.96, 97.96),
+    ("2026-10-14", "688652"): ("sector-relative-strength-leader", "target_touch", 136.88, 136.88),
+    ("2026-10-15", "001225"): ("oversold-capital-reversal", "next_open", 40.05, 40.05),
+    ("2026-10-15", "001301"): ("chen-xiaoqun-skill", "next_open", 49.31, 49.31),
+    ("2026-10-15", "301269"): ("sector-relative-strength-leader", "target_touch", 97.17, 95.69),
+    ("2026-10-15", "688578"): ("oversold-capital-reversal", "next_open", 96.96, 96.96),
+    ("2026-10-19", "000893"): ("oversold-capital-reversal", "next_open", 37.35, 37.35),
+    ("2026-10-19", "002379"): ("oversold-capital-reversal", "next_open", 16.32, 16.32),
+    ("2026-10-19", "002850"): ("oversold-capital-reversal", "next_open", 160.05, 160.05),
+    ("2026-10-20", "002600"): ("oversold-capital-reversal", "next_open", 11.61, 11.61),
+    ("2026-10-20", "300969"): ("oversold-capital-reversal", "next_open", 73.09, 73.09),
+    ("2026-10-21", "301127"): ("oversold-capital-reversal", "next_open", 15.52, 15.52),
+    ("2026-10-23", "300969"): ("oversold-capital-reversal", "next_open", 71.5, 71.5),
+    ("2026-10-23", "603501"): ("sector-relative-strength-leader", "target_touch", 80.97, 79.73),
+}
+# 推荐日 → 推荐后第 1 个交易日（交易所日历）
+ENTRY_DAY = {"2026-09-23": "2026-09-24", "2026-10-08": "2026-10-09", "2026-10-14": "2026-10-15",
+             "2026-10-15": "2026-10-16", "2026-10-19": "2026-10-20", "2026-10-20": "2026-10-21",
+             "2026-10-21": "2026-10-22", "2026-10-23": "2026-10-26"}
+
+
+@pytest.mark.parametrize("signal_date,code,name,rec_price,ohlc", CASES, ids=[f"{c[0][5:]}-{c[1]}" for c in CASES])
+def test_regression_confirmed_buy_matches_settlement_fill(signal_date, code, name, rec_price, ohlc):
+    """确认买入日/价 必须等于 结算成交日/价（结算 _resolve_entry 按这只推荐自己的 entry_mode / 策略）。"""
+    bucket, entry_mode, ideal, secondary = STRATEGY[(signal_date, code)]
+    o, h, l, c, pre = ohlc
+    day1 = ENTRY_DAY[signal_date]
+    # 确认：第 1 日入场检查通过 → 按回测口径开盘买入，确认日 = 第 1 日，确认价 = 开盘价
+    check = check_entry_bar(code, {"open": o, "high": h, "low": l, "close": c, "pre_close": pre,
+                                   "volume": 1e5, "amount": 1e8}, rec_price, session_closed=True)
+    assert not check.blocked
+    confirmed = (day1, o)
+    # 结算：同一根第 1 日 K（再给一根第 2 日 K 让 2 天窗口完整）
+    snapshot = {"entry_mode": entry_mode, "ideal_buy": ideal, "secondary_buy": secondary}
+    rec = SimpleNamespace(code=code, name=name, trade_date=signal_date, recommend_price=rec_price, bucket=bucket,
+                          recommended_at=None, feature_snapshot_json=json.dumps(snapshot))
+    bar1 = SimpleNamespace(code=code, trade_date=day1, open=o, high=h, low=l, close=c,
+                           volume=1e5, amount=1e8, pct_chg=round((c / pre - 1) * 100, 4))
+    bar2 = SimpleNamespace(code=code, trade_date="2099-01-01", open=c, high=c, low=c * 0.99, close=c,
+                           volume=1e5, amount=1e8, pct_chg=0.0)
+    entry = osim._resolve_entry(rec, snapshot, [bar1, bar2], 5)
+    assert entry["triggered"], f"{name} 结算没成交：{entry['reason']}"
+    assert (entry["date"], entry["price"]) == confirmed, f"{name} 确认 {confirmed} ≠ 结算 {(entry['date'], entry['price'])}"
+    assert entry_window_days(entry_mode, bucket) in (1, 2)
