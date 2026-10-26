@@ -44,7 +44,13 @@ def test_backtest_path_policy_unchanged_for_sector_leader():
     """回测路径（execute_trade）用的执行合约不变：窗口 2 天、开盘买。"""
     policy = execution_policy_with_entry_mode(DEFAULT_EXECUTION_POLICY, "target_touch", legacy_strategy_id=SID)
     assert policy.entry == DEFAULT_EXECUTION_POLICY.entry
-    assert execution_policy_fingerprint_for_entry_policy(BACKTEST_OPEN_WINDOW.policy_id) == DEFAULT_EXECUTION_POLICY.fingerprint()
+    fp_open = execution_policy_fingerprint_for_entry_policy(BACKTEST_OPEN_WINDOW.policy_id)
+    fp_touch = execution_policy_fingerprint_for_entry_policy("causal_strategy_entry_v1")
+    # 板块龙头新入场（开盘窗口）与旧碰买点规则指纹分开；都是合法 sha256，且确定性
+    assert fp_touch == DEFAULT_EXECUTION_POLICY.fingerprint()
+    assert fp_open != fp_touch and len(fp_open) == 64 and int(fp_open, 16) >= 0
+    assert fp_open == execution_policy_fingerprint_for_entry_policy(BACKTEST_OPEN_WINDOW.policy_id)
+    assert fp_open != execution_policy_fingerprint_for_entry_policy("next_trading_day_open_v1")
 
 
 def test_open_window_buys_first_day_open_ignoring_targets():

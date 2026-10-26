@@ -1,7 +1,9 @@
 """Explicit, versioned entry assumptions used by outcome calculations."""
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import hashlib
+import json
+from dataclasses import asdict, dataclass, replace
 
 from app.engine.signal import ENTRY_MODE_NEXT_OPEN, ENTRY_MODE_TARGET_TOUCH
 from app.engine.execution_policy import (
@@ -97,12 +99,21 @@ def execution_policy_fingerprint_for_entry_policy(entry_policy_id: object) -> st
     """Fingerprint the complete execution contract actually used for entry."""
 
     normalized = str(entry_policy_id or "").strip()
-    if normalized in {CAUSAL_STRATEGY_ENTRY.policy_id, BACKTEST_OPEN_WINDOW.policy_id}:
-        # BACKTEST_OPEN_WINDOW 就是默认执行合约在回测路径（execute_trade）里的入场行为
+    if normalized == CAUSAL_STRATEGY_ENTRY.policy_id:
         return DEFAULT_EXECUTION_POLICY.fingerprint()
+    if normalized == BACKTEST_OPEN_WINDOW.policy_id:
+        # 出场/费用/仓位与默认合约相同，但入场规则不同（开盘窗口 vs 碰买点）：指纹必须分开，
+        # 否则两种入场算出的结算证据会被当成同一执行合约
+        return _entry_variant_fingerprint(DEFAULT_EXECUTION_POLICY.fingerprint(), BACKTEST_OPEN_WINDOW)
     if normalized == NEXT_TRADING_DAY_OPEN.policy_id:
         return execution_policy_for_next_open_entry().fingerprint()
     raise ValueError(f"unknown entry_policy_id: {normalized}")
+
+
+def _entry_variant_fingerprint(base_fingerprint: str, entry: EntryPolicy) -> str:
+    """在基础执行合约指纹上叠加入场规则，得到新的 sha256 指纹（确定性、与字段顺序无关）。"""
+    payload = {"base_execution_policy": base_fingerprint, "entry_policy": asdict(entry)}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def execution_policy_for_next_open_entry() -> ExecutionPolicy:
