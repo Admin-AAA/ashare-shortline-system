@@ -113,6 +113,12 @@ TASK_TYPE_STRATEGY_PROFILE_REFRESH = "strategy_profile_refresh"
 STRATEGY_PROFILE_TASK_ID = "strategy_profile_refresh_daily"
 STRATEGY_PROFILE_CRON = "40 19 * * mon-fri"
 DATA_FRESHNESS_CRON = "0 18 * * mon-fri"  # 周一到周五 18:00 只读巡检（允许在 16:35–18:35 日更窗口内跑）
+# 统一数据质量巡检（data_quality_monitor：数据库表 + data/ 文件数据集 + research 静态文件 + 调度/日志静默失败，只读）：
+# 18:00 与 data_freshness 一起跑；另在盘前 08:50（隔夜失败/停更在开盘前暴露）和 21:40（21:00 晚间补数之后验收）各跑一次。
+DATA_QUALITY_CHECKS = (
+    ("data_quality_check_morning", "盘前数据质量巡检（只读：文件数据集/research 文件/调度/日志）", "50 8 * * mon-fri"),
+    ("data_quality_check_evening", "晚间补数后数据质量验收（只读）", "40 21 * * mon-fri"),
+)
 
 
 # ── 盘中锁利影子链路（只记录不交易，见 intraday_lock_service）────────────────

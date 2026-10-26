@@ -7,6 +7,7 @@ export const queryKeys = {
   runFunnel: (id: string) => ["runs", id, "funnel"] as const,
   records: (kind: "run" | "matrix", filters: object = {}) => ["records", kind, filters] as const,
   dataHealth: () => ["data-health"] as const,
+  dataQuality: () => ["data-quality"] as const,
   dataHealthRemediation: () => ["data-health", "remediation"] as const,
   scheduler: () => ["scheduler"] as const,
   pool: () => ["pool"] as const,

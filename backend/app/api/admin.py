@@ -89,7 +89,38 @@ def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
     结果按参考交易日缓存，默认命中缓存。force_refresh=true 跳过缓存（详情页
     「重新诊断」按钮、修复任务完成后调用）。
     """
-    return diagnose_all(db, force_refresh=bool(force_refresh))
+    result = diagnose_all(db, force_refresh=bool(force_refresh))
+    # 健康评分只反映数据库表的结构性指标（95 分时 data/ 下分钟K缓存也可能已停更两个月）。
+    # 这里并列附上统一数据质量巡检（data_quality_monitor）的红/黄/绿摘要，供页面和脚本一起看。
+    try:
+        from app.services.data_quality_monitor import load_report
+
+        rep = load_report()
+        if rep:
+            result = {**result, "data_quality": {
+                "overall": rep.get("overall"), "summary": rep.get("summary"), "generated_at": rep.get("generated_at"),
+                "expected_trade_date": rep.get("expected_trade_date"),
+                "red": [i["key"] for i in rep.get("items", []) if i.get("severity") == "red"],
+            }}
+    except Exception:  # noqa: BLE001 - 附加信息，失败不影响原健康接口
+        pass
+    return result
+
+
+@router.get("/data-quality")
+def get_data_quality(refresh: bool = False, db: Session = Depends(get_db)):
+    """统一数据新鲜度与质量巡检结果（数据库表 + 文件数据集 + research 静态文件 + 调度任务 + 日志静默失败）。
+
+    默认读最近一次巡检落盘的报告（盘前 08:50 / 18:00 / 21:40 定时跑）；refresh=true 立即重跑一次（只读、不改告警登记）。
+    """
+    from app.services.data_quality_monitor import load_report, run_data_quality_check
+
+    if refresh:
+        rep = run_data_quality_check(db, alert=False)
+        if rep.get("overall") != "error":
+            return rep
+    return load_report() or {"overall": "unknown", "summary": {}, "items": [],
+                             "message": "尚无巡检报告：等定时任务或 ?refresh=true 触发一次"}
 
 
 # ── 数据源管理（配置页 Tab）：provider 列表 / 启停 / 测试 ──

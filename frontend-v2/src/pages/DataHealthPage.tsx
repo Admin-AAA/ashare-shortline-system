@@ -16,6 +16,7 @@ import type {
   DataDomainCoverageSummary,
   DataHealthDiagnostic,
   DataHealthRemediationResult,
+  DataQualityItem,
   DataSourceHealthRow,
   DataSourceHealthSummary,
   ScheduledTaskRun,
@@ -25,6 +26,7 @@ import { Panel } from "../components/Panel";
 import { formatApiDateTime } from "../utils/display";
 import { countDegradedDataSources, countHistoricalLowSuccessSources } from "../utils/dataSourceHealth";
 import {
+  useDataQualityQuery,
   useDataHealthQuery,
   useDataHealthRemediationQuery,
   useStartDataHealthRemediationMutation,
@@ -36,6 +38,103 @@ import {
  * 展示全部数据表覆盖情况、全部问题、参考交易日来源，
  * 并提供「触发修复」按钮（异步任务 + 状态轮询，复用调度任务的 result 字段）。
  */
+const SEV_META: Record<string, { label: string; color: string }> = {
+  red: { label: "红", color: "var(--market-down)" },
+  yellow: { label: "黄", color: "var(--warning)" },
+  green: { label: "绿", color: "var(--market-up)" },
+};
+
+/**
+ * 统一数据质量巡检：覆盖数据库表、data/ 下文件数据集（分钟K缓存、涨停榜、事件 parquet…）、research 静态文件、
+ * 调度任务漏跑/失败、日志里被吞掉的失败。评分（上方）只反映数据库表，这里补上它看不到的部分。
+ */
+function DataQualityPanel() {
+  const q = useDataQualityQuery();
+  const rep = q.data;
+  const items: DataQualityItem[] = rep?.items ?? [];
+  const bad = items.filter((i) => i.severity !== "green");
+  const green = items.filter((i) => i.severity === "green");
+  const s = rep?.summary ?? {};
+  return (
+    <Panel
+      kicker="统一数据质量巡检"
+      title={
+        rep && rep.overall !== "unknown" && rep.overall !== "error" ? (
+          <>
+            <span style={{ color: SEV_META[rep.overall]?.color }}>
+              {SEV_META[rep.overall]?.label ?? "?"}
+            </span>
+            {` · 红 ${s.red ?? 0} / 黄 ${s.yellow ?? 0} / 绿 ${s.green ?? 0}`}
+          </>
+        ) : (
+          "尚无巡检结果"
+        )
+      }
+      actions={
+        <button
+          className="btn btn--ghost"
+          title="立即重新巡检（只读）"
+          onClick={() => void api.dataQuality(true).then(() => q.refetch())}
+        >
+          <RefreshCw size={14} />
+        </button>
+      }
+    >
+      {rep?.message && <div className="text-muted">{rep.message}</div>}
+      {rep?.generated_at && (
+        <div className="text-muted" style={{ fontSize: "var(--text-sm)", marginBottom: "var(--space-2)" }}>
+          巡检于 {rep.generated_at}，期望最新交易日 {rep.expected_trade_date}；盘前 08:50、18:00、晚间 21:40 自动运行
+        </div>
+      )}
+      {bad.length === 0 && items.length > 0 && <div>全部 {items.length} 项正常。</div>}
+      {bad.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          <table className="data-table" style={{ width: "100%", fontSize: "var(--text-sm)", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: "var(--text-muted)", borderBottom: "1px solid var(--line)" }}>
+                <th style={{ padding: "var(--space-2)", fontWeight: 500 }}>级别</th>
+                <th style={{ padding: "var(--space-2)", fontWeight: 500 }}>数据集</th>
+                <th style={{ padding: "var(--space-2)", fontWeight: 500 }}>最新</th>
+                <th style={{ padding: "var(--space-2)", fontWeight: 500 }}>情况</th>
+                <th style={{ padding: "var(--space-2)", fontWeight: 500 }}>影响</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bad.map((i) => (
+                <tr key={i.key} style={{ borderBottom: "1px solid var(--line)", verticalAlign: "top" }}>
+                  <td style={{ padding: "var(--space-2)", color: SEV_META[i.severity]?.color, fontWeight: 600 }}>
+                    {SEV_META[i.severity]?.label}
+                    {i.provisional ? "（临时）" : ""}
+                  </td>
+                  <td style={{ padding: "var(--space-2)" }}>
+                    {i.label}
+                    <div className="text-muted text-mono" style={{ fontSize: 10 }}>{i.category}</div>
+                  </td>
+                  <td className="text-mono" style={{ padding: "var(--space-2)" }}>{i.latest ?? "—"}</td>
+                  <td style={{ padding: "var(--space-2)" }}>{i.detail}</td>
+                  <td className="text-muted" style={{ padding: "var(--space-2)" }}>{i.impact}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {green.length > 0 && (
+        <details style={{ marginTop: "var(--space-2)" }}>
+          <summary className="text-muted">正常项（{green.length}）</summary>
+          <ul style={{ margin: 0, paddingLeft: "var(--space-4)", fontSize: "var(--text-sm)" }}>
+            {green.map((i) => (
+              <li key={i.key}>
+                {i.label}：{i.detail}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </Panel>
+  );
+}
+
 export function DataHealthSection() {
   const [remediationError, setRemediationError] = useState("");
   const [remediationResult, setRemediationResult] = useState<DataHealthRemediationResult | null>(null);
@@ -178,6 +277,8 @@ export function DataHealthSection() {
           result={remediationResult}
         />
       </Panel>
+
+      <DataQualityPanel />
 
       {/* 各表覆盖情况 —— 全量 */}
       {tableRows.length > 0 && (

@@ -136,7 +136,9 @@ def active_alerts(db: Session) -> list[dict[str, Any]]:
                 "source": f"alert:{rec.get('kind')}",
                 "source_type": "ops_alert",
                 "status": "active",
-                "alert_level": "warning",
+                # 统一数据质量巡检的红色项（data_quality，消息以 [红] 开头）升为 critical，其余仍为 warning
+                "alert_level": ("critical" if rec.get("kind") == "data_quality" and str(rec.get("message", "")).startswith("[红]")
+                                else "warning"),
                 "message": f"{rec.get('key')}: {rec.get('message')}（自 {rec.get('first_seen')}，最近 {rec.get('last_seen')}）",
             })
     except Exception:  # noqa: BLE001

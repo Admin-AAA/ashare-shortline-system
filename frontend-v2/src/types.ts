@@ -662,8 +662,38 @@ export type RecentTradeCoverageTable = {
   missing_dates?: string[];
 };
 
+export type DataQualityItem = {
+  key: string;
+  label: string;
+  category: string;
+  kind: string;
+  severity: "red" | "yellow" | "green";
+  latest?: string | null;
+  expected?: string | null;
+  lag_trade_days?: number | null;
+  detail: string;
+  impact: string;
+  provisional?: boolean;
+};
+
+/** 统一数据质量巡检（后端 data_quality_monitor）：数据库表 + 文件数据集 + research 文件 + 调度任务 + 日志静默失败 */
+export type DataQualityReport = {
+  overall: "red" | "yellow" | "green" | "unknown" | "error";
+  generated_at?: string;
+  expected_trade_date?: string;
+  summary?: { red?: number; yellow?: number; green?: number; total?: number };
+  items: DataQualityItem[];
+  message?: string;
+};
+
 export type DataHealthDiagnostic = {
   score?: number;
+  data_quality?: {
+    overall?: string;
+    summary?: { red?: number; yellow?: number; green?: number; total?: number };
+    generated_at?: string;
+    red?: string[];
+  };
   reference_trade_date?: string | null;
   reference_trade_date_source?: string | null;
   reference_trade_date_note?: string | null;

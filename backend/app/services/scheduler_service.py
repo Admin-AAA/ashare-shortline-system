@@ -38,6 +38,7 @@ from app.services.registry.data_source import (
 from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     BLOCK_TRADE_BACKUP_CRON,
     DATA_FRESHNESS_CRON,
+    DATA_QUALITY_CHECKS,
     DATA_FRESHNESS_TASK_ID,
     STOCK_IDENTITY_CRON,
     STOCK_IDENTITY_TASK_ID,
@@ -350,6 +351,23 @@ def _ensure_data_freshness_task() -> None:
         logger.exception("注册数据新鲜度巡检任务失败")
 
 
+def _ensure_data_quality_tasks() -> None:
+    """注册盘前/晚间统一数据质量巡检（幂等，不覆盖手动调整；复用 data_freshness_check 任务类型，payload quality_only）。"""
+    try:
+        db = SessionLocal()
+        try:
+            for task_id, name, cron in DATA_QUALITY_CHECKS:
+                if db.get(ScheduledTask, task_id) is None:
+                    db.add(ScheduledTask(task_id=task_id, name=name, task_type=TASK_TYPE_DATA_FRESHNESS_CHECK,
+                                         cron_expression=cron, payload_json=json.dumps({"quality_only": True}), enabled=True))
+                    logger.info("已注册数据质量巡检任务: %s (cron=%s)", task_id, cron)
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册数据质量巡检任务失败")
+
+
 def _ensure_stock_identity_task() -> None:
     """注册每日股票身份刷新任务（幂等，不覆盖手动调整）。"""
     try:
@@ -484,17 +502,34 @@ def _sync_task_status_alert(task_id: str, task_run_id: str | None, status: str, 
         logger.warning("任务状态告警同步失败: %s", task_id, exc_info=True)
 
 
-def _run_data_freshness_check(db) -> dict:
+def _run_data_freshness_check(db, payload: dict | None = None) -> dict:
     from app.services.data_freshness import run_freshness_check
 
-    out = run_freshness_check(db)
+    quality_only = bool((payload or {}).get("quality_only"))
+    out: dict = {"problems": {}} if quality_only else run_freshness_check(db)
     problems = out.get("problems") or {}
     if problems:
         out["status"] = "partial_failed"  # 巡检发现问题即业务状态 partial_failed（同时每张问题表已 emit_alert）
     out["summary_text"] = (
-        "数据新鲜度正常" if not problems
-        else f"数据新鲜度异常 {len(problems)} 张表: " + "；".join(f"{t}: {v[0]}" for t, v in list(problems.items())[:8])
+        ("数据新鲜度正常" if not problems
+         else f"数据新鲜度异常 {len(problems)} 张表: " + "；".join(f"{t}: {v[0]}" for t, v in list(problems.items())[:8]))
+        if not quality_only else ""
     )
+    # 统一数据质量巡检（只读，覆盖文件数据集/research 文件/调度/日志）：失败只记日志，绝不影响任务和选股主流程
+    try:
+        from app.services.data_quality_monitor import run_data_quality_check
+
+        dq = run_data_quality_check(db)
+        s = dq.get("summary") or {}
+        out["data_quality"] = {"overall": dq.get("overall"), "summary": s, "expected_trade_date": dq.get("expected_trade_date"),
+                               "red": [i["key"] for i in dq.get("items", []) if i["severity"] == "red"],
+                               "yellow": [i["key"] for i in dq.get("items", []) if i["severity"] == "yellow"]}
+        out["summary_text"] = (out["summary_text"] + "；" if out["summary_text"] else "") + (
+            f"数据质量巡检 红 {s.get('red', 0)} / 黄 {s.get('yellow', 0)} / 绿 {s.get('green', 0)}")
+        if s.get("red"):
+            out["status"] = "partial_failed"
+    except Exception:  # noqa: BLE001
+        logger.warning("数据质量巡检异常（已忽略，不影响主流程）", exc_info=True)
     return out
 
 
@@ -512,6 +547,7 @@ def ensure_scheduled_task_registrations() -> None:
     _ensure_intraday_lock_tasks()
     _ensure_formal_safety_net_task()
     _ensure_data_freshness_task()
+    _ensure_data_quality_tasks()
     _ensure_stock_identity_task()
     _ensure_strategy_profile_task()
 
@@ -629,7 +665,7 @@ def _execute_task(
             elif task_type == TASK_TYPE_OUTCOME_LABEL:
                 result = _run_outcome_label(db, payload)
             elif task_type == TASK_TYPE_DATA_FRESHNESS_CHECK:
-                result = _run_data_freshness_check(db)
+                result = _run_data_freshness_check(db, payload)
             elif task_type == TASK_TYPE_STOCK_IDENTITY_REFRESH:
                 result = _run_stock_identity_refresh(db)
             elif task_type == TASK_TYPE_STRATEGY_PROFILE_REFRESH:

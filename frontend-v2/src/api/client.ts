@@ -7,6 +7,7 @@ import type {
   PrecisionAtKRow,
   PresetStatsRow,
   DataHealthDiagnostic,
+  DataQualityReport,
   RecommendationCard,
   RecommendationDetail,
   ExecutionConfirmation,
@@ -482,6 +483,8 @@ export const api = {
       undefined,
       options,
     ),
+  dataQuality: (refresh = false) =>
+    request<DataQualityReport>(`/api/admin/data-quality${refresh ? "?refresh=true" : ""}`, undefined, { timeoutMs: refresh ? 60_000 : 15_000 }),
   startDataHealthRemediation: (payload?: {
     target_tables?: string[];
     capital_flow_code_limit?: number;
