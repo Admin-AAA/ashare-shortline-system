@@ -124,6 +124,10 @@ DATA_QUALITY_CHECKS = (
 TASK_TYPE_DATA_HEALTH_SNAPSHOT = "data_health_snapshot"
 DATA_HEALTH_SNAPSHOT_TASK_ID = "data_health_snapshot_daily"
 DATA_HEALTH_SNAPSHOT_CRON = "40 18 * * mon-fri"
+# 次日复核：只写复核字段（大宗交易约 21:00 才发布，08:03 盘前备份出票后再核对）。08:55 而不是 08:50，
+# 错开 08:50 的盘前数据质量巡检，避免两次巡检同时写报告。
+DATA_HEALTH_RECHECK_TASK_ID = "data_health_snapshot_recheck"
+DATA_HEALTH_RECHECK_CRON = "55 8 * * mon-fri"
 # 现役策略近12个月指标每月滚动重算（rolling_r12）：每个交易日 22:30 触发，本月已算过就跳过，
 # 所以实际是每月第一个交易日晚上算一次（失败次日自动再试）。避开 09:15–15:05 与 16:35–18:35，也在 21:00 晚间补数之后。
 TASK_TYPE_ROLLING_R12 = "rolling_r12_recompute"

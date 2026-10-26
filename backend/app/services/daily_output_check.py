@@ -5,6 +5,8 @@
    且生成时间在次日 09:25 之前。0 只推荐也算成功（策略规则否决是正常结果），只有"没跑出来"才算失败。
    带 trade_date_override 的补跑会被记成 historical_replay，不算实盘，因此不算成功。
 2. 中长线：status/{date}.json 里现役策略没有 data_error，也没有缺记录。
+   例外：晚发布数据的策略（LATE_DATA_STRATEGIES，大宗交易约 21:00 发布）在次日 08:30 之前没有结果只记「待数据、未到点」，
+   不算失败；次日 08:50 复核时仍没有才算失败。
 
 只读：查 recommendation_runs、skill_registry 和 status 文件，不写库、不调上游。
 """
@@ -13,10 +15,16 @@ from __future__ import annotations
 import datetime as _dt
 import json
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select, text
 
+CN_TZ = ZoneInfo("Asia/Shanghai")
 OUTPUT_DEADLINE = _dt.time(18, 35)  # 17:35 盘后日更 + 1 小时：过了这个点还没出票，就算当天出票失败
+# 晚发布数据的策略：大宗交易约 21:00 才发布（21:00 晚间补数出票，次日 08:03 盘前备份再补一次）。
+# 17:35 / 18:40 时没有结果只记「待数据、未到点」；到次日 LATE_DATA_READY_TIME 仍没有才算失败（08:50 复核）。
+LATE_DATA_STRATEGIES: dict[str, str] = {"mid-block-trade-premium": "大宗交易约 21:00 发布"}
+LATE_DATA_READY_TIME = _dt.time(8, 30)
 
 
 def expected_short_strategies(db) -> list[str]:
@@ -59,21 +67,46 @@ def _midlong_status(trade_date: str) -> dict[str, Any]:
             stored = json.loads(f.read_text())
         except Exception:  # noqa: BLE001 - 读不出当作缺记录
             stored = {}
-    missing, errors = [], []
-    for sid in ms.STRATEGIES:
+    return {"status_file": f.exists(), "stored": stored}
+
+
+def late_data_ready_at(sid: str, trade_date: str) -> _dt.datetime | None:
+    """晚发布数据的策略：到这个时刻之前没出票只算「待数据、未到点」。不在名单里返回 None。"""
+    if sid not in LATE_DATA_STRATEGIES:
+        return None
+    from app.services.midterm_live_seal import next_open_date
+
+    return _dt.datetime.combine(next_open_date(trade_date), LATE_DATA_READY_TIME)
+
+
+def classify_midlong(stored: dict[str, Any], trade_date: str, now: _dt.datetime,
+                     strategy_ids: list[str]) -> dict[str, list[str]]:
+    """把各现役中长线策略分成 失败（缺记录/数据异常）与 待数据（晚发布数据未到点）。now 为北京时间 naive。"""
+    missing, errors, pending = [], [], []
+    for sid in strategy_ids:
         row = stored.get(sid)
-        if not row:
+        bad = (not row) or row.get("status") == "data_error"
+        if not bad:
+            continue
+        ready = late_data_ready_at(sid, trade_date)
+        if ready is not None and now < ready:
+            pending.append(sid)
+        elif not row:
             missing.append(sid)
-        elif row.get("status") == "data_error":
+        else:
             errors.append(sid)
-    return {"status_file": f.exists(), "missing": missing, "data_error": errors}
+    return {"missing": missing, "data_error": errors, "pending": pending}
 
 
-def daily_output_status(db, trade_date: str) -> dict[str, Any]:
+def daily_output_status(db, trade_date: str, now: _dt.datetime | None = None) -> dict[str, Any]:
+    """now：北京时间 naive，默认当前。决定晚发布数据的策略是「待数据」还是「失败」。"""
+    from app.services import midterm_service as ms
+
+    now = now or _dt.datetime.now(CN_TZ).replace(tzinfo=None)
     expected = expected_short_strategies(db)
     done = _live_short_runs(db, trade_date)
     short_missing = sorted(set(expected) - set(done))
-    mid = _midlong_status(trade_date)
+    mid = classify_midlong(_midlong_status(trade_date)["stored"], trade_date, now, list(ms.STRATEGIES))
     ok = not short_missing and not mid["missing"] and not mid["data_error"]
     reasons = []
     if short_missing:
@@ -82,15 +115,20 @@ def daily_output_status(db, trade_date: str) -> dict[str, Any]:
         reasons.append(f"中长线缺运行记录：{','.join(mid['missing'])}")
     if mid["data_error"]:
         reasons.append(f"中长线数据异常：{','.join(mid['data_error'])}")
+    if mid["pending"]:
+        reasons.append(f"待数据、未到点（次日 {LATE_DATA_READY_TIME:%H:%M} 前不算失败）：{','.join(mid['pending'])}")
     return {
         "trade_date": trade_date,
+        "checked_at": now.isoformat(timespec="seconds"),
         "ok": ok,
+        "status": "failed" if not ok else ("pending" if mid["pending"] else "ok"),
         "short_expected": len(expected),
         "short_done": len(expected) - len(short_missing),
         "short_missing": short_missing,
         "short_recommended": sum(v["recommended_count"] for v in done.values()),
         "midlong_missing": mid["missing"],
         "midlong_data_error": mid["data_error"],
+        "midlong_pending": mid["pending"],
         "reason": "；".join(reasons) or "按时出票",
     }
 

@@ -702,10 +702,10 @@ def check_daily_output(db, open_days: list[str], now: datetime | None = None) ->
     target = output_target_date(open_days, now.replace(tzinfo=None))
     if not target:
         return _item("formal:daily_output", "盘后出票", "盘后出票", GREEN, kind="job", detail="没有可核对的交易日")
-    st = daily_output_status(db, target)
-    sev = GREEN if st["ok"] else RED
+    st = daily_output_status(db, target, now=now.astimezone(_CST).replace(tzinfo=None))
+    sev = GREEN if st["ok"] else RED  # 待数据、未到点（大宗交易 21:00 发布）不算失败
     detail = (f"{target} 短线 {st['short_done']}/{st['short_expected']} 个策略按时实盘出票（共 {st['short_recommended']} 只）"
-              + ("" if st["ok"] else f"；{st['reason']}"))
+              + ("" if st["status"] == "ok" else f"；{st['reason']}"))
     return _item("formal:daily_output", "盘后出票", "盘后出票", sev, kind="job", latest=target, detail=detail,
                  impact="当天没有实盘推荐，次日无票可买；实盘统计也会缺这一天", output=st)
 
