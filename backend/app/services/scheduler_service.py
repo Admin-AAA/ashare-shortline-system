@@ -46,6 +46,12 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     STRATEGY_PROFILE_CRON,
     STRATEGY_PROFILE_TASK_ID,
     TASK_TYPE_STRATEGY_PROFILE_REFRESH,
+    DATA_HEALTH_SNAPSHOT_CRON,
+    DATA_HEALTH_SNAPSHOT_TASK_ID,
+    TASK_TYPE_DATA_HEALTH_SNAPSHOT,
+    ROLLING_R12_CRON,
+    ROLLING_R12_TASK_ID,
+    TASK_TYPE_ROLLING_R12,
     TASK_TYPE_DATA_FRESHNESS_CHECK,
     TASK_TYPE_STOCK_IDENTITY_REFRESH,
     BLOCK_TRADE_BACKUP_TASK_ID,
@@ -369,6 +375,52 @@ def _ensure_data_quality_tasks() -> None:
         logger.exception("注册数据质量巡检任务失败")
 
 
+def _ensure_simple_task(task_id: str, name: str, task_type: str, cron: str, payload: dict | None = None) -> None:
+    """注册一个普通定时任务（幂等，已存在就不动，不覆盖手动调整）。"""
+    try:
+        db = SessionLocal()
+        try:
+            if db.get(ScheduledTask, task_id) is None:
+                db.add(ScheduledTask(task_id=task_id, name=name, task_type=task_type, cron_expression=cron,
+                                     payload_json=json.dumps(payload or {}), enabled=True))
+                db.commit()
+                logger.info("已注册调度任务: %s (cron=%s)", task_id, cron)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册调度任务失败: %s", task_id)
+
+
+def _ensure_health_snapshot_task() -> None:
+    _ensure_simple_task(DATA_HEALTH_SNAPSHOT_TASK_ID, "数据健康分每日快照（18:40：健康分、红黄项、盘后出票是否成功）",
+                        TASK_TYPE_DATA_HEALTH_SNAPSHOT, DATA_HEALTH_SNAPSHOT_CRON)
+
+
+def _ensure_rolling_r12_task() -> None:
+    _ensure_simple_task(ROLLING_R12_TASK_ID, "现役策略近12个月指标每月滚动重算（每月第一个交易日 22:30）",
+                        TASK_TYPE_ROLLING_R12, ROLLING_R12_CRON)
+
+
+def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
+    from app.services.data_health_snapshot import summarize, take_snapshot
+
+    snap = take_snapshot(db)
+    summ = summarize(20)
+    text_ = (f"{snap['trade_date']} 健康分 {snap['score']}（红 {len(snap['red'])} / 黄 {len(snap['yellow'])}），"
+             f"盘后出票{'成功' if snap['output_ok'] else '失败：' + snap['output']['reason']}；"
+             f"近 {summ['days_with_snapshot']} 个交易日均值 {summ['avg_score']}，出票成功率 {summ['output_success_rate']}")
+    return {"snapshot": {k: snap[k] for k in ("trade_date", "score", "score_db", "penalty", "output_ok")},
+            "summary_20d": {k: summ[k] for k in ("days_with_snapshot", "avg_score", "output_success_rate", "red_days")},
+            "status": "completed" if snap["output_ok"] and not snap["red"] else "partial_failed",
+            "summary_text": text_}
+
+
+def _run_rolling_r12(db, payload: dict | None = None) -> dict:
+    from app.services.rolling_r12 import run_monthly
+
+    return run_monthly(db, force=bool((payload or {}).get("force")))
+
+
 def _ensure_stock_identity_task() -> None:
     """注册每日股票身份刷新任务（幂等，不覆盖手动调整）。"""
     try:
@@ -581,6 +633,8 @@ def ensure_scheduled_task_registrations() -> None:
     _ensure_data_quality_tasks()
     _ensure_stock_identity_task()
     _ensure_strategy_profile_task()
+    _ensure_health_snapshot_task()
+    _ensure_rolling_r12_task()
 
 
 def _current_code_revision() -> str:
@@ -701,6 +755,10 @@ def _execute_task(
                 result = _run_stock_identity_refresh(db)
             elif task_type == TASK_TYPE_STRATEGY_PROFILE_REFRESH:
                 result = _run_strategy_profile_refresh(db, payload)
+            elif task_type == TASK_TYPE_DATA_HEALTH_SNAPSHOT:
+                result = _run_data_health_snapshot(db, payload)
+            elif task_type == TASK_TYPE_ROLLING_R12:
+                result = _run_rolling_r12(db, payload)
             elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
                 result = _run_intraday_lock_shadow(db, payload)
             elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
