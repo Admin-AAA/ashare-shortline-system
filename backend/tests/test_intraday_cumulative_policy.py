@@ -90,3 +90,51 @@ def test_missing_detail_is_never_inconclusive():
     assert intraday_cumulative_inconclusive(None) is False
     assert intraday_cumulative_inconclusive({}) is False
     assert intraday_cumulative_inconclusive(_detail("", {"amount_yi": 1.0})) is False
+
+
+# ── 硬否决同样认「盘中累计量还不能下结论」 ───────────────────────────────────
+
+def _veto_skill(when: str):
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        skill_id="veto-test", name="否决测试", version="1", contract_hash="test", contract={
+            "phases": [{"name": "常规", "when": "price > 0"}, {"name": "缩量", "when": when, "hard_veto": True}],
+            "scoring": {"base": 60},
+        },
+    )
+
+
+def _stock(**fields):
+    return {"code": "600000", "name": "测试", "industry": "银行", "price": 10.0, **fields}
+
+
+def test_hard_veto_on_session_amount_shortfall_is_inconclusive():
+    from app.services.intraday_cumulative_policy import hard_veto_intraday_inconclusive
+    assert hard_veto_intraday_inconclusive(_veto_skill("amount_yi < 3"), _stock(amount_yi=1.83), []) is True
+
+
+def test_hard_veto_on_breached_upper_bound_is_conclusive():
+    from app.services.intraday_cumulative_policy import hard_veto_intraday_inconclusive
+    assert hard_veto_intraday_inconclusive(_veto_skill("amount_yi > 15"), _stock(amount_yi=18.0), []) is False
+
+
+def test_structural_hard_veto_is_conclusive():
+    from app.services.intraday_cumulative_policy import hard_veto_intraday_inconclusive
+    assert hard_veto_intraday_inconclusive(
+        _veto_skill("upper_shadow_count20 > 6"), _stock(amount_yi=1.0, upper_shadow_count20=10), [],
+    ) is False
+
+
+def test_inconclusive_hard_veto_does_not_exit_holding():
+    from app.services.execution_confirmation import _derive_decisions
+    base = {"hard_veto": True, "veto_reason": "缩量", "score": 72.0, "setup_match": "x"}
+    _, conclusive = _derive_decisions(
+        fresh=True, signal_age_trade_days=1, entry_window_closed=False, prefilter_ok=True,
+        signal=base, review=None, current_price=10.0, stop_loss=9.0,
+    )
+    _, pending = _derive_decisions(
+        fresh=True, signal_age_trade_days=1, entry_window_closed=False, prefilter_ok=True,
+        signal={**base, "hard_veto_inconclusive": True}, review=None, current_price=10.0, stop_loss=9.0,
+    )
+    assert conclusive["code"] == "exit"
+    assert pending["code"] != "exit"

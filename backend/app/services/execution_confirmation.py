@@ -30,7 +30,10 @@ from app.services.entry_day_checks import (
     check_entry_bar,
     first_day_blocked,
 )
-from app.services.intraday_cumulative_policy import intraday_cumulative_inconclusive
+from app.services.intraday_cumulative_policy import (
+    hard_veto_intraday_inconclusive,
+    intraday_cumulative_inconclusive,
+)
 from app.services.outcome_simulation import _is_intraday_recommendation, _resolve_stop_loss_price
 
 
@@ -150,7 +153,8 @@ def _derive_decisions(
     stance = str((review or {}).get("stance") or "")
     action = str((review or {}).get("action") or "")
     review_available = bool(review and review.get("status") == "ok")
-    hard_veto = bool(signal.get("hard_veto"))
+    # 硬否决若只因盘中累计量未到（全日仍可能消失），收盘前不据此给退出结论
+    hard_veto = bool(signal.get("hard_veto")) and not bool(signal.get("hard_veto_inconclusive"))
     strategy_vetoed = hard_veto or stance in {"oppose", "veto"} or action == "不做"
     # 入场决策发生在交易时段内（收盘后走 expired 分支），成交额/换手率/量比等字段拿到的
     # 是盘中累计值。这类条件在收盘前只能确认达标、不能确认不达标，未达标时判「继续观察」
@@ -254,6 +258,10 @@ def _build_signal_for_strategy(
     signal["prefilter_ok"] = prefilter_ok
     signal["prefilter_reason"] = prefilter_reason
     signal["prefilter_detail"] = prefilter_detail
+    # 硬否决同样认「盘中累计量还不能下结论」（对齐 66bed1be 的 prefilter 做法）
+    signal["hard_veto_inconclusive"] = bool(signal.get("hard_veto")) and hard_veto_intraday_inconclusive(
+        skill, current, list(snapshot.get("main_industries") or []),
+    )
     return signal, prefilter_ok, prefilter_reason
 
 

@@ -71,6 +71,29 @@ def intraday_cumulative_inconclusive(prefilter_detail: Any) -> bool:
     return False
 
 
+def hard_veto_intraday_inconclusive(
+    skill: Any,
+    stock: dict[str, Any],
+    main_industries: list[str],
+) -> bool:
+    """策略硬否决是否只是「盘中累计量还没到」：与 ``intraday_cumulative_inconclusive`` 同一判据。
+
+    硬否决来自 strategy.yaml 的阶段规则 / 观察类 setup / require_setup，不止一条表达式，这里不解析
+    规则，而是把当日累计类字段按「全日值 ∈ [当前值, +∞)」取同一组探测点重跑原策略：只要存在一个
+    可达的全日值能让硬否决消失，当前这次否决就属于盘中不可判定，收盘前不据此给出退出结论。
+    """
+    from app.engine.strategy_runner import run_strategy
+
+    cumulative = cumulative_fields_in(stock)
+    if not cumulative:
+        return False
+    for probe in _probe_contexts(stock, cumulative):
+        signal = run_strategy(skill, probe, list(main_industries or []), skip_universe_check=True)
+        if not bool(signal.get("hard_veto")):
+            return True
+    return False
+
+
 def _probe_contexts(
     observed: dict[str, Any],
     cumulative: dict[str, float],
@@ -91,5 +114,6 @@ def _probe_contexts(
 __all__ = [
     "SESSION_CUMULATIVE_FIELDS",
     "cumulative_fields_in",
+    "hard_veto_intraday_inconclusive",
     "intraday_cumulative_inconclusive",
 ]
