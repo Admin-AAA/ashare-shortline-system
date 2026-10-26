@@ -1250,7 +1250,8 @@ def _refresh_live_version(db) -> Any:
 
     version = data_version(db, ("daily_kbars", "stk_limits"))
     with _LIVE_LOCK:
-        if version != _LIVE_STATE["version"] or time.time() - _LIVE_STATE["ts"] >= _LIVE_MAX_AGE:
+        if (version is None or version != _LIVE_STATE["version"]
+                or time.time() - _LIVE_STATE["ts"] >= _LIVE_MAX_AGE):
             _REALIZED_LIVE.clear()
             _LIVE_STATE["version"] = version
             _LIVE_STATE["ts"] = time.time()

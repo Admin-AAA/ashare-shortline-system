@@ -21,7 +21,7 @@ import time
 from collections import OrderedDict
 from typing import Any, Callable, Hashable, Iterable
 
-from sqlalchemy import text
+from sqlalchemy import event, text
 from sqlalchemy.orm import Session
 
 # 大表：只看新增（主键自增 + 最新交易日）
@@ -65,13 +65,38 @@ def _fingerprint_sql(db: Session, table: str) -> str:
     return f"SELECT COUNT(*), BIT_XOR(CRC32(CONCAT_WS('|',{parts}))) FROM `{table}`"
 
 
-def data_version(db: Session, tables: Iterable[str]) -> tuple[Any, ...]:
-    """返回这些表当前的版本指纹（可做字典键）。读一致：同一连接里依次查询。"""
+_SESSION_KEY = "_data_version_memo"
+
+
+def data_version(db: Session, tables: Iterable[str]) -> tuple[Any, ...] | None:
+    """返回这些表当前的版本指纹（可做字典键）。
+
+    同一个会话、同一个事务里重复取同一张表（一次请求里多个函数各取一次）只查一次库：
+    记在 session.info 里，会话一旦 flush / commit / rollback 就清掉（见下面的事件监听），
+    所以本请求自己写了库也不会拿到旧指纹。"""
+    bind = db.get_bind()
+    if bind is None or bind.dialect.name != "mysql":
+        return None  # 指纹 SQL 只支持 MySQL；其它库（单测用的 SQLite）不缓存，调用方直接现算
+    memo: dict[str, Any] = db.info.setdefault(_SESSION_KEY, {})
     out: list[Any] = []
     for table in sorted(set(tables)):
-        row = db.execute(text(_fingerprint_sql(db, table))).first()
-        out.append((table, tuple(str(v) for v in row) if row is not None else None))
+        fp = memo.get(table)
+        if fp is None:
+            row = db.execute(text(_fingerprint_sql(db, table))).first()
+            fp = tuple(str(v) for v in row) if row is not None else ("",)
+            memo[table] = fp
+        out.append((table, fp))
     return tuple(out)
+
+
+def _drop_memo(session, *_args) -> None:
+    session.info.pop(_SESSION_KEY, None)
+
+
+event.listen(Session, "after_flush", _drop_memo)
+event.listen(Session, "after_commit", _drop_memo)
+event.listen(Session, "after_rollback", _drop_memo)
+event.listen(Session, "after_soft_rollback", _drop_memo)
 
 
 class VersionedCache:
@@ -100,6 +125,8 @@ class VersionedCache:
             return True, value
 
     def get_or_compute(self, key: Hashable, version: Any, factory: Callable[[], Any]) -> Any:
+        if version is None:  # 拿不到数据版本：不缓存
+            return factory()
         found, value = self._lookup(key, version)
         if found:
             self.hits += 1
