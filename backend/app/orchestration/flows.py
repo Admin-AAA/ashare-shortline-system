@@ -203,6 +203,10 @@ def poll_execution_confirmation(scheduled_at: str) -> dict:
         db = SessionLocal()
         try:
             ids = list_unsettled_confirmation_ids(db)
+            if not ids:
+                # 没有未结算（待确认）的正式推荐：不进入确认批次，不拉全市场行情/逐股K线，省上游额度（2026-10-26 额度耗尽根因）
+                logger.info("盘中买入确认轮询：没有未结算推荐，跳过")
+                return {"skipped": True, "reason": "no_unsettled_recommendations", "pending": 0}
             summaries = []
             for start in range(0, len(ids), MAX_BATCH_IDS):
                 result = confirm_batch_executions(db, ids[start:start + MAX_BATCH_IDS], refresh=True)

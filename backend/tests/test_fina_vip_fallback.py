@@ -72,6 +72,7 @@ def test_quota_reads_dotenv(monkeypatch):
     from app.core import provider_quota as pq
 
     monkeypatch.delenv("ASHARE_TUSHARE_QUANTDATA_DAILY_QUOTA", raising=False)
+    monkeypatch.delenv("ASHARE_TUSHARE_PROMAX_DAILY_QUOTA", raising=False)  # 本机 .env 已为 promax 设 1000，别让它串进来
     monkeypatch.setattr(pq, "_dotenv_value", lambda k: "920" if k.endswith("QUANTDATA_DAILY_QUOTA") else "")
     assert pq.daily_quota("quantdata") == 920 and pq.daily_quota("promax") is None
 

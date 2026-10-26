@@ -152,6 +152,7 @@ def test_execution_confirmation_poll_confirms_all_unsettled_in_batches(monkeypat
         lambda db, batch, refresh=False: calls.append((batch, refresh)) or {"summary": {"requested_count": len(batch)}},
     )
     monkeypatch.setattr("app.services.tushare_client.is_open_trade_date", lambda d: True)
+    monkeypatch.setattr("app.services.schedule_gate.schedule_skip_reason", lambda *a, **k: None)  # 不受真实当前时间(迟到超时)影响
     monkeypatch.setattr("app.db.session.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
 
     result = poll_execution_confirmation.fn("2026-10-21T10:00:00+08:00")
@@ -171,3 +172,19 @@ def test_execution_confirmation_poll_skips_closed_market(monkeypatch) -> None:
     result = poll_execution_confirmation.fn("2026-10-24T10:00:00+08:00")
 
     assert result["skipped"] is True
+
+
+def test_execution_confirmation_poll_skips_when_no_unsettled_recommendations(monkeypatch) -> None:
+    """没有待确认推荐时不进入确认批次（不拉行情/逐股K线），直接跳过省额度。"""
+    from app.orchestration.flows import poll_execution_confirmation
+    import app.services.batch_execution_confirmation as bec
+
+    monkeypatch.setattr("app.services.tushare_client.is_open_trade_date", lambda d: True)
+    monkeypatch.setattr("app.services.schedule_gate.schedule_skip_reason", lambda *a, **k: None)  # 不受真实当前时间(迟到超时)影响
+    monkeypatch.setattr("app.db.session.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(bec, "list_unsettled_confirmation_ids", lambda db: [])
+    monkeypatch.setattr(bec, "confirm_batch_executions", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not confirm")))
+
+    result = poll_execution_confirmation.fn("2026-10-26T10:00:00+08:00")
+
+    assert result == {"skipped": True, "reason": "no_unsettled_recommendations", "pending": 0}

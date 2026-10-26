@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.tables import RecommendationExecutionState
@@ -33,14 +34,9 @@ def persist_execution_assessments(db: Session, assessments: list[dict[str, Any]]
             continue
 
         state = db.get(RecommendationExecutionState, recommendation_id)
-        is_first_buy = decision_code == "buy" and not bool(state and state.ever_buy_confirmed)
         if state is None:
-            state = RecommendationExecutionState(
-                recommendation_id=recommendation_id,
-                latest_decision_code=decision_code,
-                latest_checked_at=checked_at,
-            )
-            db.add(state)
+            state = _insert_or_load(db, recommendation_id, decision_code, checked_at)
+        is_first_buy = decision_code == "buy" and not bool(state.ever_buy_confirmed)
 
         signal = assessment.get("strategy_signal") or {}
         state.latest_decision_code = decision_code
@@ -73,6 +69,34 @@ def persist_execution_assessments(db: Session, assessments: list[dict[str, Any]]
 
     db.flush()
     return persisted
+
+
+def _insert_or_load(db: Session, recommendation_id: str, decision_code: str, checked_at: datetime) -> RecommendationExecutionState:
+    """新建状态行；若别的写入方（盘中轮询进程 / 前端接口）刚好先插入了同一主键，改为加载那一行再更新（upsert）。
+
+    2026-10-26 09:31 实测：轮询与接口并发处理同一推荐，db.get 在 MySQL 可重复读快照里看不到对方刚提交的行，
+    随后 INSERT 撞主键，整批 flush 失败。这里用 SAVEPOINT 隔离这次插入：撞键只回滚这一行的插入，
+    不影响同批其他推荐；再用加锁读（读到最新已提交版本）取回对方那行继续更新。"""
+    try:
+        with db.begin_nested():
+            state = RecommendationExecutionState(
+                recommendation_id=recommendation_id,
+                latest_decision_code=decision_code,
+                latest_checked_at=checked_at,
+            )
+            db.add(state)
+            db.flush()
+        return state
+    except IntegrityError:
+        existing = db.execute(
+            select(RecommendationExecutionState)
+            .where(RecommendationExecutionState.recommendation_id == recommendation_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+        if existing is None:
+            raise
+        return existing
 
 
 def load_execution_state_map(
