@@ -122,3 +122,24 @@ def test_day1_missing_alert_emits_then_resolves(monkeypatch):
     assert [a["key"] for a in alerts.active_alert_records(ec.DAY1_MISSING_ALERT_KIND)] == ["r_alert"]
     ec.sync_day1_missing_alert(rec, "buyable", "2026-10-19")
     assert alerts.active_alert_records(ec.DAY1_MISSING_ALERT_KIND) == []
+
+
+def test_calendar_ending_before_end_date_falls_back_to_kbars_and_alerts(db, monkeypatch):
+    """日历只到 10-21，要查到 10-23：不拿半截日历数，退回全市场日 K 日期并告警；覆盖后解除。"""
+    from app.core import alerts
+
+    alerts.reset_alerts()
+    monkeypatch.setattr(ews, "_last_resolve_check", 0.0)
+    for d in ("2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23"):
+        _kbar(db, "600000", d)
+    db.commit()
+    # 日历 10-14..10-21（10-17/18 休市）只覆盖一半
+    assert ews.open_days_after(db, "2026-10-16", "2026-10-23") == [
+        "2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23"]
+    assert [a["key"] for a in alerts.active_alert_records(ews.CALENDAR_GAP_ALERT_KIND)] == ["SSE"]
+    # 日历补齐后按日历数，并解除告警
+    for day in (22, 23):
+        db.add(TradeCalendar(exchange="SSE", cal_date=f"202610{day}", is_open=True))
+    db.commit()
+    assert ews.open_days_after(db, "2026-10-16", "2026-10-23")[-1] == "2026-10-23"
+    assert alerts.active_alert_records(ews.CALENDAR_GAP_ALERT_KIND) == []

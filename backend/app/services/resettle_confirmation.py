@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+from datetime import date, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -32,7 +33,9 @@ def new_rule_confirmation(db: Session, rec: Any) -> tuple[str | None, float | No
 
     snap = json.loads(getattr(rec, "feature_snapshot_json", None) or "{}")
     window = entry_window_days_for_rec(rec)
-    days = open_days_after(db, str(rec.trade_date), "2099-12-31")[:window]
+    # 窗口最多几个交易日，往后看 30 个自然日足够（别用很远的结束日：日历没覆盖会触发回退和告警）
+    end = (date.fromisoformat(str(rec.trade_date)[:10]) + timedelta(days=30)).isoformat()
+    days = open_days_after(db, str(rec.trade_date), end)[:window]
     for day in days:
         bar = db.scalar(select(DailyKbar).where(DailyKbar.code == rec.code, DailyKbar.trade_date == day))
         if bar is None:

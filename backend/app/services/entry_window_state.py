@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 from sqlalchemy import func, select, text
@@ -54,9 +55,14 @@ def open_days_after(db: Session, start_exclusive: str, end_inclusive: str) -> li
         .where(TradeCalendar.exchange == EXCHANGE, TradeCalendar.cal_date > s, TradeCalendar.cal_date <= e)
         .order_by(TradeCalendar.cal_date)
     ).all()
-    if rows:
+    if rows and str(rows[-1][0]) >= e:
+        _resolve_calendar_gap()
         return [_iso(d) for d, is_open in rows if is_open]
-    logger.warning("交易所日历缺 %s~%s，入场窗口天数回退到全市场日 K 日期", start_exclusive, end_inclusive)
+    # 日历没覆盖到结束日（整段缺，或最后一天早于结束日）：不能拿半截日历数天数，退回全市场日 K 日期并告警
+    last = _iso(rows[-1][0]) if rows else None
+    logger.warning("交易所日历只到 %s，没覆盖 %s~%s，入场窗口天数回退到全市场日 K 日期",
+                   last or "—", start_exclusive, end_inclusive)
+    _alert_calendar_gap(last, end_inclusive)
     return sorted(
         str(v) for v in db.scalars(
             select(DailyKbar.trade_date)
@@ -64,6 +70,38 @@ def open_days_after(db: Session, start_exclusive: str, end_inclusive: str) -> li
             .distinct()
         ).all()
     )
+
+
+CALENDAR_GAP_ALERT_KIND = "trade_calendar_not_covering"
+CALENDAR_GAP_ALERT_KEY = "SSE"
+_RESOLVE_CHECK_INTERVAL = 600.0
+_last_resolve_check = 0.0
+
+
+def _alert_calendar_gap(last: str | None, needed: str) -> None:
+    try:
+        from app.core.alerts import emit_alert
+
+        emit_alert(CALENDAR_GAP_ALERT_KIND, CALENDAR_GAP_ALERT_KEY,
+                   f"交易所日历只到 {last or '—'}，没覆盖 {needed}；入场窗口天数临时按全市场日 K 日期数，请同步日历",
+                   cooldown=20 * 3600)
+    except Exception:  # noqa: BLE001 - 告警失败不能挡住买入确认
+        logger.debug("calendar gap alert failed", exc_info=True)
+
+
+def _resolve_calendar_gap() -> None:
+    """日历重新覆盖到要查的日子 → 解除告警（每 10 分钟最多查一次登记，避免每次调用都读文件）。"""
+    global _last_resolve_check
+    now = time.monotonic()
+    if now - _last_resolve_check < _RESOLVE_CHECK_INTERVAL:
+        return
+    _last_resolve_check = now
+    try:
+        from app.core.alerts import resolve_alert
+
+        resolve_alert(CALENDAR_GAP_ALERT_KIND, CALENDAR_GAP_ALERT_KEY, "交易所日历已覆盖")
+    except Exception:  # noqa: BLE001
+        logger.debug("calendar gap resolve failed", exc_info=True)
 
 
 def recent_open_days(db: Session, end_inclusive: str, count: int) -> list[str]:

@@ -124,7 +124,7 @@ def nineteen_table() -> None:
                 Recommendation.code == code, Recommendation.trade_date == signal_date)).all()
             rec = recs[0]
             snap = json.loads(rec.feature_snapshot_json or "{}")
-            days = open_days_after(db, signal_date, "2026-12-31")[:2]
+            days = open_days_after(db, signal_date, "2026-11-30")[:2]
             bars = [db.scalar(select(DailyKbar).where(DailyKbar.code == code, DailyKbar.trade_date == d)) for d in days]
             bars = [b for b in bars if b is not None]
             confirm = ("—", None)
