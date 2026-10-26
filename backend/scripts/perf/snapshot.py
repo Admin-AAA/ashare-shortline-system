@@ -13,6 +13,8 @@ import sys
 import urllib.parse
 import urllib.request
 
+HEADERS = {"X-Ashare-Perf-Probe": "1"}  # 测量标记：后端不把这些请求写进 api_request_metrics
+
 URLS = [
     "/api/recommendations/history?limit=200",
     "/api/recommendations/history?limit=200&offset=200",
@@ -75,7 +77,7 @@ def snap(base: str, out: str) -> None:
     d = pathlib.Path(out)
     d.mkdir(parents=True, exist_ok=True)
     for u in URLS:
-        with urllib.request.urlopen(base + u, timeout=180) as r:
+        with urllib.request.urlopen(urllib.request.Request(base + u, headers=HEADERS), timeout=180) as r:
             data = json.loads(r.read())
         (d / fname(u)).write_text(json.dumps(scrub(data), ensure_ascii=False, sort_keys=True, indent=0))
     print(f"saved {len(URLS)} -> {d}")

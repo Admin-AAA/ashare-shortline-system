@@ -21,8 +21,9 @@
 量改动前后时，可以在 worktree 里起只读临时后端：
   .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8792 --lifespan off
 （--lifespan off：不迁移、不注册定时任务、不起预热线程；注意它没有主后端的启动预热。）
-注意：后端中间件会把每个 /api/ GET 的耗时写进 api_request_metrics（self_check 用它算 api_p95），
-所以跑一轮 bench 会写入上千条延迟样本，不管打的是主后端还是临时后端。量完要清理就按时间窗删这些行。
+注意：后端中间件会把每个 /api/ GET 的耗时写进 api_request_metrics（self_check 用它算 api_p95）。
+本目录脚本的请求都带 X-Ashare-Perf-Probe: 1，后端（含此功能的版本）对来自 127.0.0.1 的这类请求不写这张表；
+打没有此功能的旧后端时仍会写入上千条样本。
 冷测数字受 MySQL 缓冲池影响很大：有别的大查询在扫 daily_kbars 时，大字段页会被挤出缓冲池，冷测会明显变慢。
 """
 import argparse
@@ -62,10 +63,13 @@ for h, name in (("mid", "中线"), ("long", "长线")):
     ]
 
 BASE = "http://127.0.0.1:8765"
+# 带 gzip（和浏览器一致）+ 测量标记头：后端看到来自 127.0.0.1 的这个头就不写 api_request_metrics
+HEADERS = {"Accept-Encoding": "gzip", "X-Ashare-Perf-Probe": "1"}
+PROBE_ONLY = {"X-Ashare-Perf-Probe": "1"}  # 需要解析 JSON 的请求不要 gzip（urllib 不自动解压）
 
 
 def get(path: str) -> tuple[float, int, int]:
-    req = urllib.request.Request(BASE + path, headers={"Accept-Encoding": "gzip"})
+    req = urllib.request.Request(BASE + path, headers=HEADERS)
     t = time.perf_counter()
     with urllib.request.urlopen(req, timeout=120) as r:
         body = r.read()
@@ -86,7 +90,7 @@ def _horizon_review(h: str) -> None:
     first = {}
 
     def full():
-        req = urllib.request.Request(f"{BASE}/api/horizons/{h}/picks?page=1&page_size=200")
+        req = urllib.request.Request(f"{BASE}/api/horizons/{h}/picks?page=1&page_size=200", headers=PROBE_ONLY)
         with urllib.request.urlopen(req, timeout=120) as r:
             first.update(json.loads(r.read()))
         n = -(-int(first.get("total") or 0) // 200)
@@ -103,7 +107,7 @@ def _horizon_review(h: str) -> None:
 
 def _short_review() -> None:
     """短线复盘页：先取第 1 页拿 total，再并发取其余页（上限 2000 条）。"""
-    req = urllib.request.Request(f"{BASE}/api/recommendations/history?limit=200")
+    req = urllib.request.Request(f"{BASE}/api/recommendations/history?limit=200", headers=PROBE_ONLY)
     with urllib.request.urlopen(req, timeout=120) as r:
         total = min(int(json.loads(r.read()).get("total") or 0), 2000)
     parallel([f"/api/recommendations/history?limit=200&offset={o}" for o in range(200, total, 200)])

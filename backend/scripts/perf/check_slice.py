@@ -8,7 +8,8 @@ B = sys.argv[1]
 
 
 def g(u):
-    return json.loads(urllib.request.urlopen(B + u, timeout=120).read())
+    return json.loads(urllib.request.urlopen(
+        urllib.request.Request(B + u, headers={"X-Ashare-Perf-Probe": "1"}), timeout=120).read())
 
 
 ok = n = 0
