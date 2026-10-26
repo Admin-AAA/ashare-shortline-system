@@ -15,8 +15,9 @@ const hhmm = (epoch: number) =>
 
 /**
  * 数据源管理 —— 按数据网关的数据类型分列：每列一个数据类型，列内按回退顺序列出 provider，
- * 回填 live 熔断状态（后端 + Prefect worker 共享），可直接启停 provider 的开关。
- * 开关即 data_source_config 的 (source, source_type) 行，一个开关可能被多个 provider 共用，卡片上会标出。
+ * 回填 live 熔断状态（后端 + Prefect worker 共享），可直接启停 provider。
+ * 卡片按钮写数据项级开关（data_gateway_item_switch：只管这一列）；源总开关（data_source_config 的
+ * (source, source_type) 行，可能被多个数据类型共用）只在「Tushare Pro 路由」列操作，或在被总开关关掉的卡片上重新打开。
  */
 export function DataSourcesSection() {
   const [topo, setTopo] = useState<GatewayTopology | null>(null);
@@ -63,11 +64,16 @@ export function DataSourcesSection() {
     }
   }
 
-  function toggle(p: GatewayProvider, id: string) {
-    const target = !p.switches.every((s) => s.enabled);
+  // 数据项级：只在这一列（数据类型）里启停该源，其他数据类型不受影响。
+  function toggleItem(p: GatewayProvider, id: string) {
+    return run(id, () => api.setGatewayItemSwitch(p.item_key, p.name, !p.item_enabled));
+  }
+
+  // 源总开关（Tushare Pro 路由列，或把被总开关关掉的源重新打开）：会影响共用该开关的所有数据类型。
+  function setSource(p: GatewayProvider, id: string, target: boolean) {
     return run(id, async () => {
       let last: GatewayTopology | undefined;
-      for (const s of p.switches) last = await api.setGatewaySwitch(s.source, s.source_type, target);
+      for (const s of p.switches) if (s.enabled !== target) last = await api.setGatewaySwitch(s.source, s.source_type, target);
       return last;
     });
   }
@@ -111,7 +117,8 @@ export function DataSourcesSection() {
         每列是一个数据类型，列内自上而下即网关的回退顺序。熔断状态取自实盘进程（后端与 Prefect）共享的熔断库：
         <span className="gw-dot gw-dot--open" /> 熔断中（到点前不再请求）
         <span className="gw-dot gw-dot--half_open" /> 待探测（冷却已过，下一次请求试探）
-        <span className="gw-dot gw-dot--closed" /> 正常。禁用 / 启用写入数据源开关，各进程 5 秒内生效、无需重启。
+        <span className="gw-dot gw-dot--closed" /> 正常。禁用 / 启用只作用于所在这一列的数据类型，其他列不受影响；
+        「Tushare Pro 路由」列的按钮是源总开关，会连带用到该源的所有数据类型。各进程 5 秒内生效、无需重启。
         {openCount > 0 && <b className="gw-alert"> 当前 {openCount} 个数据源熔断中。</b>}
       </p>
 
@@ -133,9 +140,11 @@ export function DataSourcesSection() {
               <ol className="gw-list">
                 {d.providers.map((p, i) => {
                   const id = `${d.key}:${p.name}`;
-                  const enabled = p.switches.every((s) => s.enabled);
+                  const itemOff = p.item_switchable && !p.item_enabled;
+                  const sourceOff = !p.source_enabled;
+                  // 共用同一源总开关的其他位置（只在操作 / 查看总开关时提示）
                   const shared = Array.from(new Set(p.switches.flatMap((s) => usage.get(swKey(s)) ?? []))).filter((u) => u !== `${d.label}·${p.label}`);
-                  const state = !enabled ? "disabled" : p.breaker.state;
+                  const state = itemOff || sourceOff ? "disabled" : p.breaker.state;
                   const router = d.mode === "router";
                   const res = tests[p.name];
                   return (
@@ -155,17 +164,32 @@ export function DataSourcesSection() {
                             {busy === `test:${p.name}` ? <Loader2 size={12} className="spin" /> : <Plug size={12} />}
                           </button>
                         )}
-                        {p.switches.length > 0 ? (
-                          <button className={enabled ? "cfg-btn gw-btn" : "cfg-btn cfg-btn--primary gw-btn"} disabled={busy !== null} onClick={() => toggle(p, id)}>
+                        {p.item_switchable ? (
+                          <button
+                            className={p.item_enabled ? "cfg-btn gw-btn" : "cfg-btn cfg-btn--primary gw-btn"}
+                            disabled={busy !== null}
+                            onClick={() => toggleItem(p, id)}
+                            title={`只在「${d.label}」里${p.item_enabled ? "禁用" : "启用"}，其他数据类型不受影响`}
+                          >
                             {busy === id && <Loader2 size={12} className="spin" />}
-                            {enabled ? "禁用" : "启用"}
+                            {p.item_enabled ? "禁用" : "启用"}
                           </button>
                         ) : (
-                          <span className="gw-src__tag" title="没有独立开关，随 Tushare 路由（Promax/QuantData）启停">随路由</span>
+                          p.switches.length > 0 && (
+                            <button
+                              className={p.source_enabled ? "cfg-btn gw-btn" : "cfg-btn cfg-btn--primary gw-btn"}
+                              disabled={busy !== null}
+                              onClick={() => setSource(p, id, !p.source_enabled)}
+                              title={shared.length ? `源总开关，同时影响：\n${shared.join("\n")}` : "源总开关"}
+                            >
+                              {busy === id && <Loader2 size={12} className="spin" />}
+                              {p.source_enabled ? "禁用" : "启用"}
+                            </button>
+                          )
                         )}
                       </div>
                       <div className="gw-src__meta">
-                        <StateText state={state} items={p.breaker.items} />
+                        <StateText state={state} itemOff={itemOff} sourceOff={sourceOff} router={router} items={p.breaker.items} />
                         {!p.active && <span>· {p.inactive_reason}</span>}
                       </div>
                       {p.breaker.items.length > 0 && (
@@ -180,7 +204,18 @@ export function DataSourcesSection() {
                           {p.breaker.items.length > (router ? 6 : 3) && <span className="gw-more">… 共 {p.breaker.items.length} 个接口</span>}
                         </div>
                       )}
-                      {shared.length > 0 && <div className="gw-src__shared" title={shared.join("\n")}>共用开关：{shared.join("、")}</div>}
+                      {router && shared.length > 0 && (
+                        <div className="gw-src__shared" title={shared.join("\n")}>总开关，同时影响：{shared.join("、")}</div>
+                      )}
+                      {!router && sourceOff && (
+                        <div className="gw-src__shared" title={shared.join("\n")}>
+                          整个源被总开关关闭{shared.length > 0 && `（同时影响：${shared.join("、")}）`}{" "}
+                          <button className="cfg-btn gw-btn" disabled={busy !== null} onClick={() => setSource(p, `${id}:source`, true)}>
+                            {busy === `${id}:source` && <Loader2 size={12} className="spin" />}
+                            打开总开关
+                          </button>
+                        </div>
+                      )}
                       {res && <div className={res.ok ? "gw-src__ok" : "gw-src__fail"}>{res.ok ? "连接正常" : `连接失败：${res.error || "未知错误"}`}{res.latency_ms != null && ` · ${res.latency_ms} ms`}</div>}
                     </li>
                   );
@@ -194,8 +229,19 @@ export function DataSourcesSection() {
   );
 }
 
-function StateText({ state, items }: { state: string; items: GatewayProvider["breaker"]["items"] }) {
-  if (state === "disabled") return <span>已禁用</span>;
+function StateText({ state, itemOff, sourceOff, router, items }: {
+  state: string;
+  itemOff: boolean;
+  sourceOff: boolean;
+  router: boolean;
+  items: GatewayProvider["breaker"]["items"];
+}) {
+  if (state === "disabled") {
+    if (router) return <span>已禁用（总开关）</span>;
+    if (itemOff && sourceOff) return <span>已禁用（本项 + 整源总开关）</span>;
+    if (itemOff) return <span>已禁用（仅本项）</span>;
+    return <span>已禁用（整源总开关）</span>;
+  }
   if (state === "closed") return <span>正常</span>;
   const open = items.filter((b) => b.state === "open");
   if (state === "open") {
