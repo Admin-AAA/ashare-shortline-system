@@ -2,9 +2,11 @@
 
 健康分本身是"请求那一刻"现算的，同一天上午 50、晚上 79 都可能，单看一次没法跟踪。这里固定时刻取样：
 
-- 原始记录（original）：只由 18:40 定时那次写入（当天、18:40 之后、还没有原始记录），写入后不可覆盖。
+- 原始记录（original）：只由 18:40 定时那次写入（当天 18:40–19:40、还没有原始记录），写入后不可覆盖；
+  超过 19:40 才跑到（机器休眠后补跑等）只记复核。文件读写用文件锁（跨进程）。
   先重跑一次统一巡检，再按页面同一公式算分，连同红/黄项和当天盘后出票结果一起存。
 - 复核（rechecks）：之后的任何重跑（次日 08:55 复核、手动触发）只追加到 rechecks，带时间，不改原始记录。
+  定时复核过了 09:15 就跳过。
   大宗交易这类 21:00 才发布的数据，18:40 时只记「待数据、未到点」，次日复核的结果写在这里。
 - 巡检本身失败：这一次标 quality_ok=false、score 为空，不拿旧报告凑分；不计入均值，单独计数显示。
 
@@ -23,9 +25,11 @@ from app.services.data_quality_monitor import DATA_DIR
 
 SNAPSHOT_PATH = DATA_DIR / "runtime" / "data_health_snapshots.jsonl"
 ORIGINAL_TIME = _dt.time(18, 40)
+ORIGINAL_WINDOW_END = _dt.time(19, 40)  # 原始记录只允许 18:40–19:40 写入；超时（机器休眠后补跑等）只记复核
+RECHECK_LATEST = _dt.time(9, 15)  # 次日复核过了 09:15（开盘集合竞价）就跳过，不和交易时段抢资源
 MODE_ORIGINAL = "original"
 MODE_RECHECK = "recheck"
-_LOCK = threading.Lock()
+_LOCK = threading.Lock()  # 进程内互斥；跨进程（Prefect 每个任务一个子进程、API 进程）用文件锁
 
 
 def combined_health(db, *, force_refresh: bool = False, report: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -76,7 +80,16 @@ def measure(db, *, now: _dt.datetime, trade_date: str) -> dict[str, Any]:
 
 
 def is_original_slot(trade_date: str, now: _dt.datetime) -> bool:
-    return now.date().isoformat() == trade_date and now.time().replace(tzinfo=None) >= ORIGINAL_TIME
+    t = now.time().replace(tzinfo=None)
+    return now.date().isoformat() == trade_date and ORIGINAL_TIME <= t < ORIGINAL_WINDOW_END
+
+
+def recheck_too_late(now: _dt.datetime) -> bool:
+    return now.time().replace(tzinfo=None) >= RECHECK_LATEST
+
+
+def _lock_path(path: Path) -> Path:
+    return path.with_name(path.name + ".lock")
 
 
 def take_snapshot(db, *, mode: str = MODE_ORIGINAL, now: _dt.datetime | None = None,
@@ -90,8 +103,10 @@ def take_snapshot(db, *, mode: str = MODE_ORIGINAL, now: _dt.datetime | None = N
     open_days = load_open_days(db)
     trade_date = output_target_date(open_days, now.replace(tzinfo=None)) or now.date().isoformat()
     sample = measure(db, now=now, trade_date=trade_date)
+    from app.governance.locking import file_lock
+
     p = path or SNAPSHOT_PATH
-    with _LOCK:
+    with _LOCK, file_lock(_lock_path(p)):
         rows = {str(r.get("trade_date")): r for r in load_snapshots(p)}
         rec = rows.get(trade_date) or {"trade_date": trade_date, "original": None, "rechecks": []}
         if mode == MODE_ORIGINAL and rec.get("original") is None and is_original_slot(trade_date, now):
