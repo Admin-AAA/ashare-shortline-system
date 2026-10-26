@@ -48,8 +48,7 @@ def trades(db, horizon: str, *, origin: str | None = None, strategy_id: str | No
     """所有批次的个股平铺成一行一笔，按信号日新→旧、批内排名升序。"""
     live_runs = _live_runs()
     rows: list[dict[str, Any]] = []
-    for f in ms._pick_files(strategy_id, horizon):
-        b = ms._load_batch(db, f)
+    for b in ms._load_batches(db, ms._pick_files(strategy_id, horizon)):
         o = origin_of(b, live_runs)
         if origin and origin != "all" and o != origin:
             continue

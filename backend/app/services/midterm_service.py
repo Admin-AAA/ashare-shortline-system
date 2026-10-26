@@ -8,6 +8,9 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import threading
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -1202,19 +1205,93 @@ def generate_block_trade_picks(db, as_of: str, apply_daily_cap: bool = False) ->
 
 
 _REALIZED_FINAL: dict[tuple[str, str, int], dict[str, Any]] = {}
+# 待买入 / 持有中的结算依赖最新日K：按「日K + 涨跌停表」的库内数据版本缓存（Prefect 写入新日K后版本立刻变），
+# 版本变了或超过 _LIVE_MAX_AGE 秒就整体作废。条目数 = 未平仓股票数（约千级），另设上限防意外膨胀。
+_REALIZED_LIVE: dict[tuple[str, str, int], dict[str, Any]] = {}
+_LIVE_STATE: dict[str, Any] = {"version": None, "ts": 0.0}
+_LIVE_LOCK = threading.Lock()
+_LIVE_MAX_AGE = 600.0
+_LIVE_MAX_ENTRIES = 20000
+_BAR_SQL = (
+    "SELECT k.trade_date, k.open, k.high, k.close, k.pct_chg, l.up_limit, l.down_limit FROM daily_kbars k "
+    "LEFT JOIN stk_limits l ON l.code=k.code AND l.trade_date=k.trade_date "
+)
 
 
 def _realize(db, code: str, signal_date: str, hold: int = HOLD_DAYS) -> dict[str, Any]:
     """结算单只入选股。已平仓/开盘涨停取消的结果之后不会再变，进程内缓存（复盘、交易明细、诊断每次
-    都要全量结算 700+ 只，逐只查日K约 2.5ms/只）；待买入/持有中依赖最新日K，每次重算。"""
+    都要全量结算 700+ 只，逐只查日K约 2.5ms/只）；待买入/持有中先查按数据版本缓存的结果
+    （由 prefetch_realized 批量填充并校验版本），没有再单查。"""
     key = (code, signal_date, hold)
     hit = _REALIZED_FINAL.get(key)
     if hit is not None:
         return dict(hit)
+    live = _REALIZED_LIVE.get(key)
+    if live is not None:
+        return dict(live)
     out = _realize_query(db, code, signal_date, hold)
+    _remember_realized(key, out, None)  # 单查不知道对应哪个数据版本：未平仓结果不进缓存
+    return out
+
+
+def _remember_realized(key: tuple[str, str, int], out: dict[str, Any], version: Any) -> None:
     if out["status"] in ("closed", "skipped"):
         _REALIZED_FINAL[key] = dict(out)
-    return out
+        return
+    with _LIVE_LOCK:
+        # 只在版本没被别的请求切换时写入，避免旧数据算出的结果挂到新版本下
+        if version is not None and version == _LIVE_STATE["version"] and len(_REALIZED_LIVE) < _LIVE_MAX_ENTRIES:
+            _REALIZED_LIVE[key] = dict(out)
+
+
+def _refresh_live_version(db) -> Any:
+    """取一次库内数据版本（两个 MAX 查询，<1ms）；变了或过期就清空未平仓结算缓存。返回当前版本。"""
+    from app.services.data_version import data_version
+
+    version = data_version(db, ("daily_kbars", "stk_limits"))
+    with _LIVE_LOCK:
+        if version != _LIVE_STATE["version"] or time.time() - _LIVE_STATE["ts"] >= _LIVE_MAX_AGE:
+            _REALIZED_LIVE.clear()
+            _LIVE_STATE["version"] = version
+            _LIVE_STATE["ts"] = time.time()
+    return version
+
+
+def prefetch_realized(db, batches: list[tuple[str, str, list[str]]]) -> None:
+    """批量结算：先校验数据版本，再把还没缓存的 (code, signal_date, hold) 用少量 IN 查询一次取齐日K，
+    逐只按与 _realize_query 完全相同的规则计算（同一 SQL 条件：trade_date>signal_date、close>0、按日期取前 hold+11 根）。
+    batches: [(strategy_id, signal_date, [code, ...]), ...]"""
+    if db is None:  # 无库会话（单测里 _realize 被替换）时不预取，逐只走 _realize
+        return
+    version = _refresh_live_version(db)
+    need: dict[str, list[tuple[str, int]]] = {}
+    for sid, signal_date, codes in batches:
+        hold = _hold(sid)
+        for code in codes:
+            key = (code, signal_date, hold)
+            if key in _REALIZED_FINAL or key in _REALIZED_LIVE:
+                continue
+            need.setdefault(code, []).append((signal_date, hold))
+    if not need:
+        return
+    codes = sorted(need)
+    for i in range(0, len(codes), 300):
+        chunk = codes[i:i + 300]
+        min_date = min(d for c in chunk for d, _ in need[c])
+        rows = db.execute(
+            text(_BAR_SQL.replace("SELECT k.trade_date", "SELECT k.code AS _code, k.trade_date")
+                 + "WHERE k.code IN :codes AND k.trade_date>:d AND k.close>0 ORDER BY k.code, k.trade_date")
+            .bindparams(bindparam("codes", expanding=True)),
+            {"codes": chunk, "d": min_date},
+        ).all()
+        by_code: dict[str, list[Any]] = {}
+        for r in rows:
+            by_code.setdefault(r._code, []).append(r)
+        for code in chunk:
+            bars = by_code.get(code, [])
+            for signal_date, hold in need[code]:
+                sub = [r for r in bars if r.trade_date > signal_date][: hold + 11]
+                _remember_realized((code, signal_date, hold), _realize_rows(sub, hold), version)
 
 
 def warm_realized_cache() -> None:
@@ -1222,8 +1299,7 @@ def warm_realized_cache() -> None:
     from app.db.session import SessionLocal
     db = SessionLocal()
     try:
-        for f in _pick_files(None, None):
-            _load_batch(db, f)
+        _load_batches(db, _pick_files(None, None))
     finally:
         db.close()
 
@@ -1231,10 +1307,13 @@ def warm_realized_cache() -> None:
 def _realize_query(db, code: str, signal_date: str, hold: int) -> dict[str, Any]:
     """次日开盘买入（一字/开盘涨停买不进 -> skipped）；第 hold 个交易日开盘卖出，跌停封死顺延；0.3% 成本。"""
     rows = db.execute(text(
-        "SELECT k.trade_date, k.open, k.high, k.close, k.pct_chg, l.up_limit, l.down_limit FROM daily_kbars k "
-        "LEFT JOIN stk_limits l ON l.code=k.code AND l.trade_date=k.trade_date "
-        "WHERE k.code=:c AND k.trade_date>:d AND k.close>0 ORDER BY k.trade_date LIMIT :n"),
+        _BAR_SQL + "WHERE k.code=:c AND k.trade_date>:d AND k.close>0 ORDER BY k.trade_date LIMIT :n"),
         {"c": code, "d": signal_date, "n": hold + 11}).all()
+    return _realize_rows(rows, hold)
+
+
+def _realize_rows(rows: list[Any], hold: int) -> dict[str, Any]:
+    """结算规则本体（单查 / 批量共用）：rows 为信号日之后、close>0、按日期升序的前 hold+11 根日K。"""
     if not rows or not rows[0].open:
         return {"status": "pending"}
     e = rows[0]
@@ -1254,6 +1333,8 @@ def _realize_query(db, code: str, signal_date: str, hold: int) -> dict[str, Any]
     ret = tri / (e.open / e.close) - 1
     return {"status": "holding", "entry_date": e.trade_date, "mark_date": last.trade_date,
             "ret": round(ret * 100, 2), "days": len(rows) - 1, "entry_price": e.open, "mark_price": last.close}
+
+
 
 
 # 统一 rule_score：各策略自己的排序指标（原单位，见 label / better），selection_reason 为中文入选依据
@@ -1370,8 +1451,37 @@ def _horizon_of(strategy_id: str) -> str:
     return "long" if strategy_id.startswith("long-") else "mid"
 
 
-def _load_batch(db, f: Path) -> dict[str, Any]:
-    data = json.loads(f.read_text())
+# picks/*.json 原文缓存：按 (路径, mtime_ns, 大小) 校验，文件被重写会自动重读。只缓存原文字符串
+# （每次 json.loads 出新对象，调用方随便改不会污染缓存）。条目上限 = 文件数量级。
+_FILE_CACHE: OrderedDict[str, tuple[tuple[int, int], str, int]] = OrderedDict()
+_FILE_CACHE_LOCK = threading.Lock()
+_FILE_CACHE_MAX = 5000
+
+
+def _read_pick_file(f: Path) -> tuple[str, int]:
+    """返回 (原文, picks 只数)。"""
+    st = f.stat()
+    sig = (st.st_mtime_ns, st.st_size)
+    k = str(f)
+    with _FILE_CACHE_LOCK:
+        hit = _FILE_CACHE.get(k)
+        if hit is not None and hit[0] == sig:
+            _FILE_CACHE.move_to_end(k)
+            return hit[1], hit[2]
+    raw = f.read_text()
+    n = len(json.loads(raw).get("picks", []))
+    with _FILE_CACHE_LOCK:
+        _FILE_CACHE[k] = (sig, raw, n)
+        _FILE_CACHE.move_to_end(k)
+        while len(_FILE_CACHE) > _FILE_CACHE_MAX:
+            _FILE_CACHE.popitem(last=False)
+    return raw, n
+
+
+def _load_batch(db, f: Path, _prefetched: bool = False) -> dict[str, Any]:
+    if not _prefetched:
+        return _load_batches(db, [f])[0]
+    data = json.loads(_read_pick_file(f)[0])
     sid = data["strategy_id"]
     for i, p in enumerate(data["picks"], 1):
         p.update(_realize(db, p["code"], data["signal_date"], _hold(sid)))
@@ -1386,9 +1496,19 @@ def _load_batch(db, f: Path) -> dict[str, Any]:
     return data
 
 
+def _load_batches(db, files: list[Path]) -> list[dict[str, Any]]:
+    """批量版 _load_batch：先一次性校验数据版本并批量结算所有未缓存的入选股，再逐个组装，结果与逐个 _load_batch 相同。"""
+    metas = []
+    for f in files:
+        d = json.loads(_read_pick_file(f)[0])
+        metas.append((d["strategy_id"], d["signal_date"], [p["code"] for p in d["picks"]]))
+    prefetch_realized(db, metas)
+    return [_load_batch(db, f, _prefetched=True) for f in files]
+
+
 def list_picks(db, strategy_id: str | None = None, limit_batches: int = 30,
                horizon: str | None = None) -> list[dict[str, Any]]:
-    return [_load_batch(db, f) for f in _pick_files(strategy_id, horizon)[:limit_batches]]
+    return _load_batches(db, _pick_files(strategy_id, horizon)[:limit_batches])
 
 
 def list_picks_page(db, strategy_id: str | None = None, horizon: str | None = None,
@@ -1396,8 +1516,8 @@ def list_picks_page(db, strategy_id: str | None = None, horizon: str | None = No
     """批次分页：total=批次总数、total_picks=全部只数（不算收益，便宜）、has_more。"""
     files = _pick_files(strategy_id, horizon)
     start = (max(page, 1) - 1) * page_size
-    total_picks = sum(len(json.loads(f.read_text()).get("picks", [])) for f in files)
-    batches = [_load_batch(db, f) for f in files[start:start + page_size]]
+    total_picks = sum(_read_pick_file(f)[1] for f in files)
+    batches = _load_batches(db, files[start:start + page_size])
     return {"batches": batches, "total": len(files), "total_picks": total_picks, "page": page,
             "page_size": page_size, "has_more": start + len(batches) < len(files)}
 
