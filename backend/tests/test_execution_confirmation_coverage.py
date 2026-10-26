@@ -100,3 +100,81 @@ def test_data_health_item_yellow_for_recent_silent_expiry(db):
     db.commit()
     item = dqm.check_confirmation_coverage(db, ["2026-10-14", "2026-10-15", "2026-10-16"], now=_cst(2026, 10, 16, 16, 0))
     assert item["severity"] == dqm.YELLOW and "300444" in item["detail"]
+
+
+# ── 第 4 条：告警跨日解除 / 条件还在每天重发 ─────────────────────────────
+
+@pytest.fixture()
+def real_alerts(db, monkeypatch):
+    """用真实的告警登记（pytest 下只放内存），看活跃名单本身。"""
+    import app.core.alerts as alerts_mod
+    monkeypatch.undo()
+    monkeypatch.setattr(cov, "_eligible_run_ids", lambda _db: ("run_a",))
+    alerts_mod.reset_alerts()
+    yield alerts_mod
+    alerts_mod.reset_alerts()
+
+
+def _keys(alerts_mod, kind=cov.ALERT_KIND):
+    return sorted(a["key"] for a in alerts_mod.active_alert_records(kind))
+
+
+def test_past_day_unchecked_alert_resolves_next_day(db, real_alerts):
+    real_alerts.emit_alert(cov.ALERT_KIND, "2026-10-15", "10-15 漏查")
+    real_alerts.emit_alert(cov.ALERT_KIND, "2026-10-16", "10-16 漏查")
+    cov.sweep_coverage_alerts(db, "2026-10-16")
+    assert _keys(real_alerts) == ["2026-10-16"]  # 今天的留给 report_coverage 判
+    cov.sweep_coverage_alerts(db, "2026-10-19")
+    assert _keys(real_alerts) == []
+
+
+def test_expired_gap_alert_reemits_daily_while_recent_then_resolves(db, real_alerts, monkeypatch):
+    db.add(RecommendationExecutionState(recommendation_id="rec_a", latest_decision_code="expired",
+                                        ever_buy_confirmed=False, latest_checked_at=datetime(2026, 10, 15, 8, 0)))
+    db.commit()
+    real_alerts.emit_alert(cov.ALERT_KIND, "expired:rec_a", "300444 漏查过期")
+    # 冷却内不重发
+    assert cov.sweep_coverage_alerts(db, "2026-10-16")["reemitted"] == 0
+    assert _keys(real_alerts) == ["expired:rec_a"]
+    # 一天后条件还在 → 重发一次
+    import time as _time
+    later = _time.time() + cov.DAILY_REEMIT_SECONDS + 60
+    monkeypatch.setattr(real_alerts.time, "time", lambda: later)
+    real_alerts._last_emitted.clear()
+    assert cov.sweep_coverage_alerts(db, "2026-10-19")["reemitted"] == 1
+    # 入场日 10-15 掉出近 5 个交易日 → 解除
+    assert cov.sweep_coverage_alerts(db, "2026-10-23")["resolved"] == 1
+    assert _keys(real_alerts) == []
+
+
+def test_expired_gap_alert_resolves_when_state_changes(db, real_alerts):
+    db.add(RecommendationExecutionState(recommendation_id="rec_a", latest_decision_code="buy",
+                                        ever_buy_confirmed=True, latest_checked_at=datetime(2026, 10, 15, 2, 0)))
+    db.commit()
+    real_alerts.emit_alert(cov.ALERT_KIND, "expired:rec_a", "300444 漏查过期")
+    cov.sweep_coverage_alerts(db, "2026-10-16")
+    assert _keys(real_alerts) == []
+
+
+def test_alert_cooldown_persists_across_processes(real_alerts):
+    assert real_alerts.emit_alert("k_test", "x", "m", cooldown=3600) is True
+    real_alerts._last_emitted.clear()  # 新子进程：进程内记录为空
+    assert real_alerts.emit_alert("k_test", "x", "m", cooldown=3600) is False
+
+
+def test_day1_missing_alert_stays_while_missing_then_resolves(db, real_alerts, monkeypatch):
+    from app.services import entry_window_state as ews
+    from app.services.execution_confirmation import DAY1_MISSING_ALERT_KIND
+
+    real_alerts.emit_alert(DAY1_MISSING_ALERT_KIND, "rec_a", "第 1 日缺 K")
+    real_alerts.emit_alert(DAY1_MISSING_ALERT_KIND, "rec_gone", "推荐已删")
+    cov.sweep_coverage_alerts(db, "2026-10-16")
+    # 推荐不存在 → 解除；rec_a 第 1 日（10-15）全市场日 K 仍不足 → 保留
+    assert _keys(real_alerts, DAY1_MISSING_ALERT_KIND) == ["rec_a"]
+    # 第 1 日日 K 补齐 → 解除
+    monkeypatch.setattr(ews, "MARKET_MIN_ROWS", 1)
+    db.add(DailyKbar(code="300444", trade_date="2026-10-15", open=8.9, high=9.1, low=8.8, close=9.0,
+                     volume=100, amount=1e6, pct_chg=1.0))
+    db.commit()
+    cov.sweep_coverage_alerts(db, "2026-10-16")
+    assert _keys(real_alerts, DAY1_MISSING_ALERT_KIND) == []

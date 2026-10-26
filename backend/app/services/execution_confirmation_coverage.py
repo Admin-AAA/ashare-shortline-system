@@ -7,6 +7,8 @@
 
 - 入场日 09:45（首轮 09:30 轮询后留 15 分钟）起，入场窗口内、今天还没有任何检查记录的推荐 = 漏查；
 - 轮询每轮结束时调用 ``report_coverage``：有漏查发告警 ``execution_confirmation_unchecked``，全覆盖则解除；
+- ``sweep_coverage_alerts``（轮询 + 数据健康巡检都调）：非今天的漏查日告警解除；逐只过期告警与第 1 日缺 K 告警
+  条件还在就每天重发一次，条件消失就解除（含非今天的 key）；
 - 数据健康 ``check_confirmation_coverage``：今天有漏查 → 红；近 5 个交易日有「入场日盘中没被检查就过期」→ 黄；
 - 批量确认判过期时若入场日没有盘中检查，原因写明「入场日盘中未被检查（轮询缺口）」，不再只写「今日已收盘」。
 
@@ -35,6 +37,7 @@ COVERAGE_GRACE = time(9, 45)
 SESSION_CLOSE = time(15, 0)
 ALERT_KIND = "execution_confirmation_unchecked"
 RECENT_GAP_TRADE_DAYS = 5
+DAILY_REEMIT_SECONDS = 20 * 3600  # 条件还在的告警每天重发一次
 
 
 def session_start_utc(trade_date: str) -> datetime:
@@ -109,12 +112,83 @@ def _eligible_run_ids(db: Session) -> tuple[str, ...]:
     return tuple(canonical_live_forward_run_ids(db)) + tuple(catchup_formal_run_ids(db))
 
 
+def _entry_day(db: Session, signal_date: str, until: str) -> str | None:
+    days = open_days_after(db, signal_date, until)
+    return days[0] if days else None
+
+
+def sweep_coverage_alerts(db: Session, today: str) -> dict[str, int]:
+    """告警自动解除/每日重发（评审第 4 条），轮询与数据健康都会调用：
+
+    - 漏查日告警（key=日期）：不是今天的一律解除——那天已收盘，漏查的票已转成逐只过期告警；
+      今天的由 report_coverage 按当前覆盖情况发/解除。
+    - 逐只过期告警（key=expired:<id>）：入场日仍在近 RECENT_GAP_TRADE_DAYS 个交易日内、且仍是「没确认买入就过期」
+      → 条件还在，每天重发一次；推荐已不存在 / 已确认买入 / 不再是过期 / 入场日超出近 N 日 → 解除。
+    - 第 1 日日 K 缺失告警（entry_day1_bar_missing）：按今天重算第 1 日状态，仍缺数据每天重发一次，否则解除。
+    """
+    from app.core.alerts import active_alert_records, emit_alert, resolve_alert
+    from app.services.execution_confirmation import (
+        DAY1_MISSING_ALERT_KIND,
+        day1_status_in_window,
+        is_unsettled_formal_rec,
+        sync_day1_missing_alert,
+    )
+    from app.services.entry_window_state import signal_age_trade_days
+
+    resolved = reemitted = 0
+    recent = recent_open_days(db, today, RECENT_GAP_TRADE_DAYS)
+    window_start = recent[0] if recent else today
+    for alert in active_alert_records(ALERT_KIND):
+        key = str(alert.get("key") or "")
+        if not key.startswith("expired:"):
+            if key != today:
+                resolve_alert(ALERT_KIND, key, f"{key} 已收盘，当日漏查已转为逐只过期告警")
+                resolved += 1
+            continue
+        rec_id = key.split(":", 1)[1]
+        rec = db.get(Recommendation, rec_id)
+        state = db.get(RecommendationExecutionState, rec_id)
+        entry_day = _entry_day(db, str(rec.trade_date), today) if rec is not None else None
+        still = (
+            rec is not None and state is not None
+            and str(state.latest_decision_code or "") == "expired"
+            and not bool(state.ever_buy_confirmed)
+            and entry_day is not None and entry_day >= window_start
+        )
+        if still:
+            if emit_alert(ALERT_KIND, key, str(alert.get("message") or key), cooldown=DAILY_REEMIT_SECONDS):
+                reemitted += 1
+        else:
+            resolve_alert(ALERT_KIND, key, f"{rec_id} 漏查过期已超出近 {RECENT_GAP_TRADE_DAYS} 个交易日或状态已变化")
+            resolved += 1
+    for alert in active_alert_records(DAY1_MISSING_ALERT_KIND):
+        rec_id = str(alert.get("key") or "")
+        rec = db.get(Recommendation, rec_id)
+        outcome = db.get(RecommendationOutcome, rec_id) if rec is not None else None
+        if rec is None or not is_unsettled_formal_rec(rec, outcome):
+            resolve_alert(DAY1_MISSING_ALERT_KIND, rec_id, f"{rec_id} 已结算或不存在")
+            resolved += 1
+            continue
+        status, day1 = day1_status_in_window(
+            db, rec, signal_age_trade_days=signal_age_trade_days(db, str(rec.trade_date), today),
+            window_days=entry_window_days_for_rec(rec), data_as_of=today,
+        )
+        if status == "none":
+            status = "past_window"
+        sync_day1_missing_alert(rec, status, day1)
+    return {"resolved": resolved, "reemitted": reemitted}
+
+
 def report_coverage(db: Session, now: datetime | None = None) -> dict[str, Any]:
-    """轮询每轮结束时调用：入场日 09:45 后仍有漏查 → 发告警；全覆盖 → 解除告警。"""
+    """轮询每轮结束时调用：入场日 09:45 后仍有漏查 → 发告警；全覆盖 → 解除告警；并清理跨日告警。"""
     from app.core.alerts import emit_alert, resolve_alert
 
     now_cst = (now or datetime.now(timezone.utc)).astimezone(CST)
     today = now_cst.date().isoformat()
+    try:
+        sweep_coverage_alerts(db, today)
+    except Exception:  # noqa: BLE001 - 告警清理失败不能挡住覆盖率检查
+        logger.exception("买入确认告警清理失败")
     if now_cst.time() < COVERAGE_GRACE:
         return {"checked": False, "reason": "before_grace"}
     unchecked = entry_day_unchecked(db, today, run_ids=_eligible_run_ids(db))
@@ -206,6 +280,7 @@ __all__ = [
     "entry_day_unchecked",
     "recent_expired_without_check",
     "report_coverage",
+    "sweep_coverage_alerts",
     "session_start_utc",
     "was_checked_in_session",
 ]

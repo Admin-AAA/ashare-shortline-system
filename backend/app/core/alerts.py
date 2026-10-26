@@ -72,18 +72,28 @@ def _reg_key(kind: str, key: str) -> str:
 
 
 def emit_alert(kind: str, key: str, message: str, *, cooldown: float = ALERT_COOLDOWN_SECONDS) -> bool:
-    """记录一条告警；冷却期内同一 (kind, key) 被抑制时返回 False。无论是否被抑制都刷新活跃登记。"""
+    """记录一条告警；冷却期内同一 (kind, key) 被抑制时返回 False。无论是否被抑制都刷新活跃登记。
+
+    冷却同时看进程内记录和登记里的 last_emitted_epoch（Prefect 每个任务是新子进程，只看进程内
+    会让「每天重发一次」变成每轮都发）。
+    """
     now = time.monotonic()
+    wall = time.time()
     with _lock:
         reg = _load_registry()
-        entry = reg.get(_reg_key(kind, key))
+        entry = reg.get(_reg_key(kind, key)) or {}
+        last = _last_emitted.get((kind, key))
+        reg_last = entry.get("last_emitted_epoch")
+        suppressed = (last is not None and now - last < cooldown) or (
+            isinstance(reg_last, (int, float)) and 0 <= wall - reg_last < cooldown
+        )
         reg[_reg_key(kind, key)] = {
             "kind": kind, "key": key, "message": message[:500],
-            "first_seen": (entry or {}).get("first_seen") or _now_iso(), "last_seen": _now_iso(),
+            "first_seen": entry.get("first_seen") or _now_iso(), "last_seen": _now_iso(),
+            "last_emitted_epoch": reg_last if suppressed else wall,
         }
         _save_registry(reg)
-        last = _last_emitted.get((kind, key))
-        if last is not None and now - last < cooldown:
+        if suppressed:
             return False
         _last_emitted[(kind, key)] = now
     logger.error("[ALERT:%s] %s | key=%s", kind, message, key)

@@ -792,11 +792,16 @@ def check_confirmation_coverage(db, open_days: list[str], now: datetime | None =
     """盘中买入确认覆盖率：今天入场窗口内 09:45 后仍没被检查 → 红；近 5 个交易日有入场日没检查就过期 → 黄。"""
     from app.services.execution_confirmation_coverage import (
         COVERAGE_GRACE, _eligible_run_ids, entry_day_unchecked, recent_expired_without_check,
+        sweep_coverage_alerts,
     )
 
     now = now or _now()
     now_cst = now.astimezone(_CST)
     today = now_cst.date().isoformat()
+    try:  # 告警自动解除/每日重发：轮询停了（非交易日、无待确认推荐）也要靠数据健康巡检清理
+        sweep_coverage_alerts(db, today)
+    except Exception:  # noqa: BLE001
+        logger.exception("买入确认告警清理失败")
     key, label = "job:execution_confirmation_coverage", "盘中买入确认覆盖"
     unchecked: list[dict[str, Any]] = []
     if today in set(open_days) and now_cst.time() >= COVERAGE_GRACE:
