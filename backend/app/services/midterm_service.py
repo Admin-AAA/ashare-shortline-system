@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import bisect
 import datetime as _dt
 import json
 import logging
@@ -1210,6 +1211,7 @@ _REALIZED_FINAL: dict[tuple[str, str, int], dict[str, Any]] = {}
 _REALIZED_LIVE: dict[tuple[str, str, int], dict[str, Any]] = {}
 _LIVE_STATE: dict[str, Any] = {"version": None, "ts": 0.0}
 _LIVE_LOCK = threading.Lock()
+_PREFETCH_LOCK = threading.Lock()
 _LIVE_MAX_AGE = 600.0
 _LIVE_MAX_ENTRIES = 20000
 _BAR_SQL = (
@@ -1265,6 +1267,39 @@ def prefetch_realized(db, batches: list[tuple[str, str, list[str]]]) -> None:
     if db is None:  # 无库会话（单测里 _realize 被替换）时不预取，逐只走 _realize
         return
     version = _refresh_live_version(db)
+    if not _missing_realized(batches):
+        return
+    # 同一时刻只让一个请求做批量结算（复盘页会并发发 3~4 个请求，都要同一批股票）；
+    # 后进来的等它算完，再看还缺什么，通常已经不缺了。
+    with _PREFETCH_LOCK:
+        need = _missing_realized(batches)
+        codes = sorted(need)
+        for i in range(0, len(codes), 200):
+            chunk = codes[i:i + 200]
+            # 每只股票各自的下界（该股最早的信号日），避免一只老信号把整批都拉长
+            conds = " OR ".join(f"(k.code=:c{j} AND k.trade_date>:d{j})" for j in range(len(chunk)))
+            params: dict[str, Any] = {}
+            for j, code in enumerate(chunk):
+                params[f"c{j}"] = code
+                params[f"d{j}"] = min(d for d, _ in need[code])
+            rows = db.execute(
+                text(_BAR_SQL.replace("SELECT k.trade_date", "SELECT k.code AS _code, k.trade_date")
+                     + f"WHERE ({conds}) AND k.close>0 ORDER BY k.code, k.trade_date"),
+                params,
+            ).all()
+            by_code: dict[str, list[Any]] = {}
+            for r in rows:
+                by_code.setdefault(r._code, []).append(r)
+            for code in chunk:
+                bars = by_code.get(code, [])
+                dates = [r.trade_date for r in bars]
+                for signal_date, hold in need[code]:
+                    start = bisect.bisect_right(dates, signal_date)  # 第一根 trade_date > signal_date
+                    sub = bars[start:start + hold + 11]
+                    _remember_realized((code, signal_date, hold), _realize_rows(sub, hold), version)
+
+
+def _missing_realized(batches: list[tuple[str, str, list[str]]]) -> dict[str, list[tuple[str, int]]]:
     need: dict[str, list[tuple[str, int]]] = {}
     for sid, signal_date, codes in batches:
         hold = _hold(sid)
@@ -1273,26 +1308,7 @@ def prefetch_realized(db, batches: list[tuple[str, str, list[str]]]) -> None:
             if key in _REALIZED_FINAL or key in _REALIZED_LIVE:
                 continue
             need.setdefault(code, []).append((signal_date, hold))
-    if not need:
-        return
-    codes = sorted(need)
-    for i in range(0, len(codes), 300):
-        chunk = codes[i:i + 300]
-        min_date = min(d for c in chunk for d, _ in need[c])
-        rows = db.execute(
-            text(_BAR_SQL.replace("SELECT k.trade_date", "SELECT k.code AS _code, k.trade_date")
-                 + "WHERE k.code IN :codes AND k.trade_date>:d AND k.close>0 ORDER BY k.code, k.trade_date")
-            .bindparams(bindparam("codes", expanding=True)),
-            {"codes": chunk, "d": min_date},
-        ).all()
-        by_code: dict[str, list[Any]] = {}
-        for r in rows:
-            by_code.setdefault(r._code, []).append(r)
-        for code in chunk:
-            bars = by_code.get(code, [])
-            for signal_date, hold in need[code]:
-                sub = [r for r in bars if r.trade_date > signal_date][: hold + 11]
-                _remember_realized((code, signal_date, hold), _realize_rows(sub, hold), version)
+    return need
 
 
 def warm_realized_cache() -> None:
