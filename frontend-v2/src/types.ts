@@ -1976,7 +1976,12 @@ export type ReplayAnalysisSummary = {
   total_count: number;
   false_positive_count: number;
   false_positive_rate: number;
+  /** 旧口径：全部行平均（未成交回退收盘收益），仅兼容保留，页面不展示 */
   average_net_return: number;
+  /** 已成交并卖出的笔数 / 成交率 / 每笔净收益（扣往返成本，未成交不摊 0%） */
+  executed_settled_count?: number;
+  execution_rate?: number;
+  average_executed_net_return?: number | null;
   reason_counts: Array<{ reason: string; count: number }>;
   category_counts: Array<{ category: string; category_label: string; stage: string; count: number }>;
   stage_counts: Array<{ stage: string; count: number }>;

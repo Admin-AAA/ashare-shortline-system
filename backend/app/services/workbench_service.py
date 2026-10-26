@@ -21,7 +21,7 @@ from app.agents.session_registry import AgentSessionRegistry
 from app.db.session import SessionLocal
 from app.core.config import get_settings
 from app.engine.agent_skill_runner import agent_only_signal, enrich_signal_with_agent_review
-from app.engine.trading_costs import is_net_profitable
+from app.engine.trading_costs import is_net_profitable, net_return_after_cost
 from app.services.model_router_service import has_active_model_routes
 from app.engine.aggregator import (
     aggregate,
@@ -2185,6 +2185,17 @@ def _build_replay_summary(detail: dict[str, Any]) -> dict[str, Any]:
     net_return_pct = outcome.get("executed_return")
     if net_return_pct is None:
         net_return_pct = outcome.get("close_return")
+    # 「已成交并卖出」才算一笔真实交易：买点触发、有买入日和卖出日、有执行收益；净收益再扣往返成本。
+    # 没成交的票（买点未触发 / 开盘取消）只计入成交率，不当 0% 摊进每笔均值。
+    executed_settled = bool(
+        outcome.get("entry_triggered")
+        and entry_time
+        and exit_time
+        and outcome.get("executed_return") is not None
+    )
+    executed_net_return_pct = (
+        net_return_after_cost(float(outcome["executed_return"])) if executed_settled else None
+    )
 
     trigger_conditions: list[str] = []
     for value in (
@@ -2236,6 +2247,8 @@ def _build_replay_summary(detail: dict[str, Any]) -> dict[str, Any]:
         "exit_time": exit_time,
         "exit_price": outcome.get("exit_price"),
         "net_return_pct": net_return_pct,
+        "executed_settled": executed_settled,
+        "executed_net_return_pct": executed_net_return_pct,
         "trigger_conditions": trigger_conditions,
         "false_positive_reason": failure_reason if is_false_positive else None,
         "false_positive_category": attribution["category"],
@@ -2301,6 +2314,8 @@ def _build_replay_analysis_row(detail: dict[str, Any]) -> dict[str, Any]:
         "exit_time": replay.get("exit_time"),
         "exit_price": replay.get("exit_price"),
         "net_return_pct": net_return_value,
+        "executed_settled": bool(replay.get("executed_settled")),
+        "executed_net_return_pct": replay.get("executed_net_return_pct"),
         "holding_days": replay.get("holding_days"),
         "outcome_label": outcome_label or None,
         "user_label": user_label or None,
