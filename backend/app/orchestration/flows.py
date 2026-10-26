@@ -213,7 +213,12 @@ def poll_execution_confirmation(scheduled_at: str) -> dict:
                 summaries.append(result.get("summary") or {})
                 if result.get("error"):
                     logger.warning("盘中买入确认轮询批次失败: %s", result["error"])
-            return {"pending": len(ids), "batches": summaries}
+            # 覆盖率：入场日 09:45 后仍没被检查到的待确认推荐 → 告警（全覆盖则解除）
+            from app.services.execution_confirmation_coverage import report_coverage
+
+            coverage = report_coverage(db)
+            return {"pending": len(ids), "batches": summaries,
+                    "unchecked": len(coverage.get("unchecked") or [])}
         finally:
             db.close()
     except Exception:

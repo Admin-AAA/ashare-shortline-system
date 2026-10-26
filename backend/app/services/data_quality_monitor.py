@@ -788,6 +788,34 @@ def check_datasource_all_failed(now: datetime | None = None) -> dict[str, Any]:
                  impact="对应接口的补数/实时行情当时没拿到数据")
 
 
+def check_confirmation_coverage(db, open_days: list[str], now: datetime | None = None) -> dict[str, Any]:
+    """盘中买入确认覆盖率：今天入场窗口内 09:45 后仍没被检查 → 红；近 5 个交易日有入场日没检查就过期 → 黄。"""
+    from app.services.execution_confirmation_coverage import (
+        COVERAGE_GRACE, _eligible_run_ids, entry_day_unchecked, recent_expired_without_check,
+    )
+
+    now = now or _now()
+    now_cst = now.astimezone(_CST)
+    today = now_cst.date().isoformat()
+    key, label = "job:execution_confirmation_coverage", "盘中买入确认覆盖"
+    unchecked: list[dict[str, Any]] = []
+    if today in set(open_days) and now_cst.time() >= COVERAGE_GRACE:
+        unchecked = entry_day_unchecked(db, today, run_ids=_eligible_run_ids(db))
+    gaps = recent_expired_without_check(db, today)
+    if unchecked:
+        sev = RED
+        detail = f"今天 {len(unchecked)} 只待确认推荐入场日盘中尚未被检查：" + "、".join(
+            f"{u['code']}({u['signal_date'][5:]})" for u in unchecked[:8])
+    elif gaps:
+        sev = YELLOW
+        detail = f"近 5 个交易日 {len(gaps)} 只推荐入场日盘中没被检查就过期：" + "、".join(
+            f"{g['code']}({g['entry_day'][5:]})" for g in gaps[:8])
+    else:
+        sev, detail = GREEN, "入场窗口内的待确认推荐都已在盘中被检查"
+    return _item(key, label, "调度任务", sev, kind="job", detail=detail,
+                 impact="漏查的推荐收盘后会被判过期，实盘少了本该确认的买入")
+
+
 # --------------------------------------------------------------------------- 汇总
 def _rollback(db) -> None:
     try:
@@ -812,6 +840,9 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
                    lambda: [check_concept_completeness(db, open_days, expected)])
     _rollback(db)
     items += _safe("交易日历", "db:trade_calendar", "数据库表", "db", lambda: [check_calendar_horizon(open_days, now)])
+    _rollback(db)
+    items += _safe("盘中买入确认覆盖", "job:execution_confirmation_coverage", "调度任务", "job",
+                   lambda: [check_confirmation_coverage(db, open_days, now)])
     _rollback(db)
     if include_files:
         for spec in FILE_DATASETS:

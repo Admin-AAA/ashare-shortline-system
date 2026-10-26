@@ -309,7 +309,11 @@ def _persist_fresh_assessments(db: Session, assessments: list[dict[str, Any]]) -
     """一次提交本批有效状态，并让历史页立即读到最新结果。"""
     if not assessments:
         return
+    from app.services.execution_confirmation_coverage import annotate_unchecked_expiries
     from app.services.execution_confirmation_state import persist_execution_assessments
+
+    # 入场日盘中从没被检查就要过期的：写明轮询缺口并告警，不再悄悄判过期
+    annotate_unchecked_expiries(db, assessments)
     from app.services.outcome_service import invalidate_outcome_metrics_cache
     from app.services.workbench_service import invalidate_recommendation_history_cache
 
