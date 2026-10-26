@@ -5,6 +5,7 @@ local MySQL market pool used by recommendations and backtests.
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import random
 import os
@@ -446,6 +447,62 @@ def _research_provider_limiter(provider: str):
         return _RESEARCH_OTHER_LIMITERS[provider]
 
 
+# ── 「主源」模式（teajoin 等）：主源失败/超时要快速降级到原链路，不能因它慢拖住实盘 ──
+# 路由器在把某源放到链首且后面还有备源时，用 _lead_scope 给这一次调用套上更短的读超时和 1 次尝试；
+# 超时/容量忙/熔断/额度耗尽都会立刻落到下一家（原有 promax/quantdata 链），不在主源上做退避重试。
+_LEAD_CALL: contextvars.ContextVar[tuple[float, int] | None] = contextvars.ContextVar("tushare_lead_call", default=None)
+
+
+class _lead_scope:
+    def __init__(self, read_timeout: float, attempts: int = 1) -> None:
+        self._value = (float(read_timeout), max(1, int(attempts)))
+        self._token: Any = None
+
+    def __enter__(self) -> "_lead_scope":
+        self._token = _LEAD_CALL.set(self._value)
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        _LEAD_CALL.reset(self._token)
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderSpec:
+    """某个 provider 在其支持的接口上做主源（排链首）的规则。
+
+    * apis                 做主源的接口名单（其余接口保持原链序，该源若在 included_apis 内仍为末位兜底）。
+    * intraday_sensitive   盘中（工作日 09:15–15:05）live 进程里对延迟敏感的接口：此时不做主源（排末位兜底），
+                           盘后/研究回补进程（research 命名空间，本身已限速）仍做主源，把 promax/quantdata 额度留给实盘 rt_k。
+    * heavy_apis/fast_apis  大表/慢接口读超时放宽到 heavy_timeout，小表收紧到 fast_timeout，其余 read_timeout。
+    * read_timeout         做主源且后面还有备源时的读超时（秒）；超时即换源。
+    * min_health           近期健康度低于此值（lb_health）时不做主源，直接走原链路。
+    """
+
+    provider: str
+    apis: frozenset[str]
+    intraday_sensitive: frozenset[str] = frozenset()
+    heavy_apis: frozenset[str] = frozenset()
+    fast_apis: frozenset[str] = frozenset()
+    read_timeout: float = 40.0
+    heavy_timeout: float = 90.0
+    fast_timeout: float = 15.0
+    min_health: float = 0.25
+
+    def timeout_for(self, api_name: str) -> float:
+        if api_name in self.heavy_apis:
+            return self.heavy_timeout
+        if api_name in self.fast_apis:
+            return self.fast_timeout
+        return self.read_timeout
+
+    def leads(self, api_name: str, *, research: bool, intraday: bool) -> bool:
+        if api_name not in self.apis:
+            return False
+        if intraday and not research and api_name in self.intraday_sensitive:
+            return False
+        return True
+
+
 def _breaker_kind(category: "FailureCategory") -> str | None:
     """FailureCategory -> SharedCircuitBreaker failure kind (per-kind thresholds)."""
     if category in (
@@ -644,6 +701,14 @@ class TushareHttpProvider:
             return False
         return api_name not in self.config.excluded_apis
 
+    def _call_timeout(self) -> tuple[float, float]:
+        """本次调用的 (连接, 读取) 超时；处于 _lead_scope（主源且有备源）时读超时收紧。"""
+        connect, read = self.config.timeout
+        lead = _LEAD_CALL.get()
+        if lead is not None:
+            read = min(read, lead[0])
+        return (connect, read)
+
     def _wait_for_capacity(self, api_name: str) -> None:
         t0 = time.perf_counter()
         if self.config.name == "promax" and research_intraday_throttled():
@@ -787,7 +852,9 @@ class TushareHttpProvider:
             return envelope
 
         retrying = tenacity.Retrying(
-            stop=tenacity.stop_after_attempt(self.config.max_attempts),
+            stop=tenacity.stop_after_attempt(
+                min(self.config.max_attempts, (_LEAD_CALL.get() or (0.0, self.config.max_attempts))[1])
+            ),
             retry=tenacity.retry_if_exception(
                 lambda exc: isinstance(exc, ProviderFailure) and bool(exc.retryable)
             ),
@@ -833,13 +900,13 @@ class TushareHttpProvider:
                 response = self._session.get(
                     self._endpoint(api_name),
                     params=query,
-                    timeout=self.config.timeout,
+                    timeout=self._call_timeout(),
                 )
             else:
                 response = self._session.post(
                     self._endpoint(api_name),
                     json=self._payload(api_name, params, fields),
-                    timeout=self.config.timeout,
+                    timeout=self._call_timeout(),
                 )
             status = int(response.status_code)
             if status != 200:
@@ -1113,6 +1180,7 @@ class TushareProviderRouter:
         balance_deterministic: bool = False,
         enabled_override: Any = None,
         priority_override: Any = None,
+        leaders: Sequence[LeaderSpec] | None = None,
         trace_sink: Any = None,
         correlation_id_factory: Any = None,
     ) -> None:
@@ -1131,6 +1199,8 @@ class TushareProviderRouter:
         # priority_override: 可选可调用 () -> Mapping[str, int]，提供 provider 运行时优先级
         # 覆盖（管理面拖拽调序写 DB）。为 None 时用代码默认 priority。每次选路时读取。
         self._priority_override = priority_override
+        # leaders: 在其名单接口上做主源（排链首）的 provider 规则；None/空=保持原链序。
+        self._leaders = {spec.provider: spec for spec in (leaders or ())}
         # trace_sink: 可选 DataSourceTraceSink；为 None 时不持久化 trace（默认行为不变）。
         # correlation_id_factory: 可选 () -> str，用于关联一次逻辑请求的多次 attempt。
         self._trace_sink = trace_sink
@@ -1190,8 +1260,43 @@ class TushareProviderRouter:
             ordered = [by_name[name] for name in route if name in by_name]
             # 链里没列出但已启用的 provider 追加在末尾（按 priority），避免漏掉 fallback
             rest = sorted((p for p in enabled if p.name not in route), key=self._effective_priority)
-            return self._balance(api_name, ordered + rest)
-        return self._balance(api_name, sorted(enabled, key=self._effective_priority))
+            return self._apply_leaders(api_name, self._balance(api_name, ordered + rest))
+        return self._apply_leaders(api_name, self._balance(api_name, sorted(enabled, key=self._effective_priority)))
+
+    def _lead_spec_for(self, api_name: str, ordered: list[TushareHttpProvider]) -> tuple[LeaderSpec, TushareHttpProvider] | None:
+        """当前时刻应当做该接口主源的 (规则, provider)；没有则 None。"""
+        if not self._leaders:
+            return None
+        research = _is_research_namespace()
+        intraday = _in_research_window()
+        for p in ordered:
+            spec = self._leaders.get(p.name)
+            if spec is None or not spec.leads(api_name, research=research, intraday=intraday):
+                continue
+            health = p.lb_health(api_name) if hasattr(p, "lb_health") else 1.0
+            if health < spec.min_health:
+                _metrics.inc("provider_lead_skipped", api=api_name, provider=p.name, reason="unhealthy")
+                continue
+            return spec, p
+        return None
+
+    def _apply_leaders(self, api_name: str, ordered: list[TushareHttpProvider]) -> list[TushareHttpProvider]:
+        if not self._leaders or len(ordered) < 2:
+            return ordered
+        found = self._lead_spec_for(api_name, ordered)
+        if found is None:
+            # 盘中延迟敏感接口：主源规则暂不生效 → 该源（若在链内）排到最后做兜底，原链路优先
+            demoted = [p for p in ordered if p.name in self._leaders and not self._leaders[p.name].leads(
+                api_name, research=_is_research_namespace(), intraday=_in_research_window())
+                and api_name in self._leaders[p.name].apis]
+            if demoted:
+                ordered = [p for p in ordered if p not in demoted] + demoted
+            return ordered
+        _spec, lead = found
+        if ordered[0] is not lead:
+            ordered = [lead] + [p for p in ordered if p is not lead]
+        _metrics.inc("provider_lead_choice", api=api_name, provider=lead.name)
+        return ordered
 
     def balance_weights(self, api_name: str, providers: Sequence[TushareHttpProvider]) -> dict[str, float]:
         out: dict[str, float] = {}
@@ -1275,7 +1380,14 @@ class TushareProviderRouter:
             fallback_from = providers[index - 1].name if index else None
             started = time.perf_counter()
             try:
-                envelope = provider.request(api_name, params=params, fields=fields)
+                lead_spec = self._leaders.get(provider.name) if (index == 0 and len(providers) > 1) else None
+                if lead_spec is not None and lead_spec.leads(
+                    api_name, research=_is_research_namespace(), intraday=_in_research_window()
+                ):
+                    with _lead_scope(lead_spec.timeout_for(api_name), 1):
+                        envelope = provider.request(api_name, params=params, fields=fields)
+                else:
+                    envelope = provider.request(api_name, params=params, fields=fields)
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 data = envelope.get("data")
                 items = data.get("items") if isinstance(data, Mapping) else None

@@ -898,6 +898,17 @@ def check_provider_gateway(now: datetime | None = None, *, providers: tuple[str,
         sev = _worse(sev, YELLOW)
         keys = [str(b["key"]).replace("live:", "", 1) for b in open_live][:6]
         notes.append(f"实盘链路有 {len(open_live)} 个熔断打开：{'、'.join(keys)}")
+    if "teajoin" in names:
+        try:
+            from app.core.config import get_settings
+            from app.services.datasource import teajoin_capability as _tc
+
+            if bool(getattr(get_settings(), "tushare_teajoin_lead", True)):
+                notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（盘中 {len(_tc.INTRADAY_SENSITIVE)} 个延迟敏感接口让原源先走，失败/超时自动降级）")
+            else:
+                notes.append("teajoin 主源开关已关闭（仅兜底）")
+        except Exception:  # noqa: BLE001
+            pass
     return _item("gateway:providers", "数据网关承载（各上游额度/熔断）", "数据网关", sev, kind="gateway",
                  detail="；".join(notes),
                  impact="实盘 rt_k/日K/分钟线的主备源切换；额度耗尽后补数任务会自动暂停，避免挤占实盘",
