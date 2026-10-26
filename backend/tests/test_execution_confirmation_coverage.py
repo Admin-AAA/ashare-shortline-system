@@ -178,3 +178,53 @@ def test_day1_missing_alert_stays_while_missing_then_resolves(db, real_alerts, m
     db.commit()
     cov.sweep_coverage_alerts(db, "2026-10-16")
     assert _keys(real_alerts, DAY1_MISSING_ALERT_KIND) == []
+
+
+# ── 第 5 条：轮询缺口只认入场日 09:30-15:00 的非过期检查；标记不被后续写入覆盖 ──
+
+def _assessment(code, checked_at, *, reason="今日已收盘", summary=None):
+    return {"recommendation_id": "rec_a", "code": "300444", "trade_date": "2026-10-14", "data_as_of": "2026-10-15",
+            "status": "ok", "fresh": True, "checked_at": checked_at.isoformat(),
+            "entry_decision": {"code": code, "label": code, "reason": reason},
+            "condition_summary": dict(summary or {"scope": "entry_day"})}
+
+
+def test_after_close_or_expired_checks_do_not_count_as_session_check(db):
+    # 15:30 北京（07:30 UTC）写入的 wait 不算盘中检查
+    db.add(RecommendationExecutionState(recommendation_id="rec_a", latest_decision_code="wait",
+                                        latest_checked_at=datetime(2026, 10, 15, 7, 30)))
+    db.commit()
+    state = db.get(RecommendationExecutionState, "rec_a")
+    assert cov.was_checked_in_session(state, "2026-10-15") is False
+    # 盘中 10:00 但结论是过期，也不算
+    state.latest_decision_code, state.latest_checked_at = "expired", datetime(2026, 10, 15, 2, 0)
+    assert cov.was_checked_in_session(state, "2026-10-15") is False
+
+
+def test_session_check_survives_later_expired_write(db):
+    from app.services.execution_confirmation_state import persist_execution_assessments
+
+    persist_execution_assessments(db, [_assessment("wait", datetime(2026, 10, 15, 2, 0))])  # 10:00 北京
+    persist_execution_assessments(db, [_assessment("expired", datetime(2026, 10, 15, 8, 0))])  # 16:00 北京
+    state = db.get(RecommendationExecutionState, "rec_a")
+    assert cov.was_checked_in_session(state, "2026-10-15") is True
+
+
+def test_coverage_gap_flag_not_overwritten_by_later_writes(db):
+    from app.services.execution_confirmation_state import persist_execution_assessments, serialize_execution_state
+
+    item = _assessment("expired", datetime(2026, 10, 15, 8, 0))
+    assert cov.annotate_unchecked_expiries(db, [item]) == 1
+    persist_execution_assessments(db, [item])
+    # 之后一次普通过期写入（单票确认不走 annotate）
+    persist_execution_assessments(db, [_assessment("expired", datetime(2026, 10, 16, 8, 0), reason="确认窗口已过期")])
+    out = serialize_execution_state(db.get(RecommendationExecutionState, "rec_a"))
+    assert out["condition_summary"]["coverage_gap"] is True
+    assert out["latest_decision_label"] == "盘中漏查已过期"
+    assert "轮询缺口" in out["latest_reason"]
+    # 再走一遍批量 annotate：保留原因，不重复发告警
+    emits_before = sum(1 for a in db.info["alerts"] if a[0] == "emit")
+    again = _assessment("expired", datetime(2026, 10, 16, 8, 5))
+    cov.annotate_unchecked_expiries(db, [again])
+    assert again["condition_summary"]["coverage_gap"] is True
+    assert sum(1 for a in db.info["alerts"] if a[0] == "emit") == emits_before

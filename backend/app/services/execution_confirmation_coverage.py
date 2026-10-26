@@ -27,14 +27,18 @@ from sqlalchemy.orm import Session
 from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
 from app.models.recommendation import RecommendationExecutionState
 from app.services.entry_day_checks import entry_window_days_for_rec
+from app.services.execution_confirmation_state import (
+    SESSION_CLOSE,
+    SESSION_OPEN,
+    load_condition,
+    session_check_date,
+)
 from app.services.entry_window_state import SKIPPED_STATUSES, open_days_after, recent_open_days
 
 logger = logging.getLogger(__name__)
 
 CST = timezone(timedelta(hours=8))
-SESSION_OPEN = time(9, 30)
 COVERAGE_GRACE = time(9, 45)
-SESSION_CLOSE = time(15, 0)
 ALERT_KIND = "execution_confirmation_unchecked"
 RECENT_GAP_TRADE_DAYS = 5
 DAILY_REEMIT_SECONDS = 20 * 3600  # 条件还在的告警每天重发一次
@@ -47,12 +51,24 @@ def session_start_utc(trade_date: str) -> datetime:
 
 
 def was_checked_in_session(state: Any | None, trade_date: str) -> bool:
-    """该推荐在 trade_date 的盘中（09:30 后）是否至少被检查过一次。"""
-    checked_at = getattr(state, "latest_checked_at", None) if state is not None else None
-    if not isinstance(checked_at, datetime):
+    """该推荐在 trade_date 盘中（09:30–15:00 北京时间）是否被检查过、且那次结论不是「过期」。
+
+    只认执行状态里跨写入保留的 session_checks；老数据没有这个字段时，退回看最新一次检查
+    （同样要求落在 trade_date 09:30–15:00 内、结论不是过期）。收盘后写入的过期不算检查。
+    """
+    if state is None:
         return False
-    checked_at = checked_at.replace(tzinfo=None) if checked_at.tzinfo else checked_at
-    return checked_at >= session_start_utc(trade_date)
+    condition = load_condition(state)
+    checks = condition.get("session_checks")
+    if isinstance(checks, dict) and trade_date in checks:
+        return True
+    if str(getattr(state, "latest_decision_code", "") or "") == "expired":
+        return False
+    return session_check_date(getattr(state, "latest_checked_at", None)) == trade_date
+
+
+def has_coverage_gap_flag(state: Any | None) -> bool:
+    return state is not None and bool(load_condition(state).get("coverage_gap"))
 
 
 def _market_days_after(db: Session, start: str, end: str) -> list[str]:
@@ -231,14 +247,19 @@ def annotate_unchecked_expiries(db: Session, assessments: list[dict[str, Any]]) 
             continue
         entry_day = later[0]
         state = states.get(str(item.get("recommendation_id")))
-        if state is not None and was_checked_in_session(state, entry_day):
+        already_flagged = has_coverage_gap_flag(state)
+        if not already_flagged and state is not None and was_checked_in_session(state, entry_day):
             continue
         reason = f"入场日 {entry_day} 盘中未被检查（轮询缺口），本票按规则过期，已告警"
+        if already_flagged:
+            reason = str(load_condition(state).get("coverage_gap_reason") or reason)
         item["entry_decision"] = {"code": "expired", "label": "盘中漏查已过期", "reason": reason}
         summary = dict(item.get("condition_summary") or {})
-        summary.update({"coverage_gap": True, "label": reason})
+        summary.update({"coverage_gap": True, "coverage_gap_entry_day": entry_day,
+                        "coverage_gap_reason": reason, "label": reason})
         item["condition_summary"] = summary
-        emit_alert(ALERT_KIND, f"expired:{item.get('recommendation_id')}", f"{item.get('code')} {reason}")
+        if not already_flagged:  # 已标记的由 sweep_coverage_alerts 每天重发，不在每轮轮询里刷
+            emit_alert(ALERT_KIND, f"expired:{item.get('recommendation_id')}", f"{item.get('code')} {reason}")
         changed += 1
     return changed
 
@@ -264,6 +285,11 @@ def recent_expired_without_check(db: Session, today: str, *, trade_days: int = R
         entry_day = later[0]
         # 执行状态只保留首建时间与最新检查时间：首建已在入场日收盘之后 = 收盘前从未被检查（确定的漏查）。
         # 首建早于收盘但最新检查被收盘后的过期覆盖的，无法区分，不计入（宁可少报，不误报）。
+        if has_coverage_gap_flag(state):
+            out.append({"code": str(rec.code), "signal_date": str(rec.trade_date), "entry_day": entry_day})
+            continue
+        if was_checked_in_session(state, entry_day):
+            continue
         created_at = getattr(state, "created_at", None)
         end_of_entry_day = datetime.combine(
             date.fromisoformat(entry_day), SESSION_CLOSE, tzinfo=CST,
@@ -278,6 +304,7 @@ __all__ = [
     "ALERT_KIND",
     "annotate_unchecked_expiries",
     "entry_day_unchecked",
+    "has_coverage_gap_flag",
     "recent_expired_without_check",
     "report_coverage",
     "sweep_coverage_alerts",
