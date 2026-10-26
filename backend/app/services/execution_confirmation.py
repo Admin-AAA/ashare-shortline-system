@@ -210,12 +210,6 @@ def _derive_decisions(
     return entry, holding
 
 
-def _inconclusive_condition_label(signal: dict[str, Any]) -> str:
-    detail = signal.get("prefilter_detail")
-    label = str((detail or {}).get("label") or "") if isinstance(detail, dict) else ""
-    return label or str(signal.get("prefilter_reason") or "全日累计量门槛尚未达标")
-
-
 def _run_agent_review(skill: Any, stock: dict[str, Any], snapshot: dict[str, Any], signal: dict[str, Any]) -> dict[str, Any]:
     from app.agents.agno_skill_agent import drain_api_costs, run_skill_agent_direct
 
