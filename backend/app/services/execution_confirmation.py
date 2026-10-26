@@ -28,6 +28,7 @@ from app.services.entry_day_checks import (
     ENTRY_WINDOW_TRADE_DAYS,
     EntryDayCheck,
     check_entry_bar,
+    entry_window_days_for_rec,
     first_day_blocked,
 )
 from app.services.intraday_cumulative_policy import (
@@ -138,6 +139,7 @@ def _derive_decisions(
     is_intraday_recommendation: bool = False,
     entry_check: EntryDayCheck | None = None,
     prior_day_blocked: bool = False,
+    window_days: int = ENTRY_WINDOW_TRADE_DAYS,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """把入场日检查与策略信号投影为未入场/已持仓两套动作。
 
@@ -167,13 +169,14 @@ def _derive_decisions(
     rule_supportive = bool(signal.get("setup_match")) and float(signal.get("score") or 0) >= 72
     supportive = stance in {"strong_support", "support"} or (not review_available and rule_supportive)
 
-    last_window_day = signal_age_trade_days >= ENTRY_WINDOW_TRADE_DAYS
+    window_days = max(1, int(window_days))
+    last_window_day = signal_age_trade_days >= window_days
     if signal_age_trade_days < 1 and not is_intraday_recommendation:
         entry = _decision("not_ready", "盘后候选，下一交易日确认", "盘后生成，当前不可买；请在下一交易日按实时条件确认")
     elif is_intraday_recommendation and signal_age_trade_days > 0:
         entry = _decision("expired", "盘中买点已过期", "盘中买点仅在推荐当日有效，请勿追入")
-    elif not is_intraday_recommendation and signal_age_trade_days > ENTRY_WINDOW_TRADE_DAYS:
-        entry = _decision("expired", "确认窗口已过期", f"已超过推荐后 {ENTRY_WINDOW_TRADE_DAYS} 个交易日的入场窗口（与回测一致），请等待新的推荐信号")
+    elif not is_intraday_recommendation and signal_age_trade_days > window_days:
+        entry = _decision("expired", "确认窗口已过期", f"已超过推荐后 {window_days} 个交易日的入场窗口（与回测一致），请等待新的推荐信号")
     elif not is_intraday_recommendation and signal_age_trade_days >= 2 and not prior_day_blocked:
         entry = _decision("expired", "次日确认窗口已过期", "推荐后首个交易日按回测口径已可开盘买入，后续交易日不再追入")
     elif is_intraday_recommendation:
@@ -307,9 +310,10 @@ def confirm_with_prepared_context(
         check_entry_bar(code, bar, recommend_price, session_closed=entry_window_closed)
         if bar is not None else None
     )
+    window_days = entry_window_days_for_rec(rec)
     prior_day_blocked = (
         _first_trade_day_blocked(db, code, str(rec.trade_date), data_as_of, recommend_price)
-        if signal_age_trade_days >= 2 else False
+        if signal_age_trade_days >= 2 and window_days >= 2 else False
     )
     entry_decision, holding_decision = _derive_decisions(
         fresh=fresh,
@@ -323,6 +327,7 @@ def confirm_with_prepared_context(
         is_intraday_recommendation=_is_intraday_recommendation(rec),
         entry_check=entry_check,
         prior_day_blocked=prior_day_blocked,
+        window_days=window_days,
     )
     condition_summary = _condition_summary(entry_check, entry_decision)
 

@@ -6,8 +6,9 @@
 ==================  ======================================  ===========================================
 回测规则             回测做法                                  盘中确认（本模块）
 ==================  ======================================  ===========================================
-入场窗口 2 个交易日   ``entry_lookahead_days``；首个可买日即买入   推荐后第 1 个交易日确认；仅当第 1 日被下面三条
-                                                             之一挡住时，第 2 个交易日再确认；超出即过期
+入场窗口             按每只推荐的入场方式取                       同一个 ``entry_policy_for_mode(...).max_entry_trade_days``：
+                     ``entry_policy_for_mode``：次日开盘 1 天、   次日开盘类第 1 天被挡就不买；2 天窗口的仅当第 1 日
+                     其余 2 天；首个可买日即买入                  被下面三条之一挡住时，第 2 个交易日再确认；超出即过期
 无成交 / 价格无效     ``skip_untradable_entry_bars``：跳过该日     开盘价/成交量/成交额无效 → 该日不买
 一字涨停             ``block_one_word_limit_up_entry``：跳过该日  开盘封涨停且尚未开板 → 继续观察（收盘前不定论）；
                                                              已开板 → 按回测口径当日可买
@@ -29,6 +30,7 @@ from app.engine.board_rules import is_one_word_limit_up_values, previous_close_f
 from app.engine.execution_constraints import no_liquidity_reason_from_bar
 from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
 
+# 默认执行合约的入场窗口（目标价触碰类策略）；具体每只推荐的窗口按它自己的入场方式取，见 entry_window_days
 ENTRY_WINDOW_TRADE_DAYS = int(DEFAULT_EXECUTION_POLICY.entry_lookahead_days)
 MAX_ENTRY_GAP_PCT = float(DEFAULT_EXECUTION_POLICY.max_entry_gap_pct or 0.0)
 
@@ -49,6 +51,29 @@ class EntryDayCheck:
     # 一字涨停在收盘前还可能开板：盘中不定论
     inconclusive: bool = False
     observed: dict[str, Any] | None = None
+
+
+def entry_window_days(entry_mode: Any, strategy_id: Any) -> int:
+    """这只推荐自己的入场窗口（交易日数）：与结算/回测同一个 entry_policy_for_mode。
+
+    次日开盘买（next_open：炒股养家、陈小群、超跌资金反包）只有 1 天窗口——第 1 天被挡就不买；
+    其余按其入场策略的 max_entry_trade_days。
+    """
+    from app.services.entry_policy import entry_policy_for_mode
+
+    return int(entry_policy_for_mode(entry_mode, legacy_strategy_id=strategy_id).max_entry_trade_days)
+
+
+def entry_window_days_for_rec(rec: Any) -> int:
+    """从推荐的封存快照取 entry_mode（缺失时按 bucket 迁移），给出入场窗口。"""
+    import json
+
+    try:
+        snapshot = json.loads(getattr(rec, "feature_snapshot_json", None) or "{}")
+    except (TypeError, ValueError):
+        snapshot = {}
+    entry_mode = snapshot.get("entry_mode") if isinstance(snapshot, dict) else None
+    return entry_window_days(entry_mode, getattr(rec, "bucket", None))
 
 
 def _f(value: Any) -> float:
@@ -104,6 +129,8 @@ def first_day_blocked(code: str, day_one_bar: Any, recommend_price: float) -> bo
 
 __all__ = [
     "ENTRY_WINDOW_TRADE_DAYS",
+    "entry_window_days",
+    "entry_window_days_for_rec",
     "MAX_ENTRY_GAP_PCT",
     "EntryDayCheck",
     "check_entry_bar",

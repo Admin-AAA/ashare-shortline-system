@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
 from app.models.recommendation import RecommendationExecutionState
-from app.services.entry_day_checks import ENTRY_WINDOW_TRADE_DAYS
+from app.services.entry_day_checks import entry_window_days_for_rec
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +87,7 @@ def entry_day_unchecked(
             continue
         days = _market_days_after(db, str(rec.trade_date), today)
         age = len(set(days) | {today})
-        if age > ENTRY_WINDOW_TRADE_DAYS:
+        if age > entry_window_days_for_rec(rec):
             continue
         if age >= 2 and not _first_trade_day_blocked(
             db, str(rec.code), str(rec.trade_date), today, float(rec.recommend_price or 0)

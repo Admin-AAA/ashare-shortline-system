@@ -78,3 +78,36 @@ def test_decision_state_machine_follows_two_day_window():
     assert _decide(2, ok, prior_day_blocked=False) == "expired"  # 第 1 日本可买，第 2 日不追
     assert _decide(3, ok, prior_day_blocked=True) == "expired"
     assert _decide(1, ok, closed=True) == "expired"
+
+
+# ── 入场窗口按每只推荐自己的入场方式（与结算/回测同一个 entry_policy_for_mode）───────────
+
+def test_next_open_strategies_have_one_day_window():
+    from app.services.entry_day_checks import entry_window_days
+    assert entry_window_days("next_open", "chao-gu-yang-jia-skill") == 1
+    assert entry_window_days(None, "chen-xiaoqun-skill") == 1          # 旧快照按 bucket 迁移
+    assert entry_window_days("next_open", "oversold-capital-reversal") == 1
+
+
+def test_entry_window_for_rec_reads_sealed_snapshot():
+    import json
+    from app.services.entry_day_checks import entry_window_days_for_rec
+    rec = SimpleNamespace(feature_snapshot_json=json.dumps({"entry_mode": "next_open"}), bucket="oversold-capital-reversal")
+    assert entry_window_days_for_rec(rec) == 1
+
+
+def test_one_day_window_blocked_first_day_cancels_and_never_retries():
+    gap = check_entry_bar("600000", _bar(10.7, 10.8, 10.5, 10.7), 10.0, session_closed=False)
+    ok = check_entry_bar("600000", _bar(10.1, 10.3, 9.9, 10.2), 10.0, session_closed=False)
+    entry, _ = _derive_decisions(
+        fresh=True, signal_age_trade_days=1, entry_window_closed=False, prefilter_ok=True,
+        signal={"hard_veto": False, "score": 70, "setup_match": "x"}, review=None,
+        current_price=10.7, stop_loss=9.0, entry_check=gap, window_days=1,
+    )
+    assert entry["code"] == "cancel"  # 次日开盘策略：第 1 天被挡就不买
+    entry2, _ = _derive_decisions(
+        fresh=True, signal_age_trade_days=2, entry_window_closed=False, prefilter_ok=True,
+        signal={"hard_veto": False, "score": 70, "setup_match": "x"}, review=None,
+        current_price=10.2, stop_loss=9.0, entry_check=ok, prior_day_blocked=True, window_days=1,
+    )
+    assert entry2["code"] == "expired"
