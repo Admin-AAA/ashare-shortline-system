@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import copy
 import logging
 from typing import Any
 
@@ -15,6 +16,13 @@ from sqlalchemy.orm import Session
 from app.models.tables import DailyKbar, Recommendation, RecommendationRun, StockMatrixHistory
 
 logger = logging.getLogger(__name__)
+
+from app.services.data_version import make_cache  # noqa: E402
+
+# 键 = 本次列表的 run_id 元组（列表接口固定取最近 500 个），值 ~500 个小字典；上限 8 条
+_run_returns_cache = make_cache("run_record_returns", maxsize=8, max_age=600.0)
+_RUN_RECORDS_VERSION_TABLES = ("recommendation_runs", "recommendations", "recommendation_outcomes", "daily_kbars")
+_run_records_cache = make_cache("run_records", maxsize=8, max_age=30.0)
 
 # 收益率口径：1日/3日/5日（推荐日 T+0 不算，T+1 起）
 RETURN_HORIZONS = [1, 3, 5]
@@ -105,11 +113,15 @@ def list_run_records(
     避免拖慢 bootstrap / 仪表盘（它们也调用 list_runs）。
     使用 30s 缓存（与 metrics 端点一致），因为 run 记录变更频率低但查询频繁。
     """
-    from app.services.outcome_service import _cached
+    from app.services.data_version import data_version
     from app.services.workbench_service import list_runs
 
-    key = f"run_records:{limit}"
-    return _cached(key, lambda: _attach_run_aggregate_returns(db, list_runs(db, limit=limit)))
+    # 原来是进程内 30s TTL：Prefect 进程写入的新运行最多 30s 后才看得到。现在键里带库内数据版本，
+    # 新运行 / 心跳 / 结算 / 日K 一变立即重算；仍保留 30s 上限（心跳年龄等字段随时间变化）。
+    version = data_version(db, _RUN_RECORDS_VERSION_TABLES)
+    return _run_records_cache.get_or_compute(
+        limit, version, lambda: _attach_run_aggregate_returns(db, list_runs(db, limit=limit)),
+    )
 
 
 def _empty_agg_returns() -> dict[str, Any]:
@@ -134,6 +146,27 @@ def _attach_run_aggregate_returns(db: Session, runs: list[dict[str, Any]]) -> li
     """
     if not runs:
         return runs
+    run_ids = [r["run_id"] for r in runs]
+    # 聚合收益只依赖推荐表与日K（含「至今」用的最新交易日）：按这两张表的库内数据版本缓存，
+    # Prefect 写入新推荐 / 新日K 后立即失效。缓存的是 run_id -> returns，run 本身每次现查（状态、心跳实时）。
+    from app.services.data_version import data_version
+
+    version = data_version(db, ("recommendations", "daily_kbars"))
+    returns_by_run = _run_returns_cache.get_or_compute(
+        tuple(run_ids), version, lambda: _compute_run_returns(db, run_ids),
+    )
+    for run in runs:
+        run["returns"] = copy.deepcopy(returns_by_run[run["run_id"]])
+    return runs
+
+
+def _compute_run_returns(db: Session, run_ids: list[str]) -> dict[str, dict[str, Any]]:
+    runs = [{"run_id": rid} for rid in run_ids]
+    _attach_run_aggregate_returns_uncached(db, runs)
+    return {r["run_id"]: r["returns"] for r in runs}
+
+
+def _attach_run_aggregate_returns_uncached(db: Session, runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     run_ids = [r["run_id"] for r in runs]
     recs = db.scalars(
         select(Recommendation).where(Recommendation.run_id.in_(run_ids))
