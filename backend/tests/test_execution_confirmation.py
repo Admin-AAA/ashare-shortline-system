@@ -523,3 +523,18 @@ def test_gap_up_over_limit_waits_on_day_one(db_session, monkeypatch):
     result = _confirm_oversold(db_session, monkeypatch, current_price=158.0, open_price=157.0)
     assert result["entry_decision"]["code"] == "wait"
     assert result["condition_summary"]["code"] == "entry_gap_up"
+
+
+def test_holding_exits_from_stop_or_hard_veto_are_flagged_non_backtest():
+    """第 8 条：持仓提示里用推荐止损 / 硬风控判的退出，字段与文字都标明「不是回测规则」。"""
+    base = dict(fresh=True, signal_age_trade_days=1, entry_window_closed=False, prefilter_ok=True,
+                review=None, is_intraday_recommendation=False)
+    _e, by_stop = _derive_decisions(**base, signal={}, current_price=9.0, stop_loss=9.5)
+    _e, by_veto = _derive_decisions(**base, signal={"hard_veto": True, "veto_reason": "放量滞涨"},
+                                    current_price=10.0, stop_loss=9.5)
+    for holding, basis in ((by_stop, "recommend_stop_loss"), (by_veto, "hard_risk_veto")):
+        assert holding["code"] == "exit"
+        assert holding["backtest_rule"] is False and holding["rule_basis"] == basis
+        assert "非回测规则" in holding["label"] and "非回测规则" in holding["reason"]
+    _e, hold = _derive_decisions(**base, signal={"setup_match": "x", "score": 80}, current_price=10.0, stop_loss=9.5)
+    assert hold["code"] == "hold" and "backtest_rule" not in hold

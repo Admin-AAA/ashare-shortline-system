@@ -47,6 +47,21 @@ def _decision(code: str, label: str, reason: str) -> dict[str, str]:
     return {"code": code, "label": label, "reason": reason}
 
 
+NON_BACKTEST_RULE_NOTE = "非回测规则，仅提示：结算与回测不按这条退出"
+
+
+def _non_backtest_exit(label: str, reason: str, *, basis: str) -> dict[str, Any]:
+    """持仓提示里用推荐止损 / 硬风控判的「退出」：回测与结算的离场规则里没有这两条，字段和文字都要标明。"""
+    return {
+        "code": "exit",
+        "label": f"{label}（非回测规则）",
+        "reason": f"{reason}；{NON_BACKTEST_RULE_NOTE}",
+        "backtest_rule": False,
+        "rule_basis": basis,
+        "rule_note": NON_BACKTEST_RULE_NOTE,
+    }
+
+
 def _json_mapping(raw: str | None) -> dict[str, Any]:
     try:
         value = json.loads(raw or "{}")
@@ -146,7 +161,7 @@ def _derive_decisions(
     prior_day_blocked: bool = False,
     window_days: int = ENTRY_WINDOW_TRADE_DAYS,
     prior_day_missing: bool = False,
-) -> tuple[dict[str, str], dict[str, str]]:
+) -> tuple[dict[str, str], dict[str, Any]]:
     """把入场日检查与策略信号投影为未入场/已持仓两套动作。
 
     未入场（买入确认）只看入场日检查（与回测买入规则一一对应，见 entry_day_checks）：
@@ -212,10 +227,10 @@ def _derive_decisions(
         entry = _decision("wait", "今日不买，次日再确认", f"{entry_check.reason}；回测口径跳过该日，下一交易日按开盘价再确认")
 
     if stop_broken:
-        holding = _decision("exit", "退出持仓", "当前价格已经跌破原推荐止损位")
+        holding = _non_backtest_exit("退出持仓", "当前价格已经跌破原推荐止损位", basis="recommend_stop_loss")
     elif strategy_vetoed:
         reason = str(signal.get("veto_reason") or (review or {}).get("summary") or "原策略逻辑已经失效")
-        holding = _decision("exit", "原策略已失效，建议退出", reason)
+        holding = _non_backtest_exit("原策略已失效，建议退出", reason, basis="hard_risk_veto")
     elif prefilter_failed:
         holding = _decision("reduce", "禁止加仓，降低仓位观察", "当前已不满足原策略候选条件")
     elif supportive:
