@@ -63,8 +63,12 @@ def entry_policy_for_mode(
     entry_mode: object,
     *,
     legacy_strategy_id: object = None,
+    backtest_open_window: bool = True,
 ) -> EntryPolicy:
     """Map persisted entry metadata to an executable policy.
+
+    backtest_open_window=False：结算规则 r20261019 及更早的口径（板块龙头仍走碰买点），
+    只给「按记录自己的旧版本重算」用。
 
     New recommendations own an explicit ``entry_mode`` in their sealed snapshot.
     Historical recommendations predate that field, so the two momentum/relay
@@ -73,7 +77,8 @@ def entry_policy_for_mode(
     """
     normalized = str(entry_mode or "").strip()
     strategy_id = str(legacy_strategy_id or "").strip()
-    if strategy_id in _BACKTEST_OPEN_WINDOW_STRATEGY_IDS and normalized != ENTRY_MODE_NEXT_OPEN:
+    if (backtest_open_window and strategy_id in _BACKTEST_OPEN_WINDOW_STRATEGY_IDS
+            and normalized != ENTRY_MODE_NEXT_OPEN):
         return BACKTEST_OPEN_WINDOW
     if not normalized:
         normalized = (
