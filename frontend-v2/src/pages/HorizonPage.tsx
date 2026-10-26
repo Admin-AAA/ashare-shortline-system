@@ -349,6 +349,9 @@ function BatchCard({ b, defaultOpen, list, highlight, onPick }: { b: HorizonBatc
         <span className="hz-num">{b.signal_date}</span>
         <span className="hz-batch__name">{b.strategy_name}</span>
         {b.origin === "replay" && <span className="hz-pill hz-pill--amber">回放</span>}
+        {b.origin !== "replay" && b.generated_at && b.entry_deadline && new Date(b.generated_at) > new Date(b.entry_deadline) && (
+          <span className="hz-pill hz-pill--gray" title={`生成于 ${b.generated_at}，晚于次日开盘前截止 ${b.entry_deadline}，不计入实盘统计`}>开盘后补跑</span>
+        )}
         {b.status === "pending" && b.picks.some((p) => buyingToday(b.signal_date, p)) ? <span className="hz-pill hz-pill--amber">今日开盘买入，收盘后确认</span> : <Status s={b.status} />}
         <span className="hz-muted">{b.picks.length} 只{cancelN ? `（${cancelN} 只开盘涨停取消）` : ""}{hold ? ` · 持 ${hold} 日` : ""}</span>
         <span className={`hz-batch__ret hz-num ${pnl(b.avg_ret)}`}>{b.avg_ret == null ? "—" : `${b.status === "closed" ? "平均" : "浮动平均"} ${pct(b.avg_ret)}`}</span>

@@ -423,7 +423,7 @@ def _check_horizon(horizon: str) -> None:
         raise HTTPException(404, "horizon 只能是 mid/long")
 
 
-_ORIGIN = Query("all", pattern="^(all|live|replay|legacy)$")
+_ORIGIN = Query("all", pattern="^(all|live|late|replay|legacy)$")
 
 
 @router.get("/{horizon}/trades")

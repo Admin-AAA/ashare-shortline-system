@@ -22,6 +22,7 @@ _PICK_FIELDS = (
     "rule_score_label", "selection_reason", "ret_includes_cost",
 )
 TOP_K = (1, 3, 5, 10)
+ORIGINS = ("live", "late", "replay", "legacy")
 
 
 def _live_runs() -> set[tuple[str, str]]:
@@ -38,10 +39,17 @@ def _live_runs() -> set[tuple[str, str]]:
 
 
 def origin_of(batch: dict[str, Any], live_runs: set[tuple[str, str]]) -> str:
-    """replay=历史回放重建；live=盘后流程真实出票；legacy=无来源标记、也没有运行记录的旧文件（不当实盘算）。"""
+    """replay=历史回放重建；live=盘后流程真实出票，且在次日 09:25 前生成；
+    late=有运行记录但生成时间晚于次日 09:25（开盘后补跑），不算实盘；
+    legacy=无来源标记、也没有运行记录的旧文件（不当实盘算）。
+    没有生成时间封签的旧文件（2026-10-27 之前）沿用旧规则，不改判。"""
+    from app.services.midterm_live_seal import is_late
+
     if batch.get("origin") == "replay":
         return "replay"
-    return "live" if (batch["signal_date"], batch["strategy_id"]) in live_runs else "legacy"
+    if (batch["signal_date"], batch["strategy_id"]) not in live_runs:
+        return "legacy"
+    return "late" if is_late(batch) else "live"
 
 
 def trades(db, horizon: str, *, origin: str | None = None, strategy_id: str | None = None) -> list[dict[str, Any]]:
@@ -103,7 +111,7 @@ def metrics(db, horizon: str, *, origin: str = "all", window_days: int | None = 
     if window_days:
         start = ((today or _dt.date.today()) - _dt.timedelta(days=window_days)).isoformat()
         all_rows = [r for r in all_rows if r["signal_date"] >= start]
-    by_origin = {o: stats(r for r in all_rows if r["origin"] == o) for o in ("live", "replay", "legacy")}
+    by_origin = {o: stats(r for r in all_rows if r["origin"] == o) for o in ORIGINS}
     sel = all_rows if origin in (None, "all") else [r for r in all_rows if r["origin"] == origin]
 
     by_strategy = []
