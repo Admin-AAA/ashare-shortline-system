@@ -110,3 +110,34 @@ def test_regression_confirmed_buy_matches_settlement_fill(signal_date, code, nam
     assert entry["triggered"], f"{name} 结算没成交：{entry['reason']}"
     assert (entry["date"], entry["price"]) == confirmed, f"{name} 确认 {confirmed} ≠ 结算 {(entry['date'], entry['price'])}"
     assert entry_window_days(entry_mode, bucket) in (1, 2)
+
+
+@pytest.mark.parametrize("signal_date,code,name,rec_price,ohlc", CASES, ids=[f"{c[0][5:]}-{c[1]}" for c in CASES])
+def test_regression_settlement_stop_line_matches_backtest(signal_date, code, name, rec_price, ohlc):
+    """结算止损线 = 回测止损线：都按买入成交价（含滑点）往下 5.5%（同一根第 1 日 K 买入）。"""
+    import app.services.backtest.policy_experiment as PE
+    from app.engine.execution_policy import DEFAULT_EXECUTION_POLICY
+    from app.engine.simulation import BarInput
+
+    bucket, entry_mode, ideal, secondary = STRATEGY[(signal_date, code)]
+    o, h, l, c, pre = ohlc
+    day1 = ENTRY_DAY[signal_date]
+    snapshot = {"entry_mode": entry_mode, "ideal_buy": ideal, "secondary_buy": secondary,
+                "stop_loss": round(rec_price * 0.943, 2)}  # 快照止损比回测宽：新口径下不再起作用
+    rec = SimpleNamespace(recommendation_id=f"r-{code}", code=code, name=name, trade_date=signal_date,
+                          recommend_price=rec_price, bucket=bucket, recommended_at=None, run_id="x",
+                          feature_snapshot_json=json.dumps(snapshot))
+    bar1 = SimpleNamespace(code=code, trade_date=day1, open=o, high=h, low=l, close=c,
+                           volume=1e5, amount=1e8, pct_chg=round((c / pre - 1) * 100, 4))
+    bar2 = SimpleNamespace(code=code, trade_date="2099-01-01", open=c, high=c, low=c, close=c,
+                           volume=1e5, amount=1e8, pct_chg=0.0)
+    settle = osim._simulate_outcome(rec, [bar1, bar2], [day1, "2099-01-01"], horizon_days=5)
+
+    day = SimpleNamespace(signal_date=signal_date, outcome_bars={code: tuple(
+        BarInput(code=code, trade_date=b.trade_date, open=b.open, high=b.high, low=b.low, close=b.close,
+                 volume=b.volume, tradable=True) for b in (bar1, bar2))})
+    trade = PE._simulate_card(day, {**snapshot, "code": code, "recommend_price": rec_price, "bucket": bucket},
+                              DEFAULT_EXECUTION_POLICY)["trade"]
+    assert trade.executed and str(trade.entry_date) == settle["entry_date"] == day1
+    bt_stop = float(trade.entry_price) * (1 - DEFAULT_EXECUTION_POLICY.stop_loss_pct / 100)
+    assert settle["stop_loss_price"] == round(bt_stop, 2), f"{name} 结算止损 {settle['stop_loss_price']} ≠ 回测 {bt_stop:.4f}"

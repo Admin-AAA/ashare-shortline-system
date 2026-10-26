@@ -260,7 +260,9 @@ def _simulate_outcome(
     recommend_price = _as_float(rec.recommend_price) or 0
 
     executed_entry_price = round(float(entry_result["executed_price"]), 4)
-    stop_loss_price = _resolve_stop_loss_price(raw_entry_price, feature_snapshot)
+    # 止损线与回测（execution_core.execute_trade）同口径：实际买入成交价（含买入滑点）往下 5.5%，
+    # 不再用推荐快照里的止损价夹在 −5.5%~−5.7% 之间、也不按未含滑点的开盘价（2026-10-27 用户定）。
+    stop_loss_price = _backtest_stop_loss_price(float(entry_result["executed_price"]))
     take_profit_price = _resolve_take_profit_price(
         raw_entry_price, feature_snapshot, recommend_price=recommend_price
     )
@@ -825,6 +827,13 @@ def _resolve_exit(
             "horizon_close_t1_locked",
         )
     return result.raw_price, result.trade_date, result.reason
+
+
+def _backtest_stop_loss_price(executed_entry_price: float) -> float:
+    """结算用的止损线：与回测同一公式——买入成交价 ×（1 − 默认止损幅度），不取整。止损关闭时为 0。"""
+    if not STOP_LOSS_ENABLED or executed_entry_price <= 0:
+        return 0.0
+    return executed_entry_price * (1 + DEFAULT_STOP_LOSS_PCT / 100.0)
 
 
 def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:

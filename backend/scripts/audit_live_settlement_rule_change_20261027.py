@@ -10,6 +10,7 @@
   backtest  ：§282 回测路径（PE._simulate_card，同一根 K 线）
 样本含 10-14/10-15 的单技能补跑 run（它们带着 preset_formal_opening 的 preset_id，classify_era 已按技能数判 single）。
 回测卡片带上封存快照（exit_strategy_id 等），否则逐策略出场微调 / 破买入日最低价出场不生效（第一版的假差异来源）。
+settle_new 已含止损线改为回测口径（买入成交价往下 5.5%，2026-10-27 用户定）。
 末尾再输出 19 只回归样本「确认买入日/价 vs 结算成交日/价」对照。
 只读：不写库、不调外部数据源。用法：cd backend && .venv/bin/python scripts/audit_live_settlement_rule_change_20261027.py
 """
