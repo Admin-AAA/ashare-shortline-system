@@ -702,6 +702,10 @@ class TushareStateProvider:
             return ()
         if "ann_date" in frame.columns:
             frame = frame[frame["ann_date"].astype(str) <= target]
+        # 上游（teajoin/Tushare vip）对同一 (ts_code, end_date) 可能返回多行（同日重复/更正版，
+        # 2026-10-26 period=20260930 有 104 只股票重复），而入库自然键是 (code, end_date)：
+        # 同批重复会让整批 persist 失败。按自然键去重，保留 ann_date 最新的一行（同日取靠后的更正版）。
+        by_key: dict[tuple[str, str], dict[str, Any]] = {}
         for _, item in frame.iterrows():
             code = str(item.get("ts_code") or "").split(".")[0]
             if len(code) != 6 or (wanted and code not in wanted):
@@ -709,7 +713,7 @@ class TushareStateProvider:
             end_date = str(item.get("end_date") or "")
             if not end_date:
                 continue
-            rows.append({
+            row = {
                 "code": code,
                 "end_date": end_date,
                 "ann_date": str(item.get("ann_date") or ""),
@@ -720,7 +724,11 @@ class TushareStateProvider:
                 "or_yoy": _number(item.get("or_yoy")),
                 "eps": _number(item.get("eps")),
                 "bps": _number(item.get("bps")),
-            })
+            }
+            prev = by_key.get((code, end_date))
+            if prev is None or row["ann_date"] >= prev["ann_date"]:
+                by_key[(code, end_date)] = row
+        rows = list(by_key.values())
         return rows
 
     def auction(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
