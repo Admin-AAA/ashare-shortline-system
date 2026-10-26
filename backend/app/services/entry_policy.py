@@ -43,6 +43,21 @@ _LEGACY_NEXT_OPEN_STRATEGY_IDS = frozenset({
     "dragon-tiger-smart-money",
 })
 
+# 按通过上线标准的回测口径入场（2026-10-27 用户定）：§282 BASE 回测走
+# PE._simulate_card → execution_core.execute_trade/_resolve_entry，只按开盘价买：入场窗口内
+# 跳过不可成交 / 一字涨停 / 开盘相对推荐价 > max_entry_gap_pct 的日子，第一个可买日开盘买入，
+# 不看理想/次级买点触碰。实盘结算与盘中确认对这些策略用同一规则。碰买点规则若要再用，需另行预注册检验。
+BACKTEST_OPEN_WINDOW = EntryPolicy(
+    policy_id="backtest_open_window_v1",
+    price_source="open_window",
+    max_entry_trade_days=int(DEFAULT_EXECUTION_POLICY.entry_lookahead_days),
+    allow_target_touch=False,
+    fallback_to_open_when_targets_miss=True,
+)
+_BACKTEST_OPEN_WINDOW_STRATEGY_IDS = frozenset({
+    "sector-relative-strength-leader",
+})
+
 
 def entry_policy_for_mode(
     entry_mode: object,
@@ -57,8 +72,10 @@ def entry_policy_for_mode(
     mutating the sealed recommendation evidence.
     """
     normalized = str(entry_mode or "").strip()
+    strategy_id = str(legacy_strategy_id or "").strip()
+    if strategy_id in _BACKTEST_OPEN_WINDOW_STRATEGY_IDS and normalized != ENTRY_MODE_NEXT_OPEN:
+        return BACKTEST_OPEN_WINDOW
     if not normalized:
-        strategy_id = str(legacy_strategy_id or "").strip()
         normalized = (
             ENTRY_MODE_NEXT_OPEN
             if strategy_id in _LEGACY_NEXT_OPEN_STRATEGY_IDS
@@ -75,7 +92,8 @@ def execution_policy_fingerprint_for_entry_policy(entry_policy_id: object) -> st
     """Fingerprint the complete execution contract actually used for entry."""
 
     normalized = str(entry_policy_id or "").strip()
-    if normalized == CAUSAL_STRATEGY_ENTRY.policy_id:
+    if normalized in {CAUSAL_STRATEGY_ENTRY.policy_id, BACKTEST_OPEN_WINDOW.policy_id}:
+        # BACKTEST_OPEN_WINDOW 就是默认执行合约在回测路径（execute_trade）里的入场行为
         return DEFAULT_EXECUTION_POLICY.fingerprint()
     if normalized == NEXT_TRADING_DAY_OPEN.policy_id:
         return execution_policy_for_next_open_entry().fingerprint()
@@ -140,6 +158,7 @@ def execution_policy_for_entry_mode(entry_mode: object) -> ExecutionPolicy:
 
 
 __all__ = [
+    "BACKTEST_OPEN_WINDOW",
     "CAUSAL_STRATEGY_ENTRY",
     "EntryPolicy",
     "NEXT_TRADING_DAY_OPEN",

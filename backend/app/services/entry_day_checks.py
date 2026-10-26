@@ -1,7 +1,12 @@
 """盘中买入确认的「入场日检查」：与回测买入规则一一对应，不重判信号日的形态与筛选条件。
 
-回测（``app.engine.execution_core._resolve_entry`` + 默认 execution policy）只用入场日行情决定能否
-按开盘价买入：
+对齐的是哪条路径：通过上线标准的 §282 BASE 回测走
+``scripts/research_s282_short_quality.py`` → ``PE._simulate_card`` → ``app.engine.simulation.simulate``
+→ ``execution_core.execute_trade/_resolve_entry``（默认 execution policy，按每只推荐的 entry_mode 套窗口），
+只用入场日行情决定能否按**开盘价**买入。实盘结算 ``outcome_simulation._resolve_entry`` →
+``execution_core.resolve_causal_entry`` 用同一个 ``entry_policy_for_mode`` 选规则：次日开盘类取当日开盘；
+板块相对强度龙头（原为碰理想/次级买点）2026-10-27 起改为 ``backtest_open_window_v1``（窗口内第一个可买日开盘买，
+同回测）。盘中确认、实盘结算、回测三者买入规则一致：
 
 ==================  ======================================  ===========================================
 回测规则             回测做法                                  盘中确认（本模块）
