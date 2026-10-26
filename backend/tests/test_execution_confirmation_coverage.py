@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.models.market import TradeCalendar
 from app.models.recommendation import RecommendationExecutionState
 from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
 from app.services import execution_confirmation_coverage as cov
@@ -13,7 +14,8 @@ from app.services import execution_confirmation_coverage as cov
 @pytest.fixture()
 def db(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
-    for table in (DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun, RecommendationExecutionState):
+    for table in (DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun, RecommendationExecutionState,
+                  TradeCalendar):
         table.__table__.create(engine)
     session = sessionmaker(bind=engine)()
     monkeypatch.setattr(cov, "_eligible_run_ids", lambda _db: ("run_a",))
@@ -22,6 +24,9 @@ def db(monkeypatch):
     monkeypatch.setattr(alerts_mod, "emit_alert", lambda *a, **k: alerts.append(("emit", *a)) or True)
     monkeypatch.setattr(alerts_mod, "resolve_alert", lambda *a, **k: alerts.append(("resolve", *a)) or True)
     session.info["alerts"] = alerts
+    for day in range(12, 24):  # 交易所日历：10-17/18 周末
+        cal = f"202610{day:02d}"
+        session.add(TradeCalendar(exchange="SSE", cal_date=cal, is_open=day not in (17, 18)))
     for day in ("2026-10-14", "2026-10-15", "2026-10-16"):
         session.add(DailyKbar(code="600000", trade_date=day, open=10, high=10.3, low=9.9, close=10.1,
                               volume=100, amount=1e6, pct_chg=1.0))

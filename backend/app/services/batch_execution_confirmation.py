@@ -30,16 +30,18 @@ from sqlalchemy.orm import Session
 
 from app.engine.skill_loader import load_skills
 from app.engine.trading_calendar import latest_allowed_quote_date, normalize_trade_date
-from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
+from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
 from app.services.evidence.validation import (
     canonical_live_forward_run_ids,
     catchup_formal_run_ids,
 )
 from app.services.entry_day_checks import entry_window_days_for_rec
+from app.services.entry_window_state import MISSING_STATUSES, open_days_after
 from app.services.execution_confirmation import (
     _build_signal_for_strategy,
     _entry_window_closed,
-    _first_trade_day_blocked,
+    day1_status_in_window,
+    sync_day1_missing_alert,
     confirm_with_prepared_context,
     is_unsettled_formal_rec,
 )
@@ -151,11 +153,11 @@ def _load_signal_ages(
     recs: list[tuple[Recommendation, RecommendationOutcome | None]],
     data_as_of: str,
 ) -> dict[str, int]:
-    """一次 SQL 按 recommendation 计算推荐日之后的市场交易日数。
+    """一次查询按 recommendation 计算推荐日之后的交易日数（交易所日历）。
 
-    年龄属于一笔推荐而不是股票代码；同一股票不同推荐日必须得到不同结果。交易日使用
-    全市场日 K 的 distinct 日期，而不是依赖个股是否有 K（停牌/数据缺口不应延长信号）。
-    data_as_of 尚未落库时仍作为当前交易日补入。
+    年龄属于一笔推荐而不是股票代码；同一股票不同推荐日必须得到不同结果。交易日按本地
+    交易所日历 trade_calendar 数（日历缺这段才回退到全市场日 K 日期），不依赖个股或全市场
+    日 K 是否入库（停牌/数据缺口不应拉长或缩短窗口）。data_as_of 尚未进日历时仍作为当前交易日补入。
     """
     if not recs:
         return {}
@@ -163,14 +165,7 @@ def _load_signal_ages(
     if not signal_dates or not data_as_of:
         return {str(rec.recommendation_id): 0 for rec, _ in recs}
     min_signal = min(signal_dates)
-    market_dates = {
-        str(value)
-        for value in db.scalars(
-            select(DailyKbar.trade_date)
-            .where(DailyKbar.trade_date > min_signal, DailyKbar.trade_date <= data_as_of)
-            .distinct()
-        ).all()
-    }
+    market_dates = set(open_days_after(db, min_signal, data_as_of))
     ages: dict[str, int] = {}
     for rec, _ in recs:
         signal_date = str(rec.trade_date)
@@ -403,14 +398,21 @@ def _compute_batch(
     for rec, outcome in eligible:
         age = ages.get(str(rec.recommendation_id), 0)
         intraday = _is_intraday_recommendation(rec)
+        window = entry_window_days_for_rec(rec)
+        day1_status, day1 = day1_status_in_window(
+            db, rec, signal_age_trade_days=age, window_days=window, data_as_of=expected_quote_date,
+        )
+        sync_day1_missing_alert(rec, day1_status, day1)
         reason = ""
+        if day1_status in MISSING_STATUSES:
+            # 第 1 日日 K 没入库：不预判过期，交给共享状态机判「数据未就绪」（不买也不过期）
+            pending.append((rec, outcome))
+            continue
         if intraday and age > 0:
             reason = "盘中推荐仅在推荐当日确认买点"
-        elif not intraday and age > (window := entry_window_days_for_rec(rec)):
+        elif not intraday and age > window:
             reason = f"已超过推荐后 {window} 个交易日的入场窗口（与回测一致），需要等待新的推荐信号"
-        elif not intraday and age >= 2 and not _first_trade_day_blocked(
-            db, str(rec.code), str(rec.trade_date), expected_quote_date, float(rec.recommend_price or 0)
-        ):
+        elif not intraday and age >= 2 and day1_status == "buyable":
             reason = "推荐后首个交易日按回测口径已可开盘买入，后续交易日不再追入"
         elif intraday and age == 0 and _entry_window_closed(expected_quote_date, local_now):
             reason = "当前交易日已收盘，不再追认盘中买点"

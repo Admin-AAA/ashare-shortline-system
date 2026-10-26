@@ -29,7 +29,12 @@ from app.services.entry_day_checks import (
     EntryDayCheck,
     check_entry_bar,
     entry_window_days_for_rec,
-    first_day_blocked,
+)
+from app.services.entry_window_state import (
+    MISSING_STATUSES,
+    SKIPPED_STATUSES,
+    first_day_status,
+    signal_age_trade_days as signal_age_trade_days_for,
 )
 from app.services.intraday_cumulative_policy import (
     hard_veto_intraday_inconclusive,
@@ -140,6 +145,7 @@ def _derive_decisions(
     entry_check: EntryDayCheck | None = None,
     prior_day_blocked: bool = False,
     window_days: int = ENTRY_WINDOW_TRADE_DAYS,
+    prior_day_missing: bool = False,
 ) -> tuple[dict[str, str], dict[str, str]]:
     """把入场日检查与策略信号投影为未入场/已持仓两套动作。
 
@@ -177,6 +183,12 @@ def _derive_decisions(
         entry = _decision("expired", "盘中买点已过期", "盘中买点仅在推荐当日有效，请勿追入")
     elif not is_intraday_recommendation and signal_age_trade_days > window_days:
         entry = _decision("expired", "确认窗口已过期", f"已超过推荐后 {window_days} 个交易日的入场窗口（与回测一致），请等待新的推荐信号")
+    elif not is_intraday_recommendation and signal_age_trade_days >= 2 and prior_day_missing:
+        # 第 1 日日 K 没入库（全市场或该股，且不是停牌）：判不了第 1 日能不能买，窗口内既不买也不判过期（过了窗口按日历过期）
+        entry = _decision(
+            "not_ready", "数据未就绪",
+            "推荐后第 1 个交易日的日 K 尚未入库，无法判断第 1 日是否可买；数据补齐前不买也不判过期（已告警）",
+        )
     elif not is_intraday_recommendation and signal_age_trade_days >= 2 and not prior_day_blocked:
         entry = _decision("expired", "次日确认窗口已过期", "推荐后首个交易日按回测口径已可开盘买入，后续交易日不再追入")
     elif is_intraday_recommendation:
@@ -311,10 +323,12 @@ def confirm_with_prepared_context(
         if bar is not None else None
     )
     window_days = entry_window_days_for_rec(rec)
-    prior_day_blocked = (
-        _first_trade_day_blocked(db, code, str(rec.trade_date), data_as_of, recommend_price)
-        if signal_age_trade_days >= 2 and window_days >= 2 else False
+    day1_status, day1 = day1_status_in_window(
+        db, rec, signal_age_trade_days=signal_age_trade_days, window_days=window_days, data_as_of=data_as_of,
     )
+    prior_day_blocked = day1_status in SKIPPED_STATUSES
+    prior_day_missing = day1_status in MISSING_STATUSES
+    sync_day1_missing_alert(rec, day1_status, day1)
     entry_decision, holding_decision = _derive_decisions(
         fresh=fresh,
         signal_age_trade_days=signal_age_trade_days,
@@ -328,8 +342,13 @@ def confirm_with_prepared_context(
         entry_check=entry_check,
         prior_day_blocked=prior_day_blocked,
         window_days=window_days,
+        prior_day_missing=prior_day_missing,
     )
     condition_summary = _condition_summary(entry_check, entry_decision)
+    if day1 is not None:
+        condition_summary["observed"] = {
+            **condition_summary.get("observed", {}), "day1": day1, "day1_status": day1_status,
+        }
 
     strategy_id = str(rec.bucket or "daily-stock-analysis-skill")
     return {
@@ -409,26 +428,57 @@ def _same_day_bar(current: dict[str, Any], data_as_of: str) -> dict[str, Any] | 
     return bar
 
 
-def _first_trade_day_blocked(
+def _first_trade_day_status(
     db: Session,
     code: str,
     signal_date: str,
     data_as_of: str,
     recommend_price: float,
-) -> bool:
-    """推荐后第 1 个交易日的已收盘日 K 是否被回测买入规则挡住（决定第 2 日能否再确认）。"""
-    first_day = db.scalar(
-        select(DailyKbar.trade_date)
-        .where(DailyKbar.trade_date > signal_date, DailyKbar.trade_date < data_as_of)
-        .order_by(DailyKbar.trade_date)
-        .limit(1)
+) -> tuple[str, str | None]:
+    """推荐后第 1 个交易日（按交易所日历）的状态：buyable / blocked / suspended / missing_market / missing_code / none。
+
+    决定 2 天窗口的第 2 日能否再确认；缺数据（missing_*）时调用方判「数据未就绪」并告警。
+    """
+    return first_day_status(db, code, signal_date, data_as_of, recommend_price)
+
+
+def day1_status_in_window(
+    db: Session,
+    rec: Recommendation,
+    *,
+    signal_age_trade_days: int,
+    window_days: int,
+    data_as_of: str,
+) -> tuple[str, str | None]:
+    """只有 2 天窗口的第 2 日（及以内）才需要第 1 日状态；过了窗口记 past_window（解除缺数据告警）。"""
+    if _is_intraday_recommendation(rec) or window_days < 2 or signal_age_trade_days < 2:
+        return "none", None
+    if signal_age_trade_days > window_days:
+        return "past_window", None
+    return _first_trade_day_status(
+        db, str(rec.code), str(rec.trade_date), data_as_of, float(rec.recommend_price or 0)
     )
-    if first_day is None:
-        return False
-    bar = db.scalar(
-        select(DailyKbar).where(DailyKbar.code == code, DailyKbar.trade_date == str(first_day))
-    )
-    return first_day_blocked(code, bar, recommend_price)
+
+
+DAY1_MISSING_ALERT_KIND = "entry_day1_bar_missing"
+DAY1_MISSING_ALERT_COOLDOWN = 20 * 3600  # 条件还在就每天重发一次
+
+
+def sync_day1_missing_alert(rec: Recommendation, status: str, day1: str | None) -> None:
+    """第 1 日日 K 缺失 → 告警（每天一次）；状态已能判定（有 K / 停牌）→ 解除。"""
+    from app.core.alerts import emit_alert, resolve_alert
+
+    key = str(rec.recommendation_id)
+    if status in MISSING_STATUSES:
+        scope = "全市场" if status == "missing_market" else "该股"
+        emit_alert(
+            DAY1_MISSING_ALERT_KIND, key,
+            f"{rec.code} {rec.name or ''} 推荐日 {rec.trade_date} 的第 1 个交易日 {day1} {scope}日 K 未入库，"
+            "买入确认判「数据未就绪」（不买也不过期），请补数",
+            cooldown=DAY1_MISSING_ALERT_COOLDOWN,
+        )
+    elif status != "none":
+        resolve_alert(DAY1_MISSING_ALERT_KIND, key, f"{rec.code} 第 1 个交易日{(' ' + day1) if day1 else ''}状态已可判定或已过窗口（{status}）")
 
 
 def confirm_recommendation_execution(
@@ -493,19 +543,8 @@ def confirm_recommendation_execution(
 
     signal, prefilter_ok, _prefilter_reason = _build_signal_for_strategy(skill, current, snapshot)
 
-    later_dates = set(
-        str(value)
-        for value in db.scalars(
-            select(DailyKbar.trade_date).where(
-                DailyKbar.code == code,
-                DailyKbar.trade_date > str(rec.trade_date),
-                DailyKbar.trade_date <= data_as_of,
-            )
-        ).all()
-    )
-    if data_as_of > str(rec.trade_date):
-        later_dates.add(data_as_of)
-    signal_age_trade_days = len(later_dates)
+    # 推荐天数按交易所日历数（不按该股自己的 K：停牌/缺数据不能拉长或缩短窗口）
+    signal_age_trade_days = signal_age_trade_days_for(db, str(rec.trade_date), data_as_of)
 
     expected_quote_date = latest_allowed_quote_date()
     fresh = data_as_of == expected_quote_date

@@ -126,9 +126,12 @@ def check_entry_bar(
 
 
 def first_day_blocked(code: str, day_one_bar: Any, recommend_price: float) -> bool:
-    """推荐后第 1 个交易日（已收盘的日 K）是否被回测买入规则挡住——决定第 2 个交易日还能不能买。"""
+    """推荐后第 1 个交易日（已收盘的日 K）是否被回测买入规则挡住——决定第 2 个交易日还能不能买。
+
+    没有日 K 时不在这里猜（停牌和缺数据要区分），由 entry_window_state.first_day_status 判定。
+    """
     if day_one_bar is None:
-        return True  # 停牌无 K：回测跳过该日
+        raise ValueError("first_day_blocked 需要第 1 个交易日的日 K；缺 K 请用 entry_window_state.first_day_status 区分停牌/缺数据")
     return check_entry_bar(code, day_one_bar, recommend_price, session_closed=True).blocked
 
 

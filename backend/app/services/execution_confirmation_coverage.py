@@ -22,9 +22,10 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.tables import DailyKbar, Recommendation, RecommendationOutcome, RecommendationRun
+from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
 from app.models.recommendation import RecommendationExecutionState
 from app.services.entry_day_checks import entry_window_days_for_rec
+from app.services.entry_window_state import SKIPPED_STATUSES, open_days_after, recent_open_days
 
 logger = logging.getLogger(__name__)
 
@@ -52,14 +53,8 @@ def was_checked_in_session(state: Any | None, trade_date: str) -> bool:
 
 
 def _market_days_after(db: Session, start: str, end: str) -> list[str]:
-    return sorted(
-        str(value)
-        for value in db.scalars(
-            select(DailyKbar.trade_date)
-            .where(DailyKbar.trade_date > start, DailyKbar.trade_date <= end)
-            .distinct()
-        ).all()
-    )
+    """(start, end] 的交易日：按交易所日历（日历缺这段才回退到全市场日 K 日期）。"""
+    return open_days_after(db, start, end)
 
 
 def entry_day_unchecked(
@@ -69,7 +64,7 @@ def entry_day_unchecked(
     run_ids: tuple[str, ...],
 ) -> list[dict[str, Any]]:
     """今天处于入场窗口（推荐后第 1 个交易日；或第 2 日且第 1 日被回测规则挡住）却还没被检查的未结算推荐。"""
-    from app.services.execution_confirmation import _first_trade_day_blocked, is_unsettled_formal_rec
+    from app.services.execution_confirmation import _first_trade_day_status, is_unsettled_formal_rec
     from app.services.outcome_simulation import _is_intraday_recommendation
 
     if not run_ids:
@@ -89,10 +84,13 @@ def entry_day_unchecked(
         age = len(set(days) | {today})
         if age > entry_window_days_for_rec(rec):
             continue
-        if age >= 2 and not _first_trade_day_blocked(
-            db, str(rec.code), str(rec.trade_date), today, float(rec.recommend_price or 0)
-        ):
-            continue
+        if age >= 2:
+            day1_status, _day1 = _first_trade_day_status(
+                db, str(rec.code), str(rec.trade_date), today, float(rec.recommend_price or 0)
+            )
+            # 第 1 日可买 → 今天不在窗口；第 1 日缺数据 → 走 entry_day1_bar_missing 告警，不算漏查
+            if day1_status not in SKIPPED_STATUSES:
+                continue
         if state is not None and (
             bool(getattr(state, "ever_buy_confirmed", False))
             or str(getattr(state, "latest_decision_code", "") or "") in {"expired", "cancel"}
@@ -173,12 +171,7 @@ def annotate_unchecked_expiries(db: Session, assessments: list[dict[str, Any]]) 
 
 def recent_expired_without_check(db: Session, today: str, *, trade_days: int = RECENT_GAP_TRADE_DAYS) -> list[dict[str, Any]]:
     """近 N 个交易日内「入场日盘中没被检查就被判过期」的推荐（静默失败证据）。"""
-    days = sorted(
-        str(v) for v in db.scalars(
-            select(DailyKbar.trade_date).where(DailyKbar.trade_date <= today).distinct()
-            .order_by(DailyKbar.trade_date.desc()).limit(trade_days + 1)
-        ).all()
-    )
+    days = recent_open_days(db, today, trade_days + 1)
     if not days:
         return []
     rows = db.execute(

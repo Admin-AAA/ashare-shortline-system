@@ -1,6 +1,7 @@
 """入场日检查与回测买入规则一一对应：窗口 2 日、可成交、一字涨停、开盘跳空 ≤6%。"""
 from types import SimpleNamespace
 
+import pytest
 from app.services.entry_day_checks import (
     ENTRY_WINDOW_TRADE_DAYS,
     MAX_ENTRY_GAP_PCT,
@@ -65,7 +66,9 @@ def test_first_day_blocked_uses_closed_bar_rules():
     day_one_ok = SimpleNamespace(open=10.1, high=10.3, low=9.9, close=10.2, pct_chg=2.0, volume=1, amount=1)
     assert first_day_blocked("600000", day_one_gap, 10.0) is True
     assert first_day_blocked("600000", day_one_ok, 10.0) is False
-    assert first_day_blocked("600000", None, 10.0) is True  # 停牌：回测跳过该日
+    # 缺 K 不在这里猜：停牌/缺数据由 entry_window_state.first_day_status 区分
+    with pytest.raises(ValueError):
+        first_day_blocked("600000", None, 10.0)
 
 
 def test_decision_state_machine_follows_two_day_window():

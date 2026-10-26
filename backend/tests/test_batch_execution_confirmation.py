@@ -559,7 +559,7 @@ def test_incomplete_realtime_bar_returns_not_ready_instead_of_buy(db, monkeypatc
 # ── expired 状态 ───────────────────────────────────────────────────────────
 
 def test_expired_when_age_greater_than_one(db, monkeypatch):
-    """推荐日之后已超过首个交易日 → expired，不拉该票 rt_k。"""
+    """第 2 个交易日且第 1 日按回测口径可买 → expired，不拉该票 rt_k。"""
     run_id = _make_run(db, "test_batch_expired_run", trade_date="2026-07-25")
     rec = _make_rec(db, "test_batch_expired_rec", run_id, "600775", trade_date="2026-07-25")
     db.flush()
@@ -572,6 +572,7 @@ def test_expired_when_age_greater_than_one(db, monkeypatch):
         "_load_signal_ages",
         lambda db, recs, da: {str(rec.recommendation_id): 2 for rec, _ in recs},
     )
+    monkeypatch.setattr(svc, "day1_status_in_window", lambda *a, **k: ("buyable", "2026-07-27"))
     monkeypatch.setattr("app.services.market_data.get_market_universe", lambda: ([], _fake_snapshot()))
     monkeypatch.setattr(
         "app.services.realtime_pnl_service._fetch_rtk_quotes",
@@ -584,6 +585,30 @@ def test_expired_when_age_greater_than_one(db, monkeypatch):
     assert result["items"][0]["entry_decision"]["code"] == "expired"
     assert result["summary"]["expired_count"] == 1
     assert rtk_calls["n"] == 0  # 过期票不拉 rt_k
+
+
+def test_day1_bar_missing_is_not_pre_expired(db, monkeypatch):
+    """第 2 个交易日但第 1 日日 K 没入库：不预判过期，进入实时确认（共享状态机判数据未就绪）。"""
+    run_id = _make_run(db, "test_batch_day1_missing_run", trade_date="2026-07-25")
+    rec = _make_rec(db, "test_batch_day1_missing_rec", run_id, "600775", trade_date="2026-07-25")
+    db.flush()
+
+    rtk_calls = {"n": 0}
+    monkeypatch.setattr(svc, "latest_allowed_quote_date", lambda: "2026-07-29")
+    monkeypatch.setattr(
+        svc, "_load_signal_ages", lambda db, recs, da: {str(rec.recommendation_id): 2 for rec, _ in recs},
+    )
+    monkeypatch.setattr(svc, "day1_status_in_window", lambda *a, **k: ("missing_market", "2026-07-27"))
+    monkeypatch.setattr("app.services.market_data.get_market_universe", lambda: ([], _fake_snapshot()))
+    monkeypatch.setattr(
+        "app.services.realtime_pnl_service._fetch_rtk_quotes",
+        lambda codes: rtk_calls.__setitem__("n", rtk_calls["n"] + 1) or {},
+    )
+    svc._cache["value"] = None
+    result = svc.confirm_batch_executions(db, [rec], refresh=True)
+
+    assert result["summary"]["expired_count"] == 0
+    assert all(item["entry_decision"]["code"] != "expired" for item in result["items"])
 
 
 def test_same_stock_recommendations_use_their_own_signal_dates(db, monkeypatch):
