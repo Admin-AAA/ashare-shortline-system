@@ -410,20 +410,26 @@ POLICY_RULE_LABELS: dict[str, str] = {
 }
 
 
-def _policy_block_detail(empty_reason: str | None) -> str | None:
-    """解析 filter_audit.empty_reason（"production_policy_blocked: n/m；a=1, b=2"）→ "大成交额×1、高换手×2"。"""
+# 名额类规则不是风控：原因文字单独写「名额限制」。
+QUOTA_RULE_IDS = frozenset({"daily_top_n", "daily_strategy_cap"})
+
+
+def _policy_block_detail(empty_reason: str | None) -> tuple[str | None, str | None]:
+    """解析 filter_audit.empty_reason（"production_policy_blocked: n/m；a=1, b=2"）
+    → (风控否决 "大成交额×1、高换手×2", 名额限制 "当日名额已满×3")，没有的一类为 None。"""
     text = str(empty_reason or "")
     if not text.startswith("production_policy_blocked"):
-        return None
+        return None, None
     _, _, detail = text.partition("；")
-    items = []
+    risk: list[str] = []
+    quota: list[str] = []
     for part in detail.split(","):
         rule, sep, count = part.strip().partition("=")
         if not rule:
             continue
         label = POLICY_RULE_LABELS.get(rule, rule)
-        items.append(f"{label}×{count}" if sep else label)
-    return "、".join(items) or None
+        (quota if rule in QUOTA_RULE_IDS else risk).append(f"{label}×{count}" if sep else label)
+    return ("、".join(risk) or None), ("、".join(quota) or None)
 
 
 def _no_opportunity_reason(
@@ -431,21 +437,21 @@ def _no_opportunity_reason(
     score_line: dict[str, Any],
     empty_reason: str | None = None,
 ) -> str:
-    """0 推荐时的可读原因：最高分 / 有效线 / 被哪条风控否决 / 市场阶段。"""
+    """0 推荐时的可读原因：最高分 / 有效线 / 被哪条风控否决 / 名额限制 / 市场阶段。"""
     top = max((float(c.get("final_score") or 0) for c in cards), default=0.0)
     effective = score_line.get("effective_score_line")
     market_base = score_line.get("market_base") or ""
     if top <= 0:
         return "无候选通过规则门（全部低于 Skill 门槛）"
     market = f"市场阶段 {market_base or '未知'}"
-    blocked = _policy_block_detail(empty_reason)
-    if effective and top >= float(effective) and blocked:
-        return f"最高分 {top:.1f} 已过分数线 {float(effective):.1f}，但被风控否决：{blocked}；{market}"
+    risk, quota = _policy_block_detail(empty_reason)
+    blocks = [x for x in ((f"被风控否决：{risk}" if risk else None), (f"受名额限制：{quota}" if quota else None)) if x]
+    if effective and top >= float(effective) and blocks:
+        return f"最高分 {top:.1f} 已过分数线 {float(effective):.1f}，但{'；'.join(blocks)}；{market}"
     parts = [f"最高分 {top:.1f}"]
     if effective:
         parts.append(f"未过有效分数线 {float(effective):.1f}" if top < float(effective) else f"有效分数线 {float(effective):.1f}")
-    if blocked:
-        parts.append(f"风控否决：{blocked}")
+    parts.extend(blocks)
     parts.append(market)
     return "；".join(parts)
 

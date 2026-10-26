@@ -17,8 +17,22 @@ def test_above_line_but_policy_vetoed():
 
 
 def test_unknown_rule_code_shown_as_is():
-    detail = _policy_block_detail("production_policy_blocked: 3/3；max_dd60_veto=2, brand_new_veto=1")
-    assert detail == "60日回撤过深×2、brand_new_veto×1"
+    risk, quota = _policy_block_detail("production_policy_blocked: 3/3；max_dd60_veto=2, brand_new_veto=1")
+    assert risk == "60日回撤过深×2、brand_new_veto×1"
+    assert quota is None
+
+
+def test_quota_limits_not_called_risk_veto():
+    only_quota = _no_opportunity_reason(
+        [{"final_score": 80.0}], LINE, "production_policy_blocked: 3/3；daily_strategy_cap=3"
+    )
+    assert only_quota == "最高分 80.0 已过分数线 72.0，但受名额限制：单策略当日上限×3；市场阶段 震荡"
+    assert "风控" not in only_quota
+    both = _no_opportunity_reason(
+        [{"final_score": 80.0}], LINE, "production_policy_blocked: 4/4；daily_top_n=2, high_amount_veto=1, daily_strategy_cap=1"
+    )
+    assert both == ("最高分 80.0 已过分数线 72.0，但被风控否决：大成交额×1；"
+                    "受名额限制：当日名额已满×2、单策略当日上限×1；市场阶段 震荡")
 
 
 def test_no_candidates():
