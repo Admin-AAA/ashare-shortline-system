@@ -26,3 +26,11 @@ launchctl load -w ~/Library/LaunchAgents/com.wangao.ashare-prefect-worker.plist
 launchd 直接写文件的日志（`~/Library/Logs/ashare-*.log` 等）无法 rename 轮转，改用 copy-truncate：
 `rotate_ashare_logs.sh`（>=20MB 压缩存档后清空，留 3 份）+ `com.wangao.ashare-log-rotate.plist`（每周日 03:30）。
 安装：`cp scripts/launchd/com.wangao.ashare-log-rotate.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.wangao.ashare-log-rotate.plist`
+
+## 小石全市场分钟线每日增量（2026-10-26）
+
+`com.wangao.ashare-xiaoshi-min-sync.plist`：每天 20:40 跑 `backend/scripts/sync_xiaoshi_min_all.py`（nice 低优先级，对小石 ≤6 次/秒，
+任何异常 exit 0，不碰 Prefect/17:35 日更/选股）。小石 cn-minute 只保留滚动 3 个月，不每天存就丢。数据落 `backend/data/xiaoshi_min_all/`
+（与旧 230 只 `xiaoshi_min1` 互不影响），读取用 `sync_xiaoshi_min_all.load_minutes(codes, start, end)`。日志 `~/Library/Logs/ashare-xiaoshi-min-sync.out.log`、
+`backend/data/xiaoshi_min_all/sync.log`。
+安装：`cp scripts/launchd/com.wangao.ashare-xiaoshi-min-sync.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.wangao.ashare-xiaoshi-min-sync.plist`
