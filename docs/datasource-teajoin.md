@@ -85,7 +85,7 @@
 - 全市场单日表（daily、moneyflow 等）：6～23 秒；财务全市场 VIP 50～70 秒；dc_index 20 秒。
 - 第一轮 87 次请求中：2 次 ConnectTimeout（limit_step、block_trade，重试成功），约 10% 的“重查询”返回业务码“query capacity busy”（上游并发满，重试/稍后即成功）；1 次服务端 query timeout（stk_factor_pro）。
 - 结论：**适合做盘后/批量主源，不适合做盘中实时主源**（所以盘中延迟敏感接口让位，实时接口根本不路由）。2026-10-26 19:30 后卖家确认限流 500 次/分钟，按用户指令不再继续做速度/延迟探测。
-- 回补实测：多路并发做 limit_list_d 历史单日查询时，上游会返回 `query capacity busy`（单路串行基本正常，约 2–9 秒/次）。因此回补限制为 2 路并发，失败由脚本退避重试，熔断 30 秒后自动恢复。
+- 回补实测：多路并发做 limit_list_d 历史单日查询时，上游会返回 `query capacity busy`（单路串行基本正常，约 2–9 秒/次）。网关熔断会把这种瞬时“忙”放大成分钟级停摆（走网关的旧回补脚本 1 天/分钟），所以 limit_list_d 2020 起回补改用直连脚本 `scripts/shortline_research/fetch_limit_list_d_teajoin.py`：只走 teajoin、不占 promax/quantdata 额度，容量忙就地退避重试，盘中自动暂停；按年份拆 2 路（2020-08-22~2022 / 2023~今），与原脚本同目录同列同去重键，可断点续跑。实测约 4 天/分钟/路。
 
 ## 6. 数据质量核对（2026-10-23，对本地库）
 - daily 收盘价：5565/5565 一致（teajoin 5572 行，本地 5565 行）。
