@@ -412,13 +412,18 @@ def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
 
     from app.services.data_health_snapshot import recheck_too_late
     from app.services.data_quality_monitor import _now as _dq_now
-    from app.services.honest_alerts import expire_stale, resolve_recovered
+    from app.services.honest_alerts import expire_stale, reemit_persistent, resolve_recovered
 
     mode = str((payload or {}).get("mode") or "original")
     now = _dq_now()
     expired = expire_stale(now)
+    try:
+        expired_reemit = reemit_persistent(db, now)  # 条件还在的告警每天重发，不让它在自动解除后悄悄消失
+    except Exception:  # noqa: BLE001 - 重发失败不影响快照
+        logger.warning("持续告警重发失败", exc_info=True)
+        expired_reemit = []
     if mode == "recheck" and recheck_too_late(now):
-        return {"status": "skipped", "expired_alerts": expired,
+        return {"status": "skipped", "expired_alerts": expired, "reemitted_alerts": expired_reemit,
                 "summary_text": f"次日复核 {now:%H:%M} 才开始，已过 09:15，跳过（不和交易时段抢资源）"}
     res = take_snapshot(db, mode=mode)
     s, td = res["sample"], res["trade_date"]
@@ -441,7 +446,7 @@ def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
             resolve_recovered("data_health_snapshot", td, f"{td} {res['written']}：巡检恢复正常")
     except Exception:  # noqa: BLE001 - 告警失败不影响任务
         logger.warning("健康快照告警写入失败", exc_info=True)
-    return {"expired_alerts": expired, "snapshot": {"trade_date": td, "written": res["written"],
+    return {"expired_alerts": expired, "reemitted_alerts": expired_reemit, "snapshot": {"trade_date": td, "written": res["written"],
                          **{k: s.get(k) for k in ("quality_ok", "score", "score_db", "penalty", "output_status")}},
             "summary_20d": {k: summ[k] for k in ("days_with_original", "avg_score", "output_success_rate",
                                                  "red_days", "quality_failed_days")},
@@ -449,12 +454,13 @@ def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
 
 
 def _run_rolling_r12(db, payload: dict | None = None) -> dict:
-    from app.services.honest_alerts import expire_stale
+    from app.services.honest_alerts import expire_stale, reemit_persistent
     from app.services.rolling_r12 import run_monthly
 
     expired = expire_stale()
     out = run_monthly(db, force=bool((payload or {}).get("force")))
     out["expired_alerts"] = expired
+    out["reemitted_alerts"] = reemit_persistent(db)  # 每个交易日 22:30：条件还在就重发（读结果文件，不重算）
     return out
 
 

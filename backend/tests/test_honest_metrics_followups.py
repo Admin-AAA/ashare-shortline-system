@@ -127,3 +127,73 @@ def test_short_replay_end_read_from_data_with_constant_fallback():
     assert rr.short_replay_coverage_end(_DB(dt.date(2026, 11, 20))) == ("2026-11-20", "data")
     assert rr.short_replay_coverage_end(_DB(None)) == (rr.SHORT_REPLAY_COVERAGE_END, "constant")
     assert rr.short_replay_coverage_end(_DB(boom=True)) == (rr.SHORT_REPLAY_COVERAGE_END, "constant")
+
+
+def test_negative_alert_reemitted_daily_while_condition_holds(monkeypatch):
+    from app.core import alerts
+    from app.services import honest_alerts as ha
+    from app.services import midterm_live_seal as seal
+    from app.services import midterm_service as ms
+    from app.services import rolling_r12 as rr
+
+    alerts.reset_alerts()
+    clock = {"now": dt.datetime(2026, 11, 2, 22, 30, tzinfo=CN)}
+    monkeypatch.setattr(alerts, "_now_iso", lambda: clock["now"].strftime("%Y-%m-%d %H:%M:%S"))  # 登记时间跟假时钟走
+    live_sid = next(iter(ms.STRATEGIES))
+    doc = {"cutoff": "2026-11-02", "midlong": {live_sid: {"verdict": "negative"},
+                                               "long-gone": {"verdict": "negative"}}, "short": {"strategies": {}}}
+    monkeypatch.setattr(rr, "load_latest", lambda: doc)
+    monkeypatch.setattr(seal, "_local_next_open", lambda d: "2026-11-03")
+    day1 = clock["now"]
+    assert ha.reemit_persistent(None, day1) == ["rolling_r12_negative|2026-11-02"]
+    msg = alerts.active_alert_records("rolling_r12_negative")[0]["message"]
+    assert live_sid in msg and "long-gone" not in msg  # 已不在现役表的不提醒
+    clock["now"] = day1.replace(hour=23)
+    assert ha.reemit_persistent(None, clock["now"]) == []  # 同一天只发一次
+    # 24 小时后自动解除，第二天条件还在 -> 重新发
+    clock["now"] = day1 + dt.timedelta(hours=25)
+    assert ha.expire_stale(clock["now"]) == ["rolling_r12_negative|2026-11-02"]
+    assert alerts.active_alert_records("rolling_r12_negative") == []
+    assert ha.reemit_persistent(None, clock["now"]) == ["rolling_r12_negative|2026-11-02"]
+    assert len(alerts.active_alert_records("rolling_r12_negative")) == 1
+    # 转负策略都下线后：不再发，并解除
+    doc["midlong"] = {"long-gone": {"verdict": "negative"}}
+    clock["now"] = day1 + dt.timedelta(days=2)
+    assert ha.reemit_persistent(None, clock["now"]) == []
+    assert alerts.active_alert_records("rolling_r12_negative") == []
+    alerts.reset_alerts()
+
+
+def test_emit_daily_dedupes_per_day(monkeypatch):
+    from app.core import alerts
+    from app.services import honest_alerts as ha
+
+    alerts.reset_alerts()
+    logged = []
+    monkeypatch.setattr(alerts.logger, "error", lambda *a, **k: logged.append(a))
+    clock = {"now": dt.datetime(2026, 11, 2, 9, 0, tzinfo=CN)}
+    monkeypatch.setattr(alerts, "_now_iso", lambda: clock["now"].strftime("%Y-%m-%d %H:%M:%S"))
+    assert ha.emit_daily("rolling_r12_negative", "k", "m", now=clock["now"]) is True
+    assert ha.emit_daily("rolling_r12_negative", "k", "m", now=clock["now"]) is False
+    clock["now"] += dt.timedelta(days=1)
+    assert ha.emit_daily("rolling_r12_negative", "k", "m", now=clock["now"]) is True
+    assert len(logged) == 2
+    alerts.reset_alerts()
+
+
+def test_calendar_missing_alert_repeats_each_day_not_once_per_process(monkeypatch):
+    from app.services import midterm_live_seal as seal
+
+    sent = []
+    monkeypatch.setattr(seal, "_found", {})
+    monkeypatch.setattr(seal, "_alerted", {})
+    monkeypatch.setattr(seal, "_query_next_open", lambda d: None)
+    monkeypatch.setattr("app.services.honest_alerts.emit_daily", lambda kind, key, msg, **k: sent.append(key))
+    clock = {"now": dt.datetime(2026, 12, 31, 18, 0, tzinfo=CN)}
+    monkeypatch.setattr(seal, "now_cn", lambda: clock["now"])
+    seal.deadline_info("2026-12-31")
+    seal.deadline_info("2026-12-31")
+    assert sent == ["seal:2026-12-31"]  # 同一天一次
+    clock["now"] = dt.datetime(2027, 1, 1, 18, 0, tzinfo=CN)
+    seal.deadline_info("2026-12-31")
+    assert sent == ["seal:2026-12-31", "seal:2026-12-31"]  # 第二天条件还在，再发

@@ -26,7 +26,7 @@ SOURCE_CALENDAR = "calendar"
 SOURCE_FALLBACK = "weekday_fallback"
 
 _found: dict[str, str] = {}  # 只缓存查到的结果；查不到的下次重查
-_alerted: set[str] = set()
+_alerted: dict[str, str] = {}  # 信号日 -> 最近一次告警的日期（每天最多一次）
 _lock = threading.Lock()
 
 
@@ -64,16 +64,17 @@ def _alert_missing(signal_date: str, reason: str) -> None:
     if signal_date < (now_cn().date() - _dt.timedelta(days=ALERT_RECENT_DAYS)).isoformat():
         logger.debug("trade calendar missing for historical signal date %s (%s)", signal_date, reason)
         return
-    with _lock:
-        if signal_date in _alerted:
+    today = now_cn().date().isoformat()
+    with _lock:  # 同一信号日每天最多发一次；条件还在，第二天照常再发（不是一个进程只发一次）
+        if _alerted.get(signal_date) == today:
             return
-        _alerted.add(signal_date)
+        _alerted[signal_date] = today
     msg = f"本地交易日历查不到 {signal_date} 之后的开市日（{reason}），实盘封签按工作日兜底，且不锁批次"
     logger.warning(msg)
     try:
-        from app.core.alerts import emit_alert
+        from app.services.honest_alerts import emit_daily
 
-        emit_alert("trade_calendar", f"seal:{signal_date}", msg)
+        emit_daily("trade_calendar", f"seal:{signal_date}", msg)
     except Exception:  # noqa: BLE001 - 告警失败不影响出票
         logger.debug("emit trade_calendar alert failed", exc_info=True)
 

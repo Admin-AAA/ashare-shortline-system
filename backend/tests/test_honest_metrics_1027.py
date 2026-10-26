@@ -240,9 +240,9 @@ def test_seal_fallback_not_cached_alerts_and_does_not_lock(monkeypatch):
     monkeypatch.undo()  # 去掉 autouse 的假日历，测真实的查表/兜底逻辑
     calls, alerts = [], []
     monkeypatch.setattr(seal, "_found", {})
-    monkeypatch.setattr(seal, "_alerted", set())
+    monkeypatch.setattr(seal, "_alerted", {})
     monkeypatch.setattr(seal, "_query_next_open", lambda d: calls.append(d) or None)
-    monkeypatch.setattr("app.core.alerts.emit_alert", lambda kind, key, msg, **k: alerts.append((kind, key)))
+    monkeypatch.setattr("app.services.honest_alerts.emit_daily", lambda kind, key, msg, **k: alerts.append((kind, key)))
     monkeypatch.setattr(seal, "now_cn", lambda: dt.datetime(2026, 12, 31, 18, 0, tzinfo=CN))
     seal.deadline_info("2025-08-01")  # 历史回放日期查不到日历：不告警
     assert alerts == []

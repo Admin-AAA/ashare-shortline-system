@@ -48,6 +48,60 @@ def expire_stale(now: _dt.datetime | None = None, hours: float = EXPIRE_HOURS) -
     return out
 
 
+def emit_daily(kind: str, key: str, message: str, now: _dt.datetime | None = None) -> bool:
+    """每天最多发一次：今天已经发过（登记里 last_seen 是今天）就不再发；否则发并刷新 last_seen。"""
+    from app.core.alerts import active_alert_records, emit_alert
+
+    today = (now or _dt.datetime.now(_CST)).astimezone(_CST).strftime("%Y-%m-%d")
+    for rec in active_alert_records(kind):
+        if rec.get("key") == key and str(rec.get("last_seen") or "")[:10] == today:
+            return False
+    return emit_alert(kind, key, message, cooldown=0)
+
+
+def reemit_persistent(db=None, now: _dt.datetime | None = None) -> list[str]:
+    """条件还在就每天重发，不让问题在 24 小时自动解除后悄悄消失（只读结果文件和本地日历，不重算）。
+
+    - 滚动重算结果（rolling_r12_latest.json）里仍是 negative、且仍在现役表里的策略 -> rolling_r12_negative；
+      已经下线的不再提醒，并解除对应告警。
+    - 下一个交易日在本地交易日历里查不到 -> trade_calendar seal:<今天>（每天一次）。"""
+    from app.services import midterm_service as ms
+    from app.services.rolling_r12 import load_latest
+
+    now = (now or _dt.datetime.now(_CST)).astimezone(_CST)
+    out: list[str] = []
+    doc = load_latest()
+    if doc and doc.get("cutoff"):
+        cutoff = str(doc["cutoff"])
+        active = set(ms.STRATEGIES)
+        if db is not None:
+            try:
+                from app.services.daily_output_check import expected_short_strategies
+
+                active |= set(expected_short_strategies(db))
+            except Exception:  # noqa: BLE001 - 读不到短线现役表就只看中长线
+                logger.debug("expected short strategies unavailable", exc_info=True)
+        else:
+            active |= set((doc.get("short") or {}).get("strategies") or {})
+        neg = sorted(sid for sid, v in {**(doc.get("midlong") or {}), **((doc.get("short") or {}).get("strategies") or {})}.items()
+                     if v.get("verdict") == "negative" and sid in active)
+        if neg:
+            if emit_daily("rolling_r12_negative", cutoff,
+                          f"近12个月（截止 {cutoff}）每笔仍为负的现役策略：{','.join(neg)}", now=now):
+                out.append(f"rolling_r12_negative|{cutoff}")
+        else:
+            resolve_recovered("rolling_r12_negative", cutoff, f"截止 {cutoff} 转负的策略已不在现役表里")
+    try:
+        from app.services import midterm_live_seal as seal
+
+        today = now.date().isoformat()
+        if seal._local_next_open(today) is None:  # 查不到时 _alert_missing 已按天发过告警
+            out.append(f"trade_calendar|seal:{today}")
+    except Exception:  # noqa: BLE001
+        logger.debug("calendar coverage check failed", exc_info=True)
+    return out
+
+
 def resolve_recovered(kind: str, key: str, message: str) -> bool:
     """复核恢复：立即解除这一条（本来就不活跃时不刷日志）。"""
     from app.core.alerts import resolve_alert

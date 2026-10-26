@@ -374,7 +374,9 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
         from app.core.alerts import emit_alert
 
         if neg:
-            emit_alert("rolling_r12_negative", cutoff, f"近12个月（截止 {cutoff}）每笔转负的现役策略：{','.join(neg)}")
+            from app.services.honest_alerts import emit_daily
+
+            emit_daily("rolling_r12_negative", cutoff, f"近12个月（截止 {cutoff}）每笔转负的现役策略：{','.join(neg)}")
         if incomplete:
             emit_alert("rolling_r12_incomplete", cutoff, f"近12个月滚动重算（截止 {cutoff}）有取数失败日：{doc['replay']['incomplete_days']}")
     except Exception:  # noqa: BLE001
