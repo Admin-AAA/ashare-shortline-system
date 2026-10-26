@@ -138,3 +138,27 @@ promax 额度**专留 rt_k / rt_min**；其余接口 teajoin 做主源，promax 
 ## 9. rt_k（实时行情）在 promax 耗尽后的兜底
 teajoin 不提供 rt_k，promax 是唯一 rt_k 主源，已降为少额度用户。现网 rt_k 链路（`quote_realtime.py`，缺哪几只就只向下一级要哪几只）：promax rt_k（1.5s 硬超时、熔断）→ 新浪 realtime_quote（tushare 爬虫，50 只/批）→ 腾讯 qt.gtimg（`.env` 里 `ASHARE_DATASOURCE_CUTOVER` 已含 quote.realtime.tencent，当前启用）→ AKShare 全市场快照（见下）→ quantdata rt_min（逐只、最多 60 只，只有现价）→ 小石快照。
 
+### 9.1 AKShare 全市场快照（实时行情第二备份，2026-10-26 21:30 接入）
+代码 `backend/app/services/datasource/akshare_quote.py`，挂在 腾讯 之后、rt_min 之前。只有前面几级没拿到的代码才会请求它。
+
+**选型**：东财 `stock_zh_a_spot_em` 实测时被 push2 断连（本机 IP 在一次 56 页翻页后被东财限制，RemoteDisconnected，约 30 分钟仍未恢复，曾顺带影响同 IP 的东财备份），不能用也无法对账；新浪 `stock_zh_a_spot`（70 页、约 11s、5576 行、逐行时间戳）实测可用，作为默认（`ASHARE_QUOTE_AKSHARE_FUNC=sina`）。东财映射已写好但标注“未对账”，默认不启用。
+
+**对账（2026-10-26 收盘后 20:50，对 tushare daily 20261026 全市场）**：5576 行 vs 5570 行，匹配 5569 只；最新价/今开/最高/最低/昨收 5 项**全部一致**（最大差 0.0000），涨跌幅最大差 0.0005；成交量=股（等于 daily vol×100，比值 1.0000）、成交额=元（等于 daily amount×1000，比值 1.0000），**0 只偏差**；不复权。差异项：新浪多 7 只（002717/002827/301468/600621/601326/605258/688496，其中 7 只停牌 volume=0、open/high/low=0、002717 价格为 0），daily 多 1 只（689009）；这 7 只被 `build_snapshot` 的“停牌/无成交”规则丢弃，不会进入选股。涨跌停价：新浪快照不带涨跌停价字段，系统仍用 stk_limit/本地规则，不受影响。经 provider 端到端（1454 只抽样）同样 0 偏差。
+
+| 字段 | 与 promax rt_k 契约的关系 |
+|---|---|
+| code/ts_code/name | 一致（北交所 92 开头按 .BJ，不落到 .SH） |
+| price/open/high/low/pre_close | 一致（收盘后与日线逐只相同） |
+| volume（股）/ amount（元） | 一致（与 rt_k vol/amount 同单位；已按 daily 换算验证） |
+| quote_time | 新浪逐行时间戳（盘中用于新鲜度判断） |
+| trade_date | 按交易日历标注；盘前/非交易日=上一交易日 |
+| source | 固定 `akshare_sina_snapshot`；行里另带 `snapshot_age_s` |
+
+**盘中尚未对账**（收盘后才有条件）：盘中对 promax/新浪 chunk 的逐只对账、行时间戳新鲜度、翻页 11s 内的撕裂（先翻到的页比后翻到的旧约 11s）需要下个交易日 09:30 后抽样；盘中行情下这些“新快照 vs 其他源”的价差上限 ≈ 11s 内的价格变化，**因此它排在 rt_min 之前但在 promax/新浪/腾讯之后，只补缺**。
+
+**防封/防污染**：快照缓存 8s；两次真实翻页最少间隔 20s（≤3 次/分）；失败后冷却 60s→2min→5min→10min；单飞（同一时刻只有一个翻页）；调用方最多等 3.5s，等不到抛 DATA_PENDING（不计熔断，下一级顶上）；快照 >45s 不用；盘中行时间戳落后 >90s 的行丢弃，全市场少于 60% 新行判“冻结”整份丢弃；停牌/价格异常行丢弃；网关自带的熔断/总开关/指标照常（拓扑页可见 akshare_snapshot）。
+
+**开关**：`ASHARE_QUOTE_AKSHARE_ENABLED=false` 整体关闭；管理页 data_source_config(akshare, quote) 可运行时关闭；`ASHARE_QUOTE_AKSHARE_FUNC=em` 切东财（未对账，不建议）。
+
+**已知问题（未改，非本次范围）**：`tushare_client.ts_code()` 把 9 开头一律判成 .SH，北交所新代码 920xxx 会被映射成 920xxx.SH（本 provider 自己按新浪前缀生成 .BJ，不受影响）。
+

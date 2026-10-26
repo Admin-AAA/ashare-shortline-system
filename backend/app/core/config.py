@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     # 2026-10-26 21:00：promax 降为普通用户、额度很少；teajoin 是主力。
     # * 盘中让位（36 个延迟敏感接口让 promax/quantdata 先走）默认关闭：promax 额度要专门留给 rt_k；
     #   盘中 teajoin 做主源时读超时收紧到 intraday_read_timeout（超时立即降级）。ASHARE_TUSHARE_TEAJOIN_INTRADAY_YIELD=true 可恢复旧让位。
+    # AKShare 全市场实时快照（quote.realtime 第二备份，见 datasource/akshare_quote.py）。
+    quote_akshare_enabled: bool = True          # ASHARE_QUOTE_AKSHARE_ENABLED=false 整体关闭
+    quote_akshare_func: str = "sina"            # sina（实测可用、已对账）| em（东财，未对账，本机 IP 曾被 push2 断连）
     tushare_teajoin_intraday_yield: bool = False
     tushare_teajoin_intraday_read_timeout_seconds: float = 15.0
     # * promax 额度专留实时行情（rt_k/rt_min）：其余接口的链路里只要还有别的上游，就不把 promax 放进去；
