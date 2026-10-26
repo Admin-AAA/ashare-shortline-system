@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>com.wangao.ashare-chip-oneshot-20261027</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/bash</string>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/scripts/launchd/oneshot_chip_backfill_20261027.sh</string>
+	</array>
+	<!-- 一次性：2026-10-27 15:10 触发（脚本自检日期，过期不执行；跑完自我卸载） -->
+	<key>StartCalendarInterval</key><dict><key>Month</key><integer>10</integer><key>Day</key><integer>27</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>10</integer></dict>
+	<key>Nice</key><integer>10</integer>
+	<key>StandardOutPath</key><string>/Users/wangao/Library/Logs/ashare-chip-oneshot-20261027.log</string>
+	<key>StandardErrorPath</key><string>/Users/wangao/Library/Logs/ashare-chip-oneshot-20261027.log</string>
+</dict>
+</plist>

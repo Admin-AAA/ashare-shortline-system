@@ -687,7 +687,18 @@ export type DataQualityReport = {
 };
 
 export type DataHealthDiagnostic = {
+  /** 展示分 = score_db（库表评分）− score_detail.penalty（数据质量巡检红/黄项扣分） */
   score?: number;
+  score_db?: number;
+  score_detail?: {
+    penalty?: number;
+    red?: number;
+    yellow?: number;
+    rule?: string;
+    note?: string;
+    generated_at?: string | null;
+    score_db?: number;
+  };
   data_quality?: {
     overall?: string;
     summary?: { red?: number; yellow?: number; green?: number; total?: number };

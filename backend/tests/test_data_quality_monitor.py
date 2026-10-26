@@ -92,7 +92,7 @@ def test_file_dataset_event_mode_uses_calendar_days_and_mixed_types(tmp_path):
     assert dq.check_file_dataset(spec, OPEN, "2026-10-23", base=tmp_path)["severity"] == dq.RED
 
 
-def test_xiaoshi_min1_detects_stale_cache(tmp_path):
+def test_xiaoshi_min1_is_retired_and_never_alerts(tmp_path):
     root = tmp_path / "xiaoshi_min1"
     for code, d in (("000001", "2026-08-07"), ("000002", "2026-08-05")):
         p = root / code / "2026" / "update.parquet"
@@ -102,9 +102,22 @@ def test_xiaoshi_min1_detects_stale_cache(tmp_path):
     mx, n_dirs, n_ok = dq.xiaoshi_min1_latest(root)
     assert (mx, n_dirs, n_ok) == ("2026-08-07", 3, 2)
     it = dq.check_xiaoshi_min1(OPEN, "2026-10-23", root)
-    assert it["severity"] == dq.RED and it["latest"] == "2026-08-07"
-    pd.DataFrame({"date": ["2026-10-23"]}).to_parquet(root / "000001" / "2026" / "update.parquet", index=False)
-    assert dq.check_xiaoshi_min1(OPEN, "2026-10-23", root)["severity"] == dq.GREEN
+    # 已退役：虽然落后很多，但恒为 green、标记 retired，不告警、不扣分
+    assert it["severity"] == dq.GREEN and it["retired"] is True and it["latest"] == "2026-08-07"
+    assert "file:xiaoshi_min1" in dq.RETIRED_KEYS
+
+
+def test_quality_score_penalty_rules():
+    mk = lambda sev, **k: {"key": "x", "severity": sev, **k}  # noqa: E731
+    rep = {"generated_at": "2026-10-26 14:00:00",
+           "items": [mk("red"), mk("red", retired=True), mk("yellow"), mk("yellow"), mk("green")]}
+    out = dq.quality_score_penalty(rep, _t("2026-10-26 15:00"))
+    assert (out["red"], out["yellow"], out["penalty"]) == (1, 2, 8 + 2)  # 退役项不计
+    big = {"generated_at": "2026-10-26 14:00:00", "items": [mk("red")] * 9 + [mk("yellow")] * 30}
+    assert dq.quality_score_penalty(big, _t("2026-10-26 15:00"))["penalty"] == 40 + 10  # 封顶
+    stale = dq.quality_score_penalty(rep, _t("2026-10-28 15:00"))
+    assert stale["penalty"] == 10 + 5 and "未更新" in stale["note"]
+    assert dq.quality_score_penalty(None)["penalty"] == 0
 
 
 def test_xiaoshi_min_all_is_provisional_and_capped(tmp_path):
@@ -363,3 +376,16 @@ def test_freshness_task_quality_red_marks_partial_failed(monkeypatch):
     out = scheduler_service._run_data_freshness_check(SimpleNamespace(), {"quality_only": True})
     assert out["status"] == "partial_failed" and out["data_quality"]["red"] == ["file:xiaoshi_min1"]
     assert "数据质量巡检 红 1 / 黄 2 / 绿 3" in out["summary_text"]
+
+
+def test_concept_completeness_flags_truncated_ths_index(sdb):
+    sdb.execute(text("CREATE TABLE concept_sector (sector_code TEXT, trade_date TEXT)"))
+    for i in range(5):
+        sdb.execute(text("INSERT INTO concept_sector VALUES (:c, '2026-10-22')"), {"c": f"c{i}"})
+    sdb.commit()
+    it = dq.check_concept_completeness(sdb, OPEN, "2026-10-23")
+    assert it["severity"] == dq.YELLOW and "截断" in it["detail"]
+    for i in range(600):
+        sdb.execute(text("INSERT INTO concept_sector VALUES (:c, '2026-10-23')"), {"c": f"d{i}"})
+    sdb.commit()
+    assert dq.check_concept_completeness(sdb, OPEN, "2026-10-23")["severity"] == dq.GREEN

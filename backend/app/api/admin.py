@@ -90,18 +90,25 @@ def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
     「重新诊断」按钮、修复任务完成后调用）。
     """
     result = diagnose_all(db, force_refresh=bool(force_refresh))
-    # 健康评分只反映数据库表的结构性指标（95 分时 data/ 下分钟K缓存也可能已停更两个月）。
-    # 这里并列附上统一数据质量巡检（data_quality_monitor）的红/黄/绿摘要，供页面和脚本一起看。
+    # 健康评分原本只反映数据库表的结构性指标（95 分时 data/ 下分钟K缓存也可能已停更两个月）。
+    # 2026-10-26 起：把统一数据质量巡检（data_quality_monitor）的红/黄项折算成扣分——
+    # score = 原库表评分(score_db) − 巡检扣分(score_penalty)，规则见 score_detail.rule。
     try:
-        from app.services.data_quality_monitor import load_report
+        from app.services.data_quality_monitor import load_report, quality_score_penalty
 
         rep = load_report()
+        pen = quality_score_penalty(rep)
+        base = result.get("score")
+        extra: dict = {"score_db": base, "score_detail": {**pen, "score_db": base}}
+        if isinstance(base, (int, float)) and pen["penalty"]:
+            extra["score"] = max(0, int(base) - int(pen["penalty"]))
         if rep:
-            result = {**result, "data_quality": {
+            extra["data_quality"] = {
                 "overall": rep.get("overall"), "summary": rep.get("summary"), "generated_at": rep.get("generated_at"),
                 "expected_trade_date": rep.get("expected_trade_date"),
                 "red": [i["key"] for i in rep.get("items", []) if i.get("severity") == "red"],
-            }}
+            }
+        result = {**result, **extra}
     except Exception:  # noqa: BLE001 - 附加信息，失败不影响原健康接口
         pass
     return result

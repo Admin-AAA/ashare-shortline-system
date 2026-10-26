@@ -34,3 +34,8 @@ launchd 直接写文件的日志（`~/Library/Logs/ashare-*.log` 等）无法 re
 （与旧 230 只 `xiaoshi_min1` 互不影响），读取用 `sync_xiaoshi_min_all.load_minutes(codes, start, end)`。日志 `~/Library/Logs/ashare-xiaoshi-min-sync.out.log`、
 `backend/data/xiaoshi_min_all/sync.log`。
 安装：`cp scripts/launchd/com.wangao.ashare-xiaoshi-min-sync.plist ~/Library/LaunchAgents/ && launchctl load -w ~/Library/LaunchAgents/com.wangao.ashare-xiaoshi-min-sync.plist`
+
+## 一次性：筹码空洞 4 日回补（2026-10-27）
+`com.wangao.ashare-chip-oneshot-20261027.plist`：2026-10-27 15:10 触发 `oneshot_chip_backfill_20261027.sh`，补 2026-07-30 / 08-25 / 08-31 / 09-09 的 cyq_perf 筹码
+（命令：`cd backend && PYTHONPATH=. .venv/bin/python scripts/backfill_chip_dates.py 2026-07-30 2026-08-25 2026-08-31 2026-09-09`）。
+只在 10-27 的 09:00–16:25 启动；额度没恢复就 20 分钟后重试，最多 3 次；跑完自我卸载（plist 改名 .done）。日志 `~/Library/Logs/ashare-chip-oneshot-20261027.log`。

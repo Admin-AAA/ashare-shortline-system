@@ -158,9 +158,12 @@ DB_DATASETS: list[dict[str, Any]] = [
     {"key": "db:stock_quotes", "label": "实时报价快照", "table": "stock_quotes", "col": "trade_date", "entity": "COUNT(*)",
      "lag": 0, "cliff": True, "impact": "首页/行情池"},
     {"key": "db:concept_sector", "label": "概念板块", "table": "concept_sector", "col": "trade_date", "entity": "COUNT(*)",
-     "lag": 0, "cliff": True, "impact": "题材类短线策略/板块强度"},
+     "lag": 0, "cliff": True, "spike_is_recovery": True,
+     "impact": "题材类短线策略/板块强度（注意：同花顺 ths_index 条数随上游路由不同——quantdata 全量约 2517 条，"
+               "promax 只返回 5 条/662 条，行数突增多为从截断恢复为全量，不是重复写入）"},
     {"key": "db:concept_sector_stock", "label": "概念板块成分", "table": "concept_sector_stock", "col": "trade_date",
-     "entity": "COUNT(*)", "lag": 0, "cliff": True, "impact": "题材类短线策略/板块相对强度龙头"},
+     "entity": "COUNT(*)", "lag": 0, "cliff": True, "spike_is_recovery": True,
+     "impact": "题材类短线策略/板块相对强度龙头（行数暴增来自 concept_sector 从截断恢复全量，非重复写入）"},
     {"key": "db:limit_up_board", "label": "涨停板", "table": "limit_up_board", "col": "trade_date", "entity": "COUNT(*)",
      "lag": 0, "cliff": False, "impact": "涨停类短线策略（每日数量天然波动，不做突降判断）"},
     {"key": "db:dragon_tiger", "label": "龙虎榜", "table": "dragon_tiger", "col": "trade_date", "entity": "COUNT(*)",
@@ -200,7 +203,10 @@ def check_db_dataset(db, spec: dict[str, Any], open_days: list[str], expected: s
             latest_day = days[-1]
             baseline = [counts[d] for d in days[:-1]][-BASELINE_DAYS:]
             csev, cmsg = cliff_severity(counts[latest_day], counts[days[-2]], baseline)
-            if csev != GREEN:
+            if csev != GREEN and spec.get("spike_is_recovery") and "口径" in cmsg:
+                # 概念板块：行数暴增 = ths_index 从截断（5 条）恢复为全量（2517 条），不是异常；截断由 completeness 检查负责
+                notes.append(f"{latest_day} {cmsg}（已核实：上游从截断恢复为全量，非重复写入，不告警）")
+            elif csev != GREEN:
                 notes.append(f"{latest_day} {cmsg}")
                 sev = _worse(sev, csev)
             med = statistics.median(baseline) if baseline else 0
@@ -209,6 +215,23 @@ def check_db_dataset(db, spec: dict[str, Any], open_days: list[str], expected: s
     return _item(spec["key"], spec["label"], "数据库表", sev, kind="db", latest=mx, expected=expected, lag=lag,
                  detail=detail, impact=spec["impact"], latest_count=(counts.get(mx) if mx else None),
                  recent_low_days=recent_low[-8:])
+
+
+CONCEPT_MIN_SECTORS = 500  # ths_index 全量约 2500 条；少于此值视为上游截断
+
+
+def check_concept_completeness(db, open_days: list[str], expected: str) -> dict[str, Any]:
+    """concept_sector 最新一日条数过少 = ths_index 被截断（promax 路由只回 5 条），题材特征会退化。只读。"""
+    row = db.execute(text("SELECT trade_date, COUNT(*) FROM concept_sector GROUP BY trade_date "
+                          "ORDER BY trade_date DESC LIMIT 1")).first()
+    mx, n = (norm_date(row[0]), int(row[1])) if row else (None, 0)
+    sev = YELLOW if n < CONCEPT_MIN_SECTORS else GREEN
+    detail = (f"最新 {mx} 共 {n} 个板块" +
+              (f"，少于 {CONCEPT_MIN_SECTORS}：疑似 ths_index 被截断（quantdata 额度用尽时 promax 只回 5 条）" if sev != GREEN
+               else "（完整）"))
+    return _item("db:concept_sector:completeness", "概念板块完整性", "数据质量", sev, kind="quality", latest=mx,
+                 expected=expected, detail=detail,
+                 impact="截断时概念成分只覆盖 3 个板块，题材归属退化为行业兜底；板块热度 heat_rank 本身只是接口返回顺序，不是真实热度")
 
 
 def check_index_daily(db, open_days: list[str], expected: str) -> list[dict[str, Any]]:
@@ -452,15 +475,22 @@ def xiaoshi_min1_latest(root: Path | None = None) -> tuple[str | None, int, int]
     return mx, n_dirs, n_ok
 
 
+RETIRED_KEYS = {"file:xiaoshi_min1"}  # 已退役的数据集：只展示事实，不再告警、不计入健康分扣分
+
+
 def check_xiaoshi_min1(open_days: list[str], expected: str, root: Path | None = None) -> dict[str, Any]:
+    """2026-10-26 退役（owner 授权）：旧 230 只固定股票的分钟缓存不再维护，新来源是 data/xiaoshi_min_all（全市场、每日增量）。
+
+    仍然读出最新日期供查看，但严重度恒为 green（retired=True），不发告警、不扣健康分。
+    线上分钟线走数据库 minute_kbars，不依赖这个缓存。"""
     mx, n_dirs, n_ok = xiaoshi_min1_latest(root)
     lag = trade_lag(open_days, mx, expected)
-    sev = lag_severity(lag, 0)
-    detail = f"{n_dirs} 只股票目录（{n_ok} 只有数据），全体最新 {mx}，期望 {expected}，滞后 {lag} 个交易日"
-    return _item("file:xiaoshi_min1", "小石1分钟历史缓存 data/xiaoshi_min1（230只固定大中盘股）", "文件数据集", sev, kind="file",
-                 latest=mx, expected=expected, lag=lag, detail=detail,
-                 impact="bar.minute 网关的 xiaoshi_min1 提供方读取该缓存；线上分钟线实际来自数据库 minute_kbars（正常），"
-                        "但缓存过期意味着该提供方对新交易日返回空、依赖兜底源；研究用分钟K分析会缺最近 2 个多月")
+    detail = (f"【已退役，不再告警】{n_dirs} 只股票目录（{n_ok} 只有数据），最新 {mx}，滞后 {lag} 个交易日；"
+              "替代数据源 data/xiaoshi_min_all（全市场分钟线归档）")
+    return _item("file:xiaoshi_min1", "小石1分钟旧缓存 data/xiaoshi_min1（230只，已退役）", "文件数据集", GREEN, kind="file",
+                 latest=mx, expected=expected, lag=lag, detail=detail, retired=True,
+                 impact="已退役：研究脚本请改读 xiaoshi_min_all（sync_xiaoshi_min_all.load_minutes）；"
+                        "bar.minute 网关里的 xiaoshi_min1 提供方对新交易日返回空，依赖兜底源，线上分钟线实际来自 minute_kbars")
 
 
 def check_xiaoshi_min_all(open_days: list[str], expected: str, now: datetime | None = None,
@@ -777,6 +807,9 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     items += _safe("日K值域", "db:daily_kbars:values", "数据质量", "quality",
                    lambda: [check_daily_kbar_values(db, open_days, expected)])
     items += _safe("筹码空洞", "db:daily_kbars:chip_history", "数据质量", "quality", lambda: [check_chip_history(db)])
+    items += _safe("概念板块完整性", "db:concept_sector:completeness", "数据质量", "quality",
+                   lambda: [check_concept_completeness(db, open_days, expected)])
+    _rollback(db)
     items += _safe("交易日历", "db:trade_calendar", "数据库表", "db", lambda: [check_calendar_horizon(open_days, now)])
     _rollback(db)
     if include_files:
@@ -807,6 +840,39 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     return {"generated_at": now.strftime("%Y-%m-%d %H:%M:%S"), "expected_trade_date": expected,
             "overall": RED if counts[RED] else YELLOW if counts[YELLOW] else GREEN,
             "summary": {**counts, "total": len(items)}, "items": items}
+
+
+# ---------------------------------------------------------------- 健康分扣分
+PENALTY_PER_RED = 8        # 每个红项扣 8 分
+PENALTY_RED_CAP = 40       # 红项合计最多扣 40 分
+PENALTY_PER_YELLOW = 1     # 每个黄项扣 1 分
+PENALTY_YELLOW_CAP = 10    # 黄项合计最多扣 10 分
+REPORT_STALE_HOURS = 36    # 巡检报告超过 36 小时没更新，说明巡检本身停了
+
+
+def quality_score_penalty(report: dict[str, Any] | None, now: datetime | None = None) -> dict[str, Any]:
+    """把统一数据质量巡检的红/黄项折算成健康分扣分（已退役项 retired=True 不计）。
+
+    规则：红项每个 −8（最多 −40）；黄项每个 −1（最多 −10）。巡检报告超过 36 小时未更新再 −5（巡检停了本身就是问题）。
+    没有报告时不扣分但在 note 里说明。返回 {penalty, red, yellow, rule, note, generated_at}。"""
+    rule = (f"红项每个扣 {PENALTY_PER_RED} 分（最多 {PENALTY_RED_CAP}）；黄项每个扣 {PENALTY_PER_YELLOW} 分（最多 {PENALTY_YELLOW_CAP}）；"
+            f"巡检报告超过 {REPORT_STALE_HOURS} 小时没更新另扣 5 分；已退役项不计")
+    if not report or not report.get("items"):
+        return {"penalty": 0, "red": 0, "yellow": 0, "rule": rule, "note": "尚无数据质量巡检报告，未扣分", "generated_at": None}
+    items = [i for i in report["items"] if not i.get("retired")]
+    red = sum(1 for i in items if i.get("severity") == RED)
+    yellow = sum(1 for i in items if i.get("severity") == YELLOW)
+    pen = min(PENALTY_RED_CAP, red * PENALTY_PER_RED) + min(PENALTY_YELLOW_CAP, yellow * PENALTY_PER_YELLOW)
+    note = f"红 {red} 项、黄 {yellow} 项"
+    gen = report.get("generated_at")
+    try:
+        age_h = ((now or _now()) - datetime.strptime(str(gen), "%Y-%m-%d %H:%M:%S").replace(tzinfo=_CST)).total_seconds() / 3600
+        if age_h > REPORT_STALE_HOURS:
+            pen += 5
+            note += f"；巡检报告已 {age_h:.0f} 小时未更新（再扣 5）"
+    except Exception:  # noqa: BLE001
+        pass
+    return {"penalty": int(pen), "red": red, "yellow": yellow, "rule": rule, "note": note, "generated_at": gen}
 
 
 def write_report(report: dict[str, Any], path: Path | None = None) -> None:

@@ -255,6 +255,18 @@ export function DataHealthSection() {
             </span>
             <span style={{ fontSize: 10, color: "var(--text-muted)" }}>健康评分</span>
           </div>
+          {diag.score_detail && (
+            <div
+              className="text-muted"
+              style={{ fontSize: 11, maxWidth: 260 }}
+              title={diag.score_detail.rule}
+            >
+              库表评分 {diag.score_db ?? "—"}
+              {diag.score_detail.penalty ? ` − 数据质量巡检扣 ${diag.score_detail.penalty}（${diag.score_detail.note ?? ""}）` : "（巡检无扣分）"}
+              <br />
+              规则：{diag.score_detail.rule}
+            </div>
+          )}
           <div style={{ flex: 1, fontSize: "var(--text-sm)", color: "var(--ink-secondary)" }}>
             <div>
               参考交易日 <strong className="text-mono">{refDate}</strong>

@@ -422,6 +422,11 @@ class TushareStateProvider:
                 raise
         if frame is None or frame.empty:
             return ()
+        if len(frame) < 500:
+            # 2026-10-26：ths_index 全量约 2500 条；quantdata 额度用尽、回落 promax 时只返回 5 条（截断，非重复写入）。
+            # 只告警不改行为（仍写入，读侧照旧），让这类静默截断可见。
+            emit_alert("concept_sector_truncated", request.trade_date.isoformat(),
+                       f"ths_index 只返回 {len(frame)} 条（全量约 2500），疑似 promax 回落截断；概念成分将只覆盖极少板块")
         return tuple(
             {
                 "sector_code": str(item.get("ts_code") or ""),
