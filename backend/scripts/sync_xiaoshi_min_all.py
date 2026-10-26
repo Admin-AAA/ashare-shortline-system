@@ -44,6 +44,7 @@ LOG = ROOT / "sync.log"
 DATASET = "cn-minute"
 MAX_QPS = 6.0
 DL_THREADS = 4
+MAX_CONSEC_429 = 4
 UNIFIED_COLS = ["ts_code", "trade_date", "trade_time", "open", "high", "low", "close", "vol", "amount"]
 
 
@@ -169,6 +170,24 @@ def _save_state(state: dict) -> None:
     os.replace(tmp, STATE)
 
 
+def _adopt_existing(catalog: list[dict], files: dict) -> int:
+    """上次被中断时已落盘但没来得及记进 state 的文件：大小与 sha256 都对得上就认领，不重复消耗下载会话。"""
+    n = 0
+    for it in catalog:
+        key = it["key"]
+        if key in files:
+            continue
+        dest = RAW / key_to_relpath(it["partition"])
+        try:
+            if dest.exists() and dest.stat().st_size == int(it.get("size") or -1) and _sha256(dest) == it.get("sha256"):
+                files[key] = {"sha256": it.get("sha256"), "size": it.get("size"), "first_date": it.get("first_date"),
+                              "last_date": it.get("last_date"), "path": key_to_relpath(it["partition"])}
+                n += 1
+        except OSError:
+            continue
+    return n
+
+
 def _fetch_catalog(client, pace: _Pace) -> list[dict]:
     items, off = [], 0
     while True:
@@ -215,9 +234,12 @@ def run(max_sessions: int | None = None, dry_run: bool = False) -> dict:
     if wait > 0:
         time.sleep(min(wait + 5, 600))
     catalog = _fetch_catalog(client, pace)
+    adopted = _adopt_existing(catalog, files)
+    if adopted and not dry_run:
+        _save_state(state)
     todo = plan_downloads(catalog, files)
     summary: dict[str, Any] = {"ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "catalog_files": len(catalog), "to_download": len(todo),
-                               "downloaded": 0, "bytes": 0, "errors": 0, "sessions": 0}
+                               "downloaded": 0, "bytes": 0, "errors": 0, "sessions": 0, "adopted": adopted}
     if dry_run:
         summary["dry_run"] = True
         return summary
@@ -260,7 +282,11 @@ def run(max_sessions: int | None = None, dry_run: bool = False) -> dict:
                     orec["path"] = str(arch.relative_to(RAW))
         futs[key] = (pool.submit(_download, f["url"], dest, int(it.get("size") or 0), it.get("sha256") or "", http), it, rel)
 
+    consec_429 = 0
     for n, code in enumerate(codes):
+        if consec_429 >= MAX_CONSEC_429:
+            summary["rate_limited"] = True  # 小石对 download-session 限流：停手，下次运行（或补跑循环）接着来
+            break
         if n % 200 == 0 and n:
             w = _xiaoshi_live_breaker_wait()
             if w > 0:
@@ -269,8 +295,10 @@ def run(max_sessions: int | None = None, dry_run: bool = False) -> dict:
             pace.wait()
             r = client.get_history_download_session(dataset=DATASET, code=code)
             summary["sessions"] += 1
+            consec_429 = 0
         except Exception as exc:  # noqa: BLE001
             summary["errors"] += 1
+            consec_429 = consec_429 + 1 if "429" in str(exc) else 0
             _log_err(f"session {code}: {str(exc)[:120]}")
             continue
         for f in r.get("files") or []:
@@ -280,10 +308,8 @@ def run(max_sessions: int | None = None, dry_run: bool = False) -> dict:
             submit_download(f)
         # 回收已完成的
         _collect(futs, files, summary, lock)
-        if n % 100 == 0:
+        if n % 10 == 0:
             _save_state(state)
-    for key in list(futs):
-        pass
     _collect(futs, files, summary, lock, wait_all=True)
     pool.shutdown(wait=True)
     http.close()
