@@ -42,7 +42,7 @@ RAW = ROOT / "raw"
 STATE = ROOT / "state.json"
 LOG = ROOT / "sync.log"
 DATASET = "cn-minute"
-MAX_QPS = 6.0
+MAX_QPS = float(os.environ.get('XS_QPS', '6.0'))  # 下载会话端点对短时间大量请求会 429（约 50 次后封 ~35 分钟），长期跑用 XS_QPS=0.15 之类
 DL_THREADS = 4
 MAX_CONSEC_429 = 4
 UNIFIED_COLS = ["ts_code", "trade_date", "trade_time", "open", "high", "low", "close", "vol", "amount"]
@@ -345,6 +345,14 @@ def main() -> int:
     ap.add_argument("--max-sessions", type=int)
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
+    ROOT.mkdir(parents=True, exist_ok=True)
+    import fcntl
+    lock = open(ROOT / ".lock", "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:  # 已有一个同步在跑（例如补跑循环），本次直接退出，避免两个进程同时写 state
+        print(json.dumps({"skipped": "another sync running"}))
+        return 0
     try:
         sys.path.insert(0, str(B))
         s = run(a.max_sessions, a.dry_run)
