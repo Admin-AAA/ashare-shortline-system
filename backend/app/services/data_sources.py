@@ -1033,6 +1033,7 @@ def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict
 _ROUTABLE_PROVIDERS = (
     "promax",
     "quantdata",
+    "teajoin",
 )
 
 

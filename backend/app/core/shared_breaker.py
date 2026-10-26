@@ -56,6 +56,8 @@ def _conn() -> sqlite3.Connection | None:
         "CREATE TABLE IF NOT EXISTS breaker_state (key TEXT PRIMARY KEY, open_until REAL NOT NULL, "
         "updated_at REAL NOT NULL, role TEXT, pid INTEGER, reason TEXT)"
     )
+    # 半开探测连续失败次数（跨进程）：探测失败后的冷却按次数指数拉长，见 probe_backoff_delay。
+    conn.execute("CREATE TABLE IF NOT EXISTS breaker_probe_streak (key TEXT PRIMARY KEY, streak INTEGER NOT NULL, updated_at REAL NOT NULL)")
     return conn
 
 
@@ -82,6 +84,47 @@ def _publish_open(key: str, open_until: float, reason: str = "") -> None:
         logger.debug("shared breaker publish failed %s: %s", key, exc)
 
 
+def probe_backoff_delay(streak: int, *, base: float | None = None, cap: float | None = None, rng=None) -> float:
+    """半开探测失败后的下一次冷却：base × 2^streak，封顶 cap，再加 0–10% 抖动（避免多进程同一秒一起探）。
+
+    2026-10-26：原先每次探测失败都固定再冷却 300 秒，一个真挂了的源（如小石日K）每 5 分钟被探一次、
+    一直重开熔断。改为 5→10→20→（封顶）分钟；成功后清零。streak=0 即 base（兼容旧行为）。"""
+    import random
+
+    base = float(base if base is not None else PROBE_INTERVAL_SECONDS)
+    cap = float(cap if cap is not None else PROBE_MAX_SECONDS)
+    delay = min(cap, base * (2 ** max(0, int(streak))))
+    return delay + (rng or random).uniform(0.0, 0.1) * delay
+
+
+def _get_streak(key: str) -> int:
+    try:
+        conn = _conn()
+        if conn is None:
+            return 0
+        row = conn.execute("SELECT streak FROM breaker_probe_streak WHERE key=?", (key,)).fetchone()
+        conn.close()
+        return int(row[0]) if row else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def _bump_streak(key: str) -> int:
+    try:
+        conn = _conn()
+        if conn is None:
+            return 0
+        with conn:
+            conn.execute(
+                "INSERT INTO breaker_probe_streak(key, streak, updated_at) VALUES (?,1,?) "
+                "ON CONFLICT(key) DO UPDATE SET streak=streak+1, updated_at=excluded.updated_at", (key, time.time()))
+            row = conn.execute("SELECT streak FROM breaker_probe_streak WHERE key=?", (key,)).fetchone()
+        conn.close()
+        return int(row[0]) if row else 1
+    except Exception:  # noqa: BLE001
+        return 0
+
+
 def _publish_closed(key: str) -> None:
     with _cache_lock:
         cached = _cache.get(key)
@@ -94,6 +137,7 @@ def _publish_closed(key: str) -> None:
             return
         with conn:
             conn.execute("DELETE FROM breaker_state WHERE key=?", (key,))
+            conn.execute("DELETE FROM breaker_probe_streak WHERE key=?", (key,))
         conn.close()
     except Exception as exc:  # noqa: BLE001
         logger.debug("shared breaker clear failed %s: %s", key, exc)
@@ -144,6 +188,8 @@ def shared_breaker_states() -> list[dict[str, Any]]:
 # another PROBE_INTERVAL_SECONDS. A crashed prober's claim expires after PROBE_LEASE_SECONDS.
 PROBE_INTERVAL_SECONDS = 300.0
 PROBE_LEASE_SECONDS = 60.0
+# 探测连续失败时冷却指数拉长的上限（默认 20 分钟；实时源恢复不会被拖到小时级）。
+PROBE_MAX_SECONDS = float(__import__("os").environ.get("ASHARE_BREAKER_PROBE_MAX_SECONDS", "1200") or 1200)
 
 
 def _try_claim_probe(key: str) -> bool | None:
@@ -241,7 +287,8 @@ class SharedCircuitBreaker:
         kind = (kind or "").lower() or None
         if self._probing:
             self._probing = False
-            self._open(PROBE_INTERVAL_SECONDS, "probe_failed")
+            streak = _bump_streak(self.key)
+            self._open(probe_backoff_delay(streak - 1 if streak > 0 else 0), f"probe_failed#{streak}")
             return
         if kind == "rate_limit":
             delay = float(recovery_seconds) if recovery_seconds and recovery_seconds > 0 else PROBE_INTERVAL_SECONDS

@@ -89,4 +89,4 @@ def test_chip_backfill_continues_when_only_quantdata_exhausted(monkeypatch):
     monkeypatch.setattr(mod, "backfill_budget_check",
                         lambda ps, f: (False, "quantdata 今日额度已耗尽") if ps == ("quantdata",) else (True, "ok"))
     ok, blocked = mod.usable_providers(0.6)
-    assert ok == ["promax"] and blocked
+    assert "promax" in ok and "quantdata" not in ok and blocked

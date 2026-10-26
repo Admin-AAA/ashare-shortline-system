@@ -39,3 +39,4 @@ launchd 直接写文件的日志（`~/Library/Logs/ashare-*.log` 等）无法 re
 `com.wangao.ashare-chip-oneshot-20261027.plist`：2026-10-27 15:10 触发 `oneshot_chip_backfill_20261027.sh`，补 2026-07-30 / 08-25 / 08-31 / 09-09 的 cyq_perf 筹码
 （命令：`cd backend && PYTHONPATH=. .venv/bin/python scripts/backfill_chip_dates.py 2026-07-30 2026-08-25 2026-08-31 2026-09-09`）。
 只在 10-27 的 09:00–16:25 启动；额度没恢复就 20 分钟后重试，最多 3 次；跑完自我卸载（plist 改名 .done）。日志 `~/Library/Logs/ashare-chip-oneshot-20261027.log`。
+> 2026-10-26 更新：4 个筹码空洞日已于 15:4x 通过 teajoin（cyq_perf 兜底）提前补完，上面的一次性任务已取消（plist 改名 .cancelled）。

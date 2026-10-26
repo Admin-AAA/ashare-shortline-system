@@ -22,7 +22,7 @@ from app.services.tushare_transport import TushareProviderError
 # cyq_perf 路由会落到的上游。quantdata 是按天限额（42901 token daily limit），promax 是代理连接池瞬时
 # 耗尽（实测见 app/core/promax_window.py）。2026-10-19 起：只要还有一家可用就继续；quantdata 报日限后
 # 路由自动只走 promax，节奏由传输层的 promax 窗口令牌桶控制；promax 限流/熔断时等冷却到点再重试当天。
-CHIP_PROVIDERS = ("promax", "quantdata")
+CHIP_PROVIDERS = ("promax", "quantdata", "teajoin")  # 2026-10-26 起 teajoin 兜底（cyq_perf 与本地库 100% 一致，无日额度限制）
 TRANSIENT = {"http_rate_limit", "circuit_open", "timeout", "network", "http_server"}
 
 

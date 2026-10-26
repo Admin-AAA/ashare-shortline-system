@@ -25,7 +25,7 @@ class ProviderSettings:
     api_rate_limits: dict = field(default_factory=dict)
 
 
-_PROVIDER_PREFIXES = ("promax", "quantdata")
+_PROVIDER_PREFIXES = ("promax", "quantdata", "teajoin")
 
 
 class Settings(BaseSettings):
@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     tushare_quantdata_url: str = "https://quantdata888.duckdns.org"
     tushare_quantdata_token: str = Field(default="", repr=False)
     tushare_quantdata_rate_limit_per_minute: int = 120
+    # teajoin（DaoShare）：第三方 tushare pro 协议代理（JSON token，POST 根路径）。官方最高 450 次/分钟，我们默认只用 120。
+    tushare_teajoin_url: str = "https://teajoin.com"
+    tushare_teajoin_token: str = Field(default="", repr=False)
+    tushare_teajoin_rate_limit_per_minute: int = 120
+    # research 命名空间盘中（工作日 09:15–15:05）对非 promax 源的限速（次/分钟）；0=不限。给 live 链路留额度。
+    tushare_teajoin_research_intraday_rpm: int = 30
+    tushare_quantdata_research_intraday_rpm: int = 0
     # Xiaoshi v3：独立于 Tushare Pro 协议，提供全市场快照、复权日线、财务与量化数据。
     xiaoshi_api_base_url: str = "https://api.shizixi.com"
     xiaoshi_api_key: str = Field(default="", repr=False)

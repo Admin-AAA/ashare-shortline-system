@@ -370,7 +370,28 @@ class _TushareSession:
             return self._call_with_akshare_backup(api_name, fields=fields, params=params)
         else:
             envelope = self._router.request(api_name, params=params, fields=fields)
+            envelope = self._recheck_truncated(api_name, fields, params, envelope)
         return self._envelope_frame(api_name, fields, envelope)
+
+    # 返回条数明显偏少的「全量列表」类接口：条数 < 阈值即视为被截断，改问 teajoin 核实（2026-10-26）。
+    _TRUNCATION_GUARD = {"ths_index": 500}
+
+    def _recheck_truncated(self, api_name: str, fields: str, params: Mapping[str, Any], envelope: Mapping[str, Any]):
+        floor = self._TRUNCATION_GUARD.get(api_name)
+        if not floor or params:
+            return envelope
+        try:
+            n = len((envelope.get("data") or {}).get("items") or [])
+            if n >= floor:
+                return envelope
+            alt = self._router.request_pinned("teajoin", api_name, params=params, fields=fields)
+            m = len((alt.get("data") or {}).get("items") or [])
+            if m > n:
+                logger.warning("tushare %s 主源只返回 %d 条（疑似截断），teajoin 返回 %d 条，采用 teajoin", api_name, n, m)
+                return alt
+        except Exception as exc:  # noqa: BLE001 - 核实失败就保留原结果，绝不影响主流程
+            logger.debug("truncation recheck for %s skipped: %r", api_name, exc)
+        return envelope
 
     def _envelope_frame(self, api_name: str, fields: str, envelope: Mapping[str, Any]) -> pd.DataFrame:
         data = envelope.get("data")
@@ -438,6 +459,18 @@ class _TushareSession:
         return caller
 
 
+# teajoin 允许服务的接口（2026-10-26 探测：返回与本地库逐行一致的接口；docs/datasource-teajoin.md）。
+# 不含：rt_k/rt_min/stk_mins/anns_d/news（不支持或套餐无权限）；stk_factor_pro/limit_step（超时/不稳定）。
+TEAJOIN_APIS = frozenset({
+    "trade_cal", "stock_basic", "daily", "daily_basic", "adj_factor", "stk_limit", "suspend_d", "bak_daily", "bak_basic",
+    "stock_st", "namechange", "index_daily", "limit_list_d", "limit_list_ths", "limit_cpt_list", "kpl_list", "top_list",
+    "top_inst", "hm_list", "hm_detail", "stk_auction", "stk_auction_o", "stk_auction_c", "moneyflow", "moneyflow_dc",
+    "moneyflow_ths", "cyq_perf", "stk_factor", "margin_detail", "margin", "block_trade", "ths_hot", "ths_index",
+    "ths_member", "kpl_concept_cons", "fina_indicator", "fina_indicator_vip", "income_vip", "forecast", "share_float",
+    "stk_holdertrade", "stk_holdernumber", "dividend", "repurchase", "dc_index",
+})
+
+
 def _build_provider_router() -> tuple[TushareProviderRouter, str]:
     settings = get_settings()
     timeout = (
@@ -489,6 +522,27 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                     ),
                     append_api_path=False,
                     priority=1,
+                    **common,
+                )
+            )
+        )
+
+    teajoin_token = str(getattr(settings, "tushare_teajoin_token", "") or "").strip()
+    if teajoin_token:
+        # teajoin（DaoShare）：JSON token 协议；只做「兜底（排在 promax/quantdata 之后）」且只服务已探测验证过的接口
+        # （TEAJOIN_APIS，docs/datasource-teajoin.md）。rt_k/rt_min/stk_mins 等实时与分钟接口不在名单内，不会进入实盘行情链路。
+        providers.append(
+            TushareHttpProvider(
+                ProviderConfig(
+                    name="teajoin",
+                    base_url=settings.tushare_teajoin_url,
+                    credential=teajoin_token,
+                    auth_mode=AuthMode.JSON_TOKEN,
+                    rate_limit_per_minute=max(0, int(settings.tushare_teajoin_rate_limit_per_minute)),
+                    append_api_path=False,
+                    included_apis=TEAJOIN_APIS,
+                    source="teajoin",
+                    priority=6,
                     **common,
                 )
             )
@@ -716,6 +770,17 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
             "rate_limit_per_minute": max(
                 0, int(settings.tushare_quantdata_rate_limit_per_minute)
             ),
+            "api_rate_limits": {},
+            "max_concurrency": 0,
+        },
+        {
+            "name": "teajoin",
+            "source": "teajoin",
+            "configured": bool(str(getattr(settings, "tushare_teajoin_token", "") or "").strip()),
+            "priority": 6,
+            "note": "DaoShare 第三方 pro 协议源；只做兜底，仅服务已探测的接口；无 rt_k/分钟线权限（见 docs/datasource-teajoin.md）",
+            "auth_mode": AuthMode.JSON_TOKEN.value,
+            "rate_limit_per_minute": max(0, int(getattr(settings, "tushare_teajoin_rate_limit_per_minute", 120))),
             "api_rate_limits": {},
             "max_concurrency": 0,
         },

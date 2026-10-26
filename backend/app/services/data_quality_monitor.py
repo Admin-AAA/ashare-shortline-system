@@ -830,6 +830,7 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
         items += _safe("index parquet", "research:index_daily_consistency", "研究静态文件", "research",
                        lambda: [parquet_vs_db_index(db)])
         _rollback(db)
+    items += _safe("gateway", "gateway:providers", "数据网关", "gateway", lambda: [check_provider_gateway(now)])
     items += _safe("scheduled", "job:*", "调度任务", "job", lambda: check_scheduled_tasks(db, open_days, now))
     _rollback(db)
     items += _safe("log", "log:*", "静默失败", "log", lambda: check_log_signals(now))
@@ -840,6 +841,67 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     return {"generated_at": now.strftime("%Y-%m-%d %H:%M:%S"), "expected_trade_date": expected,
             "overall": RED if counts[RED] else YELLOW if counts[YELLOW] else GREEN,
             "summary": {**counts, "total": len(items)}, "items": items}
+
+
+# ---------------------------------------------------------------- 数据网关（provider）容量
+GATEWAY_PROVIDERS = ("promax", "quantdata", "teajoin")
+QUOTA_WARN_RATIO = 0.8
+
+
+def check_provider_gateway(now: datetime | None = None, *, providers: tuple[str, ...] | None = None,
+                           usage_fn: Callable[[str], tuple[int, bool]] | None = None,
+                           quota_fn: Callable[[str], int | None] | None = None,
+                           breakers_fn: Callable[[], list[dict[str, Any]]] | None = None,
+                           configured: set[str] | None = None) -> dict[str, Any]:
+    """数据网关承载力：各上游今日请求数/日额度/是否耗尽 + 当前打开的熔断。只读。
+
+    红：所有已配置的上游今天都耗尽（实时行情会失败）；黄：任一上游耗尽、用量≥80% 日额度，或有 live 命名空间的熔断打开。
+    这是 2026-10-26 补的盲区：promax 额度耗尽导致 rt_k 全失败时，监控里原本没有"网关容量"这一项。"""
+    from app.core import provider_quota as pq
+    from app.core.shared_breaker import shared_breaker_states
+
+    usage_fn = usage_fn or pq.usage
+    quota_fn = quota_fn or pq.daily_quota
+    breakers_fn = breakers_fn or shared_breaker_states
+    if configured is None:
+        try:
+            from app.core.config import get_settings
+
+            st = get_settings()
+            configured = {n for n, ps in st.providers.items() if str(ps.credential or "").strip()}
+        except Exception:  # noqa: BLE001
+            configured = set(GATEWAY_PROVIDERS)
+    names = [p for p in (providers or GATEWAY_PROVIDERS) if p in configured]
+    rows, exhausted, warn = [], [], []
+    for p in names:
+        used, ex = usage_fn(p)
+        q = quota_fn(p)
+        rows.append(f"{p}:{used}" + (f"/{q}" if q else "") + ("(耗尽)" if ex else ""))
+        if ex:
+            exhausted.append(p)
+        elif q and used >= QUOTA_WARN_RATIO * q:
+            warn.append(f"{p} 已用 {used}/{q}")
+    now_ts = (now or _now()).timestamp()
+    open_live = [b for b in breakers_fn() if str(b.get("key", "")).startswith("live:") and float(b.get("open_until") or 0) > now_ts]
+    sev = GREEN
+    notes = ["今日请求 " + "，".join(rows) if rows else "无已配置的上游"]
+    if names and len(exhausted) == len(names):
+        sev = RED
+        notes.append("所有上游今天都已耗尽：实时行情 rt_k 和补数都会失败")
+    elif exhausted:
+        sev = YELLOW
+        notes.append(f"{'、'.join(exhausted)} 今日额度已耗尽，已自动切备源")
+    if warn:
+        sev = _worse(sev, YELLOW)
+        notes.append("接近额度：" + "；".join(warn))
+    if open_live:
+        sev = _worse(sev, YELLOW)
+        keys = [str(b["key"]).replace("live:", "", 1) for b in open_live][:6]
+        notes.append(f"实盘链路有 {len(open_live)} 个熔断打开：{'、'.join(keys)}")
+    return _item("gateway:providers", "数据网关承载（各上游额度/熔断）", "数据网关", sev, kind="gateway",
+                 detail="；".join(notes),
+                 impact="实盘 rt_k/日K/分钟线的主备源切换；额度耗尽后补数任务会自动暂停，避免挤占实盘",
+                 providers=rows, open_breakers=len(open_live))
 
 
 # ---------------------------------------------------------------- 健康分扣分

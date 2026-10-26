@@ -389,3 +389,21 @@ def test_concept_completeness_flags_truncated_ths_index(sdb):
         sdb.execute(text("INSERT INTO concept_sector VALUES (:c, '2026-10-23')"), {"c": f"d{i}"})
     sdb.commit()
     assert dq.check_concept_completeness(sdb, OPEN, "2026-10-23")["severity"] == dq.GREEN
+
+
+def test_provider_gateway_capacity_severity():
+    kw = dict(now=_t("2026-10-26 15:00"), providers=("promax", "quantdata", "teajoin"), breakers_fn=lambda: [],
+              configured={"promax", "quantdata", "teajoin"}, quota_fn=lambda p: 1000 if p == "quantdata" else None)
+    ok = dq.check_provider_gateway(usage_fn=lambda p: (10, False), **kw)
+    assert ok["severity"] == dq.GREEN
+    one = dq.check_provider_gateway(usage_fn=lambda p: (5, p == "promax"), **kw)
+    assert one["severity"] == dq.YELLOW and "promax" in one["detail"]
+    near = dq.check_provider_gateway(usage_fn=lambda p: (900, False), **kw)
+    assert near["severity"] == dq.YELLOW and "接近额度" in near["detail"]
+    allx = dq.check_provider_gateway(usage_fn=lambda p: (5, True), **kw)
+    assert allx["severity"] == dq.RED
+    live_open = [{"key": "live:tushare:promax:rt_k", "open_until": _t("2026-10-26 15:10").timestamp()}]
+    br = dq.check_provider_gateway(usage_fn=lambda p: (1, False), **{**kw, "breakers_fn": lambda: live_open})
+    assert br["severity"] == dq.YELLOW and br["open_breakers"] == 1
+    research_open = [{"key": "research:tushare:promax:rt_k", "open_until": _t("2026-10-26 15:10").timestamp()}]
+    assert dq.check_provider_gateway(usage_fn=lambda p: (1, False), **{**kw, "breakers_fn": lambda: research_open})["severity"] == dq.GREEN

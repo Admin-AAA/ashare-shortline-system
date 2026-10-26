@@ -21,13 +21,13 @@ LABELS: dict[str, str] = {
     "sina_kline": "新浪分钟", "tencent_mkline": "腾讯分钟", "akshare": "AKShare",
     "eastmoney": "东方财富", "cninfo": "巨潮", "cninfo_search": "巨潮全文检索",
     "xiaoshi_alt": "小石另类数据", "xiaoshi_quote": "小石", "xiaoshi_kline": "小石",
-    "promax": "Promax", "quantdata": "QuantData",
+    "promax": "Promax", "quantdata": "QuantData", "teajoin": "Teajoin",
 }
 # Tushare 路由下游的接口：这些 provider 还受 tushare:<pro>:<api> 路由熔断约束。
 ROUTER_APIS: dict[str, tuple[str, ...]] = {
     "tushare_rt_k": ("rt_k",), "tushare_rt_min": ("rt_min",), "tushare_stk_mins": ("stk_mins",),
 }
-PRO_PROVIDERS = ("promax", "quantdata")
+PRO_PROVIDERS = ("promax", "quantdata", "teajoin")
 _SAMPLE_QUERIES = ({}, {"freq": "1min"}, {"freq": "5min"})
 
 

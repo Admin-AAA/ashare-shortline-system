@@ -42,6 +42,8 @@ _RETRYABLE_EXCEPTIONS = (
 # 等待重试没有意义。42901 是 token 当日配额耗尽，等到配额重置即可恢复。
 _PERMISSION_BUSINESS_CODES = frozenset({"40203"})
 _RATE_LIMIT_BUSINESS_CODES = frozenset({"42901"})
+# HTTP 200 但业务层报「上游容量忙」的措辞（teajoin: "query capacity busy"）。
+_BUSINESS_CAPACITY_TERMS = ("capacity busy", "capacity_busy", "pool_exhausted", "pool exhausted", "server busy", "系统繁忙", "服务繁忙")
 _PERMISSION_MESSAGE_TERMS = ("权限", "未开通", "积分", "permission", "unauthorized")
 _RATE_LIMIT_MESSAGE_TERMS = ("频率", "频次", "rate limit", "请求速度", "limit exceeded")
 
@@ -423,6 +425,27 @@ def _research_promax_limiter():
         return _RESEARCH_LIMITER[0]
 
 
+_RESEARCH_OTHER_LIMITERS: dict[str, Any] = {}
+
+
+def _research_provider_limiter(provider: str):
+    """非 promax 源（quantdata/teajoin…）在 research 命名空间盘中的限速器；rpm<=0 表示不限（保持旧行为）。
+
+    与 promax 同一思路：交易时段（工作日 09:15–15:05）批量回补/研究脚本让路给 live: 实时与选股链路。
+    rpm 来自 Settings.tushare_<provider>_research_intraday_rpm（teajoin 默认 30，quantdata 默认 0=不限）。"""
+    with _RESEARCH_LIMITER_LOCK:
+        if provider not in _RESEARCH_OTHER_LIMITERS:
+            rpm = 0
+            try:
+                from app.core.config import get_settings
+
+                rpm = int(getattr(get_settings(), f"tushare_{provider}_research_intraday_rpm", 0) or 0)
+            except Exception:  # noqa: BLE001
+                pass
+            _RESEARCH_OTHER_LIMITERS[provider] = _make_limiter(f"{provider}:research_intraday", rpm) if rpm > 0 else None
+        return _RESEARCH_OTHER_LIMITERS[provider]
+
+
 def _breaker_kind(category: "FailureCategory") -> str | None:
     """FailureCategory -> SharedCircuitBreaker failure kind (per-kind thresholds)."""
     if category in (
@@ -625,6 +648,10 @@ class TushareHttpProvider:
         t0 = time.perf_counter()
         if self.config.name == "promax" and research_intraday_throttled():
             _research_promax_limiter().acquire()  # leave promax headroom for live: realtime
+        if self.config.name != "promax" and research_intraday_throttled():
+            _lim = _research_provider_limiter(self.config.name)
+            if _lim is not None:
+                _lim.acquire()  # 盘中研究/回补类请求限速，给 live: 链路留额度
         if self.config.name == "promax" and _is_research_namespace():
             # 按窗口令牌桶（5min/60min）；盘中先让路给 live rt_k
             _promax_window.research_acquire(api_name, intraday=_in_research_window())
@@ -1017,6 +1044,18 @@ class TushareHttpProvider:
                 retry_after_seconds=60.0,
                 upstream_detail=upstream_detail,
             )
+        if any(term in message for term in _BUSINESS_CAPACITY_TERMS):
+            # 2026-10-26 teajoin：HTTP 200 + 业务码非 0 + "query capacity busy"（重查询时上游并发满）。
+            # 不是参数/权限错误，也不是日额度：短冷却后换源/重试，别把它当 provider_error 反复打。
+            return ProviderFailure(
+                provider=self.name,
+                api_name=api_name,
+                category=FailureCategory.HTTP_RATE_LIMIT,
+                retryable=False,
+                fallback_allowed=True,
+                retry_after_seconds=30.0,
+                upstream_detail=upstream_detail,
+            )
         if any(term in message for term in ("参数", "parameter", "invalid argument")):
             return ProviderFailure(
                 provider=self.name,
@@ -1127,6 +1166,16 @@ class TushareProviderRouter:
             if provider.name in overrides:
                 return int(overrides[provider.name])
         return provider.config.priority
+
+    def request_pinned(
+        self, provider_name: str, api_name: str, *, params: Mapping[str, Any] | None = None, fields: str = ""
+    ) -> Mapping[str, Any]:
+        """只走指定 provider（仍受其熔断/限流/额度保护）。用于「主源返回了可疑的截断结果，改问另一家核实」。
+        provider 未配置/被停用/不支持该接口时抛 TushareProviderError，调用方应保留原结果。"""
+        p = self._providers.get(provider_name)
+        if p is None or not self._is_enabled(p.name) or not p.supports(api_name):
+            raise TushareProviderError(api_name, [])
+        return p.request(api_name, params=params, fields=fields)
 
     def _ordered_providers(self, api_name: str) -> list[TushareHttpProvider]:
         enabled = [
