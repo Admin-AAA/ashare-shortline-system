@@ -2368,6 +2368,20 @@ def check_formal_recommendation_gap(db) -> dict:
     if not missing_dates:
         latest = trade_dates[0]
         stats = by_date.get(latest, {})
+        # 只看「有没有任何 completed」会漏掉部分策略缺批次的日子（2026-10-26：短线 4 个策略批次缺失、其余已出）。
+        # 对最新交易日再按策略核对（历史日不核对：之后新增的策略不应回头补历史批次）；补跑按策略幂等，已完成的不重跑。
+        missing_sids = _missing_standalone_strategies(db, latest)
+        if missing_sids and not int(stats.get("inflight_count", 0)):
+            return {
+                "needs_retry": True,
+                "trade_date": latest,
+                "ok_count": int(stats.get("completed_count", 0)),
+                "productive_count": int(stats.get("productive_count", 0)),
+                "total_count": int(stats.get("total_count", 0)),
+                "missing_dates": [],
+                "missing_strategies": missing_sids,
+                "reason": f"{latest} 缺 {len(missing_sids)} 个策略的 completed formal 批次：{','.join(missing_sids)}；仅补这些策略",
+            }
         return {
             "needs_retry": False,
             "trade_date": latest,
@@ -2403,6 +2417,60 @@ def check_formal_recommendation_gap(db) -> dict:
         "missing_dates": missing_dates,
         "reason": f"最近 5 个交易日缺 formal：{','.join(missing_dates)}；先补 {target}",
     }
+
+
+def _missing_standalone_strategies(db, trade_date: str) -> list[str]:
+    """trade_date 当天缺 completed formal 单策略批次的有效策略（排序）。取不到信息（假库/异常）时返回空 = 不触发。"""
+    try:
+        from app.services.standalone_strategies import standalone_strategy_ids
+        from app.services.workbench_service import sync_skills
+
+        expected = set(standalone_strategy_ids(sync_skills(db)))
+        if not expected:
+            return []
+        done = _completed_standalone_runs(db, {"trade_date_override": trade_date})
+        return sorted(expected - set(done))
+    except Exception:  # noqa: BLE001 - 核对失败不影响原有安全网判断
+        logger.debug("_missing_standalone_strategies 核对失败", exc_info=True)
+        return []
+
+
+def _safety_net_midlong_repair(db) -> dict:
+    """盘前补跑最新已收盘交易日里 data_error（或从未记录）的中长线策略。
+
+    只补最新一个交易日：信号日 D 收盘选股、D+1 开盘买，08:30 补出的批次仍赶得上当天开盘；更早的日期买点已过，不回头补。
+    generate_picks 幂等（同日覆盖同一文件，非信号日只记 not_signal_day），实盘路径开每日新推荐上限。
+    非致命：任何异常只记日志并返回 error。
+    """
+    out: dict = {"date": None, "retried": [], "still_error": []}
+    try:
+        import json as _json
+
+        from app.services import midterm_service as ms
+
+        latest = _latest_allowed_bar_date()
+        out["date"] = latest
+        status_file = ms._status_dir() / f"{latest}.json"
+        stored = _json.loads(status_file.read_text()) if status_file.exists() else {}
+        todo = [sid for sid in ms.STRATEGIES if (stored.get(sid) or {}).get("status") in (None, "data_error")]
+        if not todo:
+            return out
+        out["retried"] = todo
+        res = ms.generate_picks(db, latest, strategy_ids=todo, apply_daily_cap=True)
+        out["still_error"] = [sid for sid in todo if ms.classify_daily_status(res.get(sid)) == "data_error"]
+        out["picks"] = {sid: res.get(sid) for sid in todo if isinstance(res.get(sid), int)}
+        if out["still_error"]:
+            from app.core.alerts import emit_alert
+
+            emit_alert(
+                "midlong_repair_data_error",
+                latest,
+                f"盘前安全网补跑 {latest} 中长线后仍 data_error：{','.join(out['still_error'])}",
+            )
+    except Exception as exc:  # noqa: BLE001 - 补跑失败不阻断 formal 安全网主流程
+        logger.warning("安全网中长线补跑失败（非阻塞）: %s", exc, exc_info=True)
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    return out
 
 
 async def _safety_net_run(db, payload: dict) -> dict:
@@ -2442,10 +2510,12 @@ async def _safety_net_run(db, payload: dict) -> dict:
     except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         logger.warning("安全网补 outcome 结算失败（非阻塞）: %s", exc)
 
+    midlong = _safety_net_midlong_repair(db)
     check = check_formal_recommendation_gap(db)
     if not check["needs_retry"]:
         logger.info("安全网跳过: %s", check["reason"])
-        return {"skipped": True, **check, "outcome": outcome_result, "summary_text": f"安全网跳过: {check['reason']}"}
+        return {"skipped": True, **check, "outcome": outcome_result, "midlong_repair": midlong,
+                "summary_text": f"安全网跳过: {check['reason']}" + (f"；中长线补跑 {len(midlong['retried'])} 个" if midlong.get("retried") else "")}
     if not check.get("trade_date"):
         return {
             "status": "failed",
@@ -2525,6 +2595,7 @@ async def _safety_net_run(db, payload: dict) -> dict:
         "related_run_id": run_id,
         "final_run": final_run,
         "recommended_count": int(final_run.get("recommended_count") or 0),
+        "midlong_repair": midlong,
         "summary_text": f"formal 安全网已补齐 {check['trade_date']}，Run {run_id} completed",
     }
 
