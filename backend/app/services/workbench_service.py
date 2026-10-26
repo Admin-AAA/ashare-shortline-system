@@ -16,6 +16,8 @@ from sqlalchemy import and_, case, func, or_, select, text
 from sqlalchemy.dialects.mysql import insert as mysql_insert
 from sqlalchemy.orm import Session, defer
 
+from app.services.data_version import data_version, make_cache
+
 from app.agents.review_runner import run_skill_reviews
 from app.agents.session_registry import AgentSessionRegistry
 from app.db.session import SessionLocal
@@ -988,14 +990,20 @@ def list_recommendation_history(
     性能：先只取 recommendation_id + trade_date + code + final_score（轻量列，不取整行），
     Python 去重后切片分页，再只对 50 个 id 批量取详情。避免查全部 1584 行整行 + outcome。
     """
-    # 短时缓存：历史数据不频繁变化（新 run 后才变），30s TTL
-    cache_key = f"hist:{code or ''}:{label or ''}:{date_from or ''}:{date_to or ''}:{bucket or ''}:{setup_type or ''}:{strategy_id or ''}:{strategy_version_id or ''}:{limit}:{offset}"
-    now = time.time()
-    with _history_cache_lock:
-        entry = _history_cache.get(cache_key)
-        if entry is not None and (now - entry[0]) < _HISTORY_CACHE_TTL:
-            return entry[1]
+    # 版本化缓存：键里带从库里现算的数据版本（见 services/data_version.py），后端外的进程（Prefect）
+    # 写入新运行 / 新结算 / 新日K / 执行确认后指纹立刻变化，缓存随之失效；另有 10 分钟兜底过期。
+    filters = (code, label, date_from, date_to, bucket, setup_type, strategy_id, strategy_version_id)
+    version = data_version(db, _HISTORY_VERSION_TABLES)
+    return _history_response_cache.get_or_compute(
+        (filters, limit, offset), version,
+        lambda: _build_recommendation_history_page(db, filters, version, limit=limit, offset=offset),
+    )
 
+
+def _build_recommendation_history_population(db: Session, filters: tuple[str | None, ...]) -> dict[str, Any]:
+    """推荐历史里「与分页无关」的部分：去重后的全量 id、汇总、取消/未触发观察、执行状态、facets。
+    同一筛选条件的多页（复盘页一次并发拉 3 页）共用一份，不再每页各算一遍。"""
+    code, label, date_from, date_to, bucket, setup_type, strategy_id, strategy_version_id = filters
     live_run_ids = canonical_live_forward_run_ids(
         db,
         date_from=date_from,
@@ -1149,6 +1157,30 @@ def list_recommendation_history(
         {str(outcome.recommendation_id): outcome for outcome in all_outcomes},
     )
     summary["missed_observation"] = missed_report["summary"]
+    return {
+        "total": total,
+        "deduped_ids": deduped_ids,
+        "summary": summary,
+        "facets": facets,
+        "all_execution_states": all_execution_states,
+        "cancel_items": cancel_report["items"],
+        "missed_items": missed_report["items"],
+    }
+
+
+def _build_recommendation_history_page(
+    db: Session, filters: tuple[str | None, ...], version: Any, *, limit: int, offset: int,
+) -> dict[str, Any]:
+    pop = _history_population_cache.get_or_compute(
+        filters, version, lambda: _build_recommendation_history_population(db, filters),
+    )
+    total = pop["total"]
+    deduped_ids = pop["deduped_ids"]
+    summary = pop["summary"]
+    facets = pop["facets"]
+    all_execution_states = pop["all_execution_states"]
+    cancel_report = {"items": pop["cancel_items"]}
+    missed_report = {"items": pop["missed_items"]}
     page_ids = deduped_ids[offset : offset + limit]
     if not page_ids:
         return {
@@ -1192,8 +1224,6 @@ def list_recommendation_history(
         "summary": summary,
         "facets": facets,
     }
-    with _history_cache_lock:
-        _history_cache[cache_key] = (time.time(), result)
     return result
 
 
@@ -1911,6 +1941,15 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
         heartbeat_stale_seconds=RUN_HEARTBEAT_STALE_SECONDS,
     )
 
+
+# 推荐历史依赖的表（见 list_recommendation_history 全部 SQL）；daily_kbars 供取消/未触发观察
+_HISTORY_VERSION_TABLES = (
+    "recommendations", "recommendation_runs", "recommendation_outcomes", "recommendation_execution_states",
+    "recommendation_reconstruction_batches", "presets", "watch_items", "daily_kbars",
+)
+# 上限：响应 ~0.5MB/条（200 条一页），population ~1MB/条；合计最坏约 60MB
+_history_response_cache = make_cache("history_response", maxsize=48, max_age=600.0)
+_history_population_cache = make_cache("history_population", maxsize=16, max_age=600.0)
 
 _RUN_HEAVY_COLUMNS = (
     RecommendationRun.params_json,
