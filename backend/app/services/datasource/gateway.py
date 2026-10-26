@@ -172,6 +172,49 @@ def provider_enabled(provider: DataProvider, disabled: set[tuple[str, str]] | No
     return not any(key in disabled for key in getattr(provider, "config_keys", ()))
 
 
+# ── per-dataset (数据项级) switches: data_gateway_item_switch ────────────────
+# 与上面的源总开关叠加：总开关关 → 所有数据类型都跳过；这里关 → 只在该数据类型跳过。
+# 同样 5 秒 TTL 从库里热加载，后端与 Prefect worker 各自读库，无需重启。
+_ITEM_CACHE: dict[str, Any] = {"value": None, "expires_at": 0.0}
+
+
+def _db_disabled_items() -> set[tuple[str, str]]:
+    """{(dataset_key, provider_name)} with enabled=False."""
+    now = time.monotonic()
+    if _ITEM_CACHE["value"] is not None and _ITEM_CACHE["expires_at"] > now:
+        return _ITEM_CACHE["value"]
+    value: set[tuple[str, str]] = set()
+    try:
+        from sqlalchemy import select
+
+        from app.db.session import SessionLocal
+        from app.models.tables import DataGatewayItemSwitch
+
+        db = SessionLocal()
+        try:
+            for r in db.scalars(select(DataGatewayItemSwitch)).all():
+                if not bool(r.enabled):
+                    value.add((str(r.dataset_key), str(r.provider)))
+        finally:
+            db.close()
+    except Exception:  # noqa: BLE001 - DB down / table not migrated yet: keep previous view (fail-safe = enabled)
+        logger.debug("gateway item-switch query failed", exc_info=True)
+        value = _ITEM_CACHE["value"] or set()
+    _ITEM_CACHE.update(value=value, expires_at=now + 5.0)
+    return value
+
+
+def item_enabled(dataset_key: str, provider_name: str, disabled: set[tuple[str, str]] | None = None) -> bool:
+    disabled = _db_disabled_items() if disabled is None else disabled
+    return (dataset_key, provider_name) not in disabled
+
+
+def invalidate_switch_caches() -> None:
+    """Drop this process's switch caches (other processes pick changes up within 5s)."""
+    _ENABLED_CACHE.update(value=None, expires_at=0.0)
+    _ITEM_CACHE.update(value=None, expires_at=0.0)
+
+
 # ── deadlines / retry budget (audit item 2) ──────────────────────────────────
 REALTIME_DATASETS: frozenset[str] = frozenset({"quote.realtime", "quote.realtime_frame"})
 RETRYABLE_KINDS = frozenset({ErrorKind.NETWORK})
@@ -283,11 +326,15 @@ class DatasetGateway:
         enabled: Callable[[DataProvider], bool] = provider_enabled,
         failure_threshold: int = 3,
         recovery_seconds: float = 300.0,
+        item_key: str | None = None,
     ) -> None:
         from app.core.shared_breaker import SharedCircuitBreaker
 
         self._providers = list(providers)
         self._enabled = enabled
+        # 数据项级开关的键：默认就是请求的 dataset；一个网关服务一族 dataset 时（如灾备的
+        # tushare.<api>）用固定键，让「数据源管理」里那一列的开关覆盖整族。
+        self.item_key = item_key
         _ALL_GATEWAYS.add(self)
         self._breakers: dict[tuple[str, str], Any] = {}
         # Shared (cross-process, per-namespace) breaker keyed like wrap.py: gw:<provider>:<dataset>.
@@ -315,12 +362,17 @@ class DatasetGateway:
         except Exception:  # noqa: BLE001
             return False
 
+    def item_key_for(self, dataset: str) -> str:
+        return self.item_key or dataset
+
     def _candidates(self, dataset: str, query: Mapping[str, Any]) -> list[DataProvider]:
         out = []
+        item = self.item_key_for(dataset)
+        disabled_items = _db_disabled_items()
         for p in self._providers:
             if not p.supports(dataset, query):
                 continue
-            if not self._enabled(p):
+            if not self._enabled(p) or not item_enabled(item, p.name, disabled_items):
                 _metrics.inc("dataset_requests", dataset=dataset, provider=p.name, outcome=ErrorKind.DISABLED.value)
                 continue
             out.append(p)

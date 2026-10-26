@@ -69,6 +69,7 @@ from app.models.market import (  # noqa: F401,E402
 from app.models.datasource import (  # noqa: F401,E402
     DataSourceHealth,
     DataSourceConfig,
+    DataGatewayItemSwitch,
     ApiCallLog,
     DataSourceRequestTrace,
     DataSourceAttempt,

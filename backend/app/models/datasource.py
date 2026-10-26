@@ -54,6 +54,22 @@ class DataSourceConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 
+class DataGatewayItemSwitch(Base):
+    """数据项级网关开关：只在某个数据类型（dataset_key）里启停某个 provider。
+
+    与 ``DataSourceConfig`` 的 (source, source_type) 总开关相互独立、叠加生效：
+    总开关关 → 该源在所有数据类型里都跳过；这里关 → 只在 dataset_key 这一列跳过。
+    没有行 = 启用。
+    """
+
+    __tablename__ = "data_gateway_item_switch"
+
+    dataset_key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(40), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+
+
 class ApiCallLog(Base):
     """LLM API 调用日志。"""
     __tablename__ = "api_call_logs"
