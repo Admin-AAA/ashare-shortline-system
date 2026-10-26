@@ -1912,6 +1912,14 @@ def _serialize_run_summary(db: Session, run: RecommendationRun) -> dict[str, Any
     )
 
 
+_RUN_HEAVY_COLUMNS = (
+    RecommendationRun.params_json,
+    RecommendationRun.market_snapshot_json,
+    RecommendationRun.filter_audit_json,
+    RecommendationRun.request_json,
+)
+
+
 def _serialize_recommendations_batched(db: Session, recs: list[Recommendation], *, slim: bool = False) -> list[dict[str, Any]]:
     """批量序列化推荐，避免 N+1 WatchItem / Run 查询。"""
     if not recs:
@@ -1926,7 +1934,14 @@ def _serialize_recommendations_batched(db: Session, recs: list[Recommendation], 
     run_map: dict[str, RecommendationRun] = {}
     preset_map: dict[str, str] = {}
     if run_ids:
-        runs = db.scalars(select(RecommendationRun).where(RecommendationRun.run_id.in_(run_ids))).all()
+        # 推荐序列化只用 run 的标量列 + selected_skills_json / result_summary_json；
+        # filter_audit_json 平均 5MB/行、params/market_snapshot/request 也是几十~几百 KB，
+        # 不 defer 时推荐历史 200 条要拉 ~100 个 run 整行（实测 740ms）。defer 后若有人访问仍会按需懒加载，结果不变。
+        runs = db.scalars(
+            select(RecommendationRun)
+            .options(*[defer(c) for c in _RUN_HEAVY_COLUMNS])
+            .where(RecommendationRun.run_id.in_(run_ids))
+        ).all()
         for r in runs:
             run_map[r.run_id] = r
         preset_ids = list({r.preset_id for r in runs if r.preset_id})
