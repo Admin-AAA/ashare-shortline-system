@@ -145,6 +145,11 @@ class _PromaxHttpProvider(TushareHttpProvider):
         )
 
 
+class _TeajoinHttpProvider(_PromaxHttpProvider):
+    """teajoin transport; ``stk_mins`` goes through the same canonical minute-K gate as promax
+    (whole minutes, continuous session only, no duplicate minutes)."""
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Canonical client contract. Provider authentication, limiting, retry, and
 # circuit breaking live in ``tushare_transport``; the local MySQL pool remains
@@ -530,9 +535,9 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
     if teajoin_token:
         # teajoin（DaoShare）：JSON token 协议；只服务已探测验证过的接口（TEAJOIN_APIS，204 个，docs/datasource-teajoin.md）。
         # 默认优先级 6 = 其余接口的末位兜底；在名单接口上做「主源」由 LeaderSpec 控制（可用 ASHARE_TUSHARE_TEAJOIN_LEAD=false 关闭）。
-        # rt_k/rt_min/stk_mins 等实时与分钟接口不在名单内，永不进入实盘行情链路。
+        # rt_k/rt_min 等实时接口不在名单内，永不进入实盘行情链路；stk_mins（历史分钟）2026-10-26 21:00 起 teajoin 主源。
         providers.append(
-            TushareHttpProvider(
+            _TeajoinHttpProvider(
                 ProviderConfig(
                     name="teajoin",
                     base_url=settings.tushare_teajoin_url,
@@ -554,7 +559,10 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                 LeaderSpec(
                     provider="teajoin",
                     apis=TEAJOIN_APIS,
-                    intraday_sensitive=TEAJOIN_INTRADAY_SENSITIVE,
+                    intraday_sensitive=(
+                        TEAJOIN_INTRADAY_SENSITIVE if bool(getattr(settings, "tushare_teajoin_intraday_yield", False)) else frozenset()
+                    ),
+                    intraday_read_timeout=max(1.0, float(getattr(settings, "tushare_teajoin_intraday_read_timeout_seconds", 15.0))),
                     heavy_apis=TEAJOIN_HEAVY_APIS,
                     fast_apis=TEAJOIN_FAST_APIS,
                     read_timeout=max(1.0, float(getattr(settings, "tushare_teajoin_lead_read_timeout_seconds", 40.0))),

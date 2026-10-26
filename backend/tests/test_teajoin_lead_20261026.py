@@ -59,6 +59,17 @@ def router(*providers, leaders=(SPEC,)):
     return TushareProviderRouter(list(providers), leaders=leaders)
 
 
+@pytest.fixture(autouse=True)
+def _promax_reserve_off(monkeypatch):
+    """本文件的旧用例按「promax 仍是末位兜底」写；promax 额度专留 rt_k 的新规则见 test_promax_reserve_20261026.py。"""
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ASHARE_TUSHARE_PROMAX_RTK_RESERVED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 def at(monkeypatch, hh, mm, research=False, weekday=0):
     # 2026-10-26 是周一
     day = 26 + weekday
@@ -135,7 +146,8 @@ def test_capability_registry_consistent_with_probe_and_excludes_realtime():
 
     from app.services.datasource import teajoin_capability as cap
 
-    assert not ({"rt_k", "rt_min", "stk_mins", "anns_d", "news"} & cap.TEAJOIN_APIS)
+    assert not ({"rt_k", "rt_min", "anns_d", "news"} & cap.TEAJOIN_APIS)
+    assert "stk_mins" in cap.TEAJOIN_APIS and "stk_mins" not in cap.NOT_ROUTED  # 2026-10-26 21:00 开通并实测通过
     assert cap.INTRADAY_SENSITIVE <= cap.TEAJOIN_APIS and cap.HEAVY_APIS <= cap.TEAJOIN_APIS and cap.FAST_APIS <= cap.TEAJOIN_APIS
     docs = Path(__file__).resolve().parents[2] / "docs"
     r1 = json.loads((docs / "teajoin_catalog_probe.json").read_text())["results"]
@@ -160,8 +172,9 @@ def test_real_router_builds_with_teajoin_leader_and_keeps_realtime_chain(monkeyp
         # 盘后：批量接口 teajoin 排首；实时/分钟接口链路不含 teajoin
         monkeypatch.setattr(tt, "_in_research_window", lambda n=None: False)
         assert [p.name for p in router._ordered_providers("cyq_perf")][0] == "teajoin"
-        for api in ("rt_k", "rt_min", "stk_mins", "anns_d"):
+        for api in ("rt_k", "rt_min", "anns_d"):
             assert "teajoin" not in [p.name for p in router._ordered_providers(api)]
+            assert [p.name for p in router._ordered_providers("stk_mins")][0] == "teajoin"  # 历史分钟：teajoin 主源（21:00 开通）
     finally:
         get_settings.cache_clear()
 

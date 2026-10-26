@@ -899,13 +899,29 @@ def check_provider_gateway(now: datetime | None = None, *, providers: tuple[str,
         sev = _worse(sev, YELLOW)
         keys = [str(b["key"]).replace("live:", "", 1) for b in open_live][:6]
         notes.append(f"实盘链路有 {len(open_live)} 个熔断打开：{'、'.join(keys)}")
+    if "promax" in names:
+        try:
+            from app.core.config import get_settings as _gs
+
+            _st = _gs()
+            if bool(getattr(_st, "tushare_promax_rtk_reserved", True)):
+                notes.append("promax 额度专留实时行情 rt_k/rt_min（其余接口走 teajoin 等；补数进程"
+                             + ("不动用" if not bool(getattr(_st, "tushare_promax_research_enabled", False)) else "仍可动用") + " promax）")
+                if "promax" in exhausted:
+                    notes.append("⚠ promax 今日已耗尽：rt_k 现由 新浪→腾讯→AKShare 全市场快照→分钟→小石 依次兜底")
+        except Exception:  # noqa: BLE001
+            pass
     if "teajoin" in names:
         try:
             from app.core.config import get_settings
             from app.services.datasource import teajoin_capability as _tc
 
             if bool(getattr(get_settings(), "tushare_teajoin_lead", True)):
-                notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（盘中 {len(_tc.INTRADAY_SENSITIVE)} 个延迟敏感接口让原源先走，失败/超时自动降级）")
+                if bool(getattr(get_settings(), "tushare_teajoin_intraday_yield", False)):
+                    notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（盘中 {len(_tc.INTRADAY_SENSITIVE)} 个延迟敏感接口让原源先走，失败/超时自动降级）")
+                else:
+                    notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（含历史分钟 stk_mins；盘中不再让位，读超时收紧到 "
+                                 f"{get_settings().tushare_teajoin_intraday_read_timeout_seconds:g}s，超时/失败自动降级）")
             else:
                 notes.append("teajoin 主源开关已关闭（仅兜底）")
         except Exception:  # noqa: BLE001

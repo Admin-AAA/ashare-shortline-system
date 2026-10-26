@@ -494,13 +494,18 @@ class LeaderSpec:
     heavy_timeout: float = 90.0
     fast_timeout: float = 15.0
     min_health: float = 0.25
+    intraday_read_timeout: float = 15.0  # 盘中 live 进程里做主源：读超时收紧到这个值（超时立即降级，不拖住实盘）
 
-    def timeout_for(self, api_name: str) -> float:
+    def timeout_for(self, api_name: str, *, live_intraday: bool = False) -> float:
         if api_name in self.heavy_apis:
-            return self.heavy_timeout
-        if api_name in self.fast_apis:
-            return self.fast_timeout
-        return self.read_timeout
+            base = self.heavy_timeout
+        elif api_name in self.fast_apis:
+            base = self.fast_timeout
+        else:
+            base = self.read_timeout
+        if live_intraday:
+            return min(base, self.intraday_read_timeout) if api_name not in self.heavy_apis else min(base, self.intraday_read_timeout * 2)
+        return base
 
     def leads(self, api_name: str, *, research: bool, intraday: bool) -> bool:
         if api_name not in self.apis:
@@ -1003,13 +1008,30 @@ class TushareHttpProvider:
                         fallback_allowed=True,
                         upstream_detail=upstream_detail,
                     )
+                client_detail = _extract_upstream_detail(response)
+                if status == 403 and self.config.name == "teajoin" and "invalid api key" in (client_detail or "").lower():
+                    # 2026-10-26 21:00 实测：teajoin 在负载高峰会偶发整段 403 "invalid api key"（同一把 key，
+                    # 几十秒后恢复，补数日志里约 10% 的请求命中）。当瞬时拥塞处理：批量/补数就地短退避重试，
+                    # live 不重试、30s 冷却并立即降级；都不开熔断。key 真被吊销时重试 5 次后仍会降级，并由
+                    # 「provider 全失败」告警暴露。
+                    batch = _is_research_namespace()
+                    raise ProviderFailure(
+                        provider=self.name,
+                        api_name=api_name,
+                        category=FailureCategory.HTTP_RATE_LIMIT,
+                        retryable=batch,
+                        fallback_allowed=True,
+                        retry_after_seconds=30.0,
+                        upstream_detail=client_detail,
+                        capacity_busy=True,
+                    )
                 raise ProviderFailure(
                     provider=self.name,
                     api_name=api_name,
                     category=FailureCategory.HTTP_CLIENT,
                     retryable=False,
                     fallback_allowed=status in {401, 403},
-                    upstream_detail=_extract_upstream_detail(response),
+                    upstream_detail=client_detail,
                 )
             try:
                 envelope = response.json()
@@ -1308,6 +1330,33 @@ class TushareProviderRouter:
             return self._apply_leaders(api_name, self._balance(api_name, ordered + rest))
         return self._apply_leaders(api_name, self._balance(api_name, sorted(enabled, key=self._effective_priority)))
 
+    # promax 额度专留实时行情：这些接口保持原链路（含 promax）
+    PROMAX_RESERVED_FOR = frozenset({"rt_k", "rt_min"})
+
+    def _apply_promax_reserve(self, api_name: str, ordered: list[TushareHttpProvider]) -> list[TushareHttpProvider]:
+        """2026-10-26：promax 降为少额度用户，额度只留给 rt_k/rt_min。
+        * research 命名空间（补数/研究脚本）：不动用 promax（含唯一源时直接失败，宁可晚补也不抢实盘额度）。
+        * live：其余接口链路里还有别的上游时，把 promax 拿掉；它是唯一源（如 anns_d）时保留。
+        两个开关见 Settings.tushare_promax_research_enabled / tushare_promax_rtk_reserved（默认都启用保护）。"""
+        if api_name in self.PROMAX_RESERVED_FOR or not any(p.name == "promax" for p in ordered):
+            return ordered
+        try:
+            from app.core.config import get_settings
+
+            st = get_settings()
+            research_ok = bool(st.tushare_promax_research_enabled)
+            reserved = bool(st.tushare_promax_rtk_reserved)
+        except Exception:  # noqa: BLE001
+            return ordered
+        others = [p for p in ordered if p.name != "promax"]
+        if _is_research_namespace() and not research_ok:
+            _metrics.inc("provider_promax_reserved", api=api_name, namespace="research")
+            return others
+        if reserved and others:
+            _metrics.inc("provider_promax_reserved", api=api_name, namespace="live")
+            return others
+        return ordered
+
     def _lead_spec_for(self, api_name: str, ordered: list[TushareHttpProvider]) -> tuple[LeaderSpec, TushareHttpProvider] | None:
         """当前时刻应当做该接口主源的 (规则, provider)；没有则 None。"""
         if not self._leaders:
@@ -1412,7 +1461,7 @@ class TushareProviderRouter:
             identity=api_name,
             level=logging.DEBUG,
         )
-        providers = self._ordered_providers(api_name)
+        providers = self._apply_promax_reserve(api_name, self._ordered_providers(api_name))
         if not providers:
             raise TushareProviderError(api_name, [])
 
@@ -1429,7 +1478,8 @@ class TushareProviderRouter:
                 if lead_spec is not None and lead_spec.leads(
                     api_name, research=_is_research_namespace(), intraday=_in_research_window()
                 ):
-                    with _lead_scope(lead_spec.timeout_for(api_name), 2 if _is_research_namespace() else 1):
+                    _live_intraday = _in_research_window() and not _is_research_namespace()
+                    with _lead_scope(lead_spec.timeout_for(api_name, live_intraday=_live_intraday), 2 if _is_research_namespace() else 1):
                         envelope = provider.request(api_name, params=params, fields=fields)
                 else:
                     envelope = provider.request(api_name, params=params, fields=fields)

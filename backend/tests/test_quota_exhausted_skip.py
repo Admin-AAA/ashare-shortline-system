@@ -51,6 +51,12 @@ def test_daily_limit_text_detection():
 
 
 def test_quota_exhausted_skips_provider_rest_of_day(quota_env, monkeypatch):
+    # 本用例验证“额度耗尽→当日跳过并切下一家”；promax 额度专留 rt_k 的规则另测（test_promax_reserve_20261026）
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ASHARE_TUSHARE_PROMAX_RTK_RESERVED", "false")
+    monkeypatch.setenv("ASHARE_TUSHARE_PROMAX_RESEARCH_ENABLED", "true")
+    get_settings.cache_clear()
     qd = _provider("quantdata")
     pm = _provider("promax", AuthMode.API_KEY_HEADER, HttpMethod.GET)
     calls = {"quantdata": 0, "promax": 0}

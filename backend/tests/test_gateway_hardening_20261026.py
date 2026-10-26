@@ -219,3 +219,26 @@ def test_http_429_without_busy_text_is_still_plain_rate_limit(monkeypatch, tmp_p
     with pytest.raises(tt.ProviderFailure) as ei:
         p.request("limit_list_d", params={})
     assert not ei.value.capacity_busy and not ei.value.retryable and len(posts) == 1
+
+
+# ── 2026-10-26 21:00：teajoin 偶发整段 403 "invalid api key"（同一把 key 几十秒后恢复）按瞬时拥塞处理 ──
+_BADKEY403 = lambda: _Resp(403, {"code": -1, "msg": "invalid api key"})  # noqa: E731
+
+
+def test_teajoin_transient_invalid_api_key_batch_retries_then_succeeds_without_breaker(monkeypatch, tmp_path):
+    _store(monkeypatch, tmp_path)
+    p, posts, sleeps = _http_provider(monkeypatch, [_BADKEY403, _BADKEY403, _OK200], research=True)
+    assert p.name == "teajoin"
+    env = p.request("limit_list_d", params={"trade_date": "20250102"})
+    assert env["data"]["items"] == [[1]] and len(posts) == 3 and len(sleeps) == 2
+    assert p._breaker("limit_list_d").allow_request() is True
+
+
+def test_teajoin_transient_invalid_api_key_live_falls_back_immediately(monkeypatch, tmp_path):
+    import pytest
+
+    _store(monkeypatch, tmp_path)
+    p, posts, sleeps = _http_provider(monkeypatch, [_BADKEY403, _OK200], research=False)
+    with pytest.raises(tt.ProviderFailure) as ei:
+        p.request("limit_list_d", params={})
+    assert ei.value.capacity_busy and not ei.value.retryable and ei.value.fallback_allowed and len(posts) == 1

@@ -139,7 +139,13 @@ def test_realtime_route_prefers_promax() -> None:
     assert result["data"]["items"] == [["promax"]]
 
 
-def test_promax_is_only_excluded_from_incompatible_announcement_contract() -> None:
+def test_promax_is_only_excluded_from_incompatible_announcement_contract(monkeypatch) -> None:
+    # 本用例验证路由表语义（promax 仅被排除出 anns_d）；promax 额度专留 rt_k 的开关另有 test_promax_reserve_20261026
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ASHARE_TUSHARE_PROMAX_RTK_RESERVED", "false")
+    monkeypatch.setenv("ASHARE_TUSHARE_PROMAX_RESEARCH_ENABLED", "true")  # pytest 进程属 research 命名空间
+    get_settings.cache_clear()
     router = TushareProviderRouter(
         [
             _FakeProvider(

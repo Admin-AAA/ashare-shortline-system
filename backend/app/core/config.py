@@ -73,6 +73,16 @@ class Settings(BaseSettings):
     tushare_teajoin_lead_read_timeout_seconds: float = 40.0
     tushare_teajoin_lead_heavy_timeout_seconds: float = 90.0
     tushare_quantdata_research_intraday_rpm: int = 0
+    # 2026-10-26 21:00：promax 降为普通用户、额度很少；teajoin 是主力。
+    # * 盘中让位（36 个延迟敏感接口让 promax/quantdata 先走）默认关闭：promax 额度要专门留给 rt_k；
+    #   盘中 teajoin 做主源时读超时收紧到 intraday_read_timeout（超时立即降级）。ASHARE_TUSHARE_TEAJOIN_INTRADAY_YIELD=true 可恢复旧让位。
+    tushare_teajoin_intraday_yield: bool = False
+    tushare_teajoin_intraday_read_timeout_seconds: float = 15.0
+    # * promax 额度专留实时行情（rt_k/rt_min）：其余接口的链路里只要还有别的上游，就不把 promax 放进去；
+    #   ASHARE_TUSHARE_PROMAX_RTK_RESERVED=false 恢复「promax 作为末位兜底」。
+    tushare_promax_rtk_reserved: bool = True
+    # * 补数/研究进程（research 命名空间）一律不动用 promax；ASHARE_TUSHARE_PROMAX_RESEARCH_ENABLED=true 恢复。
+    tushare_promax_research_enabled: bool = False
     # Xiaoshi v3：独立于 Tushare Pro 协议，提供全市场快照、复权日线、财务与量化数据。
     xiaoshi_api_base_url: str = "https://api.shizixi.com"
     xiaoshi_api_key: str = Field(default="", repr=False)

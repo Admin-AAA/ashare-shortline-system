@@ -1,0 +1,602 @@
+{
+ "probed_at": "2026-10-26 21:00-21:30 Asia/Shanghai",
+ "note": "摘要，不含 key；脚本 backend/scripts/probe_teajoin_stk_mins.py",
+ "frequency_and_range": [
+  {
+   "case": "5min 1day",
+   "tries": 1,
+   "http": 200,
+   "ms": 2405,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 48,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-10-23 09:35:00",
+   "last": "2026-10-23 15:00:00"
+  },
+  {
+   "case": "15min",
+   "tries": 1,
+   "http": 200,
+   "ms": 2740,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 16,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-10-23 09:45:00",
+   "last": "2026-10-23 15:00:00"
+  },
+  {
+   "case": "30min",
+   "tries": 1,
+   "http": 200,
+   "ms": 2828,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 8,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-10-23 10:00:00",
+   "last": "2026-10-23 15:00:00"
+  },
+  {
+   "case": "60min",
+   "tries": 1,
+   "http": 200,
+   "ms": 2671,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 4,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-10-23 10:30:00",
+   "last": "2026-10-23 15:00:00"
+  },
+  {
+   "case": "1min 2023-10-27",
+   "tries": 1,
+   "http": 200,
+   "ms": 5672,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 241,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2023-10-27 09:30:00",
+   "last": "2023-10-27 15:00:00"
+  },
+  {
+   "case": "1min 2020-01-02",
+   "tries": 1,
+   "http": 200,
+   "ms": 6042,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 241,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2020-01-02 09:30:00",
+   "last": "2020-01-02 15:00:00"
+  },
+  {
+   "case": "1min 2015-06-01",
+   "tries": 1,
+   "http": 200,
+   "ms": 9854,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 241,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2015-06-01 09:30:00",
+   "last": "2015-06-01 15:00:00"
+  },
+  {
+   "case": "1min 5 days",
+   "tries": 1,
+   "http": 200,
+   "ms": 2906,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 1205,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-10-19 09:30:00",
+   "last": "2026-10-23 15:00:00"
+  },
+  {
+   "case": "1min 1 month",
+   "tries": 1,
+   "http": 200,
+   "ms": 5871,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 4579,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-09-21 09:30:00",
+   "last": "2026-10-23 15:00:00"
+  },
+  {
+   "case": "1min 3 months",
+   "tries": 1,
+   "http": 200,
+   "ms": 4230,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 8000,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-08-31 14:14:00",
+   "last": "2026-10-23 15:00:00"
+  }
+ ],
+ "coverage_and_params": [
+  {
+   "case": "delisted stock (600290.SH) 10d before delist",
+   "tries": 1,
+   "http": 200,
+   "ms": 3461,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ]
+  },
+  {
+   "case": "delisted late (920305.BJ)",
+   "tries": 1,
+   "http": 200,
+   "ms": 2973,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 1928,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-07-20 09:30:00",
+   "last": "2026-07-29 15:00:00"
+  },
+  {
+   "case": "1day 000001.SH",
+   "tries": 1,
+   "http": 200,
+   "ms": 1484,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ]
+  },
+  {
+   "case": "1day 399006.SZ",
+   "tries": 1,
+   "http": 200,
+   "ms": 1627,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ]
+  },
+  {
+   "case": "1day 510300.SH",
+   "tries": 1,
+   "http": 200,
+   "ms": 8421,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ]
+  },
+  {
+   "case": "1day 159915.SZ",
+   "tries": 1,
+   "http": 200,
+   "ms": 4462,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ]
+  },
+  {
+   "case": "1day 920000.BJ",
+   "tries": 1,
+   "http": 200,
+   "ms": 5027,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 241,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-10-23 09:30:00",
+   "last": "2026-10-23 15:00:00"
+  },
+  {
+   "case": "1day 430047.BJ",
+   "tries": 1,
+   "http": 200,
+   "ms": 3443,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ]
+  },
+  {
+   "case": "1day 688981.SH",
+   "tries": 1,
+   "http": 200,
+   "ms": 3287,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 241,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-10-23 09:30:00",
+   "last": "2026-10-23 15:00:00"
+  },
+  {
+   "case": "ETF via etf_mins 510300.SH (compare)",
+   "tries": 1,
+   "http": 200,
+   "ms": 3398,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 241,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-10-23 09:30:00",
+   "last": "2026-10-23 15:00:00"
+  },
+  {
+   "case": "limit param=50",
+   "tries": 1,
+   "http": 200,
+   "ms": 2607,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-10-23 14:11:00",
+   "last": "2026-10-23 15:00:00"
+  },
+  {
+   "case": "offset param=1000 limit 300",
+   "tries": 1,
+   "http": 200,
+   "ms": 3958,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 300,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "first": "2026-10-16 13:26:00",
+   "last": "2026-10-19 14:24:00"
+  },
+  {
+   "case": "bad freq 2min",
+   "tries": 1,
+   "http": 200,
+   "ms": 3130,
+   "code": -1,
+   "msg": "freq 仅支持: 1min, 5min, 15min, 30min, 60min",
+   "retry_after": null,
+   "rows": 0,
+   "fields": []
+  },
+  {
+   "case": "no ts_code multi",
+   "tries": 1,
+   "http": 200,
+   "ms": 3196,
+   "code": -1,
+   "msg": "ts_code 格式错误",
+   "retry_after": null,
+   "rows": 0,
+   "fields": []
+  },
+  {
+   "case": "weekend day",
+   "tries": 1,
+   "http": 200,
+   "ms": 1081,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ]
+  },
+  {
+   "case": "today 10-26 (post-close)",
+   "tries": 1,
+   "http": 200,
+   "ms": 2123,
+   "code": 0,
+   "msg": "",
+   "retry_after": null,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ]
+  }
+ ],
+ "concurrency": [
+  {
+   "concurrency": 2,
+   "calls": 4,
+   "ok": 4,
+   "bad": [],
+   "elapsed_s": 16.4,
+   "calls_per_min": 14.6,
+   "ms_median": 6071.5,
+   "ms_max": 10776,
+   "rows_median": 4579.0
+  },
+  {
+   "concurrency": 4,
+   "calls": 8,
+   "ok": 8,
+   "bad": [],
+   "elapsed_s": 11.8,
+   "calls_per_min": 40.6,
+   "ms_median": 5036.0,
+   "ms_max": 8269,
+   "rows_median": 4579.0
+  },
+  {
+   "concurrency": 8,
+   "calls": 16,
+   "ok": 16,
+   "bad": [],
+   "elapsed_s": 11.5,
+   "calls_per_min": 83.4,
+   "ms_median": 5109.5,
+   "ms_max": 7193,
+   "rows_median": 4579.0
+  },
+  {
+   "concurrency": 8,
+   "calls": 16,
+   "ok": 16,
+   "bad": [],
+   "elapsed_s": 17.0,
+   "calls_per_min": 56.6,
+   "ms_median": 4727.5,
+   "ms_max": 9661,
+   "rows_median": 4579.0
+  }
+ ],
+ "daily_reconcile_vs_tushare_daily": [
+  "000001 2023-10-27 | 241 | 1.0000 | 1.0001 | OHLC ok | DB bars=0 vol/daily=0.0000 amt/daily=0.0000 | xiaoshi none",
+  "000001 2025-03-14 | 241 | 1.0000 | 1.0000 | OHLC ok | DB bars=0 vol/daily=0.0000 amt/daily=0.0000 | xiaoshi none",
+  "000001 2026-08-18 | 241 | 1.0000 | 1.0000 | OHLC ok | DB bars=0 vol/daily=0.0000 amt/daily=0.0000 | xiaoshi bars=238 vol/daily=1.0000 amt/daily=1.0000",
+  "000001 2026-10-23 | 241 | 1.0000 | 1.0000 | OHLC ok | DB bars=241 vol/daily=1.0000 amt/daily=0.0000 | xiaoshi none",
+  "600519 2023-10-27 | 241 | 1.0000 | 1.0000 | OHLC ok | DB bars=0 vol/daily=0.0000 amt/daily=0.0000",
+  "600519 2025-03-14 | 241 | 1.0000 | 1.0000 | OHLC diff (np.float64(1547.66), np.float64(1628.01), np.float64(1543.0), np.float64(1628.01)) vs (np.float64(1547.66), np.float64(1628.01), np.float64(1541.0), np.float64(1628.01)) | DB bars=0 vol/daily=0.0000 amt/daily=0.0000",
+  "600519 2026-08-18 | 241 | 1.0000 | 1.0000 | OHLC ok | DB bars=238 vol/daily=1.0000 amt/daily=1.0000",
+  "600519 2026-10-23 | 241 | 1.0000 | 1.0000 | OHLC ok | DB bars=241 vol/daily=1.0000 amt/daily=0.0000",
+  "300750 2023-10-27 | 241 | 1.0001 | 1.0001 | OHLC diff (np.float64(177.85), np.float64(185.32), np.float64(176.2), np.float64(184.72)) vs (np.float64(177.85), np.float64(185.88), np.float64(176.02), np.float64(184.72)) | DB bars=0 vol/daily=0.0000 amt/daily=0.0000",
+  "300750 2025-03-14 | 241 | 1.0000 | 1.0000 | OHLC diff (np.float64(253.0), np.float64(264.8), np.float64(252.75), np.float64(262.0)) vs (np.float64(253.0), np.float64(264.85), np.float64(252.65), np.float64(262.0)) | DB bars=0 vol/daily=0.0000 amt/daily=0.0000",
+  "300750 2026-08-18 | 241 | 1.0000 | 1.0000 | OHLC ok | DB bars=0 vol/daily=0.0000 amt/daily=0.0000",
+  "300750 2026-10-23 | 241 | 1.0000 | 1.0000 | OHLC ok | DB bars=241 vol/daily=1.0000 amt/daily=0.0000"
+ ]
+}

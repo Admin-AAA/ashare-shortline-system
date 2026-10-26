@@ -1,11 +1,12 @@
 """teajoin（DaoShare）能力登记：官方 guide 目录（205 个接口名）逐个实测的结果（docs/teajoin_catalog_probe*.json，2026-10-26 18:50–19:30）。
 
 * TEAJOIN_APIS            实测可用、纳入路由的接口（含 etf_mins 等已验证接口）。做主源的规则见 LeaderSpec（tushare_transport）。
-* NOT_ROUTED              目录里有但不路由的接口及原因（目前仅 stk_mins：需向卖家单独购买历史分钟权限）。
+* NOT_ROUTED              目录里有但不路由的接口及原因（stk_mins 已于 2026-10-26 21:00 开通权限并实测通过，转入 TEAJOIN_APIS）。
 * INTRADAY_SENSITIVE      盘中（工作日 09:15–15:05）live 进程里延迟敏感的接口：此时 teajoin 不做主源（排末位兜底），
                           盘后与研究回补进程（已限速）仍做主源，把 promax/quantdata 额度留给实盘 rt_k。
 * HEAVY / FAST            读超时分档：大表/慢接口 90s、小表 15s，其余 40s（做主源且有备源时；超时立即换源，不重试）。
-rt_k / rt_min / stk_mins / anns_d / news / tick / 盘口 不在名单内：teajoin 不提供，保持 promax/quantdata 原链路。
+rt_k / rt_min / anns_d / news / tick / 盘口 不在名单内：teajoin 不提供，保持 promax/quantdata 原链路。
+stk_mins（历史分钟）：teajoin 主源；单次最多 8000 行（超出静默截断、保留最新的），client 按 ≤30 天窗口取；指数/ETF 返回空（ETF 用 etf_mins）。
 """
 from __future__ import annotations
 
@@ -34,7 +35,7 @@ TEAJOIN_APIS: frozenset[str] = frozenset({
     "repurchase", "sf_month", "sge_basic", "sge_daily", "share_float", "shibor", "shibor_lpr",
     "shibor_quote", "slb_len", "slb_len_mm", "slb_sec", "slb_sec_detail", "st", "stk_account",
     "stk_ah_comparison", "stk_alert", "stk_auction", "stk_auction_c", "stk_auction_o", "stk_factor",
-    "stk_factor_pro", "stk_high_shock", "stk_holdernumber", "stk_holdertrade", "stk_limit", "stk_managers",
+    "stk_factor_pro", "stk_high_shock", "stk_holdernumber", "stk_holdertrade", "stk_limit", "stk_managers", "stk_mins",
     "stk_nineturn", "stk_rewards", "stk_seasoned", "stk_shock", "stk_surv", "stk_week_month_adj",
     "stk_weekly_monthly", "stock_basic", "stock_company", "stock_hsgt", "stock_st", "suspend_d", "sw_daily",
     "sz_daily_info", "tdx_daily", "tdx_index", "tdx_member", "ths_daily", "ths_hot", "ths_index",
@@ -44,7 +45,6 @@ TEAJOIN_APIS: frozenset[str] = frozenset({
 })
 
 NOT_ROUTED: dict[str, str] = {
-    "stk_mins": "历史分钟行情需向卖家单独购买权限（实测：当前套餐不包含分钟行情权限）",
     "rt_k": "teajoin 不支持实时行情",
     "rt_min": "teajoin 不支持实时分钟",
     "anns_d": "teajoin 不支持公告",

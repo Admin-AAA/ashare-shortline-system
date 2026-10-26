@@ -6,7 +6,7 @@
 - 一个 **Tushare Pro 协议的第三方代理**（文档页 https://teajoin.com/guide ，文档本身需前端渲染，内容已全部读取）。
 - 鉴权：HTTP POST 到根路径 `https://teajoin.com`，JSON `{"api_name","token","params","fields"}`，与 quantdata 同一种方式（本项目 `AuthMode.JSON_TOKEN`）。也支持 tushare SDK（改 `_DataApi__http_url`）和 MCP。
 - 返回格式与 Tushare 一致（`data.fields` / `data.items`，大表有 `has_more` + `offset` 翻页，单页上限 3000～10000 随接口）。
-- 套餐：**15000 积分通用套餐**。官方 guide（2026-10-26 18:49 重新通读）写“已支持接口目录 195 个”，“完整 catalog 接口名称 205 个”（含 2026-10-11 新增 7 个、独立权限的 stk_mins/etf_mins）；用户口头说的 193 个应为同一目录的不同口径。**以 205 个完整 catalog 为准**。**不含**：实时行情（rt_k）、历史分钟（stk_mins，需单独开通，实测返回“当前套餐不包含分钟行情权限”）、新闻公告、研报、港美股。集合竞价类（stk_auction/_o/_c）已包含。
+- 套餐：**15000 积分通用套餐**。官方 guide（2026-10-26 18:49 重新通读）写“已支持接口目录 195 个”，“完整 catalog 接口名称 205 个”（含 2026-10-11 新增 7 个、独立权限的 stk_mins/etf_mins）；用户口头说的 193 个应为同一目录的不同口径。**以 205 个完整 catalog 为准**。**不含**：实时行情（rt_k）、新闻公告、港美股。**历史分钟 stk_mins：2026-10-26 21:00 用户已单独开通，21:0x 起实测可用，见 §8。**集合竞价类（stk_auction/_o/_c）已包含。
 - 限流：guide 写最高 450 次/分钟，**卖家 19:32 口头确认 500 次/分钟**；我们按 **420 次/分钟**（留约 15% 余量，`ASHARE_TUSHARE_TEAJOIN_RATE_LIMIT_PER_MINUTE`），单进程并发上限 4（`ASHARE_TUSHARE_TEAJOIN_MAX_CONCURRENCY`）；盘中研究/回补进程另限 30 次/分钟给实盘让路。**文档没有写日额度**。注意：上游常见的瓶颈不是每分钟次数，而是“同时多路重查询”时返回 `query capacity busy`（见第 5 节）。Key 的到期日需用兑换码在 https://teajoin.com/redeem 查看（我们手里只有 Key，没有兑换码，**到期时间未知**，建议用户确认）。
 - 价格/续费：文档写“闲鱼购买兑换码、到期找卖家续费”，无公开价目。
 
@@ -32,7 +32,7 @@
 | **集合竞价 stk_auction_o（开盘竞价）** | ✓ | **2020-01-02 起**（3751 行；2023、2025 各约 5000+ 行）| 盘后当晚才有（15:10 查 10-23 为空）| ✓ | 字段：open/high/low/close/vol/amount/vwap |
 | stk_auction_c（收盘竞价）| ✓ | 2025-01-02 已验证（5633 行）| — | ✓ | 更早历史未测 |
 | stk_auction（9:25 竞价快照）| △ | 只有近期（2025、2023、2020 查询均为空）| 10-23（6096 行）| ✓ | 含价格/成交量/量比/换手；需早盘 9:26 后取 |
-| **全市场历史分钟K stk_mins** | ✗ | — | — | — | **套餐无权限**，需向卖家单独购买“历史分钟”权限。etf_mins（ETF 分钟）可用，2024 年已验证 |
+| **全市场历史分钟K stk_mins** | ✓ | 2015-06-01 起已验证 | 当日数据收盘后不立即有（10-26 21:15 仍为 0 行，T+1） | 1/5/15/30/60min | 21:00 开通；见 §8。ETF 分钟用 etf_mins；指数/ETF 走 stk_mins 返回空 |
 | rt_k / rt_min / 实时逐笔 / 盘口 / tick | ✗ | — | — | — | rt_k、rt_min 不支持；猜测的 rt_tick/realtime_tick/realtime_quote/stk_ticks 全部“未收录”。**tick/盘口缺口无法由 teajoin 补** |
 | 筹码 cyq_perf | ✓ | 已验证 2026-07～10 | 10-23 | ✓ 约 5550 只 | **与本地库 cost_50 逐行对账 5565/5565 完全一致**；cyq_chips（分布）2026-06-25 起停更 |
 | 资金流 moneyflow / moneyflow_dc / moneyflow_ths | ✓ | — | 10-23 | ✓ | 慢（18～23 秒）|
@@ -46,7 +46,7 @@
 ### 3.1 官方完整目录逐个实测（205 个：204 个已纳入，1 个不路由）
 原始结果：`docs/teajoin_catalog_probe.json`（第一轮）+ `teajoin_catalog_probe_r2.json`（第二轮：参数不对/容量忙/超时的重试）。每个接口只做 1～4 次小调用（limit 50，2 线程、间隔 ≥1.5s）。**这轮探测验证“能不能调通、返回哪些字段、最新到哪天”，不代表全市场行数**（行数上限 50）。
 
-结果：**204 个接口全部可调通**（含第二轮修正参数后的 hm_list/namechange/ths_index/ths_member/dc_index/index_daily/cyq_chips 等），其中 `dc_concept_cons`（需 theme_code 才有数据）、`stk_auction_c`（当晚数据收盘后才出）、`ggt_daily`/`index_weight`/`pledge_detail`/`fut_weekly_detail` 在个别参数下为空，属参数问题而非不可用。**未纳入：`stk_mins`（历史分钟，需向卖家单独购买权限，实测“当前套餐不包含分钟行情权限”）**；另外 rt_k/rt_min/anns_d/news/tick/盘口不在 teajoin 目录里。
+结果：**204 个接口全部可调通**（含第二轮修正参数后的 hm_list/namechange/ths_index/ths_member/dc_index/index_daily/cyq_chips 等），其中 `dc_concept_cons`（需 theme_code 才有数据）、`stk_auction_c`（当晚数据收盘后才出）、`ggt_daily`/`index_weight`/`pledge_detail`/`fut_weekly_detail` 在个别参数下为空，属参数问题而非不可用。**stk_mins 已于 21:00 开通并纳入（共 205 个，全部路由）**；另外 rt_k/rt_min/anns_d/news/tick/盘口不在 teajoin 目录里。
 
 为什么此前只有 45 个：第一轮只探测了“我们系统已经在用的数据集”并要求与本地库对账，白名单是**刻意收窄**不是漏掉；本轮按用户指令把目录全部实测后扩到 204 个。目录里与我们系统直接对应的有 59 个（日线/指标/复权/涨跌停/涨停榜/龙虎榜/资金流/融资融券/筹码/竞价/财务/股东/板块/沪深港通/周月线等），其余（期货、期权、可转债、基金、宏观、美港股参考等）暂无消费方，已登记但没有调用方，不影响现有链路。
 
@@ -70,15 +70,18 @@
 | 筹码空洞 | **已补**（4 个日子）|
 | 额度：promax、quantdata 今天同时耗尽 | **缓解**：teajoin 没有公布日额度，作为第三个兜底源，已验证可在两家耗尽时接手批量接口（不能接手 rt_k）|
 
-## 4.1 每类接口最终源顺序（2026-10-26 19:5x 起生效）
+## 4.1 每类接口最终源顺序（2026-10-26 21:30 起生效；promax 已降为少额度用户）
+promax 额度**专留 rt_k / rt_min**；其余接口 teajoin 做主源，promax 不再进入这些接口的链路（唯一源时除外），补数/研究进程**绝不动用 promax**。
 | 接口类别 | 盘后/研究回补 | 盘中（工作日 09:15–15:05）live 进程 |
 |---|---|---|
-| rt_k、rt_min、stk_mins（实时/历史分钟）、anns_d | promax → quantdata（不变） | 同左（teajoin 不参与） |
-| 日线/每日指标/复权因子/涨跌停价/停复牌/ST/交易日历/股票列表/曾用名/指数日线/技术因子 | **teajoin** → promax/quantdata | promax/quantdata → teajoin（让位） |
-| 资金流（moneyflow/_dc/_ths）、涨停榜（limit_list_d/_ths、limit_cpt_list、limit_step、kpl_list、kpl_concept_cons）、龙虎榜/游资、同花顺热榜/板块、筹码 cyq_perf、集合竞价 stk_auction/_o/_c、ETF 分钟 | **teajoin** → promax/quantdata | promax/quantdata → teajoin（让位） |
-| 融资融券、大宗、财务（fina_*/income/balancesheet/cashflow 及 vip）、业绩预告/快报、分红、回购、解禁、股东户数/增减持、质押、沪深港通、周月线、研报 等 | **teajoin** → promax/quantdata | **teajoin** → promax/quantdata（不影响盘中选股，且省额度） |
+| rt_k、rt_min（实时） | promax → …（回补不调用） | promax → 新浪 → 腾讯 → AKShare 全市场快照 → 分钟 rt_min → 小石（见 §9） |
+| **stk_mins（历史分钟）** | **teajoin**（quantdata 无权限；promax 不参与） | **teajoin**（超时 15s 自动降级；今日数据 T+1，当日空时由上层走小石分钟） |
+| anns_d（公告） | promax（唯一源，live 可用；回补不可用） | 同左 |
+| 其余全部 teajoin 支持的接口（日线/指标/复权/涨跌停价/停复牌/资金流/涨停榜/龙虎榜/筹码/集合竞价/ETF 分钟/财务…） | **teajoin** → quantdata（promax 不进链） | **teajoin**（盘中读超时 15s，重表 30s，超时/失败立即降级到 quantdata）→ quantdata |
 | promax/quantdata 本来就不支持的接口（板块行情、东财/通达信、基金、期货、可转债、宏观等） | teajoin（唯一源） | teajoin（唯一源） |
-| 链路内主源失败（超时/容量忙/熔断/额度耗尽） | 当次立即换下一家 | 同左 |
+| 链路内主源失败（超时/容量忙/偶发 invalid api key/熔断） | 批量：就地短退避重试（5 次）再换源；不开熔断 | live：不重试，30s 冷却并立即换源 |
+
+开关（都可回退）：`ASHARE_TUSHARE_TEAJOIN_LEAD`（teajoin 主源总开关）、`ASHARE_TUSHARE_TEAJOIN_INTRADAY_YIELD=true`（恢复盘中 36 个延迟敏感接口让原源先走）、`ASHARE_TUSHARE_TEAJOIN_INTRADAY_READ_TIMEOUT_SECONDS`（默认 15）、`ASHARE_TUSHARE_PROMAX_RTK_RESERVED=false`（让 promax 回到末位兜底）、`ASHARE_TUSHARE_PROMAX_RESEARCH_ENABLED=true`（允许补数进程用 promax）。
 
 ## 5. 延迟与稳定性
 - 小请求：中位数 ≈4.3 秒，范围 1.6～14 秒（12 次连续小请求 0 失败）；整体比 promax/quantdata 慢得多。
@@ -110,3 +113,28 @@
 **第 7 步（用户 18:48 指令，已做）**：teajoin 在 204 个接口上做主源（规则见第 2 节），带超时分档、1 次尝试、立即降级、盘中让位。
 **仍建议**：
 - rt_k 目前没有第三个 Tushare 协议备源（teajoin 不支持）。实盘行情在 promax/quantdata 全耗尽时只剩新浪与小石快照兜底，建议给 rt_k 预留固定额度（比如每日额度的 30%）且日更/补数任务不得占用。
+
+## 8. stk_mins（历史分钟）实测（2026-10-26 21:00–21:30，严格小量，约 100 次请求）
+脚本 `backend/scripts/probe_teajoin_stk_mins.py`，原始摘要 `docs/teajoin_stk_mins_probe.json`。
+
+| 项目 | 结论 |
+|---|---|
+| 可用性 | ✓ 可用。HTTP 200，字段 `ts_code, trade_time, open, close, high, low, vol, amount` |
+| 频率 | 1min / 5min / 15min / 30min / 60min（其它值报“freq 仅支持…”）。单日 1min = 241 根（含 09:30 集合竞价成交那一根，到 15:00）；5min 48 根、15min 16、30min 8、60min 4 |
+| 历史起点 | 至少到 **2015-06-01**（1min 当日 241 根），2020-01-02、2023-10-27、2025-03-14 均完整。我们只需 2023-10-27 之后，**完全覆盖** |
+| 覆盖范围 | 沪深主板/创业板/科创板/北交所新代码（920xxx）✓；**已退市股**可取（920305.BJ 退市前 1928 根 OK；更早退市的 600290.SH 退市前 10 天为 0 行，需按真实停牌/整理期核对）；**指数（000001.SH/399006.SZ）和 ETF（510300/159915）经 stk_mins 返回 0 行**，ETF 要用 etf_mins（510300 1 天 241 根 ✓）；北交所旧代码 430047 0 行（已换 920xxx） |
+| 单次上限 | **8000 行，超出静默截断且保留最新的**（3 个月请求只回最近 8000 行，起点变成 08-31 14:14，没有任何报错）。**必须按 ≤30 个自然日（≈22 个交易日≈5300 行）窗口取**——现有 `_minute_query_windows`（`_STK_MINS_WINDOW_DAYS`）和 `len(frame)>=8000` 的截断保护已经满足，不用改 |
+| 分页 | 支持 `limit` / `offset`（从最新一端往回数：limit=50 回最近 50 根；offset=1000,limit=300 回 10-16 13:26～10-19 14:24）。也可按日期窗口切 |
+| 复权 | **不复权**（原始价）。与 tushare daily 同日 OHLC：3 只股票 × 4 个日子（2023-10-27、2025-03-14、2026-08-18、2026-10-23）日内 open/close 逐一吻合，high/low 个别日差 0.02～0.56 元（日线 high/low 含集合竞价价，分钟线只含连续竞价），属正常 |
+| 单位 | **vol = 股，amount = 元**（不是手/千元）。与 tushare daily 对账：Σvol ÷ (日线 vol×100) = 1.0000，Σamount ÷ (日线 amount×1000) = 1.0000（12 个样本，最大偏差 0.01%）。与小石归档 `xiaoshi_min_all`（volume 股、amount 元、adjustment=raw）单位一致，000001 在 2026-08-18 的日合计量额完全一致（小石 238 根，比 teajoin 少 3 根） |
+| 与库内 minute_kbars 对账 | 2026-10-23 的 000001/600519/300750：时间轴逐分钟对齐（偏移 0 时 close 100% 吻合，偏移 ±1 分钟只剩 2.5%），**volume 94% 逐根一致，日合计 100% 一致**；库里 **amount 全是 0**（teajoin 可补齐）；库里 high/low 与 teajoin 在约 20% 的分钟上差 0.01～0.1 元（库里是快照合成，teajoin 是真实分钟 OHLC，以 teajoin 为准）；2026-10-22 库里该日数据不完整（如 14:57 volume=0，teajoin 为 1348700） |
+| 当日数据 | 10-23 可取，**10-26 在 21:15 仍是 0 行**（T+1 更新，非实时），所以今天的分钟线仍靠小石/实时源 |
+| 速度 | 单次 1 天 ≈ 1.5～5s；1 个月（4579 行）≈ 4.5～7s；8000 行 ≈ 4s。并发 2 / 4 / 8 路：吞吐 15 / 41 / 57～83 次/分，**40 次并发请求中 busy / 429 = 0 次**。teajoin 当时对 limit_list_d 另有约 10% 偶发 403 “invalid api key”（见 §5/§7，已按瞬时拥塞处理） |
+| 预估：近 3 年（2023-10-27 起，725 个交易日）全市场 1 分钟 | 约 5,700 只 × 每只 25 个 30 天窗口 ≈ **14.2 万次请求**，数据量约 9.7 亿行；按并发 8、约 70 次/分钟 ≈ **34 小时**（并发 4 约 55 小时；理论上限 420 次/分 ≈ 5.6 小时但未实测容量忙）。建议并发 6～8、分月落 parquet、可断点续传，夜间和周末跑 |
+| 预估：只补首板（涨停）日 | 库里近 3 年涨停日（主板≥9.8%，创业板/科创板≥19.8%）约 5.6 万个“股票-日”，其中首板约 3 万；每个事件（含前后各 1 天）1 次请求 ≈ **3～5.6 万次请求，约 8～14 小时**，数据量约 3000 万行，完全可以 1 个晚上跑完 |
+
+接入：`stk_mins` 已纳入 `TEAJOIN_APIS`，teajoin 做主源；teajoin 的 stk_mins 与 promax 共用同一道“分钟线合同闸门”（整分钟、仅连续竞价时段、无重复分钟，否则拒收并降级）；`NOT_ROUTED` 不再含 stk_mins。
+
+## 9. rt_k（实时行情）在 promax 耗尽后的兜底
+teajoin 不提供 rt_k，promax 是唯一 rt_k 主源，已降为少额度用户。现网 rt_k 链路（`quote_realtime.py`，缺哪几只就只向下一级要哪几只）：promax rt_k（1.5s 硬超时、熔断）→ 新浪 realtime_quote（tushare 爬虫，50 只/批）→ 腾讯 qt.gtimg（`.env` 里 `ASHARE_DATASOURCE_CUTOVER` 已含 quote.realtime.tencent，当前启用）→ AKShare 全市场快照（见下）→ quantdata rt_min（逐只、最多 60 只，只有现价）→ 小石快照。
+
