@@ -1,4 +1,7 @@
-"""limit_list_d 2020 起回补（teajoin 直连版）：接续 fetch_limit_list_d.py 的 parquet（同目录、同列、同去重键），只走 teajoin。
+"""【已弃用，保留备查｜2026-10-26 20:1x】请改用 fetch_limit_list_d.py（走统一数据网关：限流/监控/额度统计/降级全在）。
+网关现在对 teajoin 的「HTTP 429 query capacity busy」在批量进程里就地短退避重试（数秒、带抖动、不开熔断），直连版的存在理由已消失。
+
+limit_list_d 2020 起回补（teajoin 直连版）：接续 fetch_limit_list_d.py 的 parquet（同目录、同列、同去重键），只走 teajoin。
 
 为什么单独一个脚本：promax/quantdata 今日额度耗尽；teajoin 上游对「历史单日重查询」常返回 `query capacity busy`（多发于并发或连发），
 网关熔断会把它放大成分钟级停摆。本脚本单路串行 + 容量忙就地短退避重试（5s×n，最多 8 次），不占 promax/quantdata 额度，也不碰 live 熔断。

@@ -45,6 +45,9 @@ _PERMISSION_BUSINESS_CODES = frozenset({"40203"})
 _RATE_LIMIT_BUSINESS_CODES = frozenset({"42901"})
 # HTTP 200 但业务层报「上游容量忙」的措辞（teajoin: "query capacity busy"）。
 _BUSINESS_CAPACITY_TERMS = ("capacity busy", "capacity_busy", "pool_exhausted", "pool exhausted", "server busy", "系统繁忙", "服务繁忙")
+# 批量/补数进程遇到「容量忙」：就地重试 BUSY_BATCH_ATTEMPTS 次，间隔 BUSY_BATCH_WAIT 秒 × 次数（带 ±25% 抖动），不开熔断。
+BUSY_BATCH_ATTEMPTS = 5
+BUSY_BATCH_WAIT = (2.0, 5.0)
 _PERMISSION_MESSAGE_TERMS = ("权限", "未开通", "积分", "permission", "unauthorized")
 _RATE_LIMIT_MESSAGE_TERMS = ("频率", "频次", "rate limit", "请求速度", "limit exceeded")
 
@@ -221,6 +224,7 @@ class ProviderFailure(RuntimeError):
         fallback_allowed: bool,
         retry_after_seconds: float | None = None,
         upstream_detail: str | None = None,
+        capacity_busy: bool = False,
     ) -> None:
         self.provider = provider
         self.api_name = api_name
@@ -232,6 +236,9 @@ class ProviderFailure(RuntimeError):
         # 不保留完整响应体，避免把 token 或业务数据带进日志。没有这个字段时，5xx 在日志里
         # 只剩 http_server 这个粗标签，无法区分「代理宕机」与「代理容量耗尽」。
         self.upstream_detail = upstream_detail
+        # 上游「容量忙」（teajoin: query capacity busy）：瞬时拥塞，不是故障。批量/补数进程就地短退避重试且不开熔断；
+        # live 进程保持保守（30s 冷却 + 立即降级到备源）。
+        self.capacity_busy = bool(capacity_busy)
         suffix = f", upstream={upstream_detail}" if upstream_detail else ""
         super().__init__(f"{provider} {api_name} failed ({category.value}{suffix})")
 
@@ -793,7 +800,7 @@ class TushareHttpProvider:
                         "tushare provider daily quota exhausted provider=%s api=%s; skipping it for the rest of today",
                         self.name, api_name,
                     )
-                self._lb_record(api_name, True, weight=2.0 if rate_limited else 1.0)
+                self._lb_record(api_name, True, weight=0.5 if failure.capacity_busy else (2.0 if rate_limited else 1.0))
                 raise
             data = envelope.get("data")
             items = data.get("items") if isinstance(data, Mapping) else None
@@ -851,15 +858,29 @@ class TushareHttpProvider:
             )
             return envelope
 
+        base_attempts = min(self.config.max_attempts, (_LEAD_CALL.get() or (0.0, self.config.max_attempts))[1])
+
+        def _last_busy(state: Any) -> bool:
+            exc = state.outcome.exception() if state.outcome is not None else None
+            return bool(isinstance(exc, ProviderFailure) and exc.capacity_busy and exc.retryable)
+
+        def _stop(state: Any) -> bool:
+            return state.attempt_number >= (BUSY_BATCH_ATTEMPTS if _last_busy(state) else base_attempts)
+
+        def _wait(state: Any) -> float:
+            if _last_busy(state):
+                lo, hi = BUSY_BATCH_WAIT
+                delay = random.uniform(lo, hi) * min(state.attempt_number, 3)
+                _metrics.inc("provider_capacity_busy_retry", provider=self.name, api=api_name)
+                return delay
+            return min(5.0, 0.5 * (2 ** (state.attempt_number - 1))) + random.uniform(0.0, 0.2)
+
         retrying = tenacity.Retrying(
-            stop=tenacity.stop_after_attempt(
-                min(self.config.max_attempts, (_LEAD_CALL.get() or (0.0, self.config.max_attempts))[1])
-            ),
+            stop=_stop,
             retry=tenacity.retry_if_exception(
                 lambda exc: isinstance(exc, ProviderFailure) and bool(exc.retryable)
             ),
-            wait=lambda state: min(5.0, 0.5 * (2 ** (state.attempt_number - 1)))
-            + random.uniform(0.0, 0.2),
+            wait=_wait,
             sleep=lambda seconds: time.sleep(seconds),
             reraise=True,
         )
@@ -872,6 +893,13 @@ class TushareHttpProvider:
                 FailureCategory.HTTP_RATE_LIMIT,
                 FailureCategory.PERMISSION,
             }
+            if failure.capacity_busy and _is_research_namespace():
+                # 批量/补数遇到上游容量忙：已就地重试过；不计熔断失败（否则 3 次忙 = 5 分钟起的停摆），
+                # 由路由器换下一家；只留指标，监控可见。
+                _metrics.inc("provider_capacity_busy", provider=self.name, api=api_name, mode="batch")
+                raise
+            if failure.capacity_busy:
+                _metrics.inc("provider_capacity_busy", provider=self.name, api=api_name, mode="live")
             if failure.fallback_allowed and failure.category not in {
                 FailureCategory.INVALID_REQUEST,
                 FailureCategory.HTTP_CLIENT,
@@ -924,6 +952,21 @@ class TushareHttpProvider:
                         retry_after = _promax_window.cooldown_seconds(api_name, upstream_wait)
                     else:
                         retry_after = upstream_wait or 60.0
+                    busy_detail = (_extract_upstream_detail(response) or "") if self.config.name != "promax" else ""
+                    if busy_detail and any(term in busy_detail.lower() for term in _BUSINESS_CAPACITY_TERMS):
+                        # teajoin：HTTP 429 + {"msg":"query capacity busy"} + Retry-After:2 —— 上游瞬时拥塞，不是额度/故障。
+                        # 批量/补数进程：就地短退避重试（见 BUSY_BATCH_*），不开熔断；live 进程：不重试，30s 冷却并立即降级。
+                        batch = _is_research_namespace()
+                        raise ProviderFailure(
+                            provider=self.name,
+                            api_name=api_name,
+                            category=FailureCategory.HTTP_RATE_LIMIT,
+                            retryable=batch,
+                            fallback_allowed=True,
+                            retry_after_seconds=30.0,
+                            upstream_detail=busy_detail,
+                            capacity_busy=True,
+                        )
                     raise ProviderFailure(
                         provider=self.name,
                         api_name=api_name,
@@ -1114,14 +1157,16 @@ class TushareHttpProvider:
         if any(term in message for term in _BUSINESS_CAPACITY_TERMS):
             # 2026-10-26 teajoin：HTTP 200 + 业务码非 0 + "query capacity busy"（重查询时上游并发满）。
             # 不是参数/权限错误，也不是日额度：短冷却后换源/重试，别把它当 provider_error 反复打。
+            batch = _is_research_namespace()
             return ProviderFailure(
                 provider=self.name,
                 api_name=api_name,
                 category=FailureCategory.HTTP_RATE_LIMIT,
-                retryable=False,
+                retryable=batch,  # 批量/补数：就地短退避重试；live：不重试，立即换源
                 fallback_allowed=True,
                 retry_after_seconds=30.0,
                 upstream_detail=upstream_detail,
+                capacity_busy=True,
             )
         if any(term in message for term in ("参数", "parameter", "invalid argument")):
             return ProviderFailure(
@@ -1384,7 +1429,7 @@ class TushareProviderRouter:
                 if lead_spec is not None and lead_spec.leads(
                     api_name, research=_is_research_namespace(), intraday=_in_research_window()
                 ):
-                    with _lead_scope(lead_spec.timeout_for(api_name), 1):
+                    with _lead_scope(lead_spec.timeout_for(api_name), 2 if _is_research_namespace() else 1):
                         envelope = provider.request(api_name, params=params, fields=fields)
                 else:
                     envelope = provider.request(api_name, params=params, fields=fields)
