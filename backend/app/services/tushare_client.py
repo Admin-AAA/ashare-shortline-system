@@ -544,7 +544,8 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
                     included_apis=TEAJOIN_APIS,
                     source="teajoin",
                     priority=6,
-                    **common,
+                    **{**common, "timeout": (max(float(common["timeout"][0]), 15.0), common["timeout"][1])},  # 上游拥塞时建连慢，5s 连接超时会误判
+
                 )
             )
         )
