@@ -385,17 +385,68 @@ def _drop_as_repeat_card(
     return False
 
 
-def _no_opportunity_reason(cards: list[dict[str, Any]], score_line: dict[str, Any]) -> str:
-    """0 推荐时的可读原因：最高分 / 有效线 / 市场阶段。"""
+# 选股政策否决规则代号 → 中文（policy_drop_owner，见 aggregator_pure / daily_pick_cap）；映射不到的原样显示代号。
+POLICY_RULE_LABELS: dict[str, str] = {
+    "high_amount_veto": "大成交额",
+    "high_turnover_veto": "高换手",
+    "high_chg20_veto": "20日涨幅过大",
+    "high_chg60_veto": "60日涨幅过大",
+    "high_pos60_veto": "60日高位",
+    "max_dd60_veto": "60日回撤过深",
+    "limit_up_days20_veto": "20日涨停过多",
+    "strong_climax_top_n": "高潮日限只数",
+    "strong_high_ivol_veto": "强势高特质波动",
+    "weak_low_ivoldn20_veto": "弱势低下行波动",
+    "no_support_high_ivol_veto": "无均线支撑高波动",
+    "require_ma_support": "无均线支撑",
+    "extra_tail_veto": "尾部风险",
+    "consensus_gate": "共识闸门",
+    "anti_consensus_gate": "反向共识闸门",
+    "board_universe": "板块范围",
+    "excluded_strategy_bucket": "排除的策略类别",
+    "daily_top_n": "当日名额已满",
+    "daily_strategy_cap": "单策略当日上限",
+    "score_line": "分数线",
+}
+
+
+def _policy_block_detail(empty_reason: str | None) -> str | None:
+    """解析 filter_audit.empty_reason（"production_policy_blocked: n/m；a=1, b=2"）→ "大成交额×1、高换手×2"。"""
+    text = str(empty_reason or "")
+    if not text.startswith("production_policy_blocked"):
+        return None
+    _, _, detail = text.partition("；")
+    items = []
+    for part in detail.split(","):
+        rule, sep, count = part.strip().partition("=")
+        if not rule:
+            continue
+        label = POLICY_RULE_LABELS.get(rule, rule)
+        items.append(f"{label}×{count}" if sep else label)
+    return "、".join(items) or None
+
+
+def _no_opportunity_reason(
+    cards: list[dict[str, Any]],
+    score_line: dict[str, Any],
+    empty_reason: str | None = None,
+) -> str:
+    """0 推荐时的可读原因：最高分 / 有效线 / 被哪条风控否决 / 市场阶段。"""
     top = max((float(c.get("final_score") or 0) for c in cards), default=0.0)
     effective = score_line.get("effective_score_line")
     market_base = score_line.get("market_base") or ""
     if top <= 0:
         return "无候选通过规则门（全部低于 Skill 门槛）"
+    market = f"市场阶段 {market_base or '未知'}"
+    blocked = _policy_block_detail(empty_reason)
+    if effective and top >= float(effective) and blocked:
+        return f"最高分 {top:.1f} 已过分数线 {float(effective):.1f}，但被风控否决：{blocked}；{market}"
     parts = [f"最高分 {top:.1f}"]
     if effective:
-        parts.append(f"有效分数线 {effective:.1f}")
-    parts.append(f"市场阶段 {market_base or '未知'}")
+        parts.append(f"未过有效分数线 {float(effective):.1f}" if top < float(effective) else f"有效分数线 {float(effective):.1f}")
+    if blocked:
+        parts.append(f"风控否决：{blocked}")
+    parts.append(market)
     return "；".join(parts)
 
 
