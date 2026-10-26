@@ -21,6 +21,9 @@
 量改动前后时，可以在 worktree 里起只读临时后端：
   .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8792 --lifespan off
 （--lifespan off：不迁移、不注册定时任务、不起预热线程；注意它没有主后端的启动预热。）
+注意：后端中间件会把每个 /api/ GET 的耗时写进 api_request_metrics（self_check 用它算 api_p95），
+所以跑一轮 bench 会写入上千条延迟样本，不管打的是主后端还是临时后端。量完要清理就按时间窗删这些行。
+冷测数字受 MySQL 缓冲池影响很大：有别的大查询在扫 daily_kbars 时，大字段页会被挤出缓冲池，冷测会明显变慢。
 """
 import argparse
 import json
