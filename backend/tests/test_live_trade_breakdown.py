@@ -30,3 +30,24 @@ def test_summarize_keeps_eras_and_fill_columns_apart():
     assert out["combo"]["open_simulated"]["avg_net_return"] == -1.6
     assert out["single"]["confirmed"]["n"] == 1 and out["single"]["not_filled_count"] == 1
     assert out["single"]["by_strategy"]["oversold-capital-reversal"]["confirmed"]["avg_net_return"] == 3.0
+
+
+def test_single_skill_run_with_combo_preset_id_is_single():
+    # 10-14/10-15 单策略补跑 run 带着 preset_formal_opening 的 preset_id
+    assert classify_era("preset_formal_opening", '[{"skill_id":"oversold-capital-reversal"}]') == "single"
+
+
+def test_confirmed_but_not_filled_is_its_own_column():
+    not_filled = SimpleNamespace(entry_triggered=False)
+    assert classify_fill(not_filled, SimpleNamespace(ever_buy_confirmed=True)) == "confirmed_not_filled"
+    assert classify_fill(not_filled, SimpleNamespace(ever_buy_confirmed=False)) == "not_filled"
+    rows = [
+        {"era": "single", "strategy_id": "s", "code": "002379", "signal_date": "2026-10-20",
+         "fill": "confirmed_not_filled", "net_return_pct": None},
+        {"era": "single", "strategy_id": "s", "code": "000893", "signal_date": "2026-10-20",
+         "fill": "not_filled", "net_return_pct": None},
+    ]
+    out = summarize(rows)["single"]
+    assert out["confirmed_not_filled_count"] == 1 and out["not_filled_count"] == 1
+    assert out["confirmed_not_filled"] == ["002379(2026-10-20)"]
+    assert out["by_strategy"]["s"]["confirmed_not_filled_count"] == 1
