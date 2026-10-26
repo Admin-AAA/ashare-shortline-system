@@ -212,7 +212,11 @@ def diff_intervals(
     返回 {insert: [区间], update: [(id, 新区间, 变化字段)], delete: [id], normalize: n}。
     existing 里 effective_from 为 'YYYYMMDD' 的行先归一成 ISO 再配对，字段 effective_from 的修正计入 update。
     """
-    new_by_key = {(it["code"], it["effective_from"]): {**it, "source_version": source_version} for it in new}
+    # scope_codes 同时限定「新区间」：此前只限定库里现有行，范围外的代码在新区间里仍会被当作库里没有而 INSERT，
+    # 撞唯一键 uq_stock_metadata_history_interval，整次刷新回滚（2026-10-26 08:10 namechange 取数失败时 920680 触发，
+    # 之后股票身份每日刷新（新股 / ST 戴帽摘帽）整个失效）。
+    new_by_key = {(it["code"], it["effective_from"]): {**it, "source_version": source_version}
+                  for it in new if scope_codes is None or it["code"] in scope_codes}
     existing_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     delete: list[int] = []
     normalized = 0

@@ -172,3 +172,17 @@ def test_refresh_rejects_truncated_stock_basic():
 
     with pytest.raises(si.StockIdentityError):
         si.refresh_stock_identity(FakeDb(), FakePro(), dry_run=True, cache_dir=None)
+
+
+def test_diff_scope_also_limits_new_intervals_so_out_of_scope_codes_are_not_reinserted():
+    """namechange 取数失败时 scope 只含「库里还没有区间的新股」；范围外代码的新区间不得被当成缺失而 INSERT（撞唯一键、整次刷新回滚）。"""
+    sv = si.SOURCE_VERSION
+    existing = [{"id": 7, "code": "920680", "name": "广道退(退)", "industry": None, "market": "北交所", "list_date": "2021-11-15",
+                 "is_st": 0, "effective_from": "2021-11-15", "effective_to": "2025-05-05", "source_version": sv}]
+    new = [{"code": "920680", "name": "广道退(退)", "industry": None, "market": "北交所", "list_date": "2021-11-15", "is_st": False,
+            "effective_from": "2021-11-15", "effective_to": "2025-05-05"},
+           {"code": "001999", "name": "新股", "industry": None, "market": "主板", "list_date": "2026-10-20", "is_st": False,
+            "effective_from": "2026-10-20", "effective_to": None}]
+    d = si.diff_intervals(existing, new, scope_codes={"001999"})
+    assert [(r["code"], r["effective_from"]) for r in d["insert"]] == [("001999", "2026-10-20")]
+    assert d["update"] == [] and d["delete"] == []
