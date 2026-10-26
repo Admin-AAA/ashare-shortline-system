@@ -5,12 +5,16 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models.tables import DailyKbar
+from app.services.entry_day_checks import EntryDayCheck
 from app.services.execution_confirmation import (
     _adjust_stop_loss_for_ex_right,
     _condition_summary,
     _derive_decisions,
     _entry_window_closed,
 )
+
+# 入场日检查通过（非一字涨停、可成交、开盘相对推荐价 ≤6%）
+_OK = EntryDayCheck(False, "entry_day_checks_passed", "入场日检查通过", observed={"gap_pct": 0.5})
 
 
 def _signal(**overrides):
@@ -35,6 +39,7 @@ def test_fresh_next_day_support_allows_entry_and_holding():
         review={"stance": "support", "action": "轻仓试错", "summary": "主线和买点仍成立"},
         current_price=15.2,
         stop_loss=14.5,
+        entry_check=_OK,
     )
 
     assert entry["code"] == "buy"
@@ -121,7 +126,8 @@ def test_after_hours_recommendation_waits_on_signal_day():
     }
 
 
-def test_strategy_veto_cancels_entry_and_exits_holding():
+def test_strategy_veto_no_longer_cancels_entry_but_still_exits_holding():
+    """入场日重跑的策略硬否决不再取消买入（回测没有这条入场规则）；持仓提示仍按否决退出。"""
     entry, holding = _derive_decisions(
         fresh=True,
         signal_age_trade_days=1,
@@ -131,13 +137,15 @@ def test_strategy_veto_cancels_entry_and_exits_holding():
         review={"stance": "veto", "action": "不做"},
         current_price=15.0,
         stop_loss=14.5,
+        entry_check=_OK,
     )
 
-    assert entry == {"code": "cancel", "label": "取消买入", "reason": "非主线热点"}
+    assert entry["code"] == "buy"
     assert holding["code"] == "exit"
 
 
-def test_prefilter_failure_explains_specific_condition_instead_of_generic_pool_reason():
+def test_signal_day_prefilter_rerun_does_not_cancel_entry():
+    """信号日形态条件（如「当日涨幅≥3」）拿入场日盘中数据重判不过，不再取消买入。"""
     entry, _holding = _derive_decisions(
         fresh=True,
         signal_age_trade_days=1,
@@ -145,15 +153,16 @@ def test_prefilter_failure_explains_specific_condition_instead_of_generic_pool_r
         prefilter_ok=False,
         signal=_signal(
             hard_veto=True,
-            veto_reason="不在策略股票池",
-            prefilter_reason="当日涨幅需为非负",
+            veto_reason="未命中任何入场 setup（策略要求 require_setup）",
+            prefilter_reason="当日涨幅（%）需不低于 3（当前 -9.039）",
         ),
         review=None,
-        current_price=8.34,
-        stop_loss=8.0,
+        current_price=35.0,
+        stop_loss=35.3,
+        entry_check=_OK,
     )
 
-    assert entry == {"code": "cancel", "label": "取消买入", "reason": "当日涨幅需为非负"}
+    assert entry["code"] == "buy"
 
 
 def test_stale_snapshot_never_emits_actionable_buy_or_sell():
@@ -188,7 +197,8 @@ def test_old_recommendation_cannot_be_reopened_even_if_strategy_recovers():
     assert holding["code"] == "hold"
 
 
-def test_original_stop_loss_overrides_supportive_agent_review():
+def test_price_below_recommend_stop_does_not_cancel_entry_but_exits_holding():
+    """回测止损按实际买入价设定，低开照样开盘买入；止损只用于持仓提示。"""
     entry, holding = _derive_decisions(
         fresh=True,
         signal_age_trade_days=1,
@@ -198,9 +208,10 @@ def test_original_stop_loss_overrides_supportive_agent_review():
         review={"stance": "support", "action": "轻仓试错"},
         current_price=14.4,
         stop_loss=14.5,
+        entry_check=_OK,
     )
 
-    assert entry["code"] == "cancel"
+    assert entry["code"] == "buy"
     assert holding["code"] == "exit"
 
 
@@ -214,6 +225,7 @@ def test_agent_failure_uses_high_confidence_rule_signal():
         review={"status": "fallback", "error": "provider unavailable"},
         current_price=15.2,
         stop_loss=14.5,
+        entry_check=_OK,
     )
 
     assert entry["code"] == "buy"
@@ -298,8 +310,8 @@ def _prefilter_detail(expression: str, observed: dict, label: str) -> dict:
     }
 
 
-def test_session_amount_shortfall_waits_instead_of_cancelling():
-    """开盘十几分钟累计成交额 2.601 亿低于 3 亿下限：全日仍可能达标，判继续观察。"""
+def test_session_amount_shortfall_does_not_block_entry_or_reduce_holding():
+    """开盘十几分钟累计成交额 2.601 亿低于 3 亿下限：买入只看入场日检查；持仓也不据此减仓。"""
     entry, holding = _derive_decisions(
         fresh=True,
         signal_age_trade_days=1,
@@ -316,17 +328,16 @@ def test_session_amount_shortfall_waits_instead_of_cancelling():
         review=None,
         current_price=241.02,
         stop_loss=210.0,
+        entry_check=_OK,
     )
 
-    assert entry["code"] == "wait"
-    assert "成交额（亿元）需不低于 3（当前 2.601）" in entry["reason"]
-    assert "盘中累计值仍可能继续增长" in entry["reason"]
+    assert entry["code"] == "buy"
     # 盘中累计量未达标不构成降低仓位的依据
     assert holding["code"] != "reduce"
 
 
-def test_session_amount_shortfall_never_emits_buy():
-    """累计成交额尚未证明达标时，即使规则分足够也不放行买入。"""
+def test_entry_waits_when_entry_bar_missing():
+    """取不到入场日开盘行情时不确认买入（也不取消）。"""
     entry, _holding = _derive_decisions(
         fresh=True,
         signal_age_trade_days=1,
@@ -366,15 +377,15 @@ def test_breached_cumulative_upper_bound_still_cancels():
         review=None,
         current_price=15.2,
         stop_loss=14.0,
+        entry_check=_OK,
     )
 
-    assert entry["code"] == "cancel"
-    assert entry["reason"] == "成交额（亿元）需低于 15（当前 18.4）"
+    assert entry["code"] == "buy"
     assert holding["code"] == "reduce"
 
 
-def test_structural_prefilter_failure_still_cancels():
-    """长上影次数与当日累计量无关，失败仍然取消。"""
+def test_structural_prefilter_failure_only_affects_holding():
+    """长上影次数等信号日条件不再取消买入；持仓提示仍降低仓位。"""
     entry, holding = _derive_decisions(
         fresh=True,
         signal_age_trade_days=1,
@@ -391,15 +402,15 @@ def test_structural_prefilter_failure_still_cancels():
         review=None,
         current_price=15.2,
         stop_loss=14.0,
+        entry_check=_OK,
     )
 
-    assert entry["code"] == "cancel"
-    assert entry["reason"] == "20 日长上影次数需不高于 6（当前 10）"
+    assert entry["code"] == "buy"
     assert holding["code"] == "reduce"
 
 
-def test_stop_loss_break_still_cancels_under_cumulative_shortfall():
-    """跌破止损是价格事实，不因累计量不可判定而降级为继续观察。"""
+def test_stop_loss_break_exits_holding_under_cumulative_shortfall():
+    """跌破止损是价格事实：持仓提示退出，不因累计量不可判定而降级。"""
     entry, holding = _derive_decisions(
         fresh=True,
         signal_age_trade_days=1,
@@ -417,13 +428,11 @@ def test_stop_loss_break_still_cancels_under_cumulative_shortfall():
         stop_loss=14.5,
     )
 
-    assert entry["code"] == "cancel"
-    assert entry["reason"] == "当前价格已经跌破原推荐止损位"
     assert holding["code"] == "exit"
 
 
-def test_hard_veto_still_cancels_under_cumulative_shortfall():
-    """策略硬否决优先于累计量不可判定。"""
+def test_hard_veto_does_not_cancel_entry_under_cumulative_shortfall():
+    """入场日重跑的硬否决不再取消买入。"""
     entry, _holding = _derive_decisions(
         fresh=True,
         signal_age_trade_days=1,
@@ -441,44 +450,27 @@ def test_hard_veto_still_cancels_under_cumulative_shortfall():
         review=None,
         current_price=15.2,
         stop_loss=14.0,
+        entry_check=_OK,
     )
 
-    assert entry["code"] == "cancel"
-    assert entry["reason"] == "退潮期加速末端"
+    assert entry["code"] == "buy"
 
 
-def test_condition_summary_marks_cumulative_shortfall_as_pending():
-    """不可判定的条件不能留下 failed 证据，取消原因另有其事时同样如此。"""
-    cumulative = _prefilter_detail(
-        "amount_yi >= 3",
-        {"amount_yi": 2.601},
-        "成交额（亿元）需不低于 3（当前 2.601）",
-    )
-    structural = _prefilter_detail(
-        "upper_shadow_count20 <= 6",
-        {"upper_shadow_count20": 10},
-        "20 日长上影次数需不高于 6（当前 10）",
-    )
+def test_condition_summary_records_entry_day_check_only():
+    """条件证据只记录入场日检查，状态随买入决策：buy=passed、wait=pending、cancel=failed。"""
+    gap = EntryDayCheck(True, "entry_gap_up", "开盘价高于推荐价 7.00%", observed={"gap_pct": 7.0})
+    passed = _condition_summary(_OK, {"code": "buy", "reason": "入场日检查通过"})
+    waited = _condition_summary(gap, {"code": "wait", "reason": "次日再确认"})
+    failed = _condition_summary(gap, {"code": "cancel", "reason": "入场窗口最后一日"})
 
-    waited = _condition_summary(
-        _signal(prefilter_detail=cumulative), False, {"code": "wait"}
-    )
-    # 硬风控取消这笔推荐，但累计量那条条件本身仍然只是尚未成立
-    vetoed = _condition_summary(
-        _signal(prefilter_detail=cumulative), False, {"code": "cancel"}
-    )
-    failed = _condition_summary(
-        _signal(prefilter_detail=structural), False, {"code": "cancel"}
-    )
-
-    assert waited["status"] == "pending"
-    assert vetoed["status"] == "pending"
-    assert failed["status"] == "failed"
+    assert passed["status"] == "passed" and passed["scope"] == "entry_day"
+    assert waited["status"] == "pending" and waited["code"] == "entry_gap_up"
+    assert failed["status"] == "failed" and failed["observed"]["gap_pct"] == 7.0
 
 
 # ── #9: 原始止损高于推荐价（超跌反包，价远低于 MA20）时按结算口径归一化 ──────────
 
-def _confirm_oversold(db_session, monkeypatch, current_price: float):
+def _confirm_oversold(db_session, monkeypatch, current_price: float, open_price: float | None = None):
     import json
     from types import SimpleNamespace
 
@@ -507,6 +499,9 @@ def _confirm_oversold(db_session, monkeypatch, current_price: float):
         signal=_signal(setup_match="超跌放量反包", score=75.0),
         prefilter_ok=True,
         signal_age_trade_days=1,
+        entry_bar={"open": open_price or current_price, "high": max(current_price, open_price or 0) + 1,
+                   "low": min(current_price, open_price or current_price) - 1, "close": current_price,
+                   "volume": 1000, "amount": 1e7, "pre_close": 147.13},
     )
 
 
@@ -516,6 +511,15 @@ def test_stop_above_recommend_price_does_not_cancel_on_open(db_session, monkeypa
     assert result["original"]["stop_loss"] == pytest.approx(139.04, abs=0.01)  # 147.13*(1-5.5%)
 
 
-def test_normalized_stop_still_cancels_real_break(db_session, monkeypatch):
+def test_price_below_normalized_stop_still_buys_like_backtest(db_session, monkeypatch):
+    """回测按开盘价买入、止损按买入价重设；入场前跌破推荐止损不取消，持仓提示退出。"""
     result = _confirm_oversold(db_session, monkeypatch, current_price=138.0)
-    assert result["entry_decision"]["code"] == "cancel"
+    assert result["entry_decision"]["code"] == "buy"
+    assert result["holding_decision"]["code"] == "exit"
+
+
+def test_gap_up_over_limit_waits_on_day_one(db_session, monkeypatch):
+    """开盘高于推荐价 >6%：回测跳过该日，第 1 日判「次日再确认」而不是取消。"""
+    result = _confirm_oversold(db_session, monkeypatch, current_price=158.0, open_price=157.0)
+    assert result["entry_decision"]["code"] == "wait"
+    assert result["condition_summary"]["code"] == "entry_gap_up"

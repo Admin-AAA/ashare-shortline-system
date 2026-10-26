@@ -35,9 +35,11 @@ from app.services.evidence.validation import (
     canonical_live_forward_run_ids,
     catchup_formal_run_ids,
 )
+from app.services.entry_day_checks import ENTRY_WINDOW_TRADE_DAYS
 from app.services.execution_confirmation import (
     _build_signal_for_strategy,
     _entry_window_closed,
+    _first_trade_day_blocked,
     confirm_with_prepared_context,
     is_unsettled_formal_rec,
 )
@@ -207,6 +209,21 @@ def _build_today_bar(code: str, quote_date: str, rt: dict[str, Any]) -> dict[str
         "holder_pct": None, "profit_efficiency": None,
         "chip_concentration": None,
         "_indicator": {},
+    }
+
+
+def _entry_bar_from_rt(rt: dict[str, Any] | None) -> dict[str, Any] | None:
+    """rt_k 实时 K → 入场日检查用的 bar（开盘至今 OHLCV + 前收）。"""
+    if not rt:
+        return None
+    return {
+        "open": _f(rt.get("open")),
+        "high": _f(rt.get("high")),
+        "low": _f(rt.get("low")),
+        "close": _f(rt.get("close")),
+        "volume": _f(rt.get("vol")),
+        "amount": _f(rt.get("amount")),
+        "pre_close": _f(rt.get("pre_close")),
     }
 
 
@@ -385,8 +402,12 @@ def _compute_batch(
         reason = ""
         if intraday and age > 0:
             reason = "盘中推荐仅在推荐当日确认买点"
-        elif not intraday and age > 1:
-            reason = "已超过推荐后的首个交易日，需要等待新的推荐信号"
+        elif not intraday and age > ENTRY_WINDOW_TRADE_DAYS:
+            reason = f"已超过推荐后 {ENTRY_WINDOW_TRADE_DAYS} 个交易日的入场窗口（与回测一致），需要等待新的推荐信号"
+        elif not intraday and age >= 2 and not _first_trade_day_blocked(
+            db, str(rec.code), str(rec.trade_date), expected_quote_date, float(rec.recommend_price or 0)
+        ):
+            reason = "推荐后首个交易日按回测口径已可开盘买入，后续交易日不再追入"
         elif intraday and age == 0 and _entry_window_closed(expected_quote_date, local_now):
             reason = "当前交易日已收盘，不再追认盘中买点"
         if reason:
@@ -547,6 +568,7 @@ def _compute_batch(
                 prefilter_ok=prefilter_ok,
                 signal_age_trade_days=age,
                 review=None,
+                entry_bar=_entry_bar_from_rt(usable_rt_quotes.get(code)),
             )
             assessments.append(result)
             items.append(_to_batch_item(result))
