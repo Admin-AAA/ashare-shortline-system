@@ -114,7 +114,12 @@ def _research_skill_paths(skills_dir: Path) -> list[Path]:
 def load_skills(skills_dir: Path) -> list[StrategySkill]:
     if not skills_dir.exists():
         return []
-    paths = sorted(path for path in skills_dir.iterdir() if path.is_dir())
+    # 完全空的目录不是策略（git 不跟踪空目录，退役策略常残留空壳），直接跳过；
+    # 有内容但缺 manifest.json 的目录仍按契约报错。
+    paths = sorted(
+        path for path in skills_dir.iterdir()
+        if path.is_dir() and any(not child.name.startswith(".") for child in path.iterdir())
+    )
     return [load_skill(path) for path in paths + _research_skill_paths(skills_dir)]
 
 
