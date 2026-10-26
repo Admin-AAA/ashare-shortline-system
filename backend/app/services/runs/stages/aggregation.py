@@ -63,6 +63,8 @@ class AggregationStage:
         degraded_watchlist = tuple(pipeline_updates.get("degraded_watchlist") or ())
         climax_watchlist = tuple(pipeline_updates.get("watchlist") or ())
         pipeline_audit = dict(data.pipeline_audit or {})
+        if pipeline_updates.get("daily_strategy_cap"):
+            pipeline_audit["daily_strategy_cap"] = dict(pipeline_updates["daily_strategy_cap"])
         filter_audit = build_filter_audit(
             prefilter_audit=dict(data.prefilter_audit or {}),
             skill_gate_audit=dict(data.skill_gate_audit or {}),

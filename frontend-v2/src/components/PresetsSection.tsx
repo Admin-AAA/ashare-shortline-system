@@ -482,7 +482,7 @@ function PresetEditor({
         <FormField label="分数线">
           <input className="cfg-input" type="number" min={0} max={100} step={0.5} value={form.score_line} onChange={(e) => set("score_line", Number(e.target.value))} />
         </FormField>
-        <FormField label="输出数量">
+        <FormField label="输出数量（另受每策略每日上限约束）">
           <input className="cfg-input" type="number" min={1} max={50} step={1} value={form.output_count} onChange={(e) => set("output_count", Number(e.target.value))} />
         </FormField>
         <FormField label="风险模板">

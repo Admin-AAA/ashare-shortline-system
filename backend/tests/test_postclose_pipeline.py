@@ -69,7 +69,7 @@ def _stub_db_side_steps(monkeypatch):
     import app.services.tdx_indicator_fill as tdx_indicator_fill
 
     monkeypatch.setattr(tdx_indicator_fill, "fill_recent_indicator_gaps", lambda _db, _trade_date: {"filled": 0})
-    monkeypatch.setattr(midterm_service, "generate_picks", lambda _db, _trade_date: {})
+    monkeypatch.setattr(midterm_service, "generate_picks", lambda _db, _trade_date, **kw: {})
 
 def test_concept_sector_nan_member_count_is_normalized(db):
     client = SimpleNamespace(
@@ -171,7 +171,7 @@ def test_postclose_pipeline_orders_sync_health_gate_and_recommendation(monkeypat
     monkeypatch.setattr(
         midterm_service,
         "generate_picks",
-        lambda _db, trade_date: calls.append(("midterm_picks", trade_date)) or {},
+        lambda _db, trade_date, **kw: calls.append(("midterm_picks", trade_date)) or {},
     )
     monkeypatch.setattr(
         scheduler_service,

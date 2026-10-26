@@ -32,6 +32,6 @@ def test_backup_hook_only_targets_block_trade_strategy(monkeypatch, tmp_path):
 
     monkeypatch.setattr(ss, "_latest_allowed_bar_date", lambda: "2026-10-16")
     out = {}
-    monkeypatch.setattr(ms, "_block_trade_picks", lambda db, sid, meta, t: out.setdefault(sid, t) and 0)
+    monkeypatch.setattr(ms, "_block_trade_picks", lambda db, sid, meta, t, *a, **k: out.setdefault(sid, t) and 0)
     res = ms.generate_block_trade_picks(None, "2026-10-16")
     assert list(res) == ["mid-block-trade-premium"]

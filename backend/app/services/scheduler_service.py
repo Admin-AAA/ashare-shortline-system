@@ -153,7 +153,7 @@ def _run_block_trade_picks_hook(db, task_id: str) -> dict[str, Any]:
         trade_date = _latest_allowed_bar_date()
         from app.services.midterm_service import generate_block_trade_picks
 
-        out = generate_block_trade_picks(db, trade_date)
+        out = generate_block_trade_picks(db, trade_date, apply_daily_cap=True)
         logger.warning("midterm block-trade picks (%s, T=%s): %s", task_id, trade_date, out)
         return {"trade_date": trade_date, "trigger": task_id, "result": out}
     except Exception as exc:  # noqa: BLE001 - must not break the parent job
@@ -1829,7 +1829,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
     try:
         from app.services.midterm_service import generate_picks as _mid_generate_picks
 
-        midterm_picks = {"trade_date": str(trade_date)[:10], "result": _mid_generate_picks(db, trade_date)}
+        midterm_picks = {"trade_date": str(trade_date)[:10], "result": _mid_generate_picks(db, trade_date, apply_daily_cap=True)}
         logger.warning("midterm picks (T=%s): %s", trade_date, midterm_picks["result"])
     except Exception as exc:  # noqa: BLE001
         db.rollback()
