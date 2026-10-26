@@ -257,16 +257,26 @@ function ReviewView({ horizon, list, onPick }: { horizon: H; list: HorizonStrate
   const [st, setSt] = useState<string>("all");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"date" | "ret_desc" | "ret_asc">("date");
-  const res = useApi<HorizonPicksResponse>(() => api.horizonPicksPage(horizon, page, PAGE_SIZE, sid === "all" ? undefined : sid), [horizon, page, sid]);
-  // 收益曲线要全量批次（列表是分页的）：按 200 一页拉全，只跟随策略筛选，不跟随状态/搜索（否则幸存者偏差）
-  const all = useApi<HorizonBatch[]>(async () => {
+  // 收益曲线要全量批次（列表是分页的）：按 200 一页拉全，只跟随策略筛选，不跟随状态/搜索（否则幸存者偏差）。
+  // 列表分页直接切这份全量数据（后端分页同样是按文件新→旧切片，结果一致），不再另发 page_size=20 的请求，翻页也不用等网络。
+  const allQ = useApi<{ batches: HorizonBatch[]; total: number; total_picks: number }>(async () => {
     const sq = sid === "all" ? undefined : sid;
     const first = await api.horizonPicksPage(horizon, 1, 200, sq);
     const n = Math.ceil((first.total ?? 0) / 200);
     const rest = await Promise.all(Array.from({ length: Math.max(0, n - 1) }, (_, i) => api.horizonPicksPage(horizon, i + 2, 200, sq)));
-    return [first, ...rest].flatMap((r) => r.batches);
+    return { batches: [first, ...rest].flatMap((r) => r.batches), total: first.total ?? 0, total_picks: first.total_picks ?? 0 };
   }, [horizon, sid]);
-  const curvePicks = useMemo(() => (all.data ?? []).flatMap((b) => b.picks), [all.data]);
+  const all = { ...allQ, data: allQ.data?.batches };
+  const res = {
+    ...allQ,
+    data: allQ.data && {
+      batches: allQ.data.batches.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+      total: allQ.data.total,
+      total_picks: allQ.data.total_picks,
+      has_more: page * PAGE_SIZE < allQ.data.total,
+    },
+  };
+  const curvePicks = useMemo(() => (allQ.data?.batches ?? []).flatMap((b) => b.picks), [allQ.data]);
   const kw = q.trim();
   const batches = res.data?.batches ?? [];
   const shown = batches
