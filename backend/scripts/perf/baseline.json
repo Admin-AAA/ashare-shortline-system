@@ -1,0 +1,283 @@
+{
+ "ts": "2026-10-26 23:20:00",
+ "budget_ms": 200.0,
+ "endpoints": [
+  {
+   "page": "短线 今日",
+   "path": "/api/runs?limit=100&fields=slim",
+   "status": 200,
+   "p50": 39,
+   "p95": 50,
+   "kb_gzip": 4.9
+  },
+  {
+   "page": "短线 复盘",
+   "path": "/api/recommendations/history?limit=200",
+   "status": 200,
+   "p50": 24,
+   "p95": 32,
+   "kb_gzip": 66.4
+  },
+  {
+   "page": "短线 复盘",
+   "path": "/api/recommendations/history?limit=200&offset=200",
+   "status": 200,
+   "p50": 19,
+   "p95": 21,
+   "kb_gzip": 60.2
+  },
+  {
+   "page": "短线 复盘",
+   "path": "/api/recommendations/history?limit=200&offset=400",
+   "status": 200,
+   "p50": 12,
+   "p95": 13,
+   "kb_gzip": 30.7
+  },
+  {
+   "page": "短线 交易明细",
+   "path": "/api/recommendations/history?limit=50",
+   "status": 200,
+   "p50": 8,
+   "p95": 9,
+   "kb_gzip": 21.5
+  },
+  {
+   "page": "短线 运行记录",
+   "path": "/api/records/runs?page=1&page_size=20&fields=slim",
+   "status": 200,
+   "p50": 3,
+   "p95": 4,
+   "kb_gzip": 1.4
+  },
+  {
+   "page": "短线 运行记录",
+   "path": "/api/presets",
+   "status": 200,
+   "p50": 6,
+   "p95": 9,
+   "kb_gzip": 0.8
+  },
+  {
+   "page": "短线 策略",
+   "path": "/api/strategies",
+   "status": 200,
+   "p50": 28,
+   "p95": 45,
+   "kb_gzip": 4.8
+  },
+  {
+   "page": "短线 策略",
+   "path": "/api/stats/by-preset",
+   "status": 200,
+   "p50": 3,
+   "p95": 6,
+   "kb_gzip": 0.4
+  },
+  {
+   "page": "短线 策略",
+   "path": "/api/strategies/standalone-metrics",
+   "status": 200,
+   "p50": 3,
+   "p95": 3,
+   "kb_gzip": 1.4
+  },
+  {
+   "page": "短线 驾驶舱",
+   "path": "/api/dashboard/overview",
+   "status": 200,
+   "p50": 311,
+   "p95": 351,
+   "kb_gzip": 7.9
+  },
+  {
+   "page": "短线 持仓",
+   "path": "/api/recommendations/realtime-pnl",
+   "status": 200,
+   "p50": 8,
+   "p95": 9,
+   "kb_gzip": 0.1
+  },
+  {
+   "page": "系统",
+   "path": "/api/admin/data-health",
+   "status": 200,
+   "p50": 5,
+   "p95": 6,
+   "kb_gzip": 6.7
+  },
+  {
+   "page": "系统",
+   "path": "/api/admin/data-quality",
+   "status": 200,
+   "p50": 4,
+   "p95": 4,
+   "kb_gzip": 6.8
+  },
+  {
+   "page": "系统",
+   "path": "/api/admin/data-health/remediate/status",
+   "status": 200,
+   "p50": 29,
+   "p95": 29,
+   "kb_gzip": 17.6
+  },
+  {
+   "page": "中线 今日/策略",
+   "path": "/api/horizons/mid/strategies",
+   "status": 200,
+   "p50": 15,
+   "p95": 30,
+   "kb_gzip": 29.9
+  },
+  {
+   "page": "中线 今日/策略",
+   "path": "/api/horizons/mid/picks?limit=60",
+   "status": 200,
+   "p50": 55,
+   "p95": 173,
+   "kb_gzip": 15.4
+  },
+  {
+   "page": "中线 复盘",
+   "path": "/api/horizons/mid/picks?page=1&page_size=20",
+   "status": 200,
+   "p50": 28,
+   "p95": 33,
+   "kb_gzip": 6.7
+  },
+  {
+   "page": "中线 复盘",
+   "path": "/api/horizons/mid/picks?page=1&page_size=200",
+   "status": 200,
+   "p50": 69,
+   "p95": 69,
+   "kb_gzip": 43.8
+  },
+  {
+   "page": "中线 交易明细",
+   "path": "/api/horizons/mid/trades",
+   "status": 200,
+   "p50": 73,
+   "p95": 77,
+   "kb_gzip": 50.4
+  },
+  {
+   "page": "中线 运行记录",
+   "path": "/api/horizons/mid/runs?limit=60",
+   "status": 200,
+   "p50": 3,
+   "p95": 3,
+   "kb_gzip": 0.9
+  },
+  {
+   "page": "中线 诊断",
+   "path": "/api/horizons/mid/metrics?origin=all",
+   "status": 200,
+   "p50": 55,
+   "p95": 56,
+   "kb_gzip": 2.2
+  },
+  {
+   "page": "长线 今日/策略",
+   "path": "/api/horizons/long/strategies",
+   "status": 200,
+   "p50": 8,
+   "p95": 8,
+   "kb_gzip": 20.3
+  },
+  {
+   "page": "长线 今日/策略",
+   "path": "/api/horizons/long/picks?limit=60",
+   "status": 200,
+   "p50": 635,
+   "p95": 730,
+   "kb_gzip": 59.5
+  },
+  {
+   "page": "长线 复盘",
+   "path": "/api/horizons/long/picks?page=1&page_size=20",
+   "status": 200,
+   "p50": 126,
+   "p95": 133,
+   "kb_gzip": 19.1
+  },
+  {
+   "page": "长线 复盘",
+   "path": "/api/horizons/long/picks?page=1&page_size=200",
+   "status": 200,
+   "p50": 632,
+   "p95": 763,
+   "kb_gzip": 65.0
+  },
+  {
+   "page": "长线 交易明细",
+   "path": "/api/horizons/long/trades",
+   "status": 200,
+   "p50": 556,
+   "p95": 692,
+   "kb_gzip": 35.8
+  },
+  {
+   "page": "长线 运行记录",
+   "path": "/api/horizons/long/runs?limit=60",
+   "status": 200,
+   "p50": 2,
+   "p95": 3,
+   "kb_gzip": 0.5
+  },
+  {
+   "page": "长线 诊断",
+   "path": "/api/horizons/long/metrics?origin=all",
+   "status": 200,
+   "p50": 670,
+   "p95": 736,
+   "kb_gzip": 1.4
+  }
+ ],
+ "pages": {
+  "短线复盘": {
+   "p50": 60,
+   "p95": 153
+  },
+  "中线复盘": {
+   "p50": 228,
+   "p95": 238
+  },
+  "长线复盘": {
+   "p50": 839,
+   "p95": 1204
+  }
+ },
+ "pages_cold": {
+  "短线复盘": {
+   "p50": 5755,
+   "p95": 6005,
+   "samples": [
+    5755,
+    5601,
+    6033
+   ]
+  },
+  "中线复盘": {
+   "p50": 297,
+   "p95": 634,
+   "samples": [
+    255,
+    297,
+    671
+   ]
+  },
+  "长线复盘": {
+   "p50": 749,
+   "p95": 827,
+   "samples": [
+    749,
+    590,
+    835
+   ]
+  }
+ },
+ "share_p95_within_budget": "24/29",
+ "review_endpoints_max_p95": 763
+}
