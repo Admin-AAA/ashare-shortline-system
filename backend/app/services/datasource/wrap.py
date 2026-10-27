@@ -80,6 +80,10 @@ def gw_call(dataset: str, provider: str, fn: Callable[..., Any], *args: Any, **k
     if not _gw.provider_enabled(_P(provider, spec)):
         _metrics.inc("dataset_requests", dataset=dataset, provider=provider, outcome="disabled")
         raise _gw.DataSourceError(_gw.ErrorKind.DISABLED, "disabled in data_source_config", provider=provider, dataset=dataset)
+    if not _gw.item_enabled(dataset, provider):
+        # 数据项级开关：只在这一数据类型里跳过该源；调用方现有的 except 回退会接着试下一个源。
+        _metrics.inc("dataset_requests", dataset=dataset, provider=provider, outcome="disabled")
+        raise _gw.DataSourceError(_gw.ErrorKind.DISABLED, "disabled for this dataset", provider=provider, dataset=dataset)
     breaker = _breaker(provider, dataset)
     if not breaker.allow_request():
         _metrics.inc("dataset_requests", dataset=dataset, provider=provider, outcome="circuit_open")

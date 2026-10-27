@@ -171,6 +171,10 @@ def invalidate_recommendation_history_cache() -> None:
     """推荐或执行确认状态变化后清空历史页短缓存。"""
     with _history_cache_lock:
         _history_cache.clear()
+    # 版本化缓存（workbench_service._history_*_cache）：库里的指纹已能发现变化，这里同进程内再立即清一次
+    from app.services.data_version import clear_named
+
+    clear_named("history_")
 
 
 def _build_recommendation_history_summary(

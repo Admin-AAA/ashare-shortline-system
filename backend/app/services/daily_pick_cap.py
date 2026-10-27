@@ -6,6 +6,8 @@
   回放、回测、历史重建、单股分析不经此处，行为不变。
 - 取前 N 的依据永远是该策略**自己已有的排序**（本模块不重排，只切片）：
   短线 = 选股政策输出顺序（portfolio_rank_score 降序，即 final_score 扣行业分散惩罚后）；中长线 = 各策略 candidates 函数返回顺序（见 midterm 各 meta 的排序键）。
+- 同分顺延（用户 2026-10-27）：先取前 N 只，再把和第 N 名同分的票一起带上；其后更低分的不要。
+  例：100,100,90,90,90,80 → 取 5 只；10 只全满分 → 10 只都出；分数各不相同 → 就是前 N 只。
 - 这是「当日新推荐数」上限，不是持仓上限；中长线 20 仓位（回测口径）、持有 20/60 日等与之无关。
 """
 from __future__ import annotations
@@ -25,23 +27,46 @@ def daily_pick_cap() -> int:
         return 5
 
 
+def _score_key(item: Mapping[str, Any], fields: Sequence[str]) -> Any:
+    """取排序分（按 fields 顺序第一个非空值，四舍五入到 6 位比较）；取不到时返回独一无二的值（不与任何票同分）。"""
+    for f in fields:
+        v = item.get(f)
+        if v is None:
+            continue
+        try:
+            return round(float(v), 6)
+        except (TypeError, ValueError):
+            continue
+    return object()
+
+
 def cap_ordered_picks(picks: Sequence[Mapping[str, Any]], cap: int | None = None) -> tuple[list[Any], dict[str, Any] | None]:
-    """按给定顺序保留前 cap 只；返回 (保留列表, 审计)。未超限或 cap<=0 时审计为 None、列表原样。"""
+    """按给定顺序保留前 cap 只，再顺延与第 cap 名同分的票（用户 2026-10-27：同分顺延）。
+
+    picks 已按策略自身排序（同分必相邻）。没有 score 字段的票不与任何票同分（等同只取前 N 只）。
+    返回 (保留列表, 审计)；未截断或 cap<=0 时审计为 None、列表原样。"""
     cap = daily_pick_cap() if cap is None else int(cap)
     items = list(picks)
     if cap <= 0 or len(items) <= cap:
         return items, None
-    dropped = items[cap:]
+    boundary = _score_key(items[cap - 1], ("score",))
+    cut = cap
+    while cut < len(items) and _score_key(items[cut], ("score",)) == boundary:
+        cut += 1
+    if cut >= len(items):
+        return items, None
+    dropped = items[cut:]
     audit = {
         "rule": DAILY_CAP_RULE_ID,
         "cap": cap,
+        "cap_unit": "top_n_with_ties",
         "candidates_before_cap": len(items),
-        "kept_count": cap,
+        "kept_count": cut,
         "truncated_count": len(dropped),
         "truncated_codes": [str(p.get("code") or "") for p in dropped],
         "order_basis": "strategy_own_ranking",
     }
-    return items[:cap], audit
+    return items[:cut], audit
 
 
 def is_live_formal_run(db: Any, run_id: str) -> bool:
@@ -89,8 +114,9 @@ def cap_cards_per_strategy(
 ) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
     """对短线正式推荐卡（已按政策顺序排好）按策略施加每日上限。
 
-    - 单策略 run：strategy_ids=[sid]，already_counts={sid: 当日同策略已有推荐数}，保证同日多次 run 合计 ≤ cap。
-    - 多策略 run（旧组合口径/手动 /run）：卡片按「有信号的策略」归属；只有当它所属的策略**全部**已满额才丢弃，
+    同分顺延（用户 2026-10-27）：每个策略先收满 cap 只，之后只再收与第 cap 只同分（portfolio_rank_score）的卡。
+    - 单策略 run：strategy_ids=[sid]，already_counts={sid: 当日同策略已有推荐数}；之前 run 已满额时本次不再顺延。
+    - 多策略 run（旧组合口径/手动 /run）：卡片按「有信号的策略」归属；只有当它所属的策略**全部**拒收才丢弃，
       否则保留并给其所有归属策略计数（一张卡同时背书多个策略时不会因其中一个满额被误杀）。
     被截断的卡在 formal_cards/scored_cards 对应 dict 上写 policy_drop_owner + policy_verdict_steps。
     """
@@ -98,22 +124,32 @@ def cap_cards_per_strategy(
     if cap <= 0 or not strategy_ids:
         return list(formal_cards), None
     counts = {sid: int((already_counts or {}).get(sid, 0)) for sid in strategy_ids}
+    boundary: dict[str, Any] = {}  # 本次 run 内收满 cap 只时第 cap 只的分数
     kept: list[dict[str, Any]] = []
     dropped: list[dict[str, Any]] = []
     single = len(strategy_ids) == 1
+    fields = ("portfolio_rank_score", "selection_score", "final_score")
+
+    def _accepts(s: str, k: Any) -> bool:
+        return counts[s] < cap or (s in boundary and k == boundary[s])
+
     for card in formal_cards:
         sup = set(strategy_ids) if single else _supporters(card, strategy_ids)
-        if sup and all(counts[s] >= cap for s in sup):
+        k = _score_key(card, fields)
+        if sup and not any(_accepts(s, k) for s in sup):
             dropped.append(card)
             continue
         for s in sup:
-            counts[s] += 1
+            if _accepts(s, k):
+                counts[s] += 1
+                if counts[s] == cap:
+                    boundary[s] = k
         kept.append(card)
     if not dropped:
         return kept, None
     dropped_codes = [str(c.get("code") or "") for c in dropped]
     drop_set = set(dropped_codes)
-    reason = f"每个策略每日最多新推荐 {cap} 只（按策略自身排序取前 {cap}）"
+    reason = f"每个策略每日最多新推荐 {cap} 只（与第 {cap} 名同分顺延，按策略自身排序）"
     for pool in (formal_cards, scored_cards or ()):
         for card in pool:
             if str(card.get("code") or "") in drop_set:
@@ -124,6 +160,7 @@ def cap_cards_per_strategy(
     audit = {
         "rule": DAILY_CAP_RULE_ID,
         "cap": cap,
+        "cap_unit": "top_n_with_ties",
         "strategy_ids": list(strategy_ids),
         "already_counts": {k: int(v) for k, v in (already_counts or {}).items()},
         "candidates_before_cap": len(formal_cards),

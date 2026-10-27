@@ -384,11 +384,34 @@ def set_gateway_switch(db: Session, source: str, source_type: str, enabled: bool
         row.enabled = enabled
         row.updated_at = now
     db.commit()
-    _gw._ENABLED_CACHE.update(value=None, expires_at=0.0)
+    _gw.invalidate_switch_caches()
     if source_type == _PROVIDER_SOURCE_TYPE:
         from app.services.tushare_client import invalidate_provider_enabled_override
 
         invalidate_provider_enabled_override()
+    return True
+
+
+def set_gateway_item_switch(db: Session, dataset_key: str, provider: str, enabled: bool) -> bool:
+    """写数据项级开关：只在 dataset_key 这一数据类型里启停 provider，不碰共用的源总开关。
+
+    只接受「数据源管理」拓扑里实际存在的 (数据项键, provider)；各进程 5 秒内生效。
+    """
+    from app.models.tables import DataGatewayItemSwitch
+    from app.services.datasource import gateway as _gw
+    from app.services.datasource.topology import gateway_item_keys
+
+    if (dataset_key, provider) not in gateway_item_keys():
+        return False
+    row = db.get(DataGatewayItemSwitch, {"dataset_key": dataset_key, "provider": provider})
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if row is None:
+        db.add(DataGatewayItemSwitch(dataset_key=dataset_key, provider=provider, enabled=enabled, updated_at=now))
+    else:
+        row.enabled = enabled
+        row.updated_at = now
+    db.commit()
+    _gw.invalidate_switch_caches()
     return True
 
 

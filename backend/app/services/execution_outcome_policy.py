@@ -104,12 +104,13 @@ def build_cancel_observations(
     if candidates:
         codes = sorted({candidate["code"] for candidate in candidates if candidate["code"]})
         min_cancel_date = min(candidate["cancel_date"] for candidate in candidates)
-        bars = db.scalars(
-            select(DailyKbar)
+        # 只取用到的三列（整行 ORM 要拉十几列 + 实例化，上千行时是主要耗时）
+        bars = db.execute(
+            select(DailyKbar.code, DailyKbar.trade_date, DailyKbar.close)
             .where(DailyKbar.code.in_(codes), DailyKbar.trade_date > min_cancel_date)
             .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
         ).all()
-        bars_by_code: dict[str, list[DailyKbar]] = {}
+        bars_by_code: dict[str, list[Any]] = {}
         for bar in bars:
             if float(bar.close or 0) > 0:
                 bars_by_code.setdefault(str(bar.code), []).append(bar)
@@ -192,8 +193,9 @@ def build_missed_observations(
     if candidates:
         codes = sorted({candidate["code"] for candidate in candidates})
         min_trade_date = min(candidate["trade_date"] for candidate in candidates)
-        bars = db.scalars(
-            select(DailyKbar)
+        # 只取用到的三列：推荐历史全量 500 条时这里要扫 1.7 万根日K，整行 ORM 约 330ms
+        bars = db.execute(
+            select(DailyKbar.code, DailyKbar.trade_date, DailyKbar.close)
             .where(DailyKbar.code.in_(codes), DailyKbar.trade_date > min_trade_date)
             .order_by(DailyKbar.code.asc(), DailyKbar.trade_date.asc())
         ).all()

@@ -671,7 +671,36 @@ def latest_validated_reconstruction_cohort(
     return cohorts[0] if cohorts else None
 
 
+_COHORT_VERSION_TABLES = ("recommendation_runs", "recommendation_reconstruction_batches")
+# 结果只依赖这两张表；按库内数据版本缓存（跨进程可靠失效），驾驶舱一次请求要调 3 次、推荐历史 1 次，每次约 100ms。
+_cohort_cache = None
+
+
 def latest_validated_reconstruction_cohorts(
+    db: Session,
+    *,
+    trade_date: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    per_template: bool = True,
+) -> list[ValidatedReconstructionCohort]:
+    """见 _latest_validated_reconstruction_cohorts_uncached；结果为不可变 cohort 的列表副本。"""
+    global _cohort_cache
+    from app.services.data_version import data_version, make_cache
+
+    if _cohort_cache is None:
+        _cohort_cache = make_cache("reconstruction_cohorts", maxsize=64, max_age=600.0)
+    version = data_version(db, _COHORT_VERSION_TABLES)
+    found = _cohort_cache.get_or_compute(
+        (trade_date, date_from, date_to, per_template), version,
+        lambda: tuple(_latest_validated_reconstruction_cohorts_uncached(
+            db, trade_date=trade_date, date_from=date_from, date_to=date_to, per_template=per_template,
+        )),
+    )
+    return list(found)
+
+
+def _latest_validated_reconstruction_cohorts_uncached(
     db: Session,
     *,
     trade_date: str | None = None,

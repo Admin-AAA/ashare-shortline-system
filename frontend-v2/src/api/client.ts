@@ -393,6 +393,9 @@ export const api = {
     request<GatewayTopology>("/api/admin/data-gateway", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   setGatewaySwitch: (source: string, sourceType: string, enabled: boolean) =>
     request<GatewayTopology>("/api/admin/data-gateway/switch", json("POST", { source, source_type: sourceType, enabled })),
+  /** 只在一个数据类型里启停一个 provider，不影响其他数据类型 */
+  setGatewayItemSwitch: (dataset: string, provider: string, enabled: boolean) =>
+    request<GatewayTopology>("/api/admin/data-gateway/item-switch", json("POST", { dataset, provider, enabled })),
 
   scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   scheduledTaskRuns: (limit = 100, taskId?: string) =>

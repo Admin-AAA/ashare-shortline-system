@@ -4,6 +4,10 @@
 
 - 配置：`settings.max_daily_picks_per_strategy`（`backend/app/core/config.py`，默认 5，环境变量 `ASHARE_MAX_DAILY_PICKS_PER_STRATEGY`，0 = 不限制）。
 - 实现：`backend/app/services/daily_pick_cap.py`。只切片、不重排；取前 N 的依据永远是策略自身已有排序。
+- 同分顺延（用户 2026-10-27）：先取前 N 只，再带上与第 N 名同分的票，更低分的不要。
+  例：100,100,90,90,90,80 → 5 只；10 只全满分 → 10 只；分数各不相同 → 前 N 只。同日之前的 run 已满额时不再顺延。
+  分数字段：短线 `portfolio_rank_score`（缺则 selection_score / final_score）；中长线 picks 的 `score`。没有分数的票每只各算一档（等同取前 N 只）。
+  审计里 `cap_unit="top_n_with_ties"`。
 - 短线（`ProductionRecommendationAssembly.aggregate`，政策之后、冷却之前）：仅 run 行存在、run_mode=formal、非历史重建的实盘 run 才生效；
   回测回放（`backtest-rule-replay-*` 无 run 行）、单股分析不受影响。排序 = 政策输出顺序（portfolio_rank_score 降序）。
   单策略 run 把同日同策略已落库推荐数计入（同日多次 run 合计 <= 上限）。

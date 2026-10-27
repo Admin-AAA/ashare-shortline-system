@@ -34,6 +34,8 @@ from app.services.datasource.gateway import DataSourceError, DatasetGateway, Err
 
 PROVIDER_NAME = "akshare"
 CONFIG_KEY = (PROVIDER_NAME, "tushare_provider")
+# 「数据源管理」里灾备那一列的数据项键：这个网关服务整族 tushare.<api>，开关按列生效。
+BACKUP_ITEM_KEY = "tushare.backup"
 AKSHARE_BACKUP_APIS: frozenset[str] = frozenset({"margin_detail", "stk_surv", "anns_d", "pledge_stat", "trade_cal"})
 # Served by this provider but never as an automatic fallback (see module doc).
 EXPLICIT_BACKUP_APIS: frozenset[str] = frozenset({"repurchase"})
@@ -415,11 +417,11 @@ def backup_gateway() -> DatasetGateway:
     if _GATEWAY is None:
         from app.services.datasource.baostock_backup import BaostockTradeCalProvider
 
-        _GATEWAY = DatasetGateway([AkshareProvider(), BaostockTradeCalProvider()])
+        _GATEWAY = DatasetGateway([AkshareProvider(), BaostockTradeCalProvider()], item_key=BACKUP_ITEM_KEY)
     return _GATEWAY
 
 
 def backup_enabled() -> bool:
-    from app.services.datasource.gateway import provider_enabled
+    from app.services.datasource.gateway import item_enabled, provider_enabled
 
-    return provider_enabled(AkshareProvider())
+    return provider_enabled(AkshareProvider()) and item_enabled(BACKUP_ITEM_KEY, PROVIDER_NAME)

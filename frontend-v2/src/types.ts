@@ -1160,6 +1160,14 @@ export type GatewayProvider = {
   name: string;
   label: string;
   switches: GatewaySwitch[];
+  /** 数据项级开关的键（通常就是所在列的数据类型 key） */
+  item_key: string;
+  /** 只在这一列启停该源的开关 */
+  item_enabled: boolean;
+  /** 源总开关（可能被多个数据类型共用）是否全开 */
+  source_enabled: boolean;
+  /** false = 这一列没有数据项级开关（Tushare Pro 路由列，按钮操作源总开关） */
+  item_switchable: boolean;
   active: boolean;
   inactive_reason: string | null;
   breaker: { state: "open" | "half_open" | "closed"; items: GatewayBreakerItem[] };

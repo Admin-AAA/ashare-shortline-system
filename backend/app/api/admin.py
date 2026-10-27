@@ -158,6 +158,21 @@ def data_gateway_switch_api(payload: dict, db: Session = Depends(get_db)):
     return build_topology(db)
 
 
+@router.post("/data-gateway/item-switch")
+def data_gateway_item_switch_api(payload: dict, db: Session = Depends(get_db)):
+    """只在一个数据类型里启停一个 provider {dataset, provider, enabled}（写 data_gateway_item_switch，
+    不动共用的源总开关；各进程 5s 内生效）。"""
+    from app.services.data_sources import set_gateway_item_switch
+    from app.services.datasource.topology import build_topology
+
+    dataset, provider = str(payload.get("dataset") or ""), str(payload.get("provider") or "")
+    if "enabled" not in payload:
+        raise HTTPException(status_code=400, detail="enabled is required")
+    if not set_gateway_item_switch(db, dataset, provider, bool(payload["enabled"])):
+        raise HTTPException(status_code=404, detail=f"不是可单独启停的数据项: {dataset}/{provider}")
+    return build_topology(db)
+
+
 @router.post("/data-sources/reorder")
 def reorder_providers_api(payload: dict, db: Session = Depends(get_db)):
     """重排当前 Tushare Pro Provider 的路由优先级（运行时即时生效，不动 config）。

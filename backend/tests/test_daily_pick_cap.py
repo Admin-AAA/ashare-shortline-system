@@ -18,6 +18,12 @@ def _set_cap(monkeypatch, cap: int) -> None:
     monkeypatch.setattr("app.core.config.get_settings", lambda: SimpleNamespace(max_daily_picks_per_strategy=cap))
 
 
+@pytest.fixture(autouse=True)
+def _seal_open(monkeypatch):
+    # 测试里写死的信号日会随真实时间过 D+1 09:15 封签；这里只测上限，固定为未封签。
+    monkeypatch.setattr("app.services.midterm_live_seal.past_deadline", lambda *_a, **_k: False)
+
+
 def test_default_cap_is_five_in_settings():
     from app.core.config import Settings
 
@@ -30,6 +36,31 @@ def test_over_cap_keeps_top5_in_given_order_and_audits():
     assert audit["truncated_count"] == 3
     assert audit["truncated_codes"] == ["000006", "000007", "000008"]
     assert audit["cap"] == 5 and audit["candidates_before_cap"] == 8
+
+
+def test_ties_extend_all_same_score_kept():
+    picks = [{"code": f"{i:06d}", "score": 100} for i in range(1, 11)]
+    kept, audit = dpc.cap_ordered_picks(picks, 5)
+    assert len(kept) == 10 and audit is None
+
+
+def test_top5_then_ties_with_fifth():
+    scores = [100, 100, 90, 90, 90, 80, 70, 60, 60, 50]
+    picks = [{"code": f"{i:06d}", "score": s} for i, s in enumerate(scores, 1)]
+    kept, audit = dpc.cap_ordered_picks(picks, 5)
+    assert [p["score"] for p in kept] == [100, 100, 90, 90, 90]
+    assert audit["truncated_count"] == 5 and audit["cap_unit"] == "top_n_with_ties"
+    # 第 5 名后面还有同分的 → 一起带上
+    scores = [100, 100, 90, 90, 90, 90, 80]
+    picks = [{"code": f"{i:06d}", "score": s} for i, s in enumerate(scores, 1)]
+    kept, audit = dpc.cap_ordered_picks(picks, 5)
+    assert [p["score"] for p in kept] == [100, 100, 90, 90, 90, 90]
+    assert audit["truncated_codes"] == ["000007"]
+
+
+def test_missing_score_falls_back_to_top_n():
+    kept, audit = dpc.cap_ordered_picks([{"code": f"{i:06d}"} for i in range(8)], 5)
+    assert len(kept) == 5 and audit["truncated_count"] == 3
 
 
 @pytest.mark.parametrize("n", [0, 3, 5])
@@ -121,6 +152,22 @@ def test_shortline_single_strategy_over_cap_truncates_and_marks_audit():
     assert all(c["policy_drop_owner"] == "daily_strategy_cap" for c in dropped_scored)
     assert all(c["policy_verdict_steps"][-1]["rule_id"] == "daily_strategy_cap" for c in dropped_scored)
     assert "policy_drop_owner" not in scored[0]
+
+
+def test_shortline_ties_extend_by_portfolio_rank_score():
+    scores = [95, 95, 95, 95, 95, 95, 95, 88, 80]  # 7 张同为 95 分
+    cards = [{"code": f"{i:06d}", "portfolio_rank_score": s, "final_score": 99} for i, s in enumerate(scores, 1)]
+    kept, audit = dpc.cap_cards_per_strategy(cards, strategy_ids=["s1"], cap=5, already_counts={"s1": 0})
+    assert [c["code"] for c in kept] == [f"{i:06d}" for i in range(1, 8)]  # 前 5 + 同为 95 的 2 张
+    assert audit["truncated_codes"] == ["000008", "000009"]
+    kept, _ = dpc.cap_cards_per_strategy(cards, strategy_ids=["s1"], cap=1, already_counts={"s1": 0})
+    assert len(kept) == 7
+    # 同日已推过 4 只：还剩 1 个名额，第 5 只 95 分，同分的一起顺延
+    kept, _ = dpc.cap_cards_per_strategy(cards, strategy_ids=["s1"], cap=5, already_counts={"s1": 4})
+    assert len(kept) == 7
+    # 之前 run 已满额：本次不再顺延
+    kept, _ = dpc.cap_cards_per_strategy(cards, strategy_ids=["s1"], cap=5, already_counts={"s1": 5})
+    assert kept == []
 
 
 def test_shortline_under_cap_unchanged():
