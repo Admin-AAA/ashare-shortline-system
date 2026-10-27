@@ -1985,3 +1985,19 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 原因：龙头次日 20% 开盘涨停买不进（之后一天 +8.5%），买得进的高开 +2.55% 后开盘到收盘 −0.36%——逆向选择。质量/持续性/阶段过滤只缩样本，不改结构。
 - 永久规则：题材龙头类想法不要再在「T+1 开盘买」口径下换参数重测；要测必须换入场方式（盘中打板 / 竞价买入），并先补分钟或竞价数据、建排板成交模型。
 - 复现：`backend/scripts/shortline_research/theme_leader_s156.py`，结果 `backend/output/research/s156/`。
+
+## L-193 vectorbt 0.28.5 的主题模板不能配 plotly 7
+
+- 状态：encoded
+- 适用：backend 依赖解析、`import app.main`、回测相关测试收集
+- 证据：GitHub Actions run [40461517996](https://github.com/Admin-AAA/ashare-shortline-system/actions/runs/40461517996) 与 main 上的 [40461820410](https://github.com/Admin-AAA/ashare-shortline-system/actions/runs/40461820410)。`import vectorbt` 走到 `_settings.register_template('light')`，用 `vectorbt/templates/light.json`（含 `data.scattermapbox` 与 `layout.mapbox`）构造 `go.layout.Template`。plotly 7.0 删除该 trace 后抛 `ValueError: Invalid property 'scattermapbox'`。同一份 JSON：plotly 7.1.0 失败，plotly 6.9.0 成功。
+- 永久规则：在 vectorbt 主题去掉 mapbox 痕迹、或换用不在导入期注册这些模板的版本之前，锁定 `plotly==6.9.0`。不要为了跟最新把 plotly 升到 7.x。
+- 吸收位置：`backend/requirements.txt`。
+
+## L-194 CI 的 MySQL smoke 必须迁 ashare_test
+
+- 状态：encoded
+- 适用：`.github/workflows/verify.yml` 的 Python MySQL integration smoke tests
+- 证据：同上 run。服务只 `CREATE DATABASE ashare_workbench`，alembic 也迁这个库；`backend/tests/conftest.py` 在连接前把库名改成 `ashare_test`，于是 `Unknown database 'ashare_test'`（1049）。认证已经成功，缺的是测试库本身。
+- 永久规则：该 job 的 `MYSQL_DATABASE` 与 `ASHARE_DATABASE_URL` 都指向 `ashare_test`，alembic upgrade head 打在测试库上。不要把 smoke 指回 `ashare_workbench`。
+- 吸收位置：`.github/workflows/verify.yml`。
