@@ -410,7 +410,21 @@ def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
     from app.core.alerts import emit_alert
     from app.services.data_health_snapshot import summarize, take_snapshot
 
+    from app.services.data_health_snapshot import recheck_too_late
+    from app.services.data_quality_monitor import _now as _dq_now
+    from app.services.honest_alerts import expire_stale, reemit_persistent, resolve_recovered
+
     mode = str((payload or {}).get("mode") or "original")
+    now = _dq_now()
+    expired = expire_stale(now)
+    try:
+        expired_reemit = reemit_persistent(db, now)  # 条件还在的告警每天重发，不让它在自动解除后悄悄消失
+    except Exception:  # noqa: BLE001 - 重发失败不影响快照
+        logger.warning("持续告警重发失败", exc_info=True)
+        expired_reemit = []
+    if mode == "recheck" and recheck_too_late(now):
+        return {"status": "skipped", "expired_alerts": expired, "reemitted_alerts": expired_reemit,
+                "summary_text": f"次日复核 {now:%H:%M} 才开始，已过 09:15，跳过（不和交易时段抢资源）"}
     res = take_snapshot(db, mode=mode)
     s, td = res["sample"], res["trade_date"]
     summ = summarize(20)
@@ -421,13 +435,18 @@ def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
              f"近 {summ['days_with_original']} 个交易日均值 {summ['avg_score']}，出票成功率 {summ['output_success_rate']}"
              + (f"，巡检失败 {summ['quality_failed_days']} 天" if summ["quality_failed_days"] else ""))
     try:
+        # 告警 key=交易日：复核恢复时立即解除；一直不再触发的 24 小时后由 expire_stale 自动解除
         if s["output_status"] == "failed":
-            emit_alert("daily_output_failed", f"{td}:{res['written']}", f"{td} 盘后出票失败（{res['written']}）：{s['output']['reason']}")
+            emit_alert("daily_output_failed", td, f"{td} 盘后出票失败（{res['written']}）：{s['output']['reason']}")
+        else:
+            resolve_recovered("daily_output_failed", td, f"{td} {res['written']} 复核：盘后出票{s['output_status']}")
         if not s["quality_ok"]:
-            emit_alert("data_health_snapshot", f"{td}:{res['written']}", f"{td} 健康快照：数据质量巡检失败，本次不算分")
+            emit_alert("data_health_snapshot", td, f"{td} 健康快照：数据质量巡检失败，本次不算分")
+        else:
+            resolve_recovered("data_health_snapshot", td, f"{td} {res['written']}：巡检恢复正常")
     except Exception:  # noqa: BLE001 - 告警失败不影响任务
         logger.warning("健康快照告警写入失败", exc_info=True)
-    return {"snapshot": {"trade_date": td, "written": res["written"],
+    return {"expired_alerts": expired, "reemitted_alerts": expired_reemit, "snapshot": {"trade_date": td, "written": res["written"],
                          **{k: s.get(k) for k in ("quality_ok", "score", "score_db", "penalty", "output_status")}},
             "summary_20d": {k: summ[k] for k in ("days_with_original", "avg_score", "output_success_rate",
                                                  "red_days", "quality_failed_days")},
@@ -435,9 +454,14 @@ def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
 
 
 def _run_rolling_r12(db, payload: dict | None = None) -> dict:
+    from app.services.honest_alerts import expire_stale, reemit_persistent
     from app.services.rolling_r12 import run_monthly
 
-    return run_monthly(db, force=bool((payload or {}).get("force")))
+    expired = expire_stale()
+    out = run_monthly(db, force=bool((payload or {}).get("force")))
+    out["expired_alerts"] = expired
+    out["reemitted_alerts"] = reemit_persistent(db)  # 每个交易日 22:30：条件还在就重发（读结果文件，不重算）
+    return out
 
 
 def _ensure_stock_identity_task() -> None:

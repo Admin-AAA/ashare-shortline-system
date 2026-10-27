@@ -38,7 +38,8 @@ MIN_TRADES = 30
 WARMUP_DAYS = 100  # 自然日，约 70 个交易日，覆盖长线 60 日持有，让窗口开头的「已持有不重复买」与实盘一致
 BLACKOUTS = ((_dt.time(9, 15), _dt.time(15, 5)), (_dt.time(16, 35), _dt.time(18, 35)))
 # 短线回放（历史重建 historical_reconstruction）覆盖终点：这天及以前只用回放，之后只用实盘，两段不重叠、不混算。
-# 2025-10-20 ~ 2026-10-16 的全量重建（scripts/rebuild_replay_picks.py，2026-10-19）。以后扩展重建范围时改这里。
+# 优先从库里读（short_replay_coverage_end），读不到才用这个常量兜底：
+# 2025-10-20 ~ 2026-10-16 的全量重建（scripts/rebuild_replay_picks.py，2026-10-19）。
 SHORT_REPLAY_COVERAGE_END = "2026-10-16"
 STOP_AT = _dt.time(0, 0)  # 22:30 开跑，到 00:00 在日边界停下，下个交易日接着跑
 
@@ -244,7 +245,8 @@ def short_window_stats(db, window_start: str, cutoff: str) -> dict[str, Any]:
     from app.services.outcome_service import metrics_by_strategy
 
     expected = expected_short_strategies(db)
-    segments = short_segments(window_start, cutoff)
+    boundary, boundary_source = short_replay_coverage_end(db)
+    segments = short_segments(window_start, cutoff, boundary)
 
     def seg_rows(seg: dict[str, Any] | None) -> dict[str, tuple[int, float]]:
         if seg is None:
@@ -258,9 +260,6 @@ def short_window_stats(db, window_start: str, cutoff: str) -> dict[str, Any]:
         return out_
 
     replay_rows, live_rows = seg_rows(segments["replay"]), seg_rows(segments["live"])
-    actual_cover = db.execute(text(
-        "SELECT MAX(trade_date) FROM recommendation_runs WHERE evidence_class='historical_reconstruction' AND status='completed'"
-    )).scalar()
     out: dict[str, Any] = {}
     for sid in expected:
         rn, ra = replay_rows.get(sid, (0, 0.0))
@@ -273,8 +272,24 @@ def short_window_stats(db, window_start: str, cutoff: str) -> dict[str, Any]:
             "replay_segment": {**(segments["replay"] or {}), "n": rn, "avg": round(ra, 2) if rn else None},
             "live_segment": {**(segments["live"] or {}), "n": ln, "avg": round(la, 2) if ln else None},
         }
-    return {"strategies": out, "replay_coverage_end": SHORT_REPLAY_COVERAGE_END,
-            "db_reconstruction_max_date": str(actual_cover) if actual_cover else None}
+    return {"strategies": out, "replay_coverage_end": boundary, "replay_coverage_end_source": boundary_source}
+
+
+def short_replay_coverage_end(db) -> tuple[str, str]:
+    """短线回放覆盖终点：优先从库里读（completed 的 historical_reconstruction 正式 run 的最大交易日），
+    读不到（空表/查询失败）再用常量 SHORT_REPLAY_COVERAGE_END。返回 (日期, "data"|"constant")。"""
+    try:
+        v = db.execute(text(
+            "SELECT MAX(trade_date) FROM recommendation_runs "
+            "WHERE evidence_class='historical_reconstruction' AND status='completed' AND run_mode='formal'"
+        )).scalar()
+    except Exception:  # noqa: BLE001 - 读不到就用常量
+        logger.warning("short replay coverage end unreadable, using constant", exc_info=True)
+        v = None
+    s = str(v)[:10] if v else ""
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        return s, "data"
+    return SHORT_REPLAY_COVERAGE_END, "constant"
 
 
 def short_segments(window_start: str, cutoff: str, boundary: str | None = None) -> dict[str, dict[str, str] | None]:
@@ -345,7 +360,8 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
                    "local_covered_through": upstream["covered"]},
         "method": ("中长线：现行生产选股代码重放（开每日上限），财报/分红/回购/业绩预告优先读本地库，本地未覆盖的日期才走网关；"
                    "只算窗口内信号、截止日前已卖出的笔，扣 0.3%。"
-                   f"短线：{SHORT_REPLAY_COVERAGE_END} 及以前只用历史重建、之后只用实盘，两段分开列，已成交净收益（未成交不摊 0%）。"
+                   f"短线：{short['replay_coverage_end']}（来源 {short['replay_coverage_end_source']}）及以前只用历史重建、"
+                   "之后只用实盘，两段分开列，已成交净收益（未成交不摊 0%）。"
                    "样本 < 30 笔不判正负"),
     }
     root.mkdir(parents=True, exist_ok=True)
@@ -358,7 +374,9 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
         from app.core.alerts import emit_alert
 
         if neg:
-            emit_alert("rolling_r12_negative", cutoff, f"近12个月（截止 {cutoff}）每笔转负的现役策略：{','.join(neg)}")
+            from app.services.honest_alerts import emit_daily
+
+            emit_daily("rolling_r12_negative", cutoff, f"近12个月（截止 {cutoff}）每笔转负的现役策略：{','.join(neg)}")
         if incomplete:
             emit_alert("rolling_r12_incomplete", cutoff, f"近12个月滚动重算（截止 {cutoff}）有取数失败日：{doc['replay']['incomplete_days']}")
     except Exception:  # noqa: BLE001
