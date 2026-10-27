@@ -3662,3 +3662,19 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 附带观察（只报告，不触发任何动作）：同进程原策略 F_any_h20 的 OOS 合并 959 笔 +1.34% **PF 1.29**、中位 −0.82、2023 年 −1.69%/笔，按 8 段口径仍 6/8 达标（与上线时一致）；近 3 年 +3.30%（满期）PF1.70。建议在下次中线体检时把「分年 PF」也列出来看。
 - 处置：写入日志；MID_REJECTED 由 owner 决定是否追加（本节不改代码）。
 - 运行：逐段单进程，每段约 11–21 秒；只读本地 parquet，未调外部数据源。输出 `backend/output/research/s339/`（gitignore）。
+
+## §340 [短线] 「重要股东/高管大额增持公告 → 公告后首个交易日收盘未涨停 → 次日开盘买、持 5 日」（INB_h5）— 预注册（2026-10-27 21:00 CST 写于出结果前，规则不再改）
+- 想法：真金白银增持（合计 ≥0.5% 总股本）是内部人最强的看多信号，市场短期常反应不足。§91 H_big_h20/h60（同口径持 20/60 日）超额不过、§329 CIB_h20（集体增持）否决；本题只检验公告后 5 日的短线反应，不改阈值。
+- 数据：data/midterm/events/holdertrade_in_*.parquet（tushare 增持，公告日 PIT）。按 (code, ann_date) 汇总 change_ratio（C/G/P 全部类型），≥0.5% 才算；同股 20 个自然日内只认第一次公告。
+- 反应日 E = 第一个 > ann_date 的交易日（与 §336 同口径）。条件：E 日 liq（amt20>5000 万、上市>250 日、非 ST、非北交所）& E 日收盘未封涨停。同日按增持比例降序前 5。
+- 引擎 realistic：E+1 开盘买（开盘涨停买不进、不递补）、持 5 日、跌停锁死顺延、0.3% 成本；K=20、max_new=5（仅回测）。窗口：标准 8 段 + R12 + N3（2024-01~2026-10）。
+- 判定（§282 标准，不改）：R12、N3 每笔均 >0、PF ≥1.3、MDD 在上限内，8 段 ≥6 段为正且 W0/W00 ≥−5%，R12/N3 各 ≥30 笔；另报中位数、两头各去 5%、彩票/稳健标签。
+- 脚本：backend/scripts/shortline_research/inb_s340.py，串行 backend/scripts/midterm/run_s340.sh。
+
+## §341 [中线] 「财报公告期市场反应强 → 次日开盘买、持 20 日」（EAR_h20，earnings announcement return 漂移）— 预注册（2026-10-27 21:00 CST 写于出结果前，规则不再改）
+- 想法：Brandt–Kishore–Santa-Clara–Venkatachalam（2008）：用市场对财报的真实价格反应（而不是会计意外）衡量"超预期"，反应强的股票其后继续跑赢。与 §93 PEAD、§319 SUE（会计意外）、§322 CSL（业绩加速+新高）、§103（业绩预告）不同：只看价格反应。
+- 数据：data/midterm/fina/*.parquet（fina_indicator，ann_date PIT），每个 (code, end_date) 只取最早 ann_date；沪深300 = index_daily 000300.SH。
+- 事件：R0 = 第一个 ≥ ann_date 的交易日，R1 = 下一个交易日；EAR2 = 两天（个股复权涨跌 − 沪深300 涨跌）之和；EAR2 ≥ +5% 触发，信号日 R1。条件：R1 当日 liq。排序分 = EAR2 降序。
+- 引擎 realistic：R1+1 开盘买（开盘涨停买不进、不递补）、持 20 日、跌停锁死顺延、0.3% 成本；K=20、max_new=5（仅回测）。窗口同上。
+- 判定：同 §340（中线 MDD 上限 25%）。
+- 脚本：backend/scripts/midterm/lt_research130.py，串行 backend/scripts/midterm/run_s341.sh。
