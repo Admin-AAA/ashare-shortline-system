@@ -10,6 +10,19 @@ from app.services import daily_pick_cap as dpc
 from app.services import midterm_service as ms
 
 
+@pytest.fixture(autouse=True)
+def _clock_before_entry(monkeypatch):
+    """固定在 2026-10-26 18:00（信号日盘后、次日开盘前）。
+
+    实盘封签（midterm_live_seal）过了 D+1 开盘就不再覆盖已落盘批次；不固定时钟，本文件用 2026-10-26 当信号日的
+    用例在 10-27 开盘后就会因「不覆盖」而失败（时间炸弹，与每日上限逻辑无关）。"""
+    import datetime as _dt
+
+    from app.services import midterm_live_seal as seal
+
+    monkeypatch.setattr(seal, "now_cn", lambda: _dt.datetime(2026, 10, 26, 18, 0, tzinfo=seal.CN_TZ))
+
+
 def _picks(n: int) -> list[dict]:
     return [{"code": f"{i:06d}", "name": f"s{i}", "score": 100 - i} for i in range(1, n + 1)]
 
