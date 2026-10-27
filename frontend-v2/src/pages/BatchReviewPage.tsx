@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import type { RecommendationHistoryResponse } from "../types";
 import { exitReasonLabel, formatApiDateTime, isOutcomeSettled, setupLabel } from "../utils/display";
 import { SHORT_STRATEGIES, strategyShortName } from "../ui/strategyRules";
+import { QualityChip, QualityTable, type QualityRow } from "../components/StrategyQuality";
 import { EmptyState, ErrorPage, PageSkeleton } from "../components/StateViews";
 
 /** 复盘 · 按批次（默认视图）
@@ -54,6 +55,14 @@ export function BatchReviewPage() {
       const rest = await Promise.all(offsets.map((offset) => api.recommendationHistory({ ...base, offset })));
       return { ...first, items: [...first.items, ...rest.flatMap((r) => r.items)] };
     },
+  });
+
+  const qs = useQuery({ queryKey: ["strategy-quality"], queryFn: () => api.strategies() });
+  const st = useQuery({ queryKey: ["by-strategy-review", scope], queryFn: () => api.metricsByStrategy(undefined, scope === "live" ? "live_forward" : "historical_replay") });
+  const qrows: QualityRow[] = SHORT_STRATEGIES.map((m) => {
+    const q = qs.data?.find((x) => x.skill_id === m.id);
+    const r = st.data?.find((x) => x.strategy_id === m.id);
+    return { id: m.id, name: `${m.short}${m.status === "观察" ? "（观察）" : ""}`, quality: q?.quality, realized: r ? { n: r.trade_count, avg: r.average_net_return, median: r.median_net_return } : null };
   });
 
   const batches = useMemo(() => {
@@ -110,6 +119,8 @@ export function BatchReviewPage() {
         <div className="card stat"><div className="l">取消后第 5 日假设收益</div><div className="v">{pct(co?.average_5d_return)}</div><div className="d">已观察 {co?.observed_5d_count ?? 0} 笔</div></div>
         <div className="card stat"><div className="l">避免亏损率</div><div className="v">{co?.avoided_loss_rate_5d == null ? "—" : `${co.avoided_loss_rate_5d.toFixed(0)}%`}</div><div className="d">取消后第 5 日假设收益 ≤ 0 的比例</div></div>
       </div>
+      {!qs.isLoading && <QualityTable title="各策略每笔收益" rows={qrows} realizedTitle={scope === "live" ? "前瞻已结算" : "历史重建已结算"}
+        notes={[<>已结算笔数不足 30 笔显示「样本不足」（前瞻样本目前都很少）；无回测画像的策略标签显示「—」。</>, <>回测列为 21 次选股抽样平均，已扣成本；标签规则见鼠标悬停。</>]} />}
       <div className="card toolbar">
         <input className="inp" placeholder="6 位代码" value={code} onChange={(e) => { setCode(e.target.value.trim()); setPage(1); }} style={{ width: 120 }} />
         <select className="inp" value={strategy} onChange={(e) => { setStrategy(e.target.value); setPage(1); }}>
@@ -191,6 +202,8 @@ export function BatchReviewPage() {
 /** 展开：命中策略（skill_breakdown，≥2 显示 ×N 策略）+ 风险提示（仅供参考） */
 function StockHits({ id }: { id: string }) {
   const d = useQuery({ queryKey: ["rec-detail", id], queryFn: () => api.recommendationDetail(id) });
+  const qs = useQuery({ queryKey: ["strategy-quality"], queryFn: () => api.strategies() });
+  const quality = new Map((qs.data ?? []).map((x) => [x.skill_id, x.quality]));
   if (d.isLoading) return <span className="muted small">加载命中策略…</span>;
   if (!d.data) return <span className="muted small">无详情</span>;
   const sb = d.data.skill_breakdown ?? [];
@@ -198,9 +211,10 @@ function StockHits({ id }: { id: string }) {
     <div className="hits">
       <span className="muted small">命中策略：</span>
       {sb.length ? sb.map((s, i) => (
-        <span key={s.strategy_id + i} className={`tag ${i === 0 ? "tag--brand" : ""}`} title={`${s.setup_match} · 规则分 ${s.score.toFixed(1)}${s.hard_veto ? ` · 否决：${s.veto_reason}` : ""}`}>
+        <Fragment key={s.strategy_id + i}><span className={`tag ${i === 0 ? "tag--brand" : ""}`} title={`${s.setup_match} · 规则分 ${s.score.toFixed(1)}${s.hard_veto ? ` · 否决：${s.veto_reason}` : ""}`}>
           {strategyShortName(s.strategy_id, s.strategy_name)} {s.score.toFixed(0)}
         </span>
+        <QualityChip quality={quality.get(s.strategy_id)} /></Fragment>
       )) : <span className="muted small">—</span>}
       {sb.length >= 2 && <span className="tag tag--warn">×{sb.length} 策略</span>}
       {d.data.entry_rule && <span className="small" style={{ marginLeft: 12 }}><span className="muted">入场规则：</span>{d.data.entry_rule}</span>}

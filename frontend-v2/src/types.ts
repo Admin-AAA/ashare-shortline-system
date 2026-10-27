@@ -2161,6 +2161,8 @@ export type StrategyListItem = {
   performance: StrategyPerformance | null;
   /** 三窗回测收益（path A 诊断口径，单策略组合）：与 canonical 画像分开呈现 */
   backtest_returns?: StrategyBacktestReturns | null;
+  /** 彩票型/稳健型（后端 §285，来自回测，只展示） */
+  quality?: import("./components/StrategyQuality").StrategyQuality | null;
 };
 
 /** 单个窗口的逐笔回测统计（口径见 StrategyBacktestReturns.caliber） */

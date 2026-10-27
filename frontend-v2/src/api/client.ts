@@ -57,6 +57,7 @@ import type {
 } from "../types";
 import { createDashboardApi } from "./dashboard";
 import { logger } from "../utils/logger";
+import type { StrategyQuality } from "../components/StrategyQuality";
 
 type PresetPayload = Omit<Partial<Preset>, "skills"> & {
   skills?: Array<{ skill_id: string; weight: number; sort_order?: number }>;
@@ -218,8 +219,10 @@ export type HorizonStrategy = {
   /** 当日出票状态（17:35 盘后才有）；缺失则不显示 */
   daily_status?: { status: "ok" | "no_signal" | "data_error" | "slots_full" | "not_signal_day" | string; reason?: string | null; date?: string | null } | string | null;
   daily_status_reason?: string | null; schedule: string; hold_days: number; top_n: number;
-  metrics: { recent_12m?: HorizonMetrics; phases?: Record<string, HorizonMetrics>; window?: string; note?: string };
+  metrics: { recent_12m?: HorizonMetrics; phases?: Record<string, HorizonMetrics>; window?: string; note?: string; quality?: StrategyQuality };
 };
+export type HorizonStrategyStats = { strategy_id: string; strategy_name: string; n: number | null; win_rate: number | null; avg_ret: number | null; median_ret: number | null; pl_ratio: number | null; max_gain: number | null; max_loss: number | null };
+export type HorizonMetricsResponse = { horizon: string; by_origin?: Record<string, { n?: number | null }>; by_strategy: HorizonStrategyStats[] };
 export type HorizonStrategiesResponse = { horizon: string; strategies: HorizonStrategy[]; rejected?: { name: string; reason: string }[] };
 export type HorizonPick = { code: string; name: string; total_mv: number; status: string; entry_date?: string; exit_date?: string; mark_date?: string; ret?: number; days?: number;
   rule_score?: number | null; rule_score_label?: string | null; rule_score_better?: "higher" | "lower" | null; selection_reason?: string | null; selection_rank?: number | null;
@@ -388,6 +391,8 @@ export const api = {
     request<StandaloneMetricsResponse>("/api/strategies/standalone-metrics", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   horizonStrategies: (horizon: "mid" | "long") =>
     request<HorizonStrategiesResponse>(`/api/horizons/${horizon}/strategies`),
+  horizonMetrics: (horizon: "mid" | "long") =>
+    request<HorizonMetricsResponse>(`/api/horizons/${horizon}/metrics`),
   horizonPicks: (horizon: "mid" | "long", strategyId?: string, limit = 30) =>
     request<HorizonPicksResponse>(`/api/horizons/${horizon}/picks?limit=${limit}${strategyId ? `&strategy_id=${encodeURIComponent(strategyId)}` : ""}`),
   horizonPicksPage: (horizon: "mid" | "long", page: number, pageSize: number, strategyId?: string) =>
