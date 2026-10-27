@@ -72,13 +72,13 @@ def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
     assert set(res) == {"long-dividend-lowvol", "long-growth-streak", "long-net-cash-switch"}
     res = ms.generate_picks(None, "2026-10-16", strategy_ids=["long-dividend-lowvol"])
     assert set(res) == {"long-dividend-lowvol"}
-    # §336 已下线的低换手低波：按 id 指名也不再出票（generate_picks 只遍历现役 STRATEGIES）
+    # §338 已下线的低换手低波：按 id 指名也不再出票（generate_picks 只遍历现役 STRATEGIES）
     assert ms.generate_picks(None, "2026-10-30", strategy_ids=["long-lowturn-lowvol"]) == {}
 
 
 def test_retired_strategies_not_live():
     """§278/§282：新标准重评仍不达标的 /long 策略已下线（long-net-cash-switch 已于 §282 恢复上线），不在现役 STRATEGIES，也不出票。
-    §336：long-lowturn-lowvol 近12个月满期卖出每笔为负，下线。"""
+    §338：long-lowturn-lowvol 近12个月满期卖出每笔为负，下线。"""
     retired = {"long-repurchase-big", "long-current-debt-down", "long-dividend-increase",
                "long-undist-profit-growth", "long-lowturn-lowvol"}
     assert set(ms.RETIRED_STRATEGIES) == retired
@@ -95,7 +95,7 @@ def test_next_batch_note(tmp_path, monkeypatch):
     assert notes["mid-small-cap-weekly"] == "尚未出票；每个周五收盘后选股，次日开盘买"
     assert notes["mid-block-trade-premium"] == "尚未出票；每晚约 21:00 大宗数据发布后选股，次日开盘买"
     long_notes = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("long", db=None)}
-    assert "long-lowturn-lowvol" not in long_notes  # §336 已下线
+    assert "long-lowturn-lowvol" not in long_notes  # §338 已下线
     assert long_notes["long-dividend-lowvol"] == "尚未出票；每月最后一个交易日收盘后选股，下一批：2026-10-30，次日开盘买"
     assert "2026-10-30" in long_notes["long-dividend-lowvol"]
     # 有批次后去掉前缀
@@ -120,7 +120,7 @@ def test_retired_strategies_not_in_horizon_lists(tmp_path, monkeypatch):
     assert [b["strategy_id"] for b in mid["batches"]] == ["mid-repurchase-plan"]
     lng = ms.list_picks_page(None, None, "long", page=1, page_size=30)
     assert [b["strategy_id"] for b in lng["batches"]] == ["long-dividend-lowvol"]
-    # §336 下线后历史文件保留，按 id 显式查询仍可读、持有期仍按 60 日结算
+    # §338 下线后历史文件保留，按 id 显式查询仍可读、持有期仍按 60 日结算
     lt = ms.list_picks_page(None, "long-lowturn-lowvol", None, 1, 30)["batches"][0]
     assert lt["strategy_name"] == ms.RETIRED_STRATEGIES["long-lowturn-lowvol"]["name"] and lt["hold_days"] == 60
     old = ms.list_picks_page(None, "long-repurchase-big", None, 1, 30)["batches"][0]
