@@ -11,8 +11,11 @@ CODE, D = "999991", "2099-01-02"
 
 @pytest.fixture()
 def db():
+    url = _resolve_test_db_url()
+    if not url.startswith("mysql"):
+        pytest.skip("ashare_test unavailable")
     try:
-        eng = create_engine(_resolve_test_db_url())
+        eng = create_engine(url)
         with eng.connect() as c:
             c.execute(text("SELECT 1"))
     except Exception as exc:  # pragma: no cover

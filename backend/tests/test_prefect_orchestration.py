@@ -154,6 +154,11 @@ def test_execution_confirmation_poll_confirms_all_unsettled_in_batches(monkeypat
     monkeypatch.setattr("app.services.tushare_client.is_open_trade_date", lambda d: True)
     monkeypatch.setattr("app.services.schedule_gate.schedule_skip_reason", lambda *a, **k: None)  # 不受真实当前时间(迟到超时)影响
     monkeypatch.setattr("app.db.session.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+    # 轮询在批次确认之后还会做覆盖率登记；本用例只锁分批，不连库。
+    monkeypatch.setattr(
+        "app.services.execution_confirmation_coverage.report_coverage",
+        lambda db, *args, **kwargs: {"unchecked": []},
+    )
 
     result = poll_execution_confirmation.fn("2026-10-21T10:00:00+08:00")
 

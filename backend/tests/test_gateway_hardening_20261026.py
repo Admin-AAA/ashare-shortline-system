@@ -76,7 +76,12 @@ def test_teajoin_settings_do_not_leak_token():
 
     st = get_settings()
     assert "teajoin" in st.providers
-    assert "token" not in repr(st).lower() or st.tushare_teajoin_token not in repr(st)
+    rendered = repr(st)
+    # 字段名本身含 token（如 agent_max_tokens），不能用子串 "token" 判断泄漏。
+    # 空凭证时 `"" in repr` 恒为真，只在确有密钥时检查明文没有出现。
+    assert "tushare_teajoin_token" not in rendered
+    if st.tushare_teajoin_token:
+        assert st.tushare_teajoin_token not in rendered
 
 
 # ── 容量忙：批量/补数专用短冷却；live 保守 ──────────────────────────────

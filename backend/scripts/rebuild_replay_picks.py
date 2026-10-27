@@ -196,7 +196,11 @@ def _local_forecast_reader(api_fetch):
     from app.services import midterm_forecast as mf
 
     parts = [pd.read_parquet(f, columns=mf.COLS) for f in sorted(mf.FC_DIR.glob("*.parquet"))]
-    df = pd.concat([p for p in parts if len(p)], ignore_index=True)
+    frames = [p for p in parts if len(p)]
+    if not frames:
+        # CI 和空数据目录没有本地预告 parquet。pd.concat([]) 会抛错；没有覆盖就走 API。
+        return api_fetch
+    df = pd.concat(frames, ignore_index=True)
     df["ann_date"] = df["ann_date"].astype(str).str.strip()
     covered_through = df["ann_date"].max()
     groups = {k: g.reset_index(drop=True) for k, g in df.groupby("ann_date")}

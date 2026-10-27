@@ -129,7 +129,10 @@ def test_calendar_ending_before_end_date_falls_back_to_kbars_and_alerts(db, monk
     from app.core import alerts
 
     alerts.reset_alerts()
-    monkeypatch.setattr(ews, "_last_resolve_check", 0.0)
+    # monotonic 从开机算起。写成 0 时，开机不足冷却窗口的 CI 会把解除告警直接丢掉。
+    monkeypatch.setattr(
+        ews, "_last_resolve_check", ews.time.monotonic() - ews._RESOLVE_CHECK_INTERVAL - 1
+    )
     for d in ("2026-10-19", "2026-10-20", "2026-10-21", "2026-10-22", "2026-10-23"):
         _kbar(db, "600000", d)
     db.commit()
