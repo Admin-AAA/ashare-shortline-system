@@ -159,3 +159,54 @@ def test_unfinished_override_run_is_never_live():
     run = _run(_cn(2026, 10, 27, 8, 30), "live_forward")
     run.finished_at = None
     assert _finalize(run)[0] == "historical_replay"
+
+
+# ── 中断 / 失败的补跑：定稿为不算实盘，不进冷却统计、不进实盘名单 ─────────────
+
+def _req(override=SIGNAL, matrix=False, mode="formal"):
+    return SimpleNamespace(run_mode=SimpleNamespace(value=mode), trade_date_override=override, matrix_run=matrix)
+
+
+def test_failed_or_interrupted_override_run_settles_not_live():
+    from app.services.official_sample_scope import scope_on_transition
+
+    run = SimpleNamespace(evaluation_scope="live_forward", reconstruction_batch_id=None, evidence_class=None)
+    now = _utc_naive(_cn(2026, 10, 27, 8, 50))  # 还没开盘也一样：完成不了就不算实盘
+    for status in ("failed", "interrupted", "cancelled"):
+        assert scope_on_transition(run, _req(), status, now) == "historical_replay"
+    # 中断后在开盘前恢复：重新暂定为实盘；开盘后恢复：暂定为回放
+    run.evaluation_scope = "historical_replay"
+    assert scope_on_transition(run, _req(), "running", now) == "live_forward"
+    assert scope_on_transition(run, _req(), "running", _utc_naive(_cn(2026, 10, 27, 9, 30))) is None
+    # 正常日更、矩阵批跑、显式重建都不动
+    live = SimpleNamespace(evaluation_scope="live_forward", reconstruction_batch_id=None, evidence_class=None)
+    assert scope_on_transition(live, _req(override=None), "failed", now) is None
+    assert scope_on_transition(live, _req(matrix=True), "failed", now) is None
+    recon = SimpleNamespace(evaluation_scope="historical_replay", reconstruction_batch_id="b", evidence_class=None)
+    assert scope_on_transition(recon, _req(), "running", now) is None
+
+
+def test_unfinished_runs_never_enter_cooldown_or_live_list():
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.models.tables import Recommendation, RecommendationRun
+    from app.services import shortline_cooldown as sc
+    from app.services.evidence.validation import canonical_live_forward_run_ids
+
+    engine = create_engine("sqlite:///:memory:")
+    for t in (RecommendationRun, Recommendation):
+        t.__table__.create(engine)
+    db = sessionmaker(bind=engine)()
+    skills = json.dumps([{"skill_id": "oversold-capital-reversal"}])
+    for rid, status in (("run_done", "completed"), ("run_int", "interrupted"), ("run_fail", "failed")):
+        db.add(RecommendationRun(run_id=rid, run_mode="formal", status=status, evaluation_scope="live_forward",
+                                 trade_date="2026-10-20", selected_skills_json=skills, run_name=rid))
+        db.add(Recommendation(recommendation_id=f"rec_{rid}", run_id=rid, trade_date="2026-10-20",
+                              code=f"6000{len(rid)}{status[0]}", name="x", recommend_price=10.0, final_score=80.0,
+                              bucket="oversold-capital-reversal", feature_snapshot_json="{}"))
+    db.commit()
+    picks = sc._live_picks(db, "oversold-capital-reversal", "2026-10-01", "2026-10-27")
+    assert [p["code"] for p in picks] == ["6000{}c".format(len("run_done"))]  # 只有已完成的
+    assert canonical_live_forward_run_ids(db) == ()  # 没有完整证据的都不进实盘名单（中断/失败更不会）
+    db.close()

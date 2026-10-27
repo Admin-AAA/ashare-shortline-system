@@ -43,7 +43,7 @@ from app.services.runs.repository import (
     TransitionCommit,
 )
 from app.services.runs.state_machine import RunStateMachine, RunStateTransitionError
-from app.services.official_sample_scope import evaluation_scope_for_run
+from app.services.official_sample_scope import evaluation_scope_for_run, scope_on_transition
 
 
 class SQLAlchemyRunRepository:
@@ -352,6 +352,12 @@ class SQLAlchemyRunRepository:
         elif commit.transition.target_status is RunStatus.RUNNING:
             values["finished_at"] = None
             values["interrupted_at"] = None
+        # 带 override 的补跑：失败/中断/取消 → 定稿为不算实盘；重新开跑 → 按此刻重新暂定（完成时再按真实生成时刻定稿）
+        row = self._session.get(RecommendationRun, run_id)
+        if row is not None:
+            new_scope = scope_on_transition(row, record.request, commit.transition.target_status, commit.now)
+            if new_scope is not None:
+                values["evaluation_scope"] = new_scope
 
         conditions = [
             RecommendationRun.run_id == run_id,

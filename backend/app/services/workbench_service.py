@@ -87,6 +87,7 @@ from app.services.outcome_service import (
 )
 from app.services.official_sample_scope import (
     evaluation_scope_for_run,
+    is_reconstruction_marked,
     official_sample_conditions,
     recommendation_history_conditions,
 )
@@ -1528,12 +1529,13 @@ def _persist_run_start(
     # The indexed column and the canonical request are written from the same
     # validated value; a later worker can therefore reject drift deterministically.
     run.run_mode = request.run_mode.value
-    run.evaluation_scope = evaluation_scope_for_run(
-        run_mode=request.run_mode.value,
-        trade_date_override=request.trade_date_override,
-        matrix_run=request.matrix_run,
-        generated_at=now,  # 开跑时刻（暂定）；完成时按真实生成时刻定稿（finalize_override_scope）
-    )
+    if not is_reconstruction_marked(run):  # 显式历史重建已预留为回放口径，不在开跑时改
+        run.evaluation_scope = evaluation_scope_for_run(
+            run_mode=request.run_mode.value,
+            trade_date_override=request.trade_date_override,
+            matrix_run=request.matrix_run,
+            generated_at=now,  # 开跑时刻（暂定）；完成时按真实生成时刻定稿（finalize_override_scope）
+        )
     run.trade_date = run.trade_date or _latest_trade_date(db)
     run.finished_at = None
     run.universe_count = 0

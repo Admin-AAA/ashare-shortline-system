@@ -96,6 +96,40 @@ def finalize_override_scope(run, generated_at: datetime | None) -> bool:
     return True
 
 
+def is_reconstruction_marked(run) -> bool:
+    """显式历史重建（replay_all_days 预留了 batch / 证据类）：口径归重建适配器管，这里一律不动。"""
+    return bool(getattr(run, "reconstruction_batch_id", None)) or (
+        str(getattr(run, "evidence_class", "") or "") == "historical_reconstruction"
+    )
+
+
+NOT_LIVE_TERMINAL_STATUSES = frozenset({"failed", "interrupted", "cancelled"})
+
+
+def scope_on_transition(run, request, target_status: str, now: datetime) -> str | None:
+    """任务状态迁移时带 override 的 formal 补跑应写入的 evaluation_scope；None = 不改。
+
+    - 进入失败 / 中断 / 取消：定稿为不算实盘（historical_replay）。永远完成不了的补跑不能一直挂着「暂定实盘」。
+    - 重新开跑（RUNNING，含中断后恢复）：按此刻重新暂定（入场日开盘前 → live_forward）；完成时再按真实生成时刻定稿。
+    正常日更（无 override）、矩阵批跑、显式历史重建都不在这里改。
+    """
+    mode = getattr(getattr(request, "run_mode", None), "value", getattr(request, "run_mode", None))
+    if str(mode or "").lower() != "formal":
+        return None
+    override = getattr(request, "trade_date_override", None)
+    if not override or bool(getattr(request, "matrix_run", False)) or is_reconstruction_marked(run):
+        return None
+    current = str(getattr(run, "evaluation_scope", "") or "")
+    status = str(getattr(target_status, "value", target_status) or "")
+    if status in NOT_LIVE_TERMINAL_STATUSES:
+        return HISTORICAL_REPLAY_SCOPE if current == LIVE_FORWARD_SCOPE else None
+    if status == "running":
+        tentative = evaluation_scope_for_run(run_mode="formal", trade_date_override=str(override),
+                                             generated_at=now)
+        return tentative if tentative != current else None
+    return None
+
+
 def official_sample_conditions() -> tuple:
     """Canonical LIVE_FORWARD eligibility for current demo metrics."""
     return (
@@ -156,6 +190,8 @@ __all__ = [
     "OFFICIAL_RECOMMENDATION_PREFIX",
     "evaluation_scope_for_run",
     "finalize_override_scope",
+    "is_reconstruction_marked",
+    "scope_on_transition",
     "historical_reconstruction_sample_conditions",
     "official_sample_conditions",
     "recommendation_history_conditions",
