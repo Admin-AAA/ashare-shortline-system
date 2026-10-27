@@ -13,6 +13,15 @@ from typing import Any
 from app.core.config import get_settings
 from app.engine.trading_calendar import normalize_trade_date as _normalize_trade_date
 from app.services.market_data import _split_sources
+from app.services.text_events.keywords import (
+    ANNS_D_EXTRA_RISK,
+    ANNS_D_POSITIVE,
+    NEWS_NEGATIVE,
+    NEWS_POSITIVE,
+    legacy_is_risk,
+    legacy_sentiment,
+    listed_sentiment,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -423,14 +432,8 @@ def _fetch_tushare_news(code: str, settings: Any, trade_date: str | None = None)
         if not announce_date or not title:
             continue
         url = str(row.get("url") or "").strip()
-        is_risk = _contains_any(title, ["风险", "警示", "退市", "ST", "处罚", "监管", "立案", "亏损", "减持", "问询", "通报", "冻结"])
-        is_positive = _contains_any(title, ["增长", "预增", "扭亏", "中标", "签约", "回购", "增持", "分红", "重组", "获批"])
-        if is_risk:
-            sentiment = "negative"
-        elif is_positive:
-            sentiment = "positive"
-        else:
-            sentiment = "neutral"
+        is_risk = legacy_is_risk(title, ANNS_D_EXTRA_RISK)
+        sentiment = legacy_sentiment(title, extra_risk=ANNS_D_EXTRA_RISK, positive=ANNS_D_POSITIVE)
         items.append({
             "source": "tushare",
             "article_id": _stable_article_id("tushare", code, announce_date, title, url),
@@ -443,10 +446,6 @@ def _fetch_tushare_news(code: str, settings: Any, trade_date: str | None = None)
             "is_risk_warning": is_risk,
         })
     return items
-
-
-def _contains_any(text: str, keywords: list[str]) -> bool:
-    return any(keyword in text for keyword in keywords)
 
 
 def _stable_article_id(source: str, code: str, announce_date: str, title: str, url: str) -> str:
@@ -500,10 +499,7 @@ def _fetch_eastmoney_news(code: str, settings: Any) -> list[dict[str, Any]]:
         ann_rows = ann_data.get("data", {}).get("list") or []
         for row in ann_rows:
             title = str(row.get("title_ch", ""))
-            is_risk = any(
-                kw in title
-                for kw in ["风险", "警示", "退市", "ST", "处罚", "监管", "立案", "亏损", "减持", "问询", "通报"]
-            )
+            is_risk = legacy_is_risk(title)
             items.append({
                 "source": "eastmoney",
                 "article_id": _eastmoney_article_id(row),
@@ -530,20 +526,8 @@ def _fetch_eastmoney_news(code: str, settings: Any) -> list[dict[str, Any]]:
         news_rows = news_data.get("data", {}).get("list") or []
         for row in news_rows:
             title = str(row.get("title_ch", ""))
-            is_negative = any(
-                kw in title
-                for kw in ["风险", "亏损", "下滑", "减持", "处罚", "跌停", "爆雷", "问询"]
-            )
-            is_positive = any(
-                kw in title
-                for kw in ["增长", "预增", "利好", "突破", "签约", "中标", "回购", "增持", "分红"]
-            )
-            if is_negative:
-                sentiment = "negative"
-            elif is_positive:
-                sentiment = "positive"
-            else:
-                sentiment = "neutral"
+            sentiment = listed_sentiment(title, NEWS_NEGATIVE, NEWS_POSITIVE)
+            is_negative = sentiment == "negative"
             items.append({
                 "source": "eastmoney",
                 "article_id": _eastmoney_article_id(row),

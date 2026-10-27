@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { X, Play, AlertTriangle } from "lucide-react";
-import { api, type HorizonBar, type HorizonPick, type HorizonPickDetail, type HorizonRunResponse, type HorizonStrategy } from "../api/client";
+import { api, type HorizonBar, type HorizonPick, type HorizonPickDetail, type HorizonRunResponse, type HorizonStrategy, type TextEventLabelResponse } from "../api/client";
 
 type H = "mid" | "long";
 const SKIP_CN: Record<string, string> = {
@@ -75,7 +75,16 @@ export function RunPanel({ horizon, list, onClose, onDone }: { horizon: H; list:
 export function PickDrawer({ horizon, target, onClose, onOpen }: { horizon: H; target: { sid: string; date: string; code: string }; onClose: () => void; onOpen: (t: { sid: string; date: string; code: string }) => void }) {
   const [d, setD] = useState<HorizonPickDetail | null>(null);
   const [err, setErr] = useState("");
+  const [labels, setLabels] = useState<TextEventLabelResponse | null>(null);
   useEffect(() => { setD(null); setErr(""); api.horizonPickDetail(horizon, target.sid, target.date, target.code).then(setD).catch((e) => setErr((e as Error).message)); }, [horizon, target.sid, target.date, target.code]);
+  useEffect(() => {
+    let cancelled = false;
+    setLabels(null);
+    api.textEventLabels(target.code).then((res) => { if (!cancelled) setLabels(res); }).catch(() => {
+      if (!cancelled) setLabels({ disclaimer: "仅供参考，不参与选股", participates_in_selection: false, code: target.code, items: [] });
+    });
+    return () => { cancelled = true; };
+  }, [target.code]);
   useEffect(() => { const k = (e: KeyboardEvent) => e.key === "Escape" && onClose(); window.addEventListener("keydown", k); return () => window.removeEventListener("keydown", k); }, [onClose]);
   const p = d?.pick;
   return (
@@ -101,6 +110,7 @@ export function PickDrawer({ horizon, target, onClose, onOpen }: { horizon: H; t
               <div><span>批内排名</span><b className="hz-num">{p.selection_rank ?? "—"}</b></div>
             </div>
             <div className="hz-card__sec">入选原因</div><p className="hz-note">{p.selection_reason ?? "—"}</p>
+            <TextEventBlock data={labels} />
             {d.strategy_summary && (<><div className="hz-card__sec">策略规则</div><p className="hz-note">{d.strategy_summary}</p></>)}
             <div className="hz-muted">价格为不复权价{p.ret_includes_cost === true ? "；已平仓收益已扣 0.3% 成本" : p.ret_includes_cost === false ? `；浮动收益按 ${p.mark_date ?? "最新"} 收盘，未扣 0.3% 成本` : ""}</div>
             {(d.other_signals ?? []).length > 0 && (<>
@@ -111,6 +121,32 @@ export function PickDrawer({ horizon, target, onClose, onOpen }: { horizon: H; t
         )}
       </aside>
     </div>
+  );
+}
+
+function TextEventBlock({ data }: { data: TextEventLabelResponse | null }) {
+  const disclaimer = data?.disclaimer || "仅供参考，不参与选股";
+  return (
+    <>
+      <div className="hz-card__sec">文本事件标签</div>
+      <p className="hz-note">{disclaimer}。这些分数不进入选股、排序和回测。</p>
+      {!data ? <p className="hz-muted">标签加载中</p> : data.items.length === 0 ? <p className="hz-muted">暂无已标注的文本事件</p> : (
+        <ul className="hz-events">
+          {data.items.map((item) => (
+            <li key={item.source + item.event_id} className="hz-event">
+              <div className="hz-tags">
+                <span className={`hz-tag ${item.label === "利好" ? "hz-up" : item.label === "利空" ? "hz-down" : ""}`}>{item.label} {item.score}</span>
+                <span className="hz-tag">{item.category}</span>
+                <span className="hz-tag">{item.publish_date}</span>
+                <span className="hz-tag">{item.label_origin === "rule" ? "规则" : "模型"}</span>
+              </div>
+              <p className="hz-note">{item.rationale || "—"}</p>
+              {item.keyword_label ? <p className="hz-muted">旧关键词对照：{item.keyword_label}</p> : null}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
   );
 }
 

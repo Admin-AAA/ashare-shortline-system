@@ -2001,3 +2001,11 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 证据：同上 run。服务只 `CREATE DATABASE ashare_workbench`，alembic 也迁这个库；`backend/tests/conftest.py` 在连接前把库名改成 `ashare_test`，于是 `Unknown database 'ashare_test'`（1049）。认证已经成功，缺的是测试库本身。
 - 永久规则：该 job 的 `MYSQL_DATABASE` 与 `ASHARE_DATABASE_URL` 都指向 `ashare_test`，alembic upgrade head 打在测试库上。不要把 smoke 指回 `ashare_workbench`。
 - 吸收位置：`.github/workflows/verify.yml`。
+
+## L-195 文本事件标签不得进入选股
+
+- 状态：encoded
+- 适用：新闻、公告、研报、业绩预告、调研、涨停原因等文本的 LLM 标签和分数
+- 证据：`news_announcement` 只有标题和最多 500 字摘要；旧关键词几乎只判利空，且会把「解除ST风险警示」「减持计划完成」判成利空。`feature_builder` 的 `news_risk_count` 在实盘/回测路径上被写成 0，这些标签没有进入现有策略。
+- 永久规则：`text_event` / `text_event_label` 只供展示和研究超额收益。不得写入 `feature_builder`、`research_runner`、推荐排序、回测成交或结算。LLM 默认关闭（`ASHARE_TEXT_EVENT_LLM_ENABLED`）。提示词不得包含股价或后续走势；只有日期的公告按盘后处理。
+- 吸收位置：`docs/text-event-labels.md`，`backend/tests/test_text_event_labels.py`。

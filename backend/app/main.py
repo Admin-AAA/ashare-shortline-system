@@ -486,6 +486,8 @@ app.include_router(metrics.router)
 app.include_router(outcomes.router)
 app.include_router(admin.router)
 app.include_router(llm.router)
+from app.api.text_events import router as text_events_router
+app.include_router(text_events_router)
 app.include_router(frontend_logs.router)
 app.include_router(midterm.router)
 from app.api.stock_matrix import router as stock_matrix_router

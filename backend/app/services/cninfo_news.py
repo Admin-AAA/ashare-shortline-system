@@ -13,6 +13,8 @@ from typing import Any
 
 import httpx
 
+from app.services.text_events.keywords import legacy_is_risk
+
 logger = logging.getLogger(__name__)
 
 SEARCH_URL = "http://www.cninfo.com.cn/new/information/topSearch/query"
@@ -21,8 +23,6 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
     "Referer": "http://www.cninfo.com.cn/new/commonUrl/pageOfSearch?url=disclosure/list/search",
 }
-RISK_KEYWORDS = ("风险", "警示", "退市", "ST", "处罚", "监管", "立案", "亏损", "减持", "问询", "通报")
-
 _MIN_INTERVAL = 0.5
 _last = 0.0
 _lock = threading.Lock()
@@ -92,7 +92,7 @@ def parse_announcement(row: dict[str, Any], code: str) -> dict[str, Any] | None:
     announce_date = _ms_to_date(row.get("announcementTime"))
     if len(announce_date) < 10:
         return None
-    is_risk = any(k in title for k in RISK_KEYWORDS)
+    is_risk = legacy_is_risk(title)
     return {
         "source": "cninfo",
         "article_id": aid[:80],

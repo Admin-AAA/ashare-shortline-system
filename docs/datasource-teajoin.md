@@ -162,3 +162,9 @@ teajoin 不提供 rt_k，promax 是唯一 rt_k 主源，已降为少额度用户
 
 **已知问题（未改，非本次范围）**：`tushare_client.ts_code()` 把 9 开头一律判成 .SH，北交所新代码 920xxx 会被映射成 920xxx.SH（本 provider 自己按新浪前缀生成 .BJ，不受影响）。
 
+## 10. 文本 / 事件落库（2026-10-27）
+
+第 3 节表里「公告 anns_d、新闻 news、研报 ✗」只对 `anns_d` 和 `news` 成立：这两个接口 teajoin 没有。研报 `report_rc`、业绩预告 `forecast`、机构调研 `stk_surv`、热榜原因、涨停原因、ST 原因等是有的，并且已经在 `TEAJOIN_APIS` 里。2026-10-27 起它们的原文写入 `text_event`，展示用标签写入 `text_event_label`。
+
+标签不参与选股。开关、字段、没接入的接口和本机试跑步骤见 `docs/text-event-labels.md`。
+

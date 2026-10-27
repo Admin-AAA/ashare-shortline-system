@@ -717,3 +717,74 @@ class TradeCalendar(Base):
     cal_date: Mapped[str] = mapped_column(String(8), primary_key=True)  # YYYYMMDD
     is_open: Mapped[bool] = mapped_column(Boolean, nullable=False)
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, nullable=False)
+
+
+class TextEvent(Base):
+    """文本/事件原文。只给展示和研究打标，不参与选股。
+
+    time_quality=precise 表示 publish_time 有钟点；date_only 表示上游只给了日期，
+    按盘后公告对齐。signal_trade_date 是第一次允许在收盘使用该文本的交易日，
+    entry_trade_date 是下一交易日（开盘买）。
+    """
+
+    __tablename__ = "text_event"
+    __table_args__ = (
+        UniqueConstraint("source", "event_id", name="uq_text_event_source_event"),
+        Index("ix_text_event_code_date", "code", "publish_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(40))
+    event_id: Mapped[str] = mapped_column(String(80))
+    code: Mapped[str] = mapped_column(String(6), default="")
+    title: Mapped[str | None] = mapped_column(Text)
+    body: Mapped[str | None] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"))
+    publish_date: Mapped[str] = mapped_column(String(10), index=True)
+    publish_time: Mapped[str | None] = mapped_column(String(19))
+    available_at: Mapped[str | None] = mapped_column(String(19))
+    time_quality: Mapped[str] = mapped_column(String(16), default="date_only")
+    signal_trade_date: Mapped[str | None] = mapped_column(String(10))
+    entry_trade_date: Mapped[str | None] = mapped_column(String(10))
+    provider: Mapped[str | None] = mapped_column(String(40))
+    payload_json: Mapped[str | None] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+
+
+class TextEventLabel(Base):
+    """一条文本的标签。label_origin=rule 是程序性预筛，llm 是模型。
+
+    keyword_* 是旧关键词规则的对照，不删除。score 为 -100 到 100，
+    表示事件方向和力度，不是预测收益。
+    """
+
+    __tablename__ = "text_event_label"
+    __table_args__ = (
+        UniqueConstraint("source", "event_id", "prompt_version", name="uq_text_event_label_version"),
+        Index("ix_text_event_label_code_date", "code", "publish_date"),
+        Index("ix_text_event_label_hash", "input_hash"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String(40))
+    event_id: Mapped[str] = mapped_column(String(80))
+    code: Mapped[str] = mapped_column(String(6), default="")
+    publish_date: Mapped[str] = mapped_column(String(10))
+    available_at: Mapped[str | None] = mapped_column(String(19))
+    label: Mapped[str | None] = mapped_column(String(8))
+    category: Mapped[str | None] = mapped_column(String(16))
+    score: Mapped[int | None] = mapped_column(Integer)
+    confidence: Mapped[float | None] = mapped_column(Float)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    model: Mapped[str | None] = mapped_column(String(80))
+    prompt_version: Mapped[str] = mapped_column(String(32))
+    label_origin: Mapped[str | None] = mapped_column(String(16))
+    keyword_label: Mapped[str | None] = mapped_column(String(8))
+    keyword_sentiment: Mapped[str | None] = mapped_column(String(20))
+    keyword_hits: Mapped[str | None] = mapped_column(String(200))
+    status: Mapped[str] = mapped_column(String(16), default="ok")
+    error_message: Mapped[str | None] = mapped_column(Text)
+    input_hash: Mapped[str] = mapped_column(String(64))
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer)
+    latency_ms: Mapped[float | None] = mapped_column(Float)
+    labeled_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
