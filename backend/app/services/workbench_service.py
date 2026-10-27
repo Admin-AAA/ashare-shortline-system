@@ -2659,7 +2659,9 @@ def _build_run_summary(
         # 显式说明，前端无法区分"系统运行正常但无机会"与"系统故障"。此处显式
         # 标注 opportunity 状态与原因，供前端展示空仓/观望结论。
         "opportunity": "has_recommendations" if saved else "empty",
-        "no_opportunity_reason": _no_opportunity_reason(cards, score_line),
+        "no_opportunity_reason": _no_opportunity_reason(
+            cards, score_line, ((pipeline.get("filter_audit") or {}) if isinstance(pipeline, dict) else {}).get("empty_reason")
+        ),
     }
 
 
