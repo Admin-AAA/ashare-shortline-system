@@ -27,10 +27,10 @@ def entry_no_liquidity_reason_from_card(card: dict[str, Any]) -> str | None:
     return None
 
 
-def entry_execution_block_reason_from_bar(code: str, bar: Any) -> str | None:
+def entry_execution_block_reason_from_bar(code: str, bar: Any, *, is_st: bool = False) -> str | None:
     if no_liquidity_reason_from_bar(bar, side="entry"):
         return "入场日无成交量或价格无效，无法真实成交"
-    if is_one_word_limit_up_bar(code, bar):
+    if is_one_word_limit_up_bar(code, bar, is_st=is_st):
         return "入场日一字涨停，按真实成交约束视为买不进"
     return None
 

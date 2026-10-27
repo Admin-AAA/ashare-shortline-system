@@ -190,6 +190,7 @@ class CausalEntryConfig(CanonicalValue):
     def __post_init__(self) -> None:
         if self.price_source not in {
             "open",
+            "open_window",
             "intraday_snapshot_or_postclose_target",
         }:
             raise CanonicalExecutionError(
@@ -485,6 +486,35 @@ def resolve_causal_entry(
                 "下一交易日开盘价无效，无法真实成交",
             )
         return decision(0, bar.trade_date, raw_price, "next_trading_day_open_entry")
+
+    if config.price_source == "open_window" and not config.intraday:
+        # 与回测路径 _resolve_entry 同一规则：窗口内跳过不可成交日与开盘跳空超限日，第一个可买日开盘买入
+        window = bars[: max(1, min(config.max_entry_trade_days, config.horizon_days, len(bars)))]
+        blocked: list[str] = []
+        last_gap: float | None = None
+        for index, bar in enumerate(window):
+            if bar.block_reason:
+                blocked.append(bar.block_reason)
+                continue
+            if bar.open <= 0:
+                blocked.append("入场日开盘价无效，无法真实成交")
+                continue
+            if config.recommendation_price > 0 and config.max_entry_gap_pct is not None:
+                gap_pct = (bar.open - config.recommendation_price) / config.recommendation_price * 100
+                if gap_pct > config.max_entry_gap_pct:
+                    last_gap = gap_pct
+                    blocked.append("gap_up_blocked")
+                    continue
+            return decision(index, bar.trade_date, bar.open, "backtest_open_window_entry")
+        if blocked and all(reason == "gap_up_blocked" for reason in blocked):
+            return EntryDecision(False, None, None, None, None, "gap_up_blocked", last_gap)
+        return EntryDecision(
+            False, None, None, None, None,
+            _entry_not_triggered_reason(
+                [reason for reason in blocked if reason != "gap_up_blocked"] or blocked,
+                has_targets=False,
+            ),
+        )
 
     if config.intraday:
         if config.recommendation_price <= 0:

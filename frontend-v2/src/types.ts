@@ -1810,6 +1810,10 @@ export type ExecutionDecision = {
   code: "buy" | "wait" | "cancel" | "expired" | "not_ready" | "hold" | "reduce" | "exit" | "observe" | string;
   label: string;
   reason: string;
+  /** false：持仓提示用推荐止损 / 硬风控判的退出，回测与结算没有这条规则（仅提示） */
+  backtest_rule?: boolean;
+  rule_basis?: "recommend_stop_loss" | "hard_risk_veto" | string;
+  rule_note?: string;
 };
 
 export type ExecutionConfirmation = {
