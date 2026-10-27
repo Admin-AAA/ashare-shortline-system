@@ -49,6 +49,18 @@ def _sample_scope_q() -> "Query":
     )
 
 
+@router.get("/live-breakdown")
+def live_breakdown(
+    db: Session = Depends(get_db),
+    start_date: str | None = _start_date_q(),
+    end_date: str | None = _end_date_q(),
+):
+    """实盘分口径：组合时代与单策略分开；成交分「确认买入」与「开盘模拟（未确认）」两栏。"""
+    from app.services.live_trade_breakdown import live_trade_breakdown
+
+    return live_trade_breakdown(db, start_date=start_date, end_date=end_date)
+
+
 @router.get("/runtime")
 def runtime_metrics():
     """Process-local observability: provider success/fallback/ratelimit wait, LLM latency, stage durations."""

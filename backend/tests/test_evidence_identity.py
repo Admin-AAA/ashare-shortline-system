@@ -74,9 +74,16 @@ def test_evidence_classes_and_trusted_run_sources_classify_explicitly():
 
 
 def test_only_provenance_complete_same_business_day_formal_can_be_live():
-    """**Validates: Requirements 1.3–1.5**"""
-    late_generation = datetime(2026, 7, 14, 16, 1, tzinfo=timezone.utc)
+    """**Validates: Requirements 1.3–1.5**（2026-10-27：实盘窗口 = 信号日当天到入场日 09:15 前）"""
+    # 信号日 07-14（周二）：次日 00:01 北京时间生成仍在入场日开盘前 → 实盘
+    overnight = datetime(2026, 7, 14, 16, 1, tzinfo=timezone.utc)
+    assert _build(RunSource.FORMAL, actual_generated_at=overnight).evidence_class is EvidenceClass.LIVE_FORWARD
+    # 入场日 09:20 北京时间才生成：已开盘 → 不算实盘
+    late_generation = datetime(2026, 7, 15, 1, 20, tzinfo=timezone.utc)
     assert _build(RunSource.FORMAL, actual_generated_at=late_generation).evidence_class is EvidenceClass.UNVERIFIED
+    # 信号日之前生成的不可能是该信号日的实盘
+    early = datetime(2026, 7, 13, 8, 0, tzinfo=timezone.utc)
+    assert _build(RunSource.FORMAL, actual_generated_at=early).evidence_class is EvidenceClass.UNVERIFIED
     assert _build(
         RunSource.FORMAL,
         snapshot=_snapshot(data_as_of="2026-07-15"),

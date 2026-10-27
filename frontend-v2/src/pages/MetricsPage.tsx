@@ -1216,10 +1216,11 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
       sub: "win/loss",
     },
     {
-      label: "平均收益",
-      value: data.average_net_return != null ? `${data.average_net_return.toFixed(2)}%` : "—",
-      tone: data.average_net_return >= 0 ? "up" : "down",
-      sub: `中位 ${(data.median_net_return ?? 0).toFixed(2)}%`,
+      // 只算已成交并卖出的每笔净收益；没成交的推荐只计入成交率，不当 0% 摊进均值（旧 average_net_return 会把亏损冲淡）。
+      label: "每笔净收益（已成交）",
+      value: data.executed_trade_count ? `${data.avg_executed_return.toFixed(2)}%` : "—",
+      tone: (data.avg_executed_return ?? 0) >= 0 ? "up" : "down",
+      sub: `${data.executed_trade_count} 笔已成交 · 已扣成本`,
     },
     {
       label: "最大亏损",
@@ -1234,10 +1235,10 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
       sub: "vs 基准",
     },
     {
-      label: "触发率",
+      label: "成交率",
       value: data.trigger_rate != null ? `${(data.trigger_rate * 100).toFixed(1)}%` : "—",
       tone: "neutral",
-      sub: `${data.executed_trade_count}/${data.total_recommendations}`,
+      sub: `${data.executed_trade_count}/${data.labeled_count} 已结算推荐`,
     },
     {
       label: "MFE / MAE",

@@ -3,7 +3,7 @@ import logging
 import threading
 import time
 
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Query
 from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy.orm import Session
 
@@ -89,29 +89,24 @@ def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
     结果按参考交易日缓存，默认命中缓存。force_refresh=true 跳过缓存（详情页
     「重新诊断」按钮、修复任务完成后调用）。
     """
-    result = diagnose_all(db, force_refresh=bool(force_refresh))
     # 健康评分原本只反映数据库表的结构性指标（95 分时 data/ 下分钟K缓存也可能已停更两个月）。
     # 2026-10-26 起：把统一数据质量巡检（data_quality_monitor）的红/黄项折算成扣分——
     # score = 原库表评分(score_db) − 巡检扣分(score_penalty)，规则见 score_detail.rule。
+    # 公式只在 data_health_snapshot.combined_health 一处定义（每日 18:40 快照用同一个）。
     try:
-        from app.services.data_quality_monitor import load_report, quality_score_penalty
+        from app.services.data_health_snapshot import combined_health
 
-        rep = load_report()
-        pen = quality_score_penalty(rep)
-        base = result.get("score")
-        extra: dict = {"score_db": base, "score_detail": {**pen, "score_db": base}}
-        if isinstance(base, (int, float)) and pen["penalty"]:
-            extra["score"] = max(0, int(base) - int(pen["penalty"]))
-        if rep:
-            extra["data_quality"] = {
-                "overall": rep.get("overall"), "summary": rep.get("summary"), "generated_at": rep.get("generated_at"),
-                "expected_trade_date": rep.get("expected_trade_date"),
-                "red": [i["key"] for i in rep.get("items", []) if i.get("severity") == "red"],
-            }
-        result = {**result, **extra}
+        return combined_health(db, force_refresh=bool(force_refresh))
     except Exception:  # noqa: BLE001 - 附加信息，失败不影响原健康接口
-        pass
-    return result
+        return diagnose_all(db, force_refresh=bool(force_refresh))
+
+
+@router.get("/data-health/snapshots")
+def get_data_health_snapshots(days: int = Query(20, ge=1, le=250)):
+    """每日 18:40 健康快照：近 N 个交易日健康分均值、盘后出票成功率、有红项的天数（只读文件）。"""
+    from app.services.data_health_snapshot import summarize
+
+    return summarize(days)
 
 
 @router.get("/data-quality")

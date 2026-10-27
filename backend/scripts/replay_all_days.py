@@ -215,6 +215,10 @@ def _reserve_reconstruction_run(db, run, identity, trade_date: str) -> None:
 
     if str(run.status) != "queued":
         raise ReconstructionBatchError("reconstruction reservation requires a queued run")
+    if str(run.run_mode) == "formal" and str(run.evaluation_scope) == "live_forward" and run.evidence_class is None:
+        # 2026-10-27：带 trade_date_override 的 formal run 若在入场日开盘前创建，按生成时间会记成 live_forward
+        # （安全网补跑要这样）。本脚本是显式的历史重建，对自己刚建的 queued run 明确改回回放口径。
+        run.evaluation_scope = "historical_replay"
     if str(run.run_mode) != "formal" or str(run.evaluation_scope) != "historical_replay":
         raise ReconstructionBatchError("reconstruction reservation requires formal historical replay")
     if run.evidence_class not in (None, EvidenceClass.HISTORICAL_RECONSTRUCTION.value):

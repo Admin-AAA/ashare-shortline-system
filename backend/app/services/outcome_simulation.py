@@ -74,6 +74,19 @@ from app.services.execution_constraints import (
     no_liquidity_reason_from_bar,
 )
 
+# ── 结算规则集（随 outcome_service.OUTCOME_RULE_VERSION 的 +rYYYYMMDD 后缀）──────────
+# r20261027（PR #15）：板块龙头按回测开盘窗口入场、一字涨停按日期取 ST 幅度、止损按买入成交价 −5.5%。
+# r20261019：此前口径（板块龙头碰买点、一字涨停不认 ST、止损按开盘价并参考快照止损夹在 −5.5%~−5.7%）。
+# 已按旧规则结算的记录，自动重算只按它自己的规则集算，绝不悄悄换成新规则。
+SETTLEMENT_RULESET_CURRENT = "r20261027"
+SETTLEMENT_RULESET_R20261019 = "r20261019"
+# r20261019 版本号下 2026-10-25 03:32（4fc1b685，§185）又上线了「破买入日最低价出场」却没升版本号：
+# 在那之前结算的记录要按「没有这条出场」复现，单列一个规则集（只用于复现旧记录）。
+SETTLEMENT_RULESET_R20261019_PRE_ENTRY_LOW = "r20261019.pre_el"
+SUPPORTED_SETTLEMENT_RULESETS = frozenset({
+    SETTLEMENT_RULESET_CURRENT, SETTLEMENT_RULESET_R20261019, SETTLEMENT_RULESET_R20261019_PRE_ENTRY_LOW,
+})
+
 # ── 模拟引擎配置常量 ─────────────────────────────────────────────────────
 _EXECUTION_RUNTIME = DEFAULT_EXECUTION_POLICY.runtime_constant_projection()
 ENTRY_LOOKAHEAD_DAYS = int(_EXECUTION_RUNTIME["ENTRY_LOOKAHEAD_DAYS"])
@@ -141,8 +154,11 @@ def _simulate_outcome(
     exit_resolver: Any = None,
     entry_policy: EntryPolicy | None = None,
     ma_context_bars: list[DailyKbar] | None = None,
+    ruleset: str = SETTLEMENT_RULESET_CURRENT,
 ) -> dict[str, Any] | None:
     """模拟单笔推荐 outcome。
+
+    ruleset：结算规则集（见 SUPPORTED_SETTLEMENT_RULESETS）；按旧版本结算的记录重算时传它自己的规则集。
 
     ma_context_bars：可选，含入场前日 K 的序列，仅用于均线破位出场在库内 ma 为 0/NULL 时的
     现算兜底（取入场前最多 60 根收盘），不改变结算窗口与其他逻辑。
@@ -155,6 +171,10 @@ def _simulate_outcome(
     入场时序、holding_bars 起点、executed_entry_price（含滑点）、除权重算等全部
     复用生产路径，只替换 exit 环节。
     """
+    if ruleset not in SUPPORTED_SETTLEMENT_RULESETS:
+        raise ValueError(f"unsupported settlement ruleset: {ruleset!r}")
+    legacy_r20261019 = ruleset in {SETTLEMENT_RULESET_R20261019, SETTLEMENT_RULESET_R20261019_PRE_ENTRY_LOW}
+    entry_low_on = ruleset != SETTLEMENT_RULESET_R20261019_PRE_ENTRY_LOW
     if not bars:
         return None
 
@@ -176,6 +196,7 @@ def _simulate_outcome(
     selected_entry_policy = entry_policy or entry_policy_for_mode(
         feature_snapshot.get("entry_mode"),
         legacy_strategy_id=getattr(rec, "bucket", None),
+        backtest_open_window=not legacy_r20261019,
     )
     static_metrics = _static_window_metrics(rec, signal_bar, future_bars, horizon_days)
 
@@ -213,7 +234,7 @@ def _simulate_outcome(
     # pre_resolved_entry 由 _compute_horizon_metric_records 预解析传入，省 2/3 _resolve_entry 调用（占模拟 77%）。
     entry_result = pre_resolved_entry if pre_resolved_entry is not None else _resolve_entry(
         rec, feature_snapshot, future_bars, horizon_days, signal_bar=signal_bar,
-        entry_policy=selected_entry_policy,
+        entry_policy=selected_entry_policy, st_aware_limits=not legacy_r20261019,
     )
     position_size = _resolve_position_size(feature_snapshot)
 
@@ -260,7 +281,12 @@ def _simulate_outcome(
     recommend_price = _as_float(rec.recommend_price) or 0
 
     executed_entry_price = round(float(entry_result["executed_price"]), 4)
-    stop_loss_price = _resolve_stop_loss_price(raw_entry_price, feature_snapshot)
+    # 止损线与回测（execution_core.execute_trade）同口径：实际买入成交价（含买入滑点）往下 5.5%，
+    # 不再用推荐快照里的止损价夹在 −5.5%~−5.7% 之间、也不按未含滑点的开盘价（2026-10-27 用户定）。
+    stop_loss_price = (
+        _resolve_stop_loss_price(raw_entry_price, feature_snapshot) if legacy_r20261019
+        else _backtest_stop_loss_price(float(entry_result["executed_price"]))
+    )
     take_profit_price = _resolve_take_profit_price(
         raw_entry_price, feature_snapshot, recommend_price=recommend_price
     )
@@ -314,7 +340,7 @@ def _simulate_outcome(
                         if str(_r2.reason).startswith("horizon_close") else _r2
                     )
         # Sprint4 §185：逐策略破买入日最低价出场（与回测 _simulate_card 同口径）
-        if entry_low_enabled_for(exit_strategy_id(feature_snapshot)) and exit_result is not None:
+        if entry_low_on and entry_low_enabled_for(exit_strategy_id(feature_snapshot)) and exit_result is not None:
             _t2 = first_entry_low_break(str(rec.code), holding_bars, entry_date, str(exit_result.trade_date))
             if _t2 is not None:
                 _cut2 = [b for b in holding_bars if str(b.trade_date) <= _t2]
@@ -590,13 +616,18 @@ def _resolve_entry(
     *,
     signal_bar: DailyKbar | None = None,
     entry_policy: EntryPolicy | None = None,
+    st_aware_limits: bool = True,
 ) -> dict[str, Any]:
-    """Translate ORM-shaped inputs to the canonical entry-core contract."""
+    """Translate ORM-shaped inputs to the canonical entry-core contract.
+
+    st_aware_limits=False：r20261019 旧规则集，一字涨停幅度不认 ST（按代码板位）。
+    """
     del signal_bar  # Recommendation timestamp owns intraday causality.
     selected_entry_policy = entry_policy or entry_policy_for_mode(
         feature_snapshot.get("entry_mode"),
         legacy_strategy_id=getattr(rec, "bucket", None),
     )
+    rec_is_st = st_aware_limits and _rec_is_st(rec, feature_snapshot)
     candidate_bars = tuple(
         CausalEntryBar(
             code=str(getattr(bar, "code", "") or rec.code),
@@ -604,7 +635,7 @@ def _resolve_entry(
             open=_as_float(bar.open),
             low=_as_float(bar.low),
             close=_as_float(bar.close),
-            block_reason=_entry_execution_block_reason(str(rec.code), bar),
+            block_reason=_entry_execution_block_reason(str(rec.code), bar, is_st=rec_is_st),
         )
         for bar in future_bars
     )
@@ -826,6 +857,13 @@ def _resolve_exit(
     return result.raw_price, result.trade_date, result.reason
 
 
+def _backtest_stop_loss_price(executed_entry_price: float) -> float:
+    """结算用的止损线：与回测同一公式——买入成交价 ×（1 − 默认止损幅度），不取整。止损关闭时为 0。"""
+    if not STOP_LOSS_ENABLED or executed_entry_price <= 0:
+        return 0.0
+    return executed_entry_price * (1 + DEFAULT_STOP_LOSS_PCT / 100.0)
+
+
 def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:
     """Resolve a stop price using the canonical default and maximum loss bounds."""
     if not STOP_LOSS_ENABLED:
@@ -983,8 +1021,16 @@ def _resolve_position_size(
     return round(decision.approved_size, 4)
 
 
-def _entry_execution_block_reason(code: str, bar: DailyKbar) -> str | None:
-    return entry_execution_block_reason_from_bar(code, bar)
+def _entry_execution_block_reason(code: str, bar: DailyKbar, *, is_st: bool = False) -> str | None:
+    return entry_execution_block_reason_from_bar(code, bar, is_st=is_st)
+
+
+def _rec_is_st(rec: Any, feature_snapshot: dict[str, Any] | None = None) -> bool:
+    """推荐时点是否 ST：推荐名称带 ST/退，或封存快照标了 is_st（一字涨停按日期取 ST 幅度用）。"""
+    from app.services.stock_identity import is_st_name
+
+    snap = feature_snapshot or {}
+    return bool(snap.get("is_st")) or is_st_name(getattr(rec, "name", None))
 
 
 def _exit_execution_block_reason(code: str, bar: DailyKbar) -> str | None:

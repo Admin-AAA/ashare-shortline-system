@@ -1818,6 +1818,10 @@ export type ExecutionDecision = {
   code: "buy" | "wait" | "cancel" | "expired" | "not_ready" | "hold" | "reduce" | "exit" | "observe" | string;
   label: string;
   reason: string;
+  /** false：持仓提示用推荐止损 / 硬风控判的退出，回测与结算没有这条规则（仅提示） */
+  backtest_rule?: boolean;
+  rule_basis?: "recommend_stop_loss" | "hard_risk_veto" | string;
+  rule_note?: string;
 };
 
 export type ExecutionConfirmation = {
@@ -1984,7 +1988,12 @@ export type ReplayAnalysisSummary = {
   total_count: number;
   false_positive_count: number;
   false_positive_rate: number;
+  /** 旧口径：全部行平均（未成交回退收盘收益），仅兼容保留，页面不展示 */
   average_net_return: number;
+  /** 已成交并卖出的笔数 / 成交率 / 每笔净收益（扣往返成本，未成交不摊 0%） */
+  executed_settled_count?: number;
+  execution_rate?: number;
+  average_executed_net_return?: number | null;
   reason_counts: Array<{ reason: string; count: number }>;
   category_counts: Array<{ category: string; category_label: string; stage: string; count: number }>;
   stage_counts: Array<{ stage: string; count: number }>;

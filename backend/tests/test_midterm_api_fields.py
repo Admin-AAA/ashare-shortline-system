@@ -19,7 +19,6 @@ def test_annotate_each_kind():
         "mid-forecast-beat": {"code": "1", "score": 300.0, "p_change_min": 3318.0},
         "mid-incentive-option": {"code": "1", "r20": -0.0512, "score": 0.0512, "title": "x草案"},
         "mid-block-trade-premium": {"code": "1", "ratio": 0.0061, "premium": 0.01, "n_trades": 2},
-        "long-lowturn-lowvol": {"code": "1", "score": 12.0, "turn60": 0.5, "vol60": 1.1},
         "long-dividend-lowvol": {"code": "1", "score": 9.0, "dv_ttm": 5.2, "vol60": 1.0},
     }
     expect = {"mid-small-cap-weekly": 16.64, "mid-lowprice-smallcap-weekly": 18.1, "mid-smallcap-dividend-weekly": 5.46, "mid-smallcap-lowps-weekly": 0.39, "mid-smallcap-reversal-weekly": -25.32, "mid-repurchase-plan": 1.157, "mid-incentive-option": -5.12,
@@ -44,7 +43,7 @@ def test_cancel_fields():
 def test_pagination_and_horizon(tmp_path, monkeypatch):
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     for d in ("2026-10-12", "2026-10-13", "2026-10-14"):
-        for sid in ("mid-repurchase-plan", "long-lowturn-lowvol"):
+        for sid in ("mid-repurchase-plan", "long-dividend-lowvol"):
             (tmp_path / f"{d}_{sid}.json").write_text(json.dumps(
                 {"strategy_id": sid, "signal_date": d, "picks": [{"code": "000001", "ratio": 0.02}]}))
     monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: {"status": "pending"})
@@ -55,7 +54,7 @@ def test_pagination_and_horizon(tmp_path, monkeypatch):
     out2 = ms.list_picks_page(None, None, "mid", page=2, page_size=2)
     assert len(out2["batches"]) == 1
     assert len(ms.list_picks(None, None, 30, horizon="long")) == 3
-    assert ms.list_picks_page(None, "long-lowturn-lowvol", None, 1, 30)["total"] == 3
+    assert ms.list_picks_page(None, "long-dividend-lowvol", None, 1, 30)["total"] == 3
 
 
 def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
@@ -70,15 +69,18 @@ def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
     for fn in ("cld_candidates", "dinc_candidates", "udp_candidates", "ncs_candidates", "cg_candidates"):
         monkeypatch.setattr(fe, fn, lambda db, d: None)
     res = ms.generate_picks(None, "2026-10-16", horizon="long")
-    assert set(res) == {"long-lowturn-lowvol", "long-dividend-lowvol", "long-growth-streak", "long-net-cash-switch"}
-    res = ms.generate_picks(None, "2026-10-16", strategy_ids=["long-lowturn-lowvol"])
-    assert set(res) == {"long-lowturn-lowvol"}
+    assert set(res) == {"long-dividend-lowvol", "long-growth-streak", "long-net-cash-switch"}
+    res = ms.generate_picks(None, "2026-10-16", strategy_ids=["long-dividend-lowvol"])
+    assert set(res) == {"long-dividend-lowvol"}
+    # §338 已下线的低换手低波：按 id 指名也不再出票（generate_picks 只遍历现役 STRATEGIES）
+    assert ms.generate_picks(None, "2026-10-30", strategy_ids=["long-lowturn-lowvol"]) == {}
 
 
 def test_retired_strategies_not_live():
-    """§278/§282：新标准重评仍不达标的 /long 策略已下线（long-net-cash-switch 已于 §282 恢复上线），不在现役 STRATEGIES，也不出票。"""
+    """§278/§282：新标准重评仍不达标的 /long 策略已下线（long-net-cash-switch 已于 §282 恢复上线），不在现役 STRATEGIES，也不出票。
+    §338：long-lowturn-lowvol 近12个月满期卖出每笔为负，下线。"""
     retired = {"long-repurchase-big", "long-current-debt-down", "long-dividend-increase",
-               "long-undist-profit-growth"}
+               "long-undist-profit-growth", "long-lowturn-lowvol"}
     assert set(ms.RETIRED_STRATEGIES) == retired
     assert not retired & set(ms.STRATEGIES)
 
@@ -93,8 +95,8 @@ def test_next_batch_note(tmp_path, monkeypatch):
     assert notes["mid-small-cap-weekly"] == "尚未出票；每个周五收盘后选股，次日开盘买"
     assert notes["mid-block-trade-premium"] == "尚未出票；每晚约 21:00 大宗数据发布后选股，次日开盘买"
     long_notes = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("long", db=None)}
-    assert long_notes["long-lowturn-lowvol"] == "尚未出票；每月最后一个交易日收盘后选股，下一批：2026-10-30，次日开盘买"
-    assert long_notes["long-dividend-lowvol"].startswith("尚未出票；每月最后一个交易日")
+    assert "long-lowturn-lowvol" not in long_notes  # §338 已下线
+    assert long_notes["long-dividend-lowvol"] == "尚未出票；每月最后一个交易日收盘后选股，下一批：2026-10-30，次日开盘买"
     assert "2026-10-30" in long_notes["long-dividend-lowvol"]
     # 有批次后去掉前缀
     (tmp_path / "2026-10-16_mid-repurchase-plan.json").write_text(
@@ -109,14 +111,18 @@ def test_retired_strategies_not_in_horizon_lists(tmp_path, monkeypatch):
     名称查「现役→已下线」表，不显示英文 id；历史文件按 strategy_id 显式查询仍可读，持有期按 60 日。"""
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     d = "2026-10-14"
-    for sid in ("mid-repurchase-plan", "long-lowturn-lowvol", "long-repurchase-big", "mystery-strategy"):
+    for sid in ("mid-repurchase-plan", "long-dividend-lowvol", "long-repurchase-big", "long-lowturn-lowvol",
+                "mystery-strategy"):
         (tmp_path / f"{d}_{sid}.json").write_text(json.dumps(
             {"strategy_id": sid, "signal_date": d, "picks": [{"code": "000001", "ratio": 0.02}]}))
     monkeypatch.setattr(ms, "_realize", lambda db, c, dd, h: {"status": "pending"})
     mid = ms.list_picks_page(None, None, "mid", page=1, page_size=30)
     assert [b["strategy_id"] for b in mid["batches"]] == ["mid-repurchase-plan"]
     lng = ms.list_picks_page(None, None, "long", page=1, page_size=30)
-    assert [b["strategy_id"] for b in lng["batches"]] == ["long-lowturn-lowvol"]
+    assert [b["strategy_id"] for b in lng["batches"]] == ["long-dividend-lowvol"]
+    # §338 下线后历史文件保留，按 id 显式查询仍可读、持有期仍按 60 日结算
+    lt = ms.list_picks_page(None, "long-lowturn-lowvol", None, 1, 30)["batches"][0]
+    assert lt["strategy_name"] == ms.RETIRED_STRATEGIES["long-lowturn-lowvol"]["name"] and lt["hold_days"] == 60
     old = ms.list_picks_page(None, "long-repurchase-big", None, 1, 30)["batches"][0]
     assert old["strategy_name"] == ms.RETIRED_STRATEGIES["long-repurchase-big"]["name"]
     assert old["horizon"] == "long" and old["hold_days"] == 60

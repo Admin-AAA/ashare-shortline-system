@@ -24,12 +24,42 @@ from app.services.evidence.validation import (
     canonical_live_forward_run_ids,
     catchup_formal_run_ids,
 )
-from app.services.intraday_cumulative_policy import intraday_cumulative_inconclusive
-from app.services.outcome_simulation import _is_intraday_recommendation, _resolve_stop_loss_price
+from app.services.entry_day_checks import (
+    ENTRY_WINDOW_TRADE_DAYS,
+    EntryDayCheck,
+    check_entry_bar,
+    entry_window_days_for_rec,
+)
+from app.services.entry_window_state import (
+    MISSING_STATUSES,
+    SKIPPED_STATUSES,
+    first_day_status,
+    signal_age_trade_days as signal_age_trade_days_for,
+)
+from app.services.intraday_cumulative_policy import (
+    hard_veto_intraday_inconclusive,
+    intraday_cumulative_inconclusive,
+)
+from app.services.outcome_simulation import _is_intraday_recommendation, _rec_is_st, _resolve_stop_loss_price
 
 
 def _decision(code: str, label: str, reason: str) -> dict[str, str]:
     return {"code": code, "label": label, "reason": reason}
+
+
+NON_BACKTEST_RULE_NOTE = "非回测规则，仅提示：结算与回测不按这条退出"
+
+
+def _non_backtest_exit(label: str, reason: str, *, basis: str) -> dict[str, Any]:
+    """持仓提示里用推荐止损 / 硬风控判的「退出」：回测与结算的离场规则里没有这两条，字段和文字都要标明。"""
+    return {
+        "code": "exit",
+        "label": f"{label}（非回测规则）",
+        "reason": f"{reason}；{NON_BACKTEST_RULE_NOTE}",
+        "backtest_rule": False,
+        "rule_basis": basis,
+        "rule_note": NON_BACKTEST_RULE_NOTE,
+    }
 
 
 def _json_mapping(raw: str | None) -> dict[str, Any]:
@@ -127,8 +157,18 @@ def _derive_decisions(
     current_price: float,
     stop_loss: float,
     is_intraday_recommendation: bool = False,
-) -> tuple[dict[str, str], dict[str, str]]:
-    """把规则信号与策略审查投影为未入场/已持仓两套动作。"""
+    entry_check: EntryDayCheck | None = None,
+    prior_day_blocked: bool = False,
+    window_days: int = ENTRY_WINDOW_TRADE_DAYS,
+    prior_day_missing: bool = False,
+) -> tuple[dict[str, str], dict[str, Any]]:
+    """把入场日检查与策略信号投影为未入场/已持仓两套动作。
+
+    未入场（买入确认）只看入场日检查（与回测买入规则一一对应，见 entry_day_checks）：
+    不再用入场日盘中数据重判信号日的形态/筛选条件（prefilter、require_setup、阶段硬否决），
+    也不再因「跌破推荐止损位」取消——回测没有这两类入场规则。
+    已持仓提示仍参考策略信号与止损（不影响结算）。
+    """
     if not fresh:
         reason = "当前行情快照不是最新交易日，等待数据更新后再确认"
         return _decision("not_ready", "数据未就绪", reason), _decision("observe", "等待最新数据", reason)
@@ -136,7 +176,8 @@ def _derive_decisions(
     stance = str((review or {}).get("stance") or "")
     action = str((review or {}).get("action") or "")
     review_available = bool(review and review.get("status") == "ok")
-    hard_veto = bool(signal.get("hard_veto"))
+    # 硬否决若只因盘中累计量未到（全日仍可能消失），收盘前不据此给退出结论
+    hard_veto = bool(signal.get("hard_veto")) and not bool(signal.get("hard_veto_inconclusive"))
     strategy_vetoed = hard_veto or stance in {"oppose", "veto"} or action == "不做"
     # 入场决策发生在交易时段内（收盘后走 expired 分支），成交额/换手率/量比等字段拿到的
     # 是盘中累计值。这类条件在收盘前只能确认达标、不能确认不达标，未达标时判「继续观察」
@@ -145,45 +186,51 @@ def _derive_decisions(
         signal.get("prefilter_detail")
     )
     prefilter_failed = not prefilter_ok and not prefilter_inconclusive
-    entry_blocked = strategy_vetoed or prefilter_failed
     stop_broken = stop_loss > 0 and current_price > 0 and current_price <= stop_loss
     rule_supportive = bool(signal.get("setup_match")) and float(signal.get("score") or 0) >= 72
     supportive = stance in {"strong_support", "support"} or (not review_available and rule_supportive)
 
+    window_days = max(1, int(window_days))
+    last_window_day = signal_age_trade_days >= window_days
     if signal_age_trade_days < 1 and not is_intraday_recommendation:
         entry = _decision("not_ready", "盘后候选，下一交易日确认", "盘后生成，当前不可买；请在下一交易日按实时条件确认")
     elif is_intraday_recommendation and signal_age_trade_days > 0:
         entry = _decision("expired", "盘中买点已过期", "盘中买点仅在推荐当日有效，请勿追入")
-    elif not is_intraday_recommendation and signal_age_trade_days > 1:
-        entry = _decision("expired", "次日确认窗口已过期", "已错过推荐后的首个交易日，请等待新的推荐信号")
-    elif entry_window_closed:
-        entry = _decision("expired", "盘中买点已过执行窗口", "今日已收盘，本次买点不再有效，请勿追入")
-    elif stop_broken:
-        entry = _decision("cancel", "取消买入", "当前价格已经跌破原推荐止损位")
-    elif entry_blocked:
-        reason = str(
-            (signal.get("prefilter_reason") if prefilter_failed else "")
-            or signal.get("veto_reason")
-            or (review or {}).get("summary")
-            or "原策略当前不再支持入场"
-        )
-        entry = _decision("cancel", "取消买入", reason)
-    elif prefilter_inconclusive:
+    elif not is_intraday_recommendation and signal_age_trade_days > window_days:
+        entry = _decision("expired", "确认窗口已过期", f"已超过推荐后 {window_days} 个交易日的入场窗口（与回测一致），请等待新的推荐信号")
+    elif not is_intraday_recommendation and signal_age_trade_days >= 2 and prior_day_missing:
+        # 第 1 日日 K 没入库（全市场或该股，且不是停牌）：判不了第 1 日能不能买，窗口内既不买也不判过期（过了窗口按日历过期）
         entry = _decision(
-            "wait",
-            "继续观察",
-            f"{_inconclusive_condition_label(signal)}；该门槛按全日累计量校准，盘中累计值仍可能继续增长，收盘前不据此取消",
+            "not_ready", "数据未就绪",
+            "推荐后第 1 个交易日的日 K 尚未入库，无法判断第 1 日是否可买；数据补齐前不买也不判过期（已告警）",
         )
-    elif signal.get("setup_match") and float(signal.get("score") or 0) >= 60 and supportive:
-        entry = _decision("buy", "允许按策略轻仓执行", str((review or {}).get("summary") or signal.get("entry_rule") or "当前买点仍成立"))
+    elif not is_intraday_recommendation and signal_age_trade_days >= 2 and not prior_day_blocked:
+        entry = _decision("expired", "次日确认窗口已过期", "推荐后首个交易日按回测口径已可开盘买入，后续交易日不再追入")
+    elif is_intraday_recommendation:
+        # 盘中推荐：回测按推荐价当日成交，无入场日附加检查
+        if entry_window_closed:
+            entry = _decision("expired", "盘中买点已过执行窗口", "今日已收盘，本次买点不再有效，请勿追入")
+        else:
+            entry = _decision("buy", "按推荐价执行", "盘中推荐，回测口径按推荐价当日成交")
+    elif entry_check is None:
+        entry = _decision("wait", "继续观察", "尚未取到入场日开盘行情，暂不确认")
+    elif not entry_check.blocked:
+        if entry_window_closed:
+            entry = _decision("expired", "盘中买点已过执行窗口", "今日已收盘，本次买点不再有效，请勿追入")
+        else:
+            entry = _decision("buy", "按回测口径开盘买入", entry_check.reason)
+    elif entry_check.inconclusive and not entry_window_closed:
+        entry = _decision("wait", "继续观察", entry_check.reason)
+    elif last_window_day:
+        entry = _decision("cancel", "取消买入", f"{entry_check.reason}；入场窗口最后一日，不再买入")
     else:
-        entry = _decision("wait", "继续观察", str((review or {}).get("summary") or "没有形成足够明确的当前入场确认"))
+        entry = _decision("wait", "今日不买，次日再确认", f"{entry_check.reason}；回测口径跳过该日，下一交易日按开盘价再确认")
 
     if stop_broken:
-        holding = _decision("exit", "退出持仓", "当前价格已经跌破原推荐止损位")
+        holding = _non_backtest_exit("退出持仓", "当前价格已经跌破原推荐止损位", basis="recommend_stop_loss")
     elif strategy_vetoed:
         reason = str(signal.get("veto_reason") or (review or {}).get("summary") or "原策略逻辑已经失效")
-        holding = _decision("exit", "原策略已失效，建议退出", reason)
+        holding = _non_backtest_exit("原策略已失效，建议退出", reason, basis="hard_risk_veto")
     elif prefilter_failed:
         holding = _decision("reduce", "禁止加仓，降低仓位观察", "当前已不满足原策略候选条件")
     elif supportive:
@@ -191,12 +238,6 @@ def _derive_decisions(
     else:
         holding = _decision("reduce", "禁止加仓，收紧保护位观察", str((review or {}).get("summary") or "当前策略未明确支持继续持有"))
     return entry, holding
-
-
-def _inconclusive_condition_label(signal: dict[str, Any]) -> str:
-    detail = signal.get("prefilter_detail")
-    label = str((detail or {}).get("label") or "") if isinstance(detail, dict) else ""
-    return label or str(signal.get("prefilter_reason") or "全日累计量门槛尚未达标")
 
 
 def _run_agent_review(skill: Any, stock: dict[str, Any], snapshot: dict[str, Any], signal: dict[str, Any]) -> dict[str, Any]:
@@ -241,6 +282,10 @@ def _build_signal_for_strategy(
     signal["prefilter_ok"] = prefilter_ok
     signal["prefilter_reason"] = prefilter_reason
     signal["prefilter_detail"] = prefilter_detail
+    # 硬否决同样认「盘中累计量还不能下结论」（对齐 66bed1be 的 prefilter 做法）
+    signal["hard_veto_inconclusive"] = bool(signal.get("hard_veto")) and hard_veto_intraday_inconclusive(
+        skill, current, list(snapshot.get("main_industries") or []),
+    )
     return signal, prefilter_ok, prefilter_reason
 
 
@@ -255,8 +300,12 @@ def confirm_with_prepared_context(
     prefilter_ok: bool,
     signal_age_trade_days: int,
     review: dict[str, Any] | None = None,
+    entry_bar: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """在已准备好的市场上下文（snapshot/enriched stock/策略 signal）下确认一笔推荐。
+
+    entry_bar：入场日（data_as_of）开盘至今的实时 K（open/high/low/close/volume/amount/pre_close）。
+    未传时从 current["_bars"] 里取同日 K；都取不到则买入确认判「继续观察」。
 
     单票确认（含 Agent）与批量确认（review=None）共用此函数，保证两套入口不会
     产生两套规则。调用方负责准备 snapshot、enriched stock、signal 和交易日年龄，
@@ -282,6 +331,22 @@ def confirm_with_prepared_context(
     # 止损基准跨除权修正：stop_loss 是推荐日裸价，若推荐日到今日发生除权（10送10 等），
     # 裸价比会误判跌破止损。用 pct_chg 链累乘出复权因子，把止损基准缩放到今日口径。
     adjusted_stop_loss = _adjust_stop_loss_for_ex_right(db, code, str(rec.trade_date), data_as_of, stop_loss)
+    recommend_price = float(rec.recommend_price or 0)
+    bar = entry_bar or _same_day_bar(current, data_as_of)
+    rec_is_st = _rec_is_st(rec, original_snapshot) or bool(current.get("is_st"))
+    entry_check = (
+        check_entry_bar(
+            code, bar, recommend_price, session_closed=entry_window_closed, is_st=rec_is_st, trade_date=data_as_of,
+        )
+        if bar is not None else None
+    )
+    window_days = entry_window_days_for_rec(rec)
+    day1_status, day1 = day1_status_in_window(
+        db, rec, signal_age_trade_days=signal_age_trade_days, window_days=window_days, data_as_of=data_as_of,
+    )
+    prior_day_blocked = day1_status in SKIPPED_STATUSES
+    prior_day_missing = day1_status in MISSING_STATUSES
+    sync_day1_missing_alert(rec, day1_status, day1)
     entry_decision, holding_decision = _derive_decisions(
         fresh=fresh,
         signal_age_trade_days=signal_age_trade_days,
@@ -292,8 +357,16 @@ def confirm_with_prepared_context(
         current_price=current_price,
         stop_loss=adjusted_stop_loss,
         is_intraday_recommendation=_is_intraday_recommendation(rec),
+        entry_check=entry_check,
+        prior_day_blocked=prior_day_blocked,
+        window_days=window_days,
+        prior_day_missing=prior_day_missing,
     )
-    condition_summary = _condition_summary(signal, prefilter_ok, entry_decision)
+    condition_summary = _condition_summary(entry_check, entry_decision)
+    if day1 is not None:
+        condition_summary["observed"] = {
+            **condition_summary.get("observed", {}), "day1": day1, "day1_status": day1_status,
+        }
 
     strategy_id = str(rec.bucket or "daily-stock-analysis-skill")
     return {
@@ -337,27 +410,96 @@ def confirm_with_prepared_context(
 
 
 def _condition_summary(
-    signal: dict[str, Any],
-    prefilter_ok: bool,
+    entry_check: EntryDayCheck | None,
     entry_decision: dict[str, str],
 ) -> dict[str, Any]:
-    if not prefilter_ok:
-        detail = signal.get("prefilter_detail")
-        if isinstance(detail, dict):
-            # 卡在盘中累计量上的条件收盘前不可判定，不留下 failed 的证据——即使这笔推荐
-            # 因为别的原因（硬风控、跌破止损）被取消，这条条件本身仍然只是尚未成立。
-            status = "pending" if intraday_cumulative_inconclusive(detail) else "failed"
-            return {**detail, "status": status}
-    setup_match = str(signal.get("setup_match") or "").strip()
+    """买入确认的条件证据：只记录入场日检查（与回测买入规则对应），不再记录信号日形态重判。"""
+    code = entry_decision.get("code") or "unknown"
+    if code == "buy":
+        status = "passed"
+    elif code in {"wait", "not_ready"}:
+        status = "pending"
+    else:
+        status = "failed"
     return {
-        "passed": entry_decision.get("code") == "buy",
-        "status": "passed" if entry_decision.get("code") == "buy" else "failed",
-        "scope": "setup" if setup_match else "strategy",
-        "code": entry_decision.get("code") or "unknown",
-        "label": setup_match or entry_decision.get("reason") or "未形成明确买点",
-        "expression": str(signal.get("entry_rule") or ""),
-        "observed": {"score": float(signal.get("score") or 0)},
+        "passed": code == "buy",
+        "status": status,
+        "scope": "entry_day",
+        "code": entry_check.rule_id if entry_check is not None else code,
+        "label": entry_decision.get("reason") or "",
+        "expression": "回测买入规则：入场窗口 2 日、可成交、非一字涨停、开盘相对推荐价 ≤6%",
+        "observed": dict(entry_check.observed or {}) if entry_check is not None else {},
     }
+
+
+def _same_day_bar(current: dict[str, Any], data_as_of: str) -> dict[str, Any] | None:
+    """从 enriched stock 的 _bars 取 data_as_of 当日 K（含前收），取不到返回 None。"""
+    bars = sorted(
+        (b for b in (current.get("_bars") or []) if isinstance(b, dict)),
+        key=lambda b: str(b.get("trade_date")),
+    )
+    if not bars or str(bars[-1].get("trade_date")) != data_as_of:
+        return None
+    bar = dict(bars[-1])
+    if len(bars) >= 2 and not bar.get("pre_close"):
+        bar["pre_close"] = bars[-2].get("close")
+    return bar
+
+
+def _first_trade_day_status(
+    db: Session,
+    code: str,
+    signal_date: str,
+    data_as_of: str,
+    recommend_price: float,
+    *,
+    is_st: bool = False,
+) -> tuple[str, str | None]:
+    """推荐后第 1 个交易日（按交易所日历）的状态：buyable / blocked / suspended / missing_market / missing_code / none。
+
+    决定 2 天窗口的第 2 日能否再确认；缺数据（missing_*）时调用方判「数据未就绪」并告警。
+    """
+    return first_day_status(db, code, signal_date, data_as_of, recommend_price, is_st=is_st)
+
+
+def day1_status_in_window(
+    db: Session,
+    rec: Recommendation,
+    *,
+    signal_age_trade_days: int,
+    window_days: int,
+    data_as_of: str,
+) -> tuple[str, str | None]:
+    """只有 2 天窗口的第 2 日（及以内）才需要第 1 日状态；过了窗口记 past_window（解除缺数据告警）。"""
+    if _is_intraday_recommendation(rec) or window_days < 2 or signal_age_trade_days < 2:
+        return "none", None
+    if signal_age_trade_days > window_days:
+        return "past_window", None
+    return _first_trade_day_status(
+        db, str(rec.code), str(rec.trade_date), data_as_of, float(rec.recommend_price or 0),
+        is_st=_rec_is_st(rec, _json_mapping(getattr(rec, "feature_snapshot_json", None))),
+    )
+
+
+DAY1_MISSING_ALERT_KIND = "entry_day1_bar_missing"
+DAY1_MISSING_ALERT_COOLDOWN = 20 * 3600  # 条件还在就每天重发一次
+
+
+def sync_day1_missing_alert(rec: Recommendation, status: str, day1: str | None) -> None:
+    """第 1 日日 K 缺失 → 告警（每天一次）；状态已能判定（有 K / 停牌）→ 解除。"""
+    from app.core.alerts import emit_alert, resolve_alert
+
+    key = str(rec.recommendation_id)
+    if status in MISSING_STATUSES:
+        scope = "全市场" if status == "missing_market" else "该股"
+        emit_alert(
+            DAY1_MISSING_ALERT_KIND, key,
+            f"{rec.code} {rec.name or ''} 推荐日 {rec.trade_date} 的第 1 个交易日 {day1} {scope}日 K 未入库，"
+            "买入确认判「数据未就绪」（不买也不过期），请补数",
+            cooldown=DAY1_MISSING_ALERT_COOLDOWN,
+        )
+    elif status != "none":
+        resolve_alert(DAY1_MISSING_ALERT_KIND, key, f"{rec.code} 第 1 个交易日{(' ' + day1) if day1 else ''}状态已可判定或已过窗口（{status}）")
 
 
 def confirm_recommendation_execution(
@@ -422,19 +564,8 @@ def confirm_recommendation_execution(
 
     signal, prefilter_ok, _prefilter_reason = _build_signal_for_strategy(skill, current, snapshot)
 
-    later_dates = set(
-        str(value)
-        for value in db.scalars(
-            select(DailyKbar.trade_date).where(
-                DailyKbar.code == code,
-                DailyKbar.trade_date > str(rec.trade_date),
-                DailyKbar.trade_date <= data_as_of,
-            )
-        ).all()
-    )
-    if data_as_of > str(rec.trade_date):
-        later_dates.add(data_as_of)
-    signal_age_trade_days = len(later_dates)
+    # 推荐天数按交易所日历数（不按该股自己的 K：停牌/缺数据不能拉长或缩短窗口）
+    signal_age_trade_days = signal_age_trade_days_for(db, str(rec.trade_date), data_as_of)
 
     expected_quote_date = latest_allowed_quote_date()
     fresh = data_as_of == expected_quote_date

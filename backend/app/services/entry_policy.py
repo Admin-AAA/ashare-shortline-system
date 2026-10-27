@@ -1,7 +1,9 @@
 """Explicit, versioned entry assumptions used by outcome calculations."""
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+import hashlib
+import json
+from dataclasses import asdict, dataclass, replace
 
 from app.engine.signal import ENTRY_MODE_NEXT_OPEN, ENTRY_MODE_TARGET_TOUCH
 from app.engine.execution_policy import (
@@ -43,13 +45,32 @@ _LEGACY_NEXT_OPEN_STRATEGY_IDS = frozenset({
     "dragon-tiger-smart-money",
 })
 
+# 按通过上线标准的回测口径入场（2026-10-27 用户定）：§282 BASE 回测走
+# PE._simulate_card → execution_core.execute_trade/_resolve_entry，只按开盘价买：入场窗口内
+# 跳过不可成交 / 一字涨停 / 开盘相对推荐价 > max_entry_gap_pct 的日子，第一个可买日开盘买入，
+# 不看理想/次级买点触碰。实盘结算与盘中确认对这些策略用同一规则。碰买点规则若要再用，需另行预注册检验。
+BACKTEST_OPEN_WINDOW = EntryPolicy(
+    policy_id="backtest_open_window_v1",
+    price_source="open_window",
+    max_entry_trade_days=int(DEFAULT_EXECUTION_POLICY.entry_lookahead_days),
+    allow_target_touch=False,
+    fallback_to_open_when_targets_miss=True,
+)
+_BACKTEST_OPEN_WINDOW_STRATEGY_IDS = frozenset({
+    "sector-relative-strength-leader",
+})
+
 
 def entry_policy_for_mode(
     entry_mode: object,
     *,
     legacy_strategy_id: object = None,
+    backtest_open_window: bool = True,
 ) -> EntryPolicy:
     """Map persisted entry metadata to an executable policy.
+
+    backtest_open_window=False：结算规则 r20261019 及更早的口径（板块龙头仍走碰买点），
+    只给「按记录自己的旧版本重算」用。
 
     New recommendations own an explicit ``entry_mode`` in their sealed snapshot.
     Historical recommendations predate that field, so the two momentum/relay
@@ -57,8 +78,11 @@ def entry_policy_for_mode(
     mutating the sealed recommendation evidence.
     """
     normalized = str(entry_mode or "").strip()
+    strategy_id = str(legacy_strategy_id or "").strip()
+    if (backtest_open_window and strategy_id in _BACKTEST_OPEN_WINDOW_STRATEGY_IDS
+            and normalized != ENTRY_MODE_NEXT_OPEN):
+        return BACKTEST_OPEN_WINDOW
     if not normalized:
-        strategy_id = str(legacy_strategy_id or "").strip()
         normalized = (
             ENTRY_MODE_NEXT_OPEN
             if strategy_id in _LEGACY_NEXT_OPEN_STRATEGY_IDS
@@ -77,9 +101,19 @@ def execution_policy_fingerprint_for_entry_policy(entry_policy_id: object) -> st
     normalized = str(entry_policy_id or "").strip()
     if normalized == CAUSAL_STRATEGY_ENTRY.policy_id:
         return DEFAULT_EXECUTION_POLICY.fingerprint()
+    if normalized == BACKTEST_OPEN_WINDOW.policy_id:
+        # 出场/费用/仓位与默认合约相同，但入场规则不同（开盘窗口 vs 碰买点）：指纹必须分开，
+        # 否则两种入场算出的结算证据会被当成同一执行合约
+        return _entry_variant_fingerprint(DEFAULT_EXECUTION_POLICY.fingerprint(), BACKTEST_OPEN_WINDOW)
     if normalized == NEXT_TRADING_DAY_OPEN.policy_id:
         return execution_policy_for_next_open_entry().fingerprint()
     raise ValueError(f"unknown entry_policy_id: {normalized}")
+
+
+def _entry_variant_fingerprint(base_fingerprint: str, entry: EntryPolicy) -> str:
+    """在基础执行合约指纹上叠加入场规则，得到新的 sha256 指纹（确定性、与字段顺序无关）。"""
+    payload = {"base_execution_policy": base_fingerprint, "entry_policy": asdict(entry)}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def execution_policy_for_next_open_entry() -> ExecutionPolicy:
@@ -140,6 +174,7 @@ def execution_policy_for_entry_mode(entry_mode: object) -> ExecutionPolicy:
 
 
 __all__ = [
+    "BACKTEST_OPEN_WINDOW",
     "CAUSAL_STRATEGY_ENTRY",
     "EntryPolicy",
     "NEXT_TRADING_DAY_OPEN",

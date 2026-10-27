@@ -559,7 +559,7 @@ def test_incomplete_realtime_bar_returns_not_ready_instead_of_buy(db, monkeypatc
 # ── expired 状态 ───────────────────────────────────────────────────────────
 
 def test_expired_when_age_greater_than_one(db, monkeypatch):
-    """推荐日之后已超过首个交易日 → expired，不拉该票 rt_k。"""
+    """第 2 个交易日且第 1 日按回测口径可买 → expired，不拉该票 rt_k。"""
     run_id = _make_run(db, "test_batch_expired_run", trade_date="2026-07-25")
     rec = _make_rec(db, "test_batch_expired_rec", run_id, "600775", trade_date="2026-07-25")
     db.flush()
@@ -572,6 +572,7 @@ def test_expired_when_age_greater_than_one(db, monkeypatch):
         "_load_signal_ages",
         lambda db, recs, da: {str(rec.recommendation_id): 2 for rec, _ in recs},
     )
+    monkeypatch.setattr(svc, "day1_status_in_window", lambda *a, **k: ("buyable", "2026-07-27"))
     monkeypatch.setattr("app.services.market_data.get_market_universe", lambda: ([], _fake_snapshot()))
     monkeypatch.setattr(
         "app.services.realtime_pnl_service._fetch_rtk_quotes",
@@ -584,6 +585,30 @@ def test_expired_when_age_greater_than_one(db, monkeypatch):
     assert result["items"][0]["entry_decision"]["code"] == "expired"
     assert result["summary"]["expired_count"] == 1
     assert rtk_calls["n"] == 0  # 过期票不拉 rt_k
+
+
+def test_day1_bar_missing_is_not_pre_expired(db, monkeypatch):
+    """第 2 个交易日但第 1 日日 K 没入库：不预判过期，进入实时确认（共享状态机判数据未就绪）。"""
+    run_id = _make_run(db, "test_batch_day1_missing_run", trade_date="2026-07-25")
+    rec = _make_rec(db, "test_batch_day1_missing_rec", run_id, "600775", trade_date="2026-07-25")
+    db.flush()
+
+    rtk_calls = {"n": 0}
+    monkeypatch.setattr(svc, "latest_allowed_quote_date", lambda: "2026-07-29")
+    monkeypatch.setattr(
+        svc, "_load_signal_ages", lambda db, recs, da: {str(rec.recommendation_id): 2 for rec, _ in recs},
+    )
+    monkeypatch.setattr(svc, "day1_status_in_window", lambda *a, **k: ("missing_market", "2026-07-27"))
+    monkeypatch.setattr("app.services.market_data.get_market_universe", lambda: ([], _fake_snapshot()))
+    monkeypatch.setattr(
+        "app.services.realtime_pnl_service._fetch_rtk_quotes",
+        lambda codes: rtk_calls.__setitem__("n", rtk_calls["n"] + 1) or {},
+    )
+    svc._cache["value"] = None
+    result = svc.confirm_batch_executions(db, [rec], refresh=True)
+
+    assert result["summary"]["expired_count"] == 0
+    assert all(item["entry_decision"]["code"] != "expired" for item in result["items"])
 
 
 def test_same_stock_recommendations_use_their_own_signal_dates(db, monkeypatch):
@@ -722,11 +747,10 @@ def test_intraday_recommendation_expires_after_close_without_fetching_quote(db, 
 
 # ── 跌破止损优先 + hard veto ─────────────────────────────────────────────
 
-def test_stop_broken_returns_cancel_over_supportive_signal(db, monkeypatch):
-    """跌破原止损优先于支持性规则 → cancel。"""
+def test_price_below_recommend_stop_still_buys_like_backtest(db, monkeypatch):
+    """回测止损按实际买入价设定：入场前跌破推荐止损位照样按开盘价买入；持仓提示退出。"""
     run_id = _make_run(db, "test_batch_stop_run")
     rec = _make_rec(db, "test_batch_stop_rec", run_id, "600775", bucket=_FAKE_SKILL.skill_id, recommend_price=10.0, stop_loss=9.8)
-    # 止损按结算口径归一化为 10.0*(1-5.5%)=9.45；现价 9.4 低于它
     _add_kbar(db, "600775", "2026-07-29", close=9.4)
     db.flush()
 
@@ -734,18 +758,18 @@ def test_stop_broken_returns_cancel_over_supportive_signal(db, monkeypatch):
         monkeypatch,
         stocks=[_fake_stock("600775", price=9.4)],
         rt_quotes={"600775": _rt("600775", close=9.4)},
-        # signal 看似支持入场，但跌破止损应优先 cancel
         signal={"phase": "确认", "score": 90, "setup_match": "分歧回封", "hard_veto": False, "risk_flags": []},
     )
     svc._cache["value"] = None
     result = svc.confirm_batch_executions(db, [rec], refresh=True)
-    assert result["items"][0]["entry_decision"]["code"] == "cancel"
+    assert result["items"][0]["entry_decision"]["code"] == "buy"
+    assert result["items"][0]["holding_decision"]["code"] == "exit"
 
 
-def test_hard_veto_returns_cancel(db, monkeypatch):
-    """策略 hard veto → cancel。"""
+def test_hard_veto_rerun_on_entry_day_no_longer_cancels(db, monkeypatch):
+    """入场日重跑的策略硬否决 / prefilter 不过，不再取消买入（回测没有这类入场规则）。"""
     run_id = _make_run(db, "test_batch_veto_run")
-    rec = _make_rec(db, "test_batch_veto_rec", run_id, "600775", bucket=_FAKE_SKILL.skill_id, stop_loss=1.0)  # 止损极低避免触发
+    rec = _make_rec(db, "test_batch_veto_rec", run_id, "600775", bucket=_FAKE_SKILL.skill_id, stop_loss=1.0)
     _add_kbar(db, "600775", "2026-07-29", close=10.5)
     db.flush()
 
@@ -753,12 +777,30 @@ def test_hard_veto_returns_cancel(db, monkeypatch):
         monkeypatch,
         stocks=[_fake_stock("600775")],
         rt_quotes={"600775": _rt("600775")},
-        signal={"phase": "确认", "score": 90, "setup_match": "分歧回封", "hard_veto": True, "veto_reason": "非主线热点", "risk_flags": []},
+        signal={"phase": "确认", "score": 90, "setup_match": "", "hard_veto": True,
+                "veto_reason": "未命中任何入场 setup（策略要求 require_setup）", "risk_flags": []},
         prefilter_ok=False,
     )
     svc._cache["value"] = None
     result = svc.confirm_batch_executions(db, [rec], refresh=True)
-    assert result["items"][0]["entry_decision"]["code"] == "cancel"
+    item = result["items"][0]
+    assert item["entry_decision"]["code"] == "buy"
+    assert item["condition_summary"]["scope"] == "entry_day"
+
+
+def test_gap_up_over_six_percent_waits_for_next_day(db, monkeypatch):
+    """开盘高于推荐价 >6%：回测跳过该日 → 第 1 日判「今日不买，次日再确认」。"""
+    run_id = _make_run(db, "test_batch_gap_run")
+    rec = _make_rec(db, "test_batch_gap_rec", run_id, "600775", bucket=_FAKE_SKILL.skill_id, recommend_price=10.0, stop_loss=1.0)
+    _add_kbar(db, "600775", "2026-07-29", close=10.8)
+    db.flush()
+    rt = {**_rt("600775", close=10.8), "open": 10.7}
+    _setup_decision_mocks(monkeypatch, stocks=[_fake_stock("600775", price=10.8)], rt_quotes={"600775": rt})
+    svc._cache["value"] = None
+    result = svc.confirm_batch_executions(db, [rec], refresh=True)
+    item = result["items"][0]
+    assert item["entry_decision"]["code"] == "wait"
+    assert item["condition_summary"]["code"] == "entry_gap_up"
 
 
 # ── 单票错误隔离 ──────────────────────────────────────────────────────────
