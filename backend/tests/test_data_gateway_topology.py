@@ -51,6 +51,8 @@ def test_switch_survives_registry_orphan_cleanup(db_session):
 
 
 def test_topology_reflects_switch_and_breakers(db_session, monkeypatch):
+    # 固定为「没开任何备用源」：不受本机 backend/.env 的 ASHARE_DATASOURCE_CUTOVER 影响（本机开了腾讯行情）
+    monkeypatch.setattr(gw, "_flag_set", lambda attr: set())
     now = time.time()
     monkeypatch.setattr(topology, "_breaker_rows", lambda: [
         ("tushare:promax:rt_k", now + 600, "rate_limit"),  # 路由熔断 → 实时行情 rt_k 显示熔断
