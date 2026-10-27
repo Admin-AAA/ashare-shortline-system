@@ -691,6 +691,25 @@ def check_scheduled_tasks(db, open_days: list[str], now: datetime | None = None)
     return out
 
 
+def check_daily_output(db, open_days: list[str], now: datetime | None = None) -> dict[str, Any]:
+    """盘后出票是否成功（短线实盘 run + 中长线运行记录），过了当天 18:35 仍没出来 = 红项。
+
+    任务状态（job:post_sync_formal_recommendation）只说明 17:35 那一次跑没跑成；这里看结果：
+    事后用正式流程补跑成功也算出票成功，带历史日期参数的补跑（记为回放）不算。"""
+    from app.services.daily_output_check import daily_output_status, output_target_date
+
+    now = now or _now()
+    target = output_target_date(open_days, now.replace(tzinfo=None))
+    if not target:
+        return _item("formal:daily_output", "盘后出票", "盘后出票", GREEN, kind="job", detail="没有可核对的交易日")
+    st = daily_output_status(db, target, now=now.astimezone(_CST).replace(tzinfo=None))
+    sev = GREEN if st["ok"] else RED  # 待数据、未到点（大宗交易 21:00 发布）不算失败
+    detail = (f"{target} 短线 {st['short_done']}/{st['short_expected']} 个策略按时实盘出票（共 {st['short_recommended']} 只）"
+              + ("" if st["status"] == "ok" else f"；{st['reason']}"))
+    return _item("formal:daily_output", "盘后出票", "盘后出票", sev, kind="job", latest=target, detail=detail,
+                 impact="当天没有实盘推荐，次日无票可买；实盘统计也会缺这一天", output=st)
+
+
 def _tail_text(path: Path, max_bytes: int = 6_000_000) -> str:
     with path.open("rb") as f:
         f.seek(0, os.SEEK_END)
@@ -833,6 +852,8 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
         _rollback(db)
     items += _safe("gateway", "gateway:providers", "数据网关", "gateway", lambda: [check_provider_gateway(now)])
     items += _safe("scheduled", "job:*", "调度任务", "job", lambda: check_scheduled_tasks(db, open_days, now))
+    _rollback(db)
+    items += _safe("daily_output", "formal:daily_output", "盘后出票", "job", lambda: [check_daily_output(db, open_days, now)])
     _rollback(db)
     items += _safe("log", "log:*", "静默失败", "log", lambda: check_log_signals(now))
     items += _safe("stale_alerts", "alerts:stale_active", "静默失败", "log", lambda: [check_stale_alerts(now)])

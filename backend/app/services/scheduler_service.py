@@ -46,6 +46,14 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     STRATEGY_PROFILE_CRON,
     STRATEGY_PROFILE_TASK_ID,
     TASK_TYPE_STRATEGY_PROFILE_REFRESH,
+    DATA_HEALTH_RECHECK_CRON,
+    DATA_HEALTH_RECHECK_TASK_ID,
+    DATA_HEALTH_SNAPSHOT_CRON,
+    DATA_HEALTH_SNAPSHOT_TASK_ID,
+    TASK_TYPE_DATA_HEALTH_SNAPSHOT,
+    ROLLING_R12_CRON,
+    ROLLING_R12_TASK_ID,
+    TASK_TYPE_ROLLING_R12,
     TASK_TYPE_DATA_FRESHNESS_CHECK,
     TASK_TYPE_STOCK_IDENTITY_REFRESH,
     BLOCK_TRADE_BACKUP_TASK_ID,
@@ -369,6 +377,69 @@ def _ensure_data_quality_tasks() -> None:
         logger.exception("注册数据质量巡检任务失败")
 
 
+def _ensure_simple_task(task_id: str, name: str, task_type: str, cron: str, payload: dict | None = None) -> None:
+    """注册一个普通定时任务（幂等，已存在就不动，不覆盖手动调整）。"""
+    try:
+        db = SessionLocal()
+        try:
+            if db.get(ScheduledTask, task_id) is None:
+                db.add(ScheduledTask(task_id=task_id, name=name, task_type=task_type, cron_expression=cron,
+                                     payload_json=json.dumps(payload or {}), enabled=True))
+                db.commit()
+                logger.info("已注册调度任务: %s (cron=%s)", task_id, cron)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册调度任务失败: %s", task_id)
+
+
+def _ensure_health_snapshot_task() -> None:
+    _ensure_simple_task(DATA_HEALTH_SNAPSHOT_TASK_ID, "数据健康分每日快照（18:40 原始记录：健康分、红黄项、盘后出票是否成功）",
+                        TASK_TYPE_DATA_HEALTH_SNAPSHOT, DATA_HEALTH_SNAPSHOT_CRON, {"mode": "original"})
+    _ensure_simple_task(DATA_HEALTH_RECHECK_TASK_ID, "数据健康快照次日复核（08:55：只写复核字段，含大宗交易等晚发布数据）",
+                        TASK_TYPE_DATA_HEALTH_SNAPSHOT, DATA_HEALTH_RECHECK_CRON, {"mode": "recheck"})
+
+
+def _ensure_rolling_r12_task() -> None:
+    _ensure_simple_task(ROLLING_R12_TASK_ID, "现役策略近12个月指标每月滚动重算（每月第一个交易日 22:30）",
+                        TASK_TYPE_ROLLING_R12, ROLLING_R12_CRON)
+
+
+def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
+    """任务本身跑完即 completed；红项 / 出票失败 / 巡检失败写进摘要并单独告警，不把业务结果变成任务失败（否则又去扣健康分）。"""
+    from app.core.alerts import emit_alert
+    from app.services.data_health_snapshot import summarize, take_snapshot
+
+    mode = str((payload or {}).get("mode") or "original")
+    res = take_snapshot(db, mode=mode)
+    s, td = res["sample"], res["trade_date"]
+    summ = summarize(20)
+    score_txt = f"健康分 {s['score']}（红 {len(s['red'])} / 黄 {len(s['yellow'])}）" if s["quality_ok"] else "巡检失败，本次不算分"
+    out_txt = {"ok": "盘后出票成功", "pending": "盘后出票待数据、未到点",
+               "failed": "盘后出票失败：" + s["output"]["reason"]}[s["output_status"]]
+    text_ = (f"{td} {'原始记录' if res['written'] == 'original' else '复核'}：{score_txt}，{out_txt}；"
+             f"近 {summ['days_with_original']} 个交易日均值 {summ['avg_score']}，出票成功率 {summ['output_success_rate']}"
+             + (f"，巡检失败 {summ['quality_failed_days']} 天" if summ["quality_failed_days"] else ""))
+    try:
+        if s["output_status"] == "failed":
+            emit_alert("daily_output_failed", f"{td}:{res['written']}", f"{td} 盘后出票失败（{res['written']}）：{s['output']['reason']}")
+        if not s["quality_ok"]:
+            emit_alert("data_health_snapshot", f"{td}:{res['written']}", f"{td} 健康快照：数据质量巡检失败，本次不算分")
+    except Exception:  # noqa: BLE001 - 告警失败不影响任务
+        logger.warning("健康快照告警写入失败", exc_info=True)
+    return {"snapshot": {"trade_date": td, "written": res["written"],
+                         **{k: s.get(k) for k in ("quality_ok", "score", "score_db", "penalty", "output_status")}},
+            "summary_20d": {k: summ[k] for k in ("days_with_original", "avg_score", "output_success_rate",
+                                                 "red_days", "quality_failed_days")},
+            "status": "completed", "summary_text": text_}
+
+
+def _run_rolling_r12(db, payload: dict | None = None) -> dict:
+    from app.services.rolling_r12 import run_monthly
+
+    return run_monthly(db, force=bool((payload or {}).get("force")))
+
+
 def _ensure_stock_identity_task() -> None:
     """注册每日股票身份刷新任务（幂等，不覆盖手动调整）。"""
     try:
@@ -581,6 +652,8 @@ def ensure_scheduled_task_registrations() -> None:
     _ensure_data_quality_tasks()
     _ensure_stock_identity_task()
     _ensure_strategy_profile_task()
+    _ensure_health_snapshot_task()
+    _ensure_rolling_r12_task()
 
 
 def _current_code_revision() -> str:
@@ -701,6 +774,10 @@ def _execute_task(
                 result = _run_stock_identity_refresh(db)
             elif task_type == TASK_TYPE_STRATEGY_PROFILE_REFRESH:
                 result = _run_strategy_profile_refresh(db, payload)
+            elif task_type == TASK_TYPE_DATA_HEALTH_SNAPSHOT:
+                result = _run_data_health_snapshot(db, payload)
+            elif task_type == TASK_TYPE_ROLLING_R12:
+                result = _run_rolling_r12(db, payload)
             elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
                 result = _run_intraday_lock_shadow(db, payload)
             elif task_type in ("data_sync", "pool_refresh", "data_backfill"):

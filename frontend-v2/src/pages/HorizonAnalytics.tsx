@@ -15,9 +15,10 @@ const hzName = (h: H) => (h === "mid" ? "中线" : "长线");
 const pct = (v?: number | null, d = 2) => (v == null ? "—" : `${v > 0 ? "+" : ""}${v.toFixed(d)}%`);
 const pnl = (v?: number | null) => (v == null ? "" : v > 0 ? "hz-up" : v < 0 ? "hz-down" : "");
 const num = (v?: number | null, d = 2) => (v == null ? "—" : v.toFixed(d));
-const ORIGIN_LABEL: Record<HorizonOrigin, string> = { live: "实盘", replay: "回放", legacy: "旧数据" };
+const ORIGIN_LABEL: Record<HorizonOrigin, string> = { live: "实盘", late: "开盘后补跑", replay: "回放", legacy: "旧数据" };
 const ORIGIN_TIP: Record<HorizonOrigin, string> = {
-  live: "盘后流程真实出票",
+  live: "盘后流程真实出票，且在次日 09:25 前生成",
+  late: "有运行记录，但生成时间晚于次日 09:25（开盘后补跑），不算实盘",
   replay: "用现行策略历史回放重建",
   legacy: "没有来源标记、也没有当天运行记录的旧文件，不当实盘算",
 };
@@ -69,7 +70,7 @@ export function HorizonMetricsPage({ horizon }: { horizon: H }) {
           <span className="hz-muted">只统计已平仓（含 0.3% 成本）；PF = 盈利总和 / 亏损总和，均盈/均亏 = 平均盈利 / 平均亏损</span></div>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
           <span className="hz-muted">来源</span>
-          <Seg value={origin} onChange={setOrigin} options={[["all", "全部"], ["live", "实盘"], ["replay", "回放"], ["legacy", "旧数据"]]} />
+          <Seg value={origin} onChange={setOrigin} options={[["all", "全部"], ["live", "实盘"], ["late", "开盘后补跑"], ["replay", "回放"], ["legacy", "旧数据"]]} />
           <span className="hz-muted">信号日窗口</span>
           <Seg value={win} onChange={setWin} options={[[null, "全部"], [90, "近 90 天"], [180, "近 180 天"], [365, "近 1 年"]]} />
           {m?.date_range.first_signal && <span className="hz-muted">信号日 {m.date_range.first_signal} ~ {m.date_range.last_signal}</span>}

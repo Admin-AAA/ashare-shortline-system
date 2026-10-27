@@ -233,11 +233,13 @@ export type HorizonPick = { code: string; name: string; total_mv: number; status
   rule_score?: number | null; rule_score_label?: string | null; rule_score_better?: "higher" | "lower" | null; selection_reason?: string | null; selection_rank?: number | null;
   cancel_code?: string | null; cancel_reason?: string | null; ret_includes_cost?: boolean | null;
   entry_price?: number | null; exit_price?: number | null; mark_price?: number | null; exit_delayed_days?: number | null };
-export type HorizonBatch = { strategy_id: string; strategy_name: string; signal_date: string; status: string; avg_ret: number | null; picks: HorizonPick[]; origin?: string | null };
+export type HorizonBatch = { strategy_id: string; strategy_name: string; signal_date: string; status: string; avg_ret: number | null; picks: HorizonPick[]; origin?: string | null;
+  /** 生成时间封签（2026-10-27 起）：generated_at 晚于 entry_deadline（次日 09:25）= 开盘后补跑，不算实盘 */
+  generated_at?: string | null; entry_deadline?: string | null };
 export type HorizonPicksResponse = { batches: HorizonBatch[]; total?: number; total_picks?: number; page?: number; page_size?: number; has_more?: boolean };
 export type HorizonBar = { trade_date: string; open: number; high: number; low: number; close: number; pct_chg?: number; volume?: number; amount?: number };
 /** 中长线来源：replay=历史回放重建，live=盘后真实出票，legacy=无来源标记的旧文件（不当实盘算）。 */
-export type HorizonOrigin = "live" | "replay" | "legacy";
+export type HorizonOrigin = "live" | "late" | "replay" | "legacy";
 export type HorizonTrade = Omit<HorizonPick, "total_mv"> & { strategy_id: string; strategy_name: string; signal_date: string; hold_days: number; origin: HorizonOrigin };
 export type HorizonTradesResponse = { horizon: string; origin: string; total: number; trades: HorizonTrade[] };
 export type HorizonStats = { n: number; win_rate: number | null; avg_ret: number | null; median_ret: number | null; total_ret: number | null;

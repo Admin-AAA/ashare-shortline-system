@@ -335,11 +335,21 @@ def _summarize_replay_analysis_rows(rows: list[dict[str, Any]]) -> dict[str, Any
         3,
     ) if rows else 0.0
     false_positive_rate = round(len(false_positive_rows) / len(rows), 3) if rows else 0.0
+    # 真实每笔：只算已成交并卖出的（扣往返成本）；没成交的只进成交率，不当 0% 摊进均值。
+    # average_net_return 保留旧口径（全部行平均、未成交时回退收盘收益）只为兼容，页面不再展示它。
+    executed_net = [
+        float(row["executed_net_return_pct"])
+        for row in rows
+        if row.get("executed_settled") and row.get("executed_net_return_pct") is not None
+    ]
     return {
         "total_count": len(rows),
         "false_positive_count": len(false_positive_rows),
         "false_positive_rate": false_positive_rate,
         "average_net_return": average_net_return,
+        "executed_settled_count": len(executed_net),
+        "execution_rate": round(len(executed_net) / len(rows), 3) if rows else 0.0,
+        "average_executed_net_return": round(sum(executed_net) / len(executed_net), 3) if executed_net else None,
         "reason_counts": [
             {"reason": reason, "count": count}
             for reason, count in reason_counts.most_common()

@@ -937,8 +937,23 @@ def _save_picks(sid: str, as_of: str, picks: list[dict[str, Any]], apply_daily_c
 
     apply_daily_cap=True（仅实盘出票路径）：picks 已是该策略自身排序（各 *_candidates 的排序键）并剔除已持有，
     这里只切前 N 只（settings.max_daily_picks_per_strategy，默认 5，0=不限），被截断的数量与代码写入文件 daily_cap 审计字段。
-    不是持仓上限：20 仓位（回测口径）、持有 20/60 日与此无关。"""
-    doc: dict[str, Any] = {"strategy_id": sid, "signal_date": as_of}
+    不是持仓上限：20 仓位（回测口径）、持有 20/60 日与此无关。
+
+    封签（midterm_live_seal）：每个批次写入 generated_at / entry_deadline（D+1 09:25）。实盘路径（apply_daily_cap=True）
+    过了 D+1 09:25 后不再覆盖已落盘的批次——开盘后重跑不能改写已生效的实盘记录；没有旧文件时照常落盘，但
+    generated_at 晚于 entry_deadline，统计时记为「补跑」（late），不算实盘。"""
+    from app.services import midterm_live_seal as seal
+
+    path = OUT_DIR / f"{as_of}_{sid}.json"
+    if apply_daily_cap and path.exists() and seal.past_deadline(as_of):
+        try:
+            kept = len(json.loads(path.read_text()).get("picks") or [])
+        except Exception:  # noqa: BLE001 - 读不出旧文件也不覆盖，宁可少一批也不改写实盘记录
+            kept = 0
+        logger.warning("%s %s 已过 %s，实盘批次已生效，不覆盖（保留 %d 只）",
+                       as_of, sid, seal.entry_deadline(as_of).isoformat(timespec="minutes"), kept)
+        return kept
+    doc: dict[str, Any] = {"strategy_id": sid, "signal_date": as_of, **seal.stamp(as_of)}
     if apply_daily_cap:
         from app.services.daily_pick_cap import cap_ordered_picks
 
@@ -949,7 +964,7 @@ def _save_picks(sid: str, as_of: str, picks: list[dict[str, Any]], apply_daily_c
                         as_of, sid, audit["kept_count"], audit["candidates_before_cap"], audit["truncated_codes"])
     doc["picks"] = picks
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(doc, ensure_ascii=False, indent=1))
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=1))
     return len(picks)
 
 
