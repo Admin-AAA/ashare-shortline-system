@@ -72,6 +72,7 @@ def test_quota_reads_dotenv(monkeypatch):
     from app.core import provider_quota as pq
 
     monkeypatch.delenv("ASHARE_TUSHARE_QUANTDATA_DAILY_QUOTA", raising=False)
+    monkeypatch.delenv("ASHARE_TUSHARE_PROMAX_DAILY_QUOTA", raising=False)  # 本机 .env 已为 promax 设 1000，别让它串进来
     monkeypatch.setattr(pq, "_dotenv_value", lambda k: "920" if k.endswith("QUANTDATA_DAILY_QUOTA") else "")
     assert pq.daily_quota("quantdata") == 920 and pq.daily_quota("promax") is None
 
@@ -124,3 +125,36 @@ def test_ths_index_alerts_and_raises(monkeypatch):
         with pytest.raises(RuntimeError):
             sa.TushareStateProvider.concept_sector(_concept_provider(_C()), _req())
     assert [a[0] for a in alerts] == ["concept_sector_failed", "concept_sector_failed"]
+
+
+def test_snapshot_announcers_filter_periodic_titles(monkeypatch):
+    """公告快照是新定期报告的主源（MySQL news_announcement 10-16 后停更，财报季只识别出 1 只）。"""
+    from types import SimpleNamespace
+
+    from app.services.auxiliary import event_snapshot, snapshot_codec
+
+    days = {}
+
+    class _Reader:
+        def __init__(self, contract, repository):
+            pass
+
+        def load(self, request):
+            day = request.parameter_map["ann_date"]
+            days.setdefault(day, 0)
+            days[day] += 1
+            rows = {
+                "20261020": [{"ts_code": "000408.SZ", "title": "2026年第三季度报告"},
+                             {"ts_code": "600000.SH", "title": "2026年第三季度报告摘要"},
+                             {"ts_code": "300750.SZ", "title": "关于召开股东大会的通知"}],
+                "20261018": [{"ts_code": "688001.SH", "title": "2026年半年度报告"}],
+            }.get(day)
+            return None if rows is None else SimpleNamespace(rows=[SimpleNamespace(lossless_payload=r) for r in rows])
+
+    monkeypatch.setattr(event_snapshot, "ActiveEventSnapshotReader", _Reader)
+    monkeypatch.setattr(snapshot_codec, "decode_canonical_payload", lambda payload: payload)
+
+    codes = ff._snapshot_periodic_announcers(object(), date(2026, 10, 20), 4)
+
+    assert codes == {"000408", "688001"}
+    assert sorted(days) == ["20261016", "20261017", "20261018", "20261019", "20261020"]

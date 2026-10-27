@@ -25,6 +25,11 @@ from app.models.tables import (
 from app.services.evidence.validation import canonical_live_forward_run_ids
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
+
 def active_alerts(db: Session) -> list[dict[str, Any]]:
     """返回当前活跃的数据源 + 系统级告警列表。"""
     from app.services.data_sources import list_data_sources
@@ -121,6 +126,23 @@ def active_alerts(db: Session) -> list[dict[str, Any]]:
             "alert_level": "warning",
             "message": "尚未执行过推荐运行",
         })
+
+    # emit_alert 活跃登记（data_freshness / task_status / daily_basic_stale …）：问题恢复后会被 resolve_alert 移出
+    try:
+        from app.core.alerts import active_alert_records
+
+        for rec in active_alert_records():
+            alerts.append({
+                "source": f"alert:{rec.get('kind')}",
+                "source_type": "ops_alert",
+                "status": "active",
+                # 统一数据质量巡检的红色项（data_quality，消息以 [红] 开头）升为 critical，其余仍为 warning
+                "alert_level": ("critical" if rec.get("kind") == "data_quality" and str(rec.get("message", "")).startswith("[红]")
+                                else "warning"),
+                "message": f"{rec.get('key')}: {rec.get('message')}（自 {rec.get('first_seen')}，最近 {rec.get('last_seen')}）",
+            })
+    except Exception:  # noqa: BLE001
+        logger.debug("active_alert_records unavailable", exc_info=True)
 
     return alerts
 

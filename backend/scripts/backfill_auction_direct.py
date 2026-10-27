@@ -75,6 +75,8 @@ def backfill_day(db, pro, d: str, retries: int = 3) -> int:
             turnover_rate=_f(r.get("turnover_rate")), volume_ratio=_f(r.get("volume_ratio")),
             float_share=_f(r.get("float_share")),
         ))
+    if len(objs) <= existing_count(db, d):  # 新取的不比库里多（源端返回不全）就不替换，免得把已有行删少
+        return 0
     db.execute(text("DELETE FROM auction_data WHERE trade_date=:d"), {"d": d})
     db.bulk_save_objects(objs); db.commit()
     return len(objs)

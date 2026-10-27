@@ -30,9 +30,17 @@ def _stub_ma250_fill(monkeypatch):
     import app.services.local_indicator_fill as local_indicator_fill
 
     monkeypatch.setattr(local_indicator_fill, "fill_local_indicators", lambda _db, **_kw: {"stub": True})
+    import app.services.kdj_boll_cci_fill as kdj_boll_cci_fill
+
+    # 流水线新增的 KDJ/BOLL/CCI/vol_ratio 本地复算步骤（P0-3）：测试用假 db，不能真跑
+    monkeypatch.setattr(kdj_boll_cci_fill, "fill_kdj_boll_cci", lambda _db, **_kw: {"stub": True})
     import app.services.daily_basic_ingest as daily_basic_ingest
 
     monkeypatch.setattr(daily_basic_ingest, "ingest_daily_basic_with_alert", lambda _db, _d: {"stub": True})
+    import app.services.survey_margin_ingest as survey_margin_ingest
+
+    # 2026-10-19 起盘后接入机构调研/两融汇总日更（直接查库），假 db 下统一桩掉
+    monkeypatch.setattr(survey_margin_ingest, "daily_survey_margin_update", lambda _db, _d: {"stub": True})
 
 
 @pytest.fixture(autouse=True)
@@ -61,7 +69,7 @@ def _stub_db_side_steps(monkeypatch):
     import app.services.tdx_indicator_fill as tdx_indicator_fill
 
     monkeypatch.setattr(tdx_indicator_fill, "fill_recent_indicator_gaps", lambda _db, _trade_date: {"filled": 0})
-    monkeypatch.setattr(midterm_service, "generate_picks", lambda _db, _trade_date: {})
+    monkeypatch.setattr(midterm_service, "generate_picks", lambda _db, _trade_date, **kw: {})
 
 def test_concept_sector_nan_member_count_is_normalized(db):
     client = SimpleNamespace(
@@ -163,7 +171,7 @@ def test_postclose_pipeline_orders_sync_health_gate_and_recommendation(monkeypat
     monkeypatch.setattr(
         midterm_service,
         "generate_picks",
-        lambda _db, trade_date: calls.append(("midterm_picks", trade_date)) or {},
+        lambda _db, trade_date, **kw: calls.append(("midterm_picks", trade_date)) or {},
     )
     monkeypatch.setattr(
         scheduler_service,

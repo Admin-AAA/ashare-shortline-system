@@ -5,6 +5,7 @@ local MySQL market pool used by recommendations and backtests.
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import random
 import os
@@ -25,6 +26,8 @@ from app.core import provider_quota as _provider_quota
 
 from app.services.observability import log_observation
 
+from app.core import promax_window as _promax_window  # noqa: E402
+
 logger = logging.getLogger(__name__)
 
 _RETRYABLE_HTTP_STATUS = frozenset({429, 500, 502, 503, 504})
@@ -40,6 +43,11 @@ _RETRYABLE_EXCEPTIONS = (
 # 等待重试没有意义。42901 是 token 当日配额耗尽，等到配额重置即可恢复。
 _PERMISSION_BUSINESS_CODES = frozenset({"40203"})
 _RATE_LIMIT_BUSINESS_CODES = frozenset({"42901"})
+# HTTP 200 但业务层报「上游容量忙」的措辞（teajoin: "query capacity busy"）。
+_BUSINESS_CAPACITY_TERMS = ("capacity busy", "capacity_busy", "pool_exhausted", "pool exhausted", "server busy", "系统繁忙", "服务繁忙")
+# 批量/补数进程遇到「容量忙」：就地重试 BUSY_BATCH_ATTEMPTS 次，间隔 BUSY_BATCH_WAIT 秒 × 次数（带 ±25% 抖动），不开熔断。
+BUSY_BATCH_ATTEMPTS = 5
+BUSY_BATCH_WAIT = (2.0, 5.0)
 _PERMISSION_MESSAGE_TERMS = ("权限", "未开通", "积分", "permission", "unauthorized")
 _RATE_LIMIT_MESSAGE_TERMS = ("频率", "频次", "rate limit", "请求速度", "limit exceeded")
 
@@ -93,9 +101,43 @@ def _extract_upstream_detail(response: Any) -> str | None:
 
 
 
+def _is_daily_limit_text(text: str) -> bool:
+    """42901（Tushare 协议：token 当日配额耗尽），或同时出现「当日/每日」与「上限/限额/次数」字样。"""
+    text = (text or "").lower()
+    if "42901" in text or "daily limit" in text:
+        return True
+    daily = any(t in text for t in ("daily", "每日", "今日", "每天", "当日"))
+    limit = any(t in text for t in ("limit", "上限", "限额", "额度", "次数"))
+    return daily and limit
+
+
 def _is_daily_limit(failure: "ProviderFailure") -> bool:
-    text = f"{getattr(failure, 'upstream_detail', '') or ''} {failure}".lower()
-    return "daily limit" in text or "每日" in text or "今日" in text or "42901" in text
+    if getattr(failure, "category", None) is FailureCategory.QUOTA_EXHAUSTED:
+        return True
+    return _is_daily_limit_text(f"{getattr(failure, 'upstream_detail', '') or ''} {failure}")
+
+
+# 当日配额耗尽标记（provider_quota，跨进程 SQLite）读一次缓存这么久，避免每个请求都开库。
+_EXHAUSTED_CHECK_TTL = 30.0
+_exhausted_cache: dict[str, tuple[float, str, bool]] = {}
+QUOTA_SKIP_DETAIL = "skipped: daily quota exhausted today"
+
+
+def provider_exhausted_today(provider: str) -> bool:
+    """provider 今天（Asia/Shanghai）已报告过日配额耗尽 → True。任何读取错误都视为未耗尽。"""
+    if os.environ.get("ASHARE_UNDER_PYTEST") and not os.environ.get("ASHARE_QUOTA_SKIP_IN_TESTS"):
+        return False  # 进程内耗尽标记会跨用例残留；只有专门的用例打开这个开关
+    now = time.monotonic()
+    day = _provider_quota._today()
+    hit = _exhausted_cache.get(provider)
+    if hit and hit[0] > now and hit[1] == day:
+        return hit[2]
+    try:
+        exhausted = bool(_provider_quota.usage(provider)[1])
+    except Exception:  # noqa: BLE001 - telemetry must never block fetching
+        exhausted = False
+    _exhausted_cache[provider] = (now + _EXHAUSTED_CHECK_TTL, day, exhausted)
+    return exhausted
 
 
 class AuthMode(StrEnum):
@@ -119,6 +161,9 @@ class FailureCategory(StrEnum):
     DATA_PENDING = "data_pending"
     NON_JSON = "non_json"
     BUSINESS_RATE_LIMIT = "business_rate_limit"
+    # 上游 token 当日配额耗尽（quantdata 42901 "token daily limit exceeded"）。与按分钟限流不同：
+    # 等几分钟不会恢复，本 provider 当天（Asia/Shanghai 日历日）其余请求直接跳过、换源。
+    QUOTA_EXHAUSTED = "quota_exhausted"
     PERMISSION = "permission"
     INVALID_REQUEST = "invalid_request"
     PROVIDER_ERROR = "provider_error"
@@ -179,6 +224,7 @@ class ProviderFailure(RuntimeError):
         fallback_allowed: bool,
         retry_after_seconds: float | None = None,
         upstream_detail: str | None = None,
+        capacity_busy: bool = False,
     ) -> None:
         self.provider = provider
         self.api_name = api_name
@@ -190,6 +236,9 @@ class ProviderFailure(RuntimeError):
         # 不保留完整响应体，避免把 token 或业务数据带进日志。没有这个字段时，5xx 在日志里
         # 只剩 http_server 这个粗标签，无法区分「代理宕机」与「代理容量耗尽」。
         self.upstream_detail = upstream_detail
+        # 上游「容量忙」（teajoin: query capacity busy）：瞬时拥塞，不是故障。批量/补数进程就地短退避重试且不开熔断；
+        # live 进程保持保守（30s 冷却 + 立即降级到备源）。
+        self.capacity_busy = bool(capacity_busy)
         suffix = f", upstream={upstream_detail}" if upstream_detail else ""
         super().__init__(f"{provider} {api_name} failed ({category.value}{suffix})")
 
@@ -348,6 +397,12 @@ _RESEARCH_LIMITER: list[Any] = []
 _RESEARCH_LIMITER_LOCK = threading.Lock()
 
 
+def _is_research_namespace() -> bool:
+    from app.core.shared_breaker import RESEARCH_NAMESPACE, breaker_namespace
+
+    return breaker_namespace() == RESEARCH_NAMESPACE
+
+
 def _in_research_window(now: datetime | None = None) -> bool:
     from zoneinfo import ZoneInfo
 
@@ -376,6 +431,101 @@ def _research_promax_limiter():
                 pass
             _RESEARCH_LIMITER.append(_make_limiter("promax:research_intraday", max(1, rpm)))
         return _RESEARCH_LIMITER[0]
+
+
+_RESEARCH_OTHER_LIMITERS: dict[str, Any] = {}
+
+
+def _research_provider_limiter(provider: str):
+    """非 promax 源（quantdata/teajoin…）在 research 命名空间盘中的限速器；rpm<=0 表示不限（保持旧行为）。
+
+    与 promax 同一思路：交易时段（工作日 09:15–15:05）批量回补/研究脚本让路给 live: 实时与选股链路。
+    rpm 来自 Settings.tushare_<provider>_research_intraday_rpm（teajoin 默认 30，quantdata 默认 0=不限）。"""
+    with _RESEARCH_LIMITER_LOCK:
+        if provider not in _RESEARCH_OTHER_LIMITERS:
+            rpm = 0
+            try:
+                from app.core.config import get_settings
+
+                rpm = int(getattr(get_settings(), f"tushare_{provider}_research_intraday_rpm", 0) or 0)
+            except Exception:  # noqa: BLE001
+                pass
+            _RESEARCH_OTHER_LIMITERS[provider] = _make_limiter(f"{provider}:research_intraday", rpm) if rpm > 0 else None
+        return _RESEARCH_OTHER_LIMITERS[provider]
+
+
+# ── 「主源」模式（teajoin 等）：主源失败/超时要快速降级到原链路，不能因它慢拖住实盘 ──
+# 路由器在把某源放到链首且后面还有备源时，用 _lead_scope 给这一次调用套上更短的读超时和 1 次尝试；
+# 超时/容量忙/熔断/额度耗尽都会立刻落到下一家（原有 promax/quantdata 链），不在主源上做退避重试。
+_LEAD_CALL: contextvars.ContextVar[tuple[float, int] | None] = contextvars.ContextVar("tushare_lead_call", default=None)
+
+
+class _lead_scope:
+    def __init__(self, read_timeout: float, attempts: int = 1) -> None:
+        self._value = (float(read_timeout), max(1, int(attempts)))
+        self._token: Any = None
+
+    def __enter__(self) -> "_lead_scope":
+        self._token = _LEAD_CALL.set(self._value)
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        _LEAD_CALL.reset(self._token)
+
+
+@dataclass(frozen=True, slots=True)
+class LeaderSpec:
+    """某个 provider 在其支持的接口上做主源（排链首）的规则。
+
+    * apis                 做主源的接口名单（其余接口保持原链序，该源若在 included_apis 内仍为末位兜底）。
+    * intraday_sensitive   盘中（工作日 09:15–15:05）live 进程里对延迟敏感的接口：此时不做主源（排末位兜底），
+                           盘后/研究回补进程（research 命名空间，本身已限速）仍做主源，把 promax/quantdata 额度留给实盘 rt_k。
+    * heavy_apis/fast_apis  大表/慢接口读超时放宽到 heavy_timeout，小表收紧到 fast_timeout，其余 read_timeout。
+    * read_timeout         做主源且后面还有备源时的读超时（秒）；超时即换源。
+    * min_health           近期健康度低于此值（lb_health）时不做主源，直接走原链路。
+    """
+
+    provider: str
+    apis: frozenset[str]
+    intraday_sensitive: frozenset[str] = frozenset()
+    heavy_apis: frozenset[str] = frozenset()
+    fast_apis: frozenset[str] = frozenset()
+    read_timeout: float = 40.0
+    heavy_timeout: float = 90.0
+    fast_timeout: float = 15.0
+    min_health: float = 0.25
+    intraday_read_timeout: float = 15.0  # 盘中 live 进程里做主源：读超时收紧到这个值（超时立即降级，不拖住实盘）
+
+    def timeout_for(self, api_name: str, *, live_intraday: bool = False) -> float:
+        if api_name in self.heavy_apis:
+            base = self.heavy_timeout
+        elif api_name in self.fast_apis:
+            base = self.fast_timeout
+        else:
+            base = self.read_timeout
+        if live_intraday:
+            return min(base, self.intraday_read_timeout) if api_name not in self.heavy_apis else min(base, self.intraday_read_timeout * 2)
+        return base
+
+    def leads(self, api_name: str, *, research: bool, intraday: bool) -> bool:
+        if api_name not in self.apis:
+            return False
+        if intraday and not research and api_name in self.intraday_sensitive:
+            return False
+        return True
+
+
+def _breaker_kind(category: "FailureCategory") -> str | None:
+    """FailureCategory -> SharedCircuitBreaker failure kind (per-kind thresholds)."""
+    if category in (
+        FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT, FailureCategory.QUOTA_EXHAUSTED
+    ):
+        return "rate_limit"
+    if category is FailureCategory.TIMEOUT:
+        return "timeout"
+    if category in (FailureCategory.MALFORMED_RESPONSE, FailureCategory.NON_JSON):
+        return "bad_data"
+    return None
 
 
 class CircuitBreaker:
@@ -407,7 +557,11 @@ class CircuitBreaker:
             self._open_until = 0.0
             self._half_open_probe = False
 
-    def record_failure(self, *, force_open: bool = False, recovery_seconds: float | None = None) -> None:
+    def record_failure(
+        self, *, force_open: bool = False, recovery_seconds: float | None = None, kind: str | None = None
+    ) -> None:
+        if kind == "rate_limit":
+            force_open = True
         with self._lock:
             self._failure_count += 1
             if force_open or self._half_open_probe or self._failure_count >= self._threshold:
@@ -559,10 +713,25 @@ class TushareHttpProvider:
             return False
         return api_name not in self.config.excluded_apis
 
+    def _call_timeout(self) -> tuple[float, float]:
+        """本次调用的 (连接, 读取) 超时；处于 _lead_scope（主源且有备源）时读超时收紧。"""
+        connect, read = self.config.timeout
+        lead = _LEAD_CALL.get()
+        if lead is not None:
+            read = min(read, lead[0])
+        return (connect, read)
+
     def _wait_for_capacity(self, api_name: str) -> None:
         t0 = time.perf_counter()
         if self.config.name == "promax" and research_intraday_throttled():
             _research_promax_limiter().acquire()  # leave promax headroom for live: realtime
+        if self.config.name != "promax" and research_intraday_throttled():
+            _lim = _research_provider_limiter(self.config.name)
+            if _lim is not None:
+                _lim.acquire()  # 盘中研究/回补类请求限速，给 live: 链路留额度
+        if self.config.name == "promax" and _is_research_namespace():
+            # 按窗口令牌桶（5min/60min）；盘中先让路给 live rt_k
+            _promax_window.research_acquire(api_name, intraday=_in_research_window())
         self._provider_limiter.acquire()
         api_limiter = self._api_limiters.get(api_name)
         if api_limiter is not None:
@@ -577,6 +746,17 @@ class TushareHttpProvider:
         fields: str = "",
     ) -> Mapping[str, Any]:
         started = time.perf_counter()
+        if provider_exhausted_today(self.name):
+            # 当日配额已耗尽：不再打上游（不计请求数、不占限速令牌），直接让路由换下一家。
+            _metrics.inc("provider_requests", provider=self.name, outcome="quota_skip")
+            raise ProviderFailure(
+                provider=self.name,
+                api_name=api_name,
+                category=FailureCategory.QUOTA_EXHAUSTED,
+                retryable=False,
+                fallback_allowed=True,
+                upstream_detail=QUOTA_SKIP_DETAIL,
+            )
         breaker = self._breaker(api_name)
         if not breaker.allow_request():
             failure = ProviderFailure(
@@ -613,11 +793,19 @@ class TushareHttpProvider:
                 )
                 _metrics.inc("provider_requests", provider=self.name, outcome=str(failure.category.value))
                 rate_limited = failure.category in (
-                    FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT
+                    FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT,
+                    FailureCategory.QUOTA_EXHAUSTED,
                 )
-                if failure.category is FailureCategory.BUSINESS_RATE_LIMIT and _is_daily_limit(failure):
+                if failure.category in (
+                    FailureCategory.BUSINESS_RATE_LIMIT, FailureCategory.QUOTA_EXHAUSTED
+                ) and _is_daily_limit(failure):
                     _provider_quota.mark_exhausted(self.name)
-                self._lb_record(api_name, True, weight=2.0 if rate_limited else 1.0)
+                    _exhausted_cache.pop(self.name, None)
+                    logger.warning(
+                        "tushare provider daily quota exhausted provider=%s api=%s; skipping it for the rest of today",
+                        self.name, api_name,
+                    )
+                self._lb_record(api_name, True, weight=0.5 if failure.capacity_busy else (2.0 if rate_limited else 1.0))
                 raise
             data = envelope.get("data")
             items = data.get("items") if isinstance(data, Mapping) else None
@@ -675,13 +863,29 @@ class TushareHttpProvider:
             )
             return envelope
 
+        base_attempts = min(self.config.max_attempts, (_LEAD_CALL.get() or (0.0, self.config.max_attempts))[1])
+
+        def _last_busy(state: Any) -> bool:
+            exc = state.outcome.exception() if state.outcome is not None else None
+            return bool(isinstance(exc, ProviderFailure) and exc.capacity_busy and exc.retryable)
+
+        def _stop(state: Any) -> bool:
+            return state.attempt_number >= (BUSY_BATCH_ATTEMPTS if _last_busy(state) else base_attempts)
+
+        def _wait(state: Any) -> float:
+            if _last_busy(state):
+                lo, hi = BUSY_BATCH_WAIT
+                delay = random.uniform(lo, hi) * min(state.attempt_number, 3)
+                _metrics.inc("provider_capacity_busy_retry", provider=self.name, api=api_name)
+                return delay
+            return min(5.0, 0.5 * (2 ** (state.attempt_number - 1))) + random.uniform(0.0, 0.2)
+
         retrying = tenacity.Retrying(
-            stop=tenacity.stop_after_attempt(self.config.max_attempts),
+            stop=_stop,
             retry=tenacity.retry_if_exception(
                 lambda exc: isinstance(exc, ProviderFailure) and bool(exc.retryable)
             ),
-            wait=lambda state: min(5.0, 0.5 * (2 ** (state.attempt_number - 1)))
-            + random.uniform(0.0, 0.2),
+            wait=_wait,
             sleep=lambda seconds: time.sleep(seconds),
             reraise=True,
         )
@@ -690,17 +894,26 @@ class TushareHttpProvider:
         except ProviderFailure as failure:
             force_open = failure.category in {
                 FailureCategory.BUSINESS_RATE_LIMIT,
+                FailureCategory.QUOTA_EXHAUSTED,
                 FailureCategory.HTTP_RATE_LIMIT,
                 FailureCategory.PERMISSION,
             }
+            if failure.capacity_busy and _is_research_namespace():
+                # 批量/补数遇到上游容量忙：已就地重试过；不计熔断失败（否则 3 次忙 = 5 分钟起的停摆），
+                # 由路由器换下一家；只留指标，监控可见。
+                _metrics.inc("provider_capacity_busy", provider=self.name, api=api_name, mode="batch")
+                raise
+            if failure.capacity_busy:
+                _metrics.inc("provider_capacity_busy", provider=self.name, api=api_name, mode="live")
             if failure.fallback_allowed and failure.category not in {
                 FailureCategory.INVALID_REQUEST,
                 FailureCategory.HTTP_CLIENT,
                 FailureCategory.DATA_PENDING,
             }:
                 breaker.record_failure(
-                    force_open=force_open,
+                    force_open=force_open and failure.category is FailureCategory.PERMISSION,
                     recovery_seconds=failure.retry_after_seconds,
+                    kind=_breaker_kind(failure.category),
                 )
             raise
 
@@ -720,13 +933,13 @@ class TushareHttpProvider:
                 response = self._session.get(
                     self._endpoint(api_name),
                     params=query,
-                    timeout=self.config.timeout,
+                    timeout=self._call_timeout(),
                 )
             else:
                 response = self._session.post(
                     self._endpoint(api_name),
                     json=self._payload(api_name, params, fields),
-                    timeout=self.config.timeout,
+                    timeout=self._call_timeout(),
                 )
             status = int(response.status_code)
             if status != 200:
@@ -739,14 +952,26 @@ class TushareHttpProvider:
                         fallback_allowed=True,
                     )
                 if status == 429:
-                    retry_after = 60.0
-                    try:
-                        retry_after = max(
-                            1.0,
-                            float((getattr(response, "headers", {}) or {}).get("Retry-After", 60)),
+                    upstream_wait = _promax_window.upstream_wait_seconds(response)
+                    if self.config.name == "promax":
+                        retry_after = _promax_window.cooldown_seconds(api_name, upstream_wait)
+                    else:
+                        retry_after = upstream_wait or 60.0
+                    busy_detail = (_extract_upstream_detail(response) or "") if self.config.name != "promax" else ""
+                    if busy_detail and any(term in busy_detail.lower() for term in _BUSINESS_CAPACITY_TERMS):
+                        # teajoin：HTTP 429 + {"msg":"query capacity busy"} + Retry-After:2 —— 上游瞬时拥塞，不是额度/故障。
+                        # 批量/补数进程：就地短退避重试（见 BUSY_BATCH_*），不开熔断；live 进程：不重试，30s 冷却并立即降级。
+                        batch = _is_research_namespace()
+                        raise ProviderFailure(
+                            provider=self.name,
+                            api_name=api_name,
+                            category=FailureCategory.HTTP_RATE_LIMIT,
+                            retryable=batch,
+                            fallback_allowed=True,
+                            retry_after_seconds=30.0,
+                            upstream_detail=busy_detail,
+                            capacity_busy=True,
                         )
-                    except (TypeError, ValueError):
-                        pass
                     raise ProviderFailure(
                         provider=self.name,
                         api_name=api_name,
@@ -759,14 +984,20 @@ class TushareHttpProvider:
                     upstream_detail = _extract_upstream_detail(response)
                     haystack = (upstream_detail or "").lower()
                     if any(term in haystack for term in _CAPACITY_EXHAUSTED_TERMS):
-                        # 容量耗尽：让本源冷却 recovery_seconds 并立刻切换到下一个 provider。
+                        # 容量耗尽：让本源冷却并立刻切换到下一个 provider。上游给了等待时间就用上游的；
+                        # promax 否则按实测窗口（app/core/promax_window.py），其他源沿用 recovery_seconds。
+                        upstream_wait = _promax_window.upstream_wait_seconds(response)
+                        if self.config.name == "promax":
+                            cooldown = _promax_window.cooldown_seconds(api_name, upstream_wait)
+                        else:
+                            cooldown = upstream_wait or float(self.config.recovery_seconds)
                         raise ProviderFailure(
                             provider=self.name,
                             api_name=api_name,
                             category=FailureCategory.HTTP_RATE_LIMIT,
                             retryable=False,
                             fallback_allowed=True,
-                            retry_after_seconds=float(self.config.recovery_seconds),
+                            retry_after_seconds=cooldown,
                             upstream_detail=upstream_detail,
                         )
                     raise ProviderFailure(
@@ -777,13 +1008,30 @@ class TushareHttpProvider:
                         fallback_allowed=True,
                         upstream_detail=upstream_detail,
                     )
+                client_detail = _extract_upstream_detail(response)
+                if status == 403 and self.config.name == "teajoin" and "invalid api key" in (client_detail or "").lower():
+                    # 2026-10-26 21:00 实测：teajoin 在负载高峰会偶发整段 403 "invalid api key"（同一把 key，
+                    # 几十秒后恢复，补数日志里约 10% 的请求命中）。当瞬时拥塞处理：批量/补数就地短退避重试，
+                    # live 不重试、30s 冷却并立即降级；都不开熔断。key 真被吊销时重试 5 次后仍会降级，并由
+                    # 「provider 全失败」告警暴露。
+                    batch = _is_research_namespace()
+                    raise ProviderFailure(
+                        provider=self.name,
+                        api_name=api_name,
+                        category=FailureCategory.HTTP_RATE_LIMIT,
+                        retryable=batch,
+                        fallback_allowed=True,
+                        retry_after_seconds=30.0,
+                        upstream_detail=client_detail,
+                        capacity_busy=True,
+                    )
                 raise ProviderFailure(
                     provider=self.name,
                     api_name=api_name,
                     category=FailureCategory.HTTP_CLIENT,
                     retryable=False,
                     fallback_allowed=status in {401, 403},
-                    upstream_detail=_extract_upstream_detail(response),
+                    upstream_detail=client_detail,
                 )
             try:
                 envelope = response.json()
@@ -878,6 +1126,24 @@ class TushareHttpProvider:
         message = raw_message.lower()
         # 上游业务错误码与原文一起保留，例如「40203: 抱歉，您没有接口(cyq_perf)访问权限」。
         upstream_detail = (f"{code}: {raw_message}" if code else raw_message)[:_UPSTREAM_DETAIL_MAX_CHARS] or None
+        # Tushare 把「访问频率超限（如 1次/小时）」也放在 40203 下，原文为「抱歉，您访问接口(x)频率超限(1次/小时)」；
+        # 只有「没有接口…访问权限」才是真无权限。否则限流会被判成 permission → 探测矩阵标 no_permission →
+        # 路由表把该 provider 永久排除（等一小时就能恢复的源被误判）。
+        _rate_text = any(term in message for term in ("频率超限", "频次超限", "访问接口") ) and (
+            "频率" in message or "频次" in message
+        )
+        _really_no_permission = "没有接口" in message or "访问权限" in message or "未开通" in message
+        if _rate_text and not _really_no_permission and not _is_daily_limit_text(f"{code} {raw_message}"):
+            _per_hour = "小时" in message or "/hour" in message
+            return ProviderFailure(
+                provider=self.name,
+                api_name=api_name,
+                category=FailureCategory.BUSINESS_RATE_LIMIT,
+                retryable=False,
+                fallback_allowed=True,
+                retry_after_seconds=3600.0 if _per_hour else 60.0,
+                upstream_detail=upstream_detail,
+            )
         if code in _PERMISSION_BUSINESS_CODES or any(
             term in message for term in _PERMISSION_MESSAGE_TERMS
         ):
@@ -885,6 +1151,15 @@ class TushareHttpProvider:
                 provider=self.name,
                 api_name=api_name,
                 category=FailureCategory.PERMISSION,
+                retryable=False,
+                fallback_allowed=True,
+                upstream_detail=upstream_detail,
+            )
+        if _is_daily_limit_text(f"{code} {raw_message}"):
+            return ProviderFailure(
+                provider=self.name,
+                api_name=api_name,
+                category=FailureCategory.QUOTA_EXHAUSTED,
                 retryable=False,
                 fallback_allowed=True,
                 upstream_detail=upstream_detail,
@@ -900,6 +1175,20 @@ class TushareHttpProvider:
                 fallback_allowed=True,
                 retry_after_seconds=60.0,
                 upstream_detail=upstream_detail,
+            )
+        if any(term in message for term in _BUSINESS_CAPACITY_TERMS):
+            # 2026-10-26 teajoin：HTTP 200 + 业务码非 0 + "query capacity busy"（重查询时上游并发满）。
+            # 不是参数/权限错误，也不是日额度：短冷却后换源/重试，别把它当 provider_error 反复打。
+            batch = _is_research_namespace()
+            return ProviderFailure(
+                provider=self.name,
+                api_name=api_name,
+                category=FailureCategory.HTTP_RATE_LIMIT,
+                retryable=batch,  # 批量/补数：就地短退避重试；live：不重试，立即换源
+                fallback_allowed=True,
+                retry_after_seconds=30.0,
+                upstream_detail=upstream_detail,
+                capacity_busy=True,
             )
         if any(term in message for term in ("参数", "parameter", "invalid argument")):
             return ProviderFailure(
@@ -958,6 +1247,7 @@ class TushareProviderRouter:
         balance_deterministic: bool = False,
         enabled_override: Any = None,
         priority_override: Any = None,
+        leaders: Sequence[LeaderSpec] | None = None,
         trace_sink: Any = None,
         correlation_id_factory: Any = None,
     ) -> None:
@@ -976,6 +1266,8 @@ class TushareProviderRouter:
         # priority_override: 可选可调用 () -> Mapping[str, int]，提供 provider 运行时优先级
         # 覆盖（管理面拖拽调序写 DB）。为 None 时用代码默认 priority。每次选路时读取。
         self._priority_override = priority_override
+        # leaders: 在其名单接口上做主源（排链首）的 provider 规则；None/空=保持原链序。
+        self._leaders = {spec.provider: spec for spec in (leaders or ())}
         # trace_sink: 可选 DataSourceTraceSink；为 None 时不持久化 trace（默认行为不变）。
         # correlation_id_factory: 可选 () -> str，用于关联一次逻辑请求的多次 attempt。
         self._trace_sink = trace_sink
@@ -1012,6 +1304,16 @@ class TushareProviderRouter:
                 return int(overrides[provider.name])
         return provider.config.priority
 
+    def request_pinned(
+        self, provider_name: str, api_name: str, *, params: Mapping[str, Any] | None = None, fields: str = ""
+    ) -> Mapping[str, Any]:
+        """只走指定 provider（仍受其熔断/限流/额度保护）。用于「主源返回了可疑的截断结果，改问另一家核实」。
+        provider 未配置/被停用/不支持该接口时抛 TushareProviderError，调用方应保留原结果。"""
+        p = self._providers.get(provider_name)
+        if p is None or not self._is_enabled(p.name) or not p.supports(api_name):
+            raise TushareProviderError(api_name, [])
+        return p.request(api_name, params=params, fields=fields)
+
     def _ordered_providers(self, api_name: str) -> list[TushareHttpProvider]:
         enabled = [
             p
@@ -1025,8 +1327,70 @@ class TushareProviderRouter:
             ordered = [by_name[name] for name in route if name in by_name]
             # 链里没列出但已启用的 provider 追加在末尾（按 priority），避免漏掉 fallback
             rest = sorted((p for p in enabled if p.name not in route), key=self._effective_priority)
-            return self._balance(api_name, ordered + rest)
-        return self._balance(api_name, sorted(enabled, key=self._effective_priority))
+            return self._apply_leaders(api_name, self._balance(api_name, ordered + rest))
+        return self._apply_leaders(api_name, self._balance(api_name, sorted(enabled, key=self._effective_priority)))
+
+    # promax 额度专留实时行情：这些接口保持原链路（含 promax）
+    PROMAX_RESERVED_FOR = frozenset({"rt_k", "rt_min"})
+
+    def _apply_promax_reserve(self, api_name: str, ordered: list[TushareHttpProvider]) -> list[TushareHttpProvider]:
+        """2026-10-26：promax 降为少额度用户，额度只留给 rt_k/rt_min。
+        * research 命名空间（补数/研究脚本）：不动用 promax（含唯一源时直接失败，宁可晚补也不抢实盘额度）。
+        * live：其余接口链路里还有别的上游时，把 promax 拿掉；它是唯一源（如 anns_d）时保留。
+        两个开关见 Settings.tushare_promax_research_enabled / tushare_promax_rtk_reserved（默认都启用保护）。"""
+        if api_name in self.PROMAX_RESERVED_FOR or not any(p.name == "promax" for p in ordered):
+            return ordered
+        try:
+            from app.core.config import get_settings
+
+            st = get_settings()
+            research_ok = bool(st.tushare_promax_research_enabled)
+            reserved = bool(st.tushare_promax_rtk_reserved)
+        except Exception:  # noqa: BLE001
+            return ordered
+        others = [p for p in ordered if p.name != "promax"]
+        if _is_research_namespace() and not research_ok:
+            _metrics.inc("provider_promax_reserved", api=api_name, namespace="research")
+            return others
+        if reserved and others:
+            _metrics.inc("provider_promax_reserved", api=api_name, namespace="live")
+            return others
+        return ordered
+
+    def _lead_spec_for(self, api_name: str, ordered: list[TushareHttpProvider]) -> tuple[LeaderSpec, TushareHttpProvider] | None:
+        """当前时刻应当做该接口主源的 (规则, provider)；没有则 None。"""
+        if not self._leaders:
+            return None
+        research = _is_research_namespace()
+        intraday = _in_research_window()
+        for p in ordered:
+            spec = self._leaders.get(p.name)
+            if spec is None or not spec.leads(api_name, research=research, intraday=intraday):
+                continue
+            health = p.lb_health(api_name) if hasattr(p, "lb_health") else 1.0
+            if health < spec.min_health:
+                _metrics.inc("provider_lead_skipped", api=api_name, provider=p.name, reason="unhealthy")
+                continue
+            return spec, p
+        return None
+
+    def _apply_leaders(self, api_name: str, ordered: list[TushareHttpProvider]) -> list[TushareHttpProvider]:
+        if not self._leaders or len(ordered) < 2:
+            return ordered
+        found = self._lead_spec_for(api_name, ordered)
+        if found is None:
+            # 盘中延迟敏感接口：主源规则暂不生效 → 该源（若在链内）排到最后做兜底，原链路优先
+            demoted = [p for p in ordered if p.name in self._leaders and not self._leaders[p.name].leads(
+                api_name, research=_is_research_namespace(), intraday=_in_research_window())
+                and api_name in self._leaders[p.name].apis]
+            if demoted:
+                ordered = [p for p in ordered if p not in demoted] + demoted
+            return ordered
+        _spec, lead = found
+        if ordered[0] is not lead:
+            ordered = [lead] + [p for p in ordered if p is not lead]
+        _metrics.inc("provider_lead_choice", api=api_name, provider=lead.name)
+        return ordered
 
     def balance_weights(self, api_name: str, providers: Sequence[TushareHttpProvider]) -> dict[str, float]:
         out: dict[str, float] = {}
@@ -1097,7 +1461,7 @@ class TushareProviderRouter:
             identity=api_name,
             level=logging.DEBUG,
         )
-        providers = self._ordered_providers(api_name)
+        providers = self._apply_promax_reserve(api_name, self._ordered_providers(api_name))
         if not providers:
             raise TushareProviderError(api_name, [])
 
@@ -1110,7 +1474,15 @@ class TushareProviderRouter:
             fallback_from = providers[index - 1].name if index else None
             started = time.perf_counter()
             try:
-                envelope = provider.request(api_name, params=params, fields=fields)
+                lead_spec = self._leaders.get(provider.name) if (index == 0 and len(providers) > 1) else None
+                if lead_spec is not None and lead_spec.leads(
+                    api_name, research=_is_research_namespace(), intraday=_in_research_window()
+                ):
+                    _live_intraday = _in_research_window() and not _is_research_namespace()
+                    with _lead_scope(lead_spec.timeout_for(api_name, live_intraday=_live_intraday), 2 if _is_research_namespace() else 1):
+                        envelope = provider.request(api_name, params=params, fields=fields)
+                else:
+                    envelope = provider.request(api_name, params=params, fields=fields)
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 data = envelope.get("data")
                 items = data.get("items") if isinstance(data, Mapping) else None
@@ -1137,7 +1509,10 @@ class TushareProviderRouter:
             except ProviderFailure as failure:
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 failures.append(failure)
-                is_breaker_skip = failure.category is FailureCategory.CIRCUIT_OPEN
+                is_breaker_skip = failure.category is FailureCategory.CIRCUIT_OPEN or (
+                    failure.category is FailureCategory.QUOTA_EXHAUSTED
+                    and failure.upstream_detail == QUOTA_SKIP_DETAIL
+                )
                 attempts.append({
                     "ordinal": ordinal,
                     "provider": provider.name,

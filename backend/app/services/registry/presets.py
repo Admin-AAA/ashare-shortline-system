@@ -184,8 +184,19 @@ def update_preset(db: Session, preset_id: str, payload: dict[str, Any]) -> dict[
     return _serialize_preset(db, preset)
 
 
-def delete_preset(db: Session, preset_id: str) -> bool:
+PROTECTED_PRESET_PREFIX = "preset_formal_"
+
+
+class ProtectedPresetError(Exception):
+    """正式预设（preset_formal_*）被正式短线/盘前 formal run 依赖，删除需显式 confirm_formal=True。"""
+
+
+def delete_preset(db: Session, preset_id: str, *, confirm_formal: bool = False) -> bool:
     import logging
+
+    if str(preset_id).startswith(PROTECTED_PRESET_PREFIX) and not confirm_formal:
+        # 正式预设删除需二次确认（用户可主动删除不再使用的正式方案）
+        raise ProtectedPresetError(preset_id)
 
     logger = logging.getLogger(__name__)
     preset = db.get(Preset, preset_id)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
@@ -355,15 +356,9 @@ def enabled_sources(db: Session, source_type: str, configured_sources: list[str]
     return []
 
 
-def sync_data_source_configs(db: Session) -> None:
-    """对账数据源注册表：注册 desired（来自配置的实际接入策略），并清理孤儿行。
-
-    孤儿 = 存在于 DataSourceConfig / DataSourceHealth 但不在 desired 中的条目
-    （历史上多 provider 行情源等残留，当前代码仅实现了 tushare 等部分 provider）。
-    清理让注册表与实际策略保持一致。desired 是注册表的唯一真相源。
-    """
-    settings = get_settings()
-    desired = {
+def registry_sources(settings: Any) -> dict[str, list[str]]:
+    """数据源注册表：每类数据按配置顺序接入的源（sync 与网关拓扑共用）。"""
+    return {
         "quote": _quote_sources(settings),
         "kline": _kline_sources(settings),
         "limit_up": _limit_up_sources(settings),
@@ -372,7 +367,68 @@ def sync_data_source_configs(db: Session) -> None:
         "dragon_tiger": _dragon_tiger_sources(settings),
         "news": _news_sources(settings),
     }
+
+
+def set_gateway_switch(db: Session, source: str, source_type: str, enabled: bool) -> bool:
+    """写网关开关行 (source, source_type)；只接受网关 provider 实际声明过的键。"""
+    from app.services.datasource import gateway as _gw
+    from app.services.datasource.topology import gateway_config_keys
+
+    if (source, source_type) not in gateway_config_keys():
+        return False
+    row = db.get(DataSourceConfig, {"source": source, "source_type": source_type})
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if row is None:
+        db.add(DataSourceConfig(source=source, source_type=source_type, enabled=enabled, priority=100, updated_at=now))
+    else:
+        row.enabled = enabled
+        row.updated_at = now
+    db.commit()
+    _gw.invalidate_switch_caches()
+    if source_type == _PROVIDER_SOURCE_TYPE:
+        from app.services.tushare_client import invalidate_provider_enabled_override
+
+        invalidate_provider_enabled_override()
+    return True
+
+
+def set_gateway_item_switch(db: Session, dataset_key: str, provider: str, enabled: bool) -> bool:
+    """写数据项级开关：只在 dataset_key 这一数据类型里启停 provider，不碰共用的源总开关。
+
+    只接受「数据源管理」拓扑里实际存在的 (数据项键, provider)；各进程 5 秒内生效。
+    """
+    from app.models.tables import DataGatewayItemSwitch
+    from app.services.datasource import gateway as _gw
+    from app.services.datasource.topology import gateway_item_keys
+
+    if (dataset_key, provider) not in gateway_item_keys():
+        return False
+    row = db.get(DataGatewayItemSwitch, {"dataset_key": dataset_key, "provider": provider})
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    if row is None:
+        db.add(DataGatewayItemSwitch(dataset_key=dataset_key, provider=provider, enabled=enabled, updated_at=now))
+    else:
+        row.enabled = enabled
+        row.updated_at = now
+    db.commit()
+    _gw.invalidate_switch_caches()
+    return True
+
+
+def sync_data_source_configs(db: Session) -> None:
+    """对账数据源注册表：注册 desired（来自配置的实际接入策略），并清理孤儿行。
+
+    孤儿 = 存在于 DataSourceConfig / DataSourceHealth 但不在 desired 中的条目
+    （历史上多 provider 行情源等残留，当前代码仅实现了 tushare 等部分 provider）。
+    清理让注册表与实际策略保持一致。desired 是注册表的唯一真相源。
+    """
+    desired = registry_sources(get_settings())
     desired_set = {(src, st) for st, srcs in desired.items() for src in srcs}
+    # 网关 provider 的开关行（如 sina/quote、cninfo/news）不在七类注册表里，同样豁免清理，
+    # 否则在「数据源管理」里禁用后会被下一次对账删除、被禁源静默回流。
+    from app.services.datasource.topology import gateway_config_keys
+
+    desired_set |= gateway_config_keys()
 
     last_error: IntegrityError | None = None
     for _attempt in range(3):
@@ -617,7 +673,9 @@ def _refresh_bar_source_stats_in_background() -> None:
             with _bar_source_stats_lock:
                 _bar_source_stats_refreshing = False
 
-    threading.Thread(target=_run, name="pool-bar-source-stats", daemon=True).start()
+    from app.services.datasource.cache import ctx_bound
+
+    threading.Thread(target=ctx_bound(_run), name="pool-bar-source-stats", daemon=True).start()
 
 
 def _compute_raw_bar_source_rows(db: Session, latest_allowed_bar_date: Any) -> list[dict[str, Any]]:
@@ -661,8 +719,33 @@ def _unified_quote_rows(db: Session, limit: int = 50, offset: int = 0) -> list[d
     ]
 
 
+_DAILY_BAR_ROWS_CACHE: dict[tuple, tuple[float, list[dict[str, Any]]]] = {}
+_DAILY_BAR_ROWS_TTL = 300.0
+_DAILY_BAR_ROWS_LOCK = threading.Lock()
+
+
+def clear_daily_bar_rows_cache() -> None:
+    with _DAILY_BAR_ROWS_LOCK:
+        _DAILY_BAR_ROWS_CACHE.clear()
+
+
 def _daily_bar_rows(db: Session, limit: int = 50, offset: int = 0) -> list[dict[str, Any]]:
+    """分页的日 K 概览。对 580 万行 daily_kbars 做 GROUP BY code 约 3 秒，/api/data-sources/pool 每次请求都会走到，
+    因此按 (limit, offset, 允许的最新日期) 做 5 分钟缓存；数据池刷新/补缺时通过 cache_hooks 清空。"""
     latest_allowed_bar_date = _latest_allowed_bar_date()
+    key = (int(limit), int(offset), str(latest_allowed_bar_date))
+    now = time.monotonic()
+    with _DAILY_BAR_ROWS_LOCK:
+        hit = _DAILY_BAR_ROWS_CACHE.get(key)
+        if hit and now - hit[0] < _DAILY_BAR_ROWS_TTL:
+            return [dict(r) for r in hit[1]]
+    result = _daily_bar_rows_uncached(db, latest_allowed_bar_date, limit, offset)
+    with _DAILY_BAR_ROWS_LOCK:
+        _DAILY_BAR_ROWS_CACHE[key] = (time.monotonic(), result)
+    return [dict(r) for r in result]
+
+
+def _daily_bar_rows_uncached(db: Session, latest_allowed_bar_date: Any, limit: int, offset: int) -> list[dict[str, Any]]:
     rows = db.execute(
         select(
             DailyKbar.code,
@@ -973,6 +1056,7 @@ def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict
 _ROUTABLE_PROVIDERS = (
     "promax",
     "quantdata",
+    "teajoin",
 )
 
 
@@ -1129,10 +1213,12 @@ def _probe_xiaoshi_source() -> dict[str, Any]:
             logger.debug("_probe_xiaoshi_source: best-effort fallback after %r", exc)
             return (False, {}, f"{type(exc).__name__}: {str(exc)[:160]}")
 
+    from app.services.datasource.cache import submit_ctx
+
     with ThreadPoolExecutor(max_workers=3) as pool:
-        manifest_future = pool.submit(_probe_manifest)
-        quote_future = pool.submit(_probe_quote)
-        kline_future = pool.submit(_probe_kline)
+        manifest_future = submit_ctx(pool, _probe_manifest)
+        quote_future = submit_ctx(pool, _probe_quote)
+        kline_future = submit_ctx(pool, _probe_kline)
         manifest_detail, manifest_error = manifest_future.result()
         quote_ok, quote_detail, quote_error = quote_future.result()
         kline_ok, kline_detail, kline_error = kline_future.result()
@@ -1221,3 +1307,8 @@ def _record_source_test(
     row.latency_ms = latency_ms
     row.updated_at = now
     db.commit()
+
+
+from app.services.cache_hooks import register as _register_cache_hook  # noqa: E402
+
+_register_cache_hook("daily_bar_rows", clear_daily_bar_rows_cache)

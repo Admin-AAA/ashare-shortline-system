@@ -229,9 +229,15 @@ export function PresetsSection() {
       return;
     }
     if (!confirm(`确认删除预设「${name}」？此操作不可撤销。`)) return;
+    const isFormal = presetId.startsWith("preset_formal_");
+    if (
+      isFormal &&
+      !confirm(`「${name}」是正式预设，定时正式运行依赖它，删除后正式运行可能失败。仍要删除吗？`)
+    )
+      return;
     setBusyId(presetId);
     try {
-      await api.deletePreset(presetId);
+      await api.deletePreset(presetId, isFormal);
       showToast("预设已删除");
       if (editingId === presetId) {
         setEditingId(null);
@@ -476,7 +482,7 @@ function PresetEditor({
         <FormField label="分数线">
           <input className="cfg-input" type="number" min={0} max={100} step={0.5} value={form.score_line} onChange={(e) => set("score_line", Number(e.target.value))} />
         </FormField>
-        <FormField label="输出数量">
+        <FormField label="输出数量（另受每策略每日上限约束）">
           <input className="cfg-input" type="number" min={1} max={50} step={1} value={form.output_count} onChange={(e) => set("output_count", Number(e.target.value))} />
         </FormField>
         <FormField label="风险模板">

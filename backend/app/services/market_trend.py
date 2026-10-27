@@ -9,6 +9,7 @@
 """
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date, timedelta
 from typing import Any, Iterable, Mapping
@@ -16,6 +17,8 @@ from typing import Any, Iterable, Mapping
 from sqlalchemy import func, select
 
 from app.models.market import DailyKbar
+
+logger = logging.getLogger(__name__)
 
 FIELDS = ("mkt_eqw_ma20_ratio", "mkt_eqw_ma60_ratio")
 _MIN_SAMPLE = 1000
@@ -79,6 +82,7 @@ def trend_by_dates(session: Any, dates: Iterable[str]) -> dict[str, dict[str, fl
     try:
         return ratios_from_returns(daily_mean_returns(session, start, ds[-1]))
     except Exception:  # noqa: BLE001 - 闸门字段缺失时退化为 0（不拦），不阻断出票
+        logger.warning("market_trend.trend_by_dates failed: 趋势闸门字段按缺失处理（退化为不拦）", exc_info=True)
         return {}
 
 
@@ -100,4 +104,5 @@ def trend_for_live(session: Any, trade_date: str, stocks: Iterable[Mapping[str, 
             rets[str(trade_date)[:10]] = sum(pcts) / len(pcts)
         return ratios_from_returns(rets).get(str(trade_date)[:10], zero)
     except Exception:  # noqa: BLE001
+        logger.warning("market_trend.trend_for_live failed trade_date=%s: 趋势闸门退化为 0（不拦）", trade_date, exc_info=True)
         return zero

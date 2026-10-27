@@ -580,3 +580,33 @@ def test_raw_adapter_rejects_nonempty_envelopes_without_exact_schema(
             requested_fields="",
             envelope={"code": 0, "data": data},
         )
+
+
+def test_holder_trade_contract_accepts_observed_11_field_schema_and_news_backup_schema():
+    from app.services.auxiliary.composition import EVENT_SNAPSHOT_CONTRACTS
+    from app.services.tushare_client import TushareRawEnvelope
+
+    ht = EVENT_SNAPSHOT_CONTRACTS["holder_trade"]
+    fields11 = ["ts_code", "ann_date", "holder_name", "holder_type", "in_de", "change_vol", "change_ratio",
+                "after_share", "after_ratio", "avg_price", "total_share"]
+    env = TushareRawEnvelope.from_envelope(
+        api_name="stk_holdertrade", requested_fields="",
+        envelope={"data": {"fields": fields11, "items": [["600960.SH", "20261019", "x", "C", "IN", 1.0, 0.1, None, 1.0, 1.0, 1.0]]}},
+    )
+    ev = ht.completeness_for(env)
+    assert ev is not None and ev.limit.truncation_ruled_out
+
+    news = EVENT_SNAPSHOT_CONTRACTS["news_announcement"]
+    fields9 = ["ts_code", "symbol", "name", "title", "ann_type", "ann_date", "ann_time", "url", "source"]
+    rows = [["000001.SZ", "000001", "n", "t", "a", "20260901", "", "u", "akshare"]] * 2500
+    env = TushareRawEnvelope.from_envelope(
+        api_name="anns_d", requested_fields="", envelope={"data": {"fields": fields9, "items": rows}},
+    )
+    ev = news.completeness_for(env)
+    assert ev is not None and ev.limit.truncation_ruled_out  # akshare 整日取尽，2000 上限不适用
+
+    fields8 = fields9[:-1]
+    env = TushareRawEnvelope.from_envelope(
+        api_name="anns_d", requested_fields="", envelope={"data": {"fields": fields8, "items": [r[:-1] for r in rows]}},
+    )
+    assert not news.completeness_for(env).limit.truncation_ruled_out  # Tushare 本体仍受 2000 上限

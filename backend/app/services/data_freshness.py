@@ -41,7 +41,8 @@ DAILY_TABLES: list[tuple[str, str, int, tuple[str, ...], bool]] = [
 # 事件/低频表：按自然日阈值判断停更
 EVENT_TABLES: list[tuple[str, str, int]] = [
     ("share_floats", "created_at", 10),
-    ("news_announcement", "announce_date", 3),
+    # news_announcement 不在此查：线上真源是公告事件快照（见 SNAPSHOT_MAX_AGE_DAYS），同名 MySQL 表
+    # 只由逐股补数写入、不日更，按它判停更是误报（10-20 报「4 天未更新」时快照已写到当天）。
     ("institutional_surveys", "surv_date", 14),
     ("stock_fina_indicator", "ann_date", 30),
     ("holder_numbers", "ann_date", 45),
@@ -53,6 +54,7 @@ EVENT_TABLES: list[tuple[str, str, int]] = [
 # 事件类数据的线上真源是 auxiliary_snapshot_batches（block_trades/holder_trades 旧表已不再写入，设计如此），
 # 按数据集看最近一次 complete 批次的年龄
 SNAPSHOT_MAX_AGE_DAYS = {"block_trade": 4, "holder_trade": 4, "share_float": 4, "news_announcement": 4}
+# 注意：以上按 fetched_at（抓取时间）计龄；回补旧分区也会刷新它，但日更若当日失败会被下面的 24h 全失败规则抓到。
 
 
 def _norm(v: Any) -> str | None:
@@ -113,16 +115,22 @@ def check_snapshot_datasets(db) -> list[dict[str, Any]]:
     rows = db.execute(text(
         "SELECT dataset, MAX(CASE WHEN status='complete' THEN fetched_at END), "
         "SUM(status<>'complete' AND fetched_at >= NOW() - INTERVAL 3 DAY), "
-        "MAX(CASE WHEN status<>'complete' THEN failure_code END) "
+        "MAX(CASE WHEN status<>'complete' THEN failure_code END), "
+        "SUM(status<>'complete' AND fetched_at >= UTC_TIMESTAMP() - INTERVAL 1 DAY), "
+        "SUM(status='complete' AND fetched_at >= UTC_TIMESTAMP() - INTERVAL 1 DAY) "
         "FROM auxiliary_snapshot_batches GROUP BY dataset")).all()
     out = []
     now = datetime.now()
-    for ds, last_ok, recent_fail, code in rows:
+    for ds, last_ok, recent_fail, code, fail_1d, ok_1d in rows:
         limit = SNAPSHOT_MAX_AGE_DAYS.get(str(ds), 4)
         age = (now - last_ok).days if last_ok else None
         issues = []
         if age is None or age > limit:
             issues.append(f"最近成功快照 {last_ok}（{age} 天前），近 3 天失败 {int(recent_fail or 0)} 次，失败码 {code}")
+        elif int(fail_1d or 0) and not int(ok_1d or 0):
+            # 2026-10-19：holder_trade 10-12 起每天 unknown_schema 0 行，但 10-09 的成功批次让年龄阈值晚几天才报；
+            # 近 24h 只有失败、没有任何成功批次即告警，不等年龄超阈值。
+            issues.append(f"近 24 小时快照全部失败 {int(fail_1d)} 次（0 次成功），失败码 {code}")
         out.append({"table": f"snapshot:{ds}", "latest": str(last_ok)[:19] if last_ok else None,
                     "age_days": age, "issues": issues})
     return out
@@ -149,6 +157,54 @@ def check_indicator_columns(db, trade_date: str) -> dict[str, Any]:
             "empty_columns": empty, "issues": issues}
 
 
+CHIP_FROZEN_RATIO = 0.9
+
+
+def chip_frozen_issue(trade_date: str, prev_date: str, compared: int, identical: int) -> str | None:
+    if compared and identical > CHIP_FROZEN_RATIO * compared:
+        return (f"{trade_date} 筹码列与前一交易日 {prev_date} 完全相同 {identical}/{compared}"
+                f"（>{int(CHIP_FROZEN_RATIO * 100)}%，疑似把前一日筹码写成当日）")
+    return None
+
+
+def check_chip_frozen(db, dates: list[str]) -> dict[str, Any]:
+    """chip_cost_15/50/85 + chip_weight_avg 与前一交易日完全相同的股票占比 > 90% 告警。"""
+    issues: list[str] = []
+    for prev, d in zip(dates, dates[1:]):
+        n, same = db.execute(text(
+            "SELECT COUNT(*), SUM(a.chip_cost_50 = b.chip_cost_50 AND a.chip_cost_15 <=> b.chip_cost_15 "
+            "AND a.chip_cost_85 <=> b.chip_cost_85 AND a.chip_weight_avg <=> b.chip_weight_avg) "
+            "FROM daily_kbars a JOIN daily_kbars b ON b.code = a.code AND b.trade_date = :p "
+            "WHERE a.trade_date = :d AND a.chip_cost_50 IS NOT NULL"), {"p": prev, "d": d}).one()
+        msg = chip_frozen_issue(d, prev, int(n or 0), int(same or 0))
+        if msg:
+            issues.append(msg)
+    return {"table": "daily_kbars:chip_frozen", "latest": dates[-1] if dates else None, "issues": issues}
+
+
+def chip_history_dates(db, since: str, until: str | None = None) -> list[str]:
+    """Trade dates in [since, until] plus the trade date just before `since` (comparison baseline)."""
+    sql = ("SELECT DISTINCT trade_date FROM daily_kbars WHERE trade_date >= "
+           "COALESCE((SELECT MAX(trade_date) FROM daily_kbars WHERE trade_date < :s), :s)")
+    params: dict[str, Any] = {"s": since}
+    if until:
+        sql += " AND trade_date <= :u"
+        params["u"] = until
+    return [str(r[0]) for r in db.execute(text(sql + " ORDER BY trade_date"), params)]
+
+
+def check_chip_frozen_since(db, since: str, until: str | None = None) -> dict[str, Any]:
+    """历史版冻结巡检：覆盖 since..until 全部交易日（默认巡检只看近 30 个交易日）。只读。
+
+    run_freshness_check(chip_frozen_since=...) 或 scripts/check_chip_frozen.py --since 2025-01-01 调用。
+    """
+    out = check_chip_frozen(db, chip_history_dates(db, since, until))
+    out["table"] = "daily_kbars:chip_frozen_history"
+    out["since"], out["until"] = since, until
+    out["frozen_dates"] = [m.split(" ", 1)[0] for m in out["issues"]]
+    return out
+
+
 def check_repurchase_events() -> dict[str, Any]:
     from app.services.data_live_sources import repurchase_events_latest
 
@@ -158,7 +214,14 @@ def check_repurchase_events() -> dict[str, Any]:
     return {"table": "events:repurchase", "latest": mx, "age_days": age, "rows": n, "issues": issues}
 
 
-def run_freshness_check(db, *, alert: bool = True) -> dict[str, Any]:
+def check_stock_identity(db, trade_date: str) -> dict[str, Any]:
+    """stocks / stock_metadata_history / daily_kbars 活跃代码三方对账（只读），见 stock_identity.reconcile_stock_identity。"""
+    from app.services.stock_identity import reconcile_stock_identity
+
+    return reconcile_stock_identity(db, trade_date)
+
+
+def run_freshness_check(db, *, alert: bool = True, chip_frozen_since: str | None = None) -> dict[str, Any]:
     from app.core.alerts import emit_alert
     from app.services.daily_basic_ingest import check_daily_basic_staleness
 
@@ -176,7 +239,11 @@ def run_freshness_check(db, *, alert: bool = True) -> dict[str, Any]:
         except Exception as exc:  # noqa: BLE001
             db.rollback()
             results.append({"table": spec[0], "issues": [f"检查失败 {type(exc).__name__}: {str(exc)[:120]}"]})
-    for fn in (lambda: check_indicator_columns(db, dates[-1]), check_repurchase_events):
+    # chip_frozen_since 给定时，筹码冻结巡检覆盖该日起的全部历史交易日（如 2025-01-01），否则只看近 30 日
+    chip_check = ((lambda: check_chip_frozen_since(db, chip_frozen_since)) if chip_frozen_since
+                  else (lambda: check_chip_frozen(db, dates)))
+    for fn in (lambda: check_indicator_columns(db, dates[-1]), chip_check, check_repurchase_events,
+               lambda: check_stock_identity(db, dates[-1])):
         try:
             results.append(fn())
         except Exception as exc:  # noqa: BLE001
@@ -188,9 +255,19 @@ def run_freshness_check(db, *, alert: bool = True) -> dict[str, Any]:
         db.rollback()
         results.append({"table": "snapshot:*", "issues": [f"检查失败 {type(exc).__name__}: {str(exc)[:120]}"]})
     problems = {r["table"]: r["issues"] for r in results if r["issues"]}
+    resolved: list[str] = []
     if alert:
+        from app.core.alerts import active_alert_records, resolve_alert
+
         for table, issues in problems.items():
-            emit_alert("data_freshness", f"{table}:{dates[-1]}", f"{table}: " + "；".join(issues[:5]))
+            # key 只用表名（不再带日期）：同一张表的同一类问题跨天只算一条活跃告警，恢复后可精确解除
+            emit_alert("data_freshness", table, f"{table}:{dates[-1]}: " + "；".join(issues[:5]))
+        checked = {r["table"] for r in results}
+        for rec in active_alert_records("data_freshness"):
+            key = str(rec["key"])
+            if key in checked and key not in problems:  # 只解除「本轮检查过且已无问题」的表
+                if resolve_alert("data_freshness", key, f"{key} 已恢复（最新交易日 {dates[-1]}）"):
+                    resolved.append(key)
     daily_basic = check_daily_basic_staleness(db, latest=dates[-1]) if alert else None
     return {"latest_trade_date": dates[-1], "problems": problems, "tables": results, "daily_basic": daily_basic,
-            "ok": not problems}
+            "resolved_alerts": resolved, "ok": not problems}

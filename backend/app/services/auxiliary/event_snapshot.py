@@ -108,6 +108,12 @@ class TushareSinglePageEventContract:
     documented_single_request_cap: int | None
     documentation_url: str | None
     provider: str = tushare_provider
+    # 上游同一接口的其它已核实全字段 schema（有序元组精确匹配）。例：stk_holdertrade 官方文档
+    # 13 字段含 begin_date/close_date，但 promax/quantdata 实测只回 11 字段（2026-10-19 实测）。
+    alternate_field_schemas: tuple[tuple[str, ...], ...] = ()
+    # alternate_field_schemas 中“来源自身翻页取尽整日”的 schema（如 akshare stock_notice_report
+    # 按页取完整日全市场），单次上限不适用：行数 ≥ cap 也视为已排除截断。
+    exhaustive_field_schemas: tuple[tuple[str, ...], ...] = ()
 
     def __post_init__(self) -> None:
         if not self.dataset.strip() or not self.endpoint.strip() or not self.provider.strip():
@@ -120,6 +126,11 @@ class TushareSinglePageEventContract:
             raise EventSnapshotError("documented single-request cap must be positive when supplied")
         if self.documentation_url is not None and not self.documentation_url.startswith("https://"):
             raise EventSnapshotError("event contract documentation URL must use HTTPS when supplied")
+        if any(schema not in self.alternate_field_schemas for schema in self.exhaustive_field_schemas):
+            raise EventSnapshotError("exhaustive field schemas must be declared alternate schemas")
+        for alt in self.alternate_field_schemas:
+            if not alt or len(alt) != len(set(alt)) or any(not field.strip() for field in alt):
+                raise EventSnapshotError("alternate field schemas must be non-empty, unique and non-blank")
         if self.documentation_url is None and self.documented_single_request_cap is not None:
             raise EventSnapshotError(
                 "a publishable single-page cap requires an official documentation URL"
@@ -153,13 +164,14 @@ class TushareSinglePageEventContract:
         # Tushare may omit data.fields for a valid empty envelope. For an empty
         # response, the declared schema is audit evidence; non-empty rows must still
         # prove an exact all-field raw schema before their payloads are persisted.
+        accepted = (self.documented_fields, *self.alternate_field_schemas)
         if returned_rows:
-            if envelope.fields != self.documented_fields:
+            if envelope.fields not in accepted:
                 raise EventSnapshotProviderError(
                     "event_provider_unknown_schema",
                     "raw response fields do not match the verified event schema",
                 )
-        elif envelope.fields not in ((), self.documented_fields):
+        elif envelope.fields not in ((), *accepted):
             raise EventSnapshotProviderError(
                 "event_provider_unknown_schema",
                 "empty raw response returned an unverified field schema",
@@ -178,10 +190,11 @@ class TushareSinglePageEventContract:
             pagination=PaginationEvidence(page_count=1, all_pages_fetched=True),
             limit=LimitEvidence(
                 returned_rows=returned_rows,
-                truncation_ruled_out=returned_rows < cap,
+                truncation_ruled_out=returned_rows < cap
+                or (bool(envelope.fields) and envelope.fields in self.exhaustive_field_schemas),
             ),
             field_set=FieldSetEvidence(
-                response_fields=self.documented_fields,
+                response_fields=envelope.fields or self.documented_fields,
                 all_returned_fields_captured=True,
                 requested_all_fields=True,
             ),

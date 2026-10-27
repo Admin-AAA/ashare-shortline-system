@@ -7,7 +7,8 @@
 # 已有保护: universe.exclude chg20>50 AND pct>2(lessons 138) + scoring chg20>35→-8 梯度 + 弱市veto(第142轮)
 id: high-range-breakout-momentum
 name: 阶段新高放量突破
-enabled: true
+# 2026-10-19 §107 退役（standalone_strategies.RETIRED_STRATEGY_IDS；manifest.json 已是 enabled=false），这里保持一致
+enabled: false
 weight: 0.35
 
 meta:

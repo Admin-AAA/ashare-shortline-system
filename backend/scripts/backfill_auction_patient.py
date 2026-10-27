@@ -16,6 +16,7 @@ cooldown；这样熔断的 60s 窗口一定会被等到。
 from __future__ import annotations
 
 import argparse
+import datetime as dt
 import sys
 import time
 from pathlib import Path
@@ -41,7 +42,18 @@ def main() -> None:
     ap.add_argument("--passes", type=int, default=8)
     ap.add_argument("--cooldown", type=float, default=75.0)
     ap.add_argument("--sleep", type=float, default=1.0)
+    ap.add_argument("--stop-at", help="HH:MM，到点在日边界退出（避开盘中/17:35 日更占用 promax），再跑可续")
     args = ap.parse_args()
+    stop_at = dt.time.fromisoformat(args.stop_at) if args.stop_at else None
+    deadline = None
+    if stop_at:
+        now = dt.datetime.now()
+        deadline = now.replace(hour=stop_at.hour, minute=stop_at.minute, second=0, microsecond=0)
+        if deadline <= now:  # 已过今天的点 → 明天这个点（夜跑跨零点）
+            deadline += dt.timedelta(days=1)
+
+    def _should_stop() -> bool:
+        return deadline is not None and dt.datetime.now() >= deadline
 
     db = SessionLocal()
     pro = get_pro()
@@ -56,6 +68,9 @@ def main() -> None:
                 break
             got = 0
             for i, d in enumerate(missing, 1):
+                if _should_stop():
+                    print(f"[patient] 到 {args.stop_at} 停止，下次再跑续上", flush=True)
+                    break
                 try:
                     n = backfill_day(db, pro, d)
                     if n > 0:
@@ -68,6 +83,8 @@ def main() -> None:
             done = len(dates) - len(missing) + got
             print(f"[pass {p}] 本轮补上 {got} 天；累计覆盖 {done}/{len(dates)} "
                   f"耗时 {(time.time()-t0)/60:.1f}min", flush=True)
+            if _should_stop():
+                break
             if got == 0:
                 print(f"[pass {p}] 零进展 → 冷却 {args.cooldown}s（等熔断窗口过去）", flush=True)
                 time.sleep(args.cooldown)

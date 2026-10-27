@@ -662,8 +662,49 @@ export type RecentTradeCoverageTable = {
   missing_dates?: string[];
 };
 
+export type DataQualityItem = {
+  key: string;
+  label: string;
+  category: string;
+  kind: string;
+  severity: "red" | "yellow" | "green";
+  latest?: string | null;
+  expected?: string | null;
+  lag_trade_days?: number | null;
+  detail: string;
+  impact: string;
+  provisional?: boolean;
+};
+
+/** 统一数据质量巡检（后端 data_quality_monitor）：数据库表 + 文件数据集 + research 文件 + 调度任务 + 日志静默失败 */
+export type DataQualityReport = {
+  overall: "red" | "yellow" | "green" | "unknown" | "error";
+  generated_at?: string;
+  expected_trade_date?: string;
+  summary?: { red?: number; yellow?: number; green?: number; total?: number };
+  items: DataQualityItem[];
+  message?: string;
+};
+
 export type DataHealthDiagnostic = {
+  /** 展示分 = score_db（库表评分）− score_detail.penalty（数据质量巡检红/黄项扣分） */
   score?: number;
+  score_db?: number;
+  score_detail?: {
+    penalty?: number;
+    red?: number;
+    yellow?: number;
+    rule?: string;
+    note?: string;
+    generated_at?: string | null;
+    score_db?: number;
+  };
+  data_quality?: {
+    overall?: string;
+    summary?: { red?: number; yellow?: number; green?: number; total?: number };
+    generated_at?: string;
+    red?: string[];
+  };
   reference_trade_date?: string | null;
   reference_trade_date_source?: string | null;
   reference_trade_date_note?: string | null;
@@ -1111,6 +1152,35 @@ export type ProviderTestResult = {
   status: string;
   error?: string | null;
 };
+
+/** 数据网关拓扑（/api/admin/data-gateway）。 */
+export type GatewaySwitch = { source: string; source_type: string; enabled: boolean };
+export type GatewayBreakerItem = { key: string; open_until: number; reason: string; state: "open" | "half_open" };
+export type GatewayProvider = {
+  name: string;
+  label: string;
+  switches: GatewaySwitch[];
+  /** 数据项级开关的键（通常就是所在列的数据类型 key） */
+  item_key: string;
+  /** 只在这一列启停该源的开关 */
+  item_enabled: boolean;
+  /** 源总开关（可能被多个数据类型共用）是否全开 */
+  source_enabled: boolean;
+  /** false = 这一列没有数据项级开关（Tushare Pro 路由列，按钮操作源总开关） */
+  item_switchable: boolean;
+  active: boolean;
+  inactive_reason: string | null;
+  breaker: { state: "open" | "half_open" | "closed"; items: GatewayBreakerItem[] };
+};
+export type GatewayDataset = {
+  key: string;
+  label: string;
+  mode: "fill" | "first" | "chain" | "router";
+  routed: boolean;
+  note: string | null;
+  providers: GatewayProvider[];
+};
+export type GatewayTopology = { namespace: string; generated_at: number; datasets: GatewayDataset[] };
 
 export type PoolSourceSummary = {
   source: string;
@@ -1748,6 +1818,10 @@ export type ExecutionDecision = {
   code: "buy" | "wait" | "cancel" | "expired" | "not_ready" | "hold" | "reduce" | "exit" | "observe" | string;
   label: string;
   reason: string;
+  /** false：持仓提示用推荐止损 / 硬风控判的退出，回测与结算没有这条规则（仅提示） */
+  backtest_rule?: boolean;
+  rule_basis?: "recommend_stop_loss" | "hard_risk_veto" | string;
+  rule_note?: string;
 };
 
 export type ExecutionConfirmation = {
@@ -1914,7 +1988,12 @@ export type ReplayAnalysisSummary = {
   total_count: number;
   false_positive_count: number;
   false_positive_rate: number;
+  /** 旧口径：全部行平均（未成交回退收盘收益），仅兼容保留，页面不展示 */
   average_net_return: number;
+  /** 已成交并卖出的笔数 / 成交率 / 每笔净收益（扣往返成本，未成交不摊 0%） */
+  executed_settled_count?: number;
+  execution_rate?: number;
+  average_executed_net_return?: number | null;
   reason_counts: Array<{ reason: string; count: number }>;
   category_counts: Array<{ category: string; category_label: string; stage: string; count: number }>;
   stage_counts: Array<{ stage: string; count: number }>;
@@ -2561,8 +2640,29 @@ export type AccuracyPolicyAudit = {
   }>;
 };
 
+export type HistoricalReconstructionCohortBatch = {
+  batch_id: string;
+  strategy_key?: string;
+  strategy_label?: string;
+  window_start: string;
+  window_end: string;
+  expected_trade_date_count: number;
+  completed_trade_date_count: number;
+  run_count?: number;
+  superseded_trade_date_count?: number;
+  completed_at: string;
+  cohort_identity_hash: string;
+  code_revision: string;
+};
+
 export type HistoricalReconstructionCohort = {
   batch_id: string;
+  /** 合并的策略批次数（每个策略只取最新有效批次）；旧后端无此字段视为 1 */
+  batch_count?: number;
+  run_count?: number;
+  strategy_label?: string;
+  superseded_trade_date_count?: number;
+  batches?: HistoricalReconstructionCohortBatch[];
   window_start: string;
   window_end: string;
   expected_trade_date_count: number;
@@ -2955,6 +3055,11 @@ export interface StandaloneStrategyMetrics {
   last_12m?: StandaloneWindowMetrics;
   recent?: StandaloneWindowMetrics;
   tuned_filter_emulated?: boolean;
+  /** 综合分（后端 strategy_rank.py，口径 A，仅短线周期内比较）；沉底策略 rank_score/rank 为空 */
+  rank_score?: number | null;
+  rank?: number | null;
+  rank_flags?: string[];
+  rank_flag_labels?: string[];
 }
 
 export interface StandaloneMetricsResponse {

@@ -93,7 +93,6 @@ def _base_payload(db=None) -> dict:
         if not row:
             return {
                 "run_name": "REPLAY-历史推荐重建",
-                "preset_id": "preset_formal_opening",
                 "run_mode": "formal",
                 "matrix_run": False,
                 "trade_date_override": None,
@@ -108,12 +107,23 @@ def _base_payload(db=None) -> dict:
             }
         params = json.loads(row)
         params["run_name"] = "REPLAY-历史推荐重建"
-        params["preset_id"] = "preset_formal_opening"
+        params.pop("preset_id", None)  # 单策略 run 不挂组合预设
         params["trade_date_override"] = None  # 每日单独设
         return params
     finally:
         if owns_session:
             db.close()
+
+
+def _single_skill_base(base: dict, skill_id: str) -> dict:
+    """与 scheduler._standalone_run_payloads 同口径：单策略、该策略自己的分数线/出票上限。"""
+    from app.services.standalone_strategies import standalone_run_settings
+
+    out = {k: v for k, v in base.items() if k not in {"skills", "selected_skill_ids", "single_skill_id", "preset_id"}}
+    score_line, output_count = standalone_run_settings(skill_id)
+    out.update({"single_skill_id": skill_id, "score_line": score_line, "output_count": output_count,
+                "hide_recent_repeats": False, "dedup_same_day": True})
+    return out
 
 
 def _historical_payload(
@@ -205,6 +215,10 @@ def _reserve_reconstruction_run(db, run, identity, trade_date: str) -> None:
 
     if str(run.status) != "queued":
         raise ReconstructionBatchError("reconstruction reservation requires a queued run")
+    if str(run.run_mode) == "formal" and str(run.evaluation_scope) == "live_forward" and run.evidence_class is None:
+        # 2026-10-27：带 trade_date_override 的 formal run 若在入场日开盘前创建，按生成时间会记成 live_forward
+        # （安全网补跑要这样）。本脚本是显式的历史重建，对自己刚建的 queued run 明确改回回放口径。
+        run.evaluation_scope = "historical_replay"
     if str(run.run_mode) != "formal" or str(run.evaluation_scope) != "historical_replay":
         raise ReconstructionBatchError("reconstruction reservation requires formal historical replay")
     if run.evidence_class not in (None, EvidenceClass.HISTORICAL_RECONSTRUCTION.value):
@@ -325,6 +339,7 @@ def main() -> int:
         "--dates",
         help="逗号分隔的精确交易日列表；指定后覆盖 --start/--end",
     )
+    parser.add_argument("--single-skill", help="按单策略独立 run 回放（与 live 一致）")
     parser.add_argument("--skip-existing", action="store_true", help="跳过已有 run 的交易日")
     parser.add_argument(
         "--rule-only-fallback",
@@ -362,6 +377,8 @@ def main() -> int:
         print(f"交易日: {len(dates)} 个 ({dates[0]} ~ {dates[-1]})")
 
         base = _base_payload(db)
+        if args.single_skill:
+            base = _single_skill_base(base, args.single_skill)
         identity = _reconstruction_identity(
             db,
             dates,
@@ -385,7 +402,13 @@ def main() -> int:
             f"(code_revision={identity.code_revision[:12]})"
         )
         results = {"completed": 0, "failed": 0, "timeout": 0, "skipped": 0}
+        stop_file = str(os.environ.get("REPLAY_STOP_FILE") or "").strip()
         for i, td in enumerate(dates):
+            # 交易日边界的干净暂停：存在停止文件时不再入队下一天、也不发布批次；
+            # 已 sealed 的天保持不变，之后用 --skip-existing 续跑。
+            if stop_file and os.path.exists(stop_file):
+                print(f"[{i+1}/{len(dates)}] 检测到停止文件 {stop_file}，在 {td} 前暂停（未发布批次）", flush=True)
+                return 75
             if args.skip_existing and _run_exists(db, identity, td):
                 print(f"[{i+1}/{len(dates)}] {td}: 当前 manifest 已 sealed，跳过")
                 results["skipped"] += 1

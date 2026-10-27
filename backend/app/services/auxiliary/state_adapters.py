@@ -53,6 +53,47 @@ from app.services.auxiliary.production import (
 )
 
 
+
+logger = logging.getLogger(__name__)
+
+
+def _margin_fill_missing_exchanges(frame: Any, target: str) -> Any:
+    """2026-10-19：promax margin_detail 实测只回 SH+BJ（无 SZ，10-16 仅 2001 行），quantdata 日限时整日缺深市。
+
+    主源缺 SH 或 SZ 任一交易所时，经统一网关 akshare 备源（交易所官方明细，7f4c394）补齐缺失交易所
+    的代码；主源已有的代码保持主源值（字段更全）。备源也失败则原样返回，由覆盖率闸门判定不完整。
+    """
+    import pandas as pd
+
+    have = set()
+    if frame is not None and not frame.empty and "ts_code" in frame.columns:
+        have = set(frame["ts_code"].astype(str).str[-2:])
+    if {"SH", "SZ"} <= have:
+        return frame
+    try:
+        from app.services.datasource.akshare_backup import backup_gateway
+
+        res = backup_gateway().fetch_first(
+            "tushare.margin_detail", {"params": {"trade_date": target}, "fields": ""}, allow_stale=False
+        )
+        rows = list(res.rows or []) if res.provider is not None else []
+    except Exception:  # noqa: BLE001 - backup is best-effort; coverage gate decides completeness
+        logger.warning("margin_detail %s backup fill failed", target, exc_info=True)
+        return frame
+    if not rows:
+        logger.warning("margin_detail %s primary missing %s, backup returned nothing", target, {"SH", "SZ"} - have)
+        return frame
+    backup = pd.DataFrame.from_records(rows)
+    existing = set(frame["ts_code"].astype(str)) if frame is not None and not frame.empty else set()
+    add = backup[~backup["ts_code"].astype(str).isin(existing)]
+    logger.warning(
+        "margin_detail %s primary exchanges=%s; filled %d rows from backup %s",
+        target, sorted(have), len(add), res.provider,
+    )
+    if frame is None or frame.empty:
+        return add.reset_index(drop=True)
+    return pd.concat([frame, add], ignore_index=True)
+
 class TushareStateClientPort(Protocol):
     """Subset of the Tushare client used by injected state providers."""
 
@@ -107,6 +148,21 @@ def _days_before(iso_day: str, days: int) -> str:
     from datetime import timedelta
 
     return (date.fromisoformat(iso_day) - timedelta(days=days)).isoformat()
+
+
+def _optional_number(value: object) -> float | None:
+    import math
+
+    try:
+        numeric = float(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    return None if numeric is None or math.isnan(numeric) else numeric
+
+
+def _optional_yi(value: object) -> float | None:
+    numeric = _optional_number(value)
+    return None if numeric is None else numeric / 1e8
 
 
 def _number(value: object, default: float = 0.0) -> float:
@@ -366,6 +422,11 @@ class TushareStateProvider:
                 raise
         if frame is None or frame.empty:
             return ()
+        if len(frame) < 500:
+            # 2026-10-26：ths_index 全量约 2500 条；quantdata 额度用尽、回落 promax 时只返回 5 条（截断，非重复写入）。
+            # 只告警不改行为（仍写入，读侧照旧），让这类静默截断可见。
+            emit_alert("concept_sector_truncated", request.trade_date.isoformat(),
+                       f"ths_index 只返回 {len(frame)} 条（全量约 2500），疑似 promax 回落截断；概念成分将只覆盖极少板块")
         return tuple(
             {
                 "sector_code": str(item.get("ts_code") or ""),
@@ -412,7 +473,7 @@ class TushareStateProvider:
     def capital_flow(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         # 单股资金流向按 trade_date 批量一次拉全市场（~5500 行、<1s），再按
         # requested_codes 过滤；逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。
-        # 本路径是资金流向唯一的定时写入口（scripts/daily_data_cron.py 从未排进调度），
+        # 本路径是资金流向唯一的定时写入口（scripts/daily_data_cron.py 从未排进调度，已删除），
         # 所以累计窗口必须在这里就地算好（L-166）。
         target = _compact_day(request.trade_date)
         wanted = set(request.requested_codes)
@@ -508,18 +569,20 @@ class TushareStateProvider:
     def margin_detail(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         target = _compact_day(request.trade_date)
         frame = self._client.margin_detail(trade_date=target)
+        frame = _margin_fill_missing_exchanges(frame, target)
         if frame is None or frame.empty:
             return ()
         return tuple(
             {
                 "code": code,
                 "trade_date": _iso_day(item.get("trade_date") or target),
-                "rzye": _number(item.get("rzye")) / 1e8,
-                "rqye": _number(item.get("rqye")) / 1e8,
-                "rzmre": _number(item.get("rzmre")) / 1e8,
-                "rzche": _number(item.get("rzche")) / 1e8,
-                "rzrqye": _number(item.get("rzrqye")) / 1e8,
-                "rqyl": _number(item.get("rqyl")),
+                # akshare backup lacks some fields (SSE: rqye/rzrqye, SZSE: rzche) -> keep NULL, not 0
+                "rzye": _optional_yi(item.get("rzye")),
+                "rqye": _optional_yi(item.get("rqye")),
+                "rzmre": _optional_yi(item.get("rzmre")),
+                "rzche": _optional_yi(item.get("rzche")),
+                "rzrqye": _optional_yi(item.get("rzrqye")),
+                "rqyl": _optional_number(item.get("rqyl")),
             }
             for _, item in frame.iterrows()
             if len(code := str(item.get("ts_code") or "").split(".")[0]) == 6
@@ -531,13 +594,17 @@ class TushareStateProvider:
         if frame is None or frame.empty:
             return ()
         item = frame.iloc[0]
-        return ({
+        row = {
             "trade_date": _iso_day(item.get("trade_date") or target),
             "north_money": _number(item.get("north_money")) / 1e4,
             "south_money": _number(item.get("south_money")) / 1e4,
             "hgt": _number(item.get("hgt")),
             "sgt": _number(item.get("sgt")),
-        },)
+        }
+        # 四个资金口径全 0 不是真实数据（上游空值/非交易日被 _number 落成 0，库里曾留下 6 条）→ 视为缺失，不入库
+        if not any(row[k] for k in ("north_money", "south_money", "hgt", "sgt")):
+            return ()
+        return (row,)
 
     def hsgt_top10(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         target = _compact_day(request.trade_date)
@@ -635,6 +702,10 @@ class TushareStateProvider:
             return ()
         if "ann_date" in frame.columns:
             frame = frame[frame["ann_date"].astype(str) <= target]
+        # 上游（teajoin/Tushare vip）对同一 (ts_code, end_date) 可能返回多行（同日重复/更正版，
+        # 2026-10-26 period=20260930 有 104 只股票重复），而入库自然键是 (code, end_date)：
+        # 同批重复会让整批 persist 失败。按自然键去重，保留 ann_date 最新的一行（同日取靠后的更正版）。
+        by_key: dict[tuple[str, str], dict[str, Any]] = {}
         for _, item in frame.iterrows():
             code = str(item.get("ts_code") or "").split(".")[0]
             if len(code) != 6 or (wanted and code not in wanted):
@@ -642,7 +713,7 @@ class TushareStateProvider:
             end_date = str(item.get("end_date") or "")
             if not end_date:
                 continue
-            rows.append({
+            row = {
                 "code": code,
                 "end_date": end_date,
                 "ann_date": str(item.get("ann_date") or ""),
@@ -653,7 +724,11 @@ class TushareStateProvider:
                 "or_yoy": _number(item.get("or_yoy")),
                 "eps": _number(item.get("eps")),
                 "bps": _number(item.get("bps")),
-            })
+            }
+            prev = by_key.get((code, end_date))
+            if prev is None or row["ann_date"] >= prev["ann_date"]:
+                by_key[(code, end_date)] = row
+        rows = list(by_key.values())
         return rows
 
     def auction(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
@@ -667,11 +742,13 @@ class TushareStateProvider:
             return ()
         if frame is None or frame.empty:
             return ()
-        wanted = set(request.requested_codes)
+        # 2026-10-19：以前按 requested_codes 过滤后只写请求的几只（10-16 某次 4 只候选的请求只写 4 行），
+        # 之后全市场刷新因“当日已有行=新鲜”被跳过。上游本就是一次拉全市场，这里全量落库；
+        # 读侧 _StateViews 仍按 requested_codes 取。另见 production.py auction minimum_record_count。
         rows: list[dict[str, Any]] = []
         for _, item in frame.iterrows():
             code = str(item.get("ts_code") or "").split(".")[0]
-            if len(code) != 6 or (wanted and code not in wanted):
+            if len(code) != 6:
                 continue
             rows.append({
                 "code": code,

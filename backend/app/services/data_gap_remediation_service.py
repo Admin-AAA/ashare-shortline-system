@@ -130,6 +130,13 @@ def _tushare_api_has_supported_provider(api: str) -> bool:
     except Exception:  # noqa: BLE001 - unknown -> keep legacy behaviour
         return True
     unsupported = set(entry.get("unsupported") or [])
+    try:
+        from app.services.datasource.akshare_backup import AKSHARE_BACKUP_APIS, backup_enabled
+
+        if api in AKSHARE_BACKUP_APIS and backup_enabled():
+            return True  # akshare backup behind tushare (gateway) can still serve it
+    except Exception:  # noqa: BLE001
+        pass
     return not (unsupported and not (entry.get("order") or []) and unsupported >= {"promax", "quantdata"})
 
 
@@ -377,7 +384,7 @@ def _backfill_news_announcements(
                         for keyword in ("风险", "退市", "处罚", "立案", "亏损", "减持", "质押", "诉讼")
                     )
                     payload_by_id[article_id] = {
-                        "source": "tushare_anns_d",
+                        "source": str(row.get("source") or "tushare_anns_d")[:40],
                         "article_id": article_id,
                         "code": row_code,
                         "announce_date": announce_date,
@@ -1604,6 +1611,9 @@ def _backfill_chip_date(db: Session, trade_date: str) -> dict[str, Any]:
         trade_date=target.replace("-", ""),
         fields="ts_code,trade_date,cost_15pct,cost_50pct,cost_85pct,weight_avg,winner_rate",
     )
+    from app.services.tushare_client_pure import keep_rows_for_trade_date
+
+    frame = keep_rows_for_trade_date(frame, target, api_name="cyq_perf")
     if frame is None or frame.empty:
         return {"row_count": 0, "provider_row_count": 0}
 
@@ -2008,7 +2018,9 @@ def _fetch_minute_code_batch(
         max_workers=min(MINUTE_REMEDIATION_WORKERS, len(codes)),
         thread_name_prefix="minute-remediation",
     ) as pool:
-        futures = [pool.submit(fetch_code, code) for code in codes]
+        from app.services.datasource.cache import submit_ctx
+
+        futures = [submit_ctx(pool, fetch_code, code) for code in codes]
         for future in as_completed(futures):
             results.append(future.result())
     return results

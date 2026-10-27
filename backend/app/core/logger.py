@@ -53,10 +53,19 @@ def setup_logging() -> None:
     access_logger.addHandler(access_handler)
 
     # Console handler — INFO and above
-    console_handler = logging.StreamHandler(sys.stderr)
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
+    # import prefect 时已在 root 上装了 PrefectConsoleHandler（同写 stderr）；再加一个会让每条日志在 launchd
+    # stderr 里出现两遍（格式不同）。root 上已有 stderr 控制台 handler 时不重复添加。
+    has_console = any(
+        isinstance(h, logging.StreamHandler)
+        and not isinstance(h, logging.FileHandler)
+        and getattr(h, "stream", None) in (sys.stderr, sys.__stderr__)
+        for h in root_logger.handlers
+    )
+    if not has_console:
+        console_handler = logging.StreamHandler(sys.stderr)
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(formatter)
+        root_logger.addHandler(console_handler)
 
     # 第三方库的 INFO 很吵（每个 HTTP 请求一行），只保留 WARNING+
     for noisy in ("httpx", "httpcore", "urllib3", "sqlalchemy.engine", "asyncio", "prefect.events",

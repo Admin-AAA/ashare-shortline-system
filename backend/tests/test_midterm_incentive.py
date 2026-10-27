@@ -88,4 +88,4 @@ def test_fetch_failure_returns_none(monkeypatch):
 def test_strategy_registered():
     meta = ms.STRATEGIES["mid-incentive-option"]
     assert meta["horizon"] == "mid" and meta["kind"] == "incentive_option" and meta["hold_days"] == 20
-    assert (meta["k_slots"], meta["max_new"], meta["schedule"]) == (20, 5, "daily")
+    assert "k_slots" not in meta and "max_new" not in meta and meta["schedule"] == "daily"

@@ -36,15 +36,10 @@ PANEL = OUT / "limit_sentiment_panel.pkl"
 TOL = 0.35  # 收盘涨停 pct 容差（百分点，仅用于新股无涨跌幅护栏）
 
 
-def board_limit_pct(code: str, is_st: bool) -> float:
-    if is_st:
-        return 5.0
-    c = str(code)
-    if c.startswith(("300", "301", "688", "689")):
-        return 20.0
-    if c.startswith(("8", "4", "920")):
-        return 30.0
-    return 10.0
+def board_limit_pct(code: str, is_st: bool, trade_date=None) -> float:
+    from app.engine.board_rules import limit_pct_for_stock
+
+    return limit_pct_for_stock({"code": str(code), "is_st": bool(is_st)}, trade_date)
 
 
 def load_raw(start: str = "2025-01-01") -> pd.DataFrame:
@@ -69,7 +64,7 @@ def build_daily_flags(df: pd.DataFrame) -> pd.DataFrame:
     is_st = name.str.contains("ST", case=False, na=False)
     # 与生产可交易宇宙对齐：剔除北交所（unsupported_market）与 ST（硬性不可交易）
     is_bj = df["code"].str.startswith(("8", "4", "920"))
-    lim = [board_limit_pct(c, st) for c, st in zip(df["code"], is_st)]
+    lim = [board_limit_pct(c, st, d) for c, st, d in zip(df["code"], is_st, df["trade_date"])]
     df["lim"] = lim
     df["tradable_univ"] = ~is_bj & ~is_st
     pct = df["pct_chg"].astype(float)

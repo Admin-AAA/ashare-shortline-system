@@ -8,7 +8,7 @@
 .hz-down { color: var(--market-down) !important; }
 .hz-hero { padding: var(--space-5); display: grid; gap: var(--space-4); grid-template-columns: minmax(280px, 1fr) auto; align-items: center; }
 .hz-hero__title { margin: 4px 0 6px; font-size: 20px; font-weight: 650; }
-.hz-hero__kpis { display: grid; grid-template-columns: repeat(5, minmax(96px, auto)); gap: var(--space-2); }
+.hz-hero__kpis { display: grid; grid-template-columns: repeat(6, minmax(96px, auto)); gap: var(--space-2); }
 .hz-kpi { background: var(--surface-soft); border: 1px solid var(--border); border-radius: var(--radius-md, 8px); padding: 8px 12px; min-width: 0; }
 .hz-kpi__l { color: var(--muted); font-size: 12px; white-space: nowrap; }
 .hz-kpi__v { font-size: 18px; font-weight: 650; margin-top: 2px; white-space: nowrap; font-family: var(--font-mono); }

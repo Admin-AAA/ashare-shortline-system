@@ -93,6 +93,8 @@ def _live_picks(db, sid: str, after: str, before: str) -> list[dict]:
         select(RecommendationRun.run_id, RecommendationRun.selected_skills_json).where(
             RecommendationRun.evaluation_scope == "live_forward",
             RecommendationRun.run_mode == "formal",
+            # 只算已完成的任务：失败/中断的补跑口径已定稿为回放，没完成的也不算实盘（2026-10-27）
+            RecommendationRun.status == "completed",
             RecommendationRun.trade_date > after,
             RecommendationRun.trade_date < before,
         )

@@ -1,5 +1,7 @@
 """[中长线] Long-history panel 2018+: Tushare daily (backfill parquet) + daily_kbar cache (2021-05-26+),
-full daily_basic (pe_ttm/pb/dv_ttm/total_mv), PIT ST flag, limit flags; fina/forecast PIT helpers."""
+full daily_basic (pe_ttm/pb/dv_ttm/total_mv), PIT ST flag, limit flags; fina/forecast PIT helpers.
+
+Units of prices(): volume = 手 (lots, 100 shares), amount = 元 — on both sides of the 2022-01-04 stitch."""
 from __future__ import annotations
 from pathlib import Path
 import os, datetime as _dt
@@ -36,7 +38,7 @@ def prices(start=None, end=None) -> pl.DataFrame:
         h = pl.concat([pl.read_parquet(f) for f in hist], how="diagonal_relaxed")
         h = h.select(pl.col("ts_code").str.slice(0, 6).alias("code"), _dash("trade_date").alias("trade_date"),
                      "open", "high", "low", "close", (pl.col("amount") * 1000).alias("amount"), "pct_chg",
-                     (pl.col("vol") * 100).alias("volume"))
+                     pl.col("vol").alias("volume"))  # tushare daily vol 已是"手"，与 cache 一致，不再 ×100
         # cache is sparse (~5 codes/day) until 2022-01-04 -> switch to the cache only once it is broad
         cnt = new.group_by("trade_date").len()
         cut = cnt.filter(pl.col("len") >= 2000)["trade_date"].min() or "2022-01-04"
@@ -45,7 +47,42 @@ def prices(start=None, end=None) -> pl.DataFrame:
         h = h.filter((pl.col("trade_date") < cut) & _win("trade_date", start, end))
         parts.insert(0, h.cast({c: new.schema[c] for c in cols}))
     df = pl.concat(parts).filter((pl.col("close") > 0) & (pl.col("open") > 0)).unique(["code", "trade_date"]).sort("code", "trade_date")
+    df = normalize_volume_to_lots(df)
+    assert_volume_in_lots(df)
     return df
+
+
+# ── 成交量单位护栏（2026-10-19）──────────────────────────────────────────────────
+# panel 的 volume 统一为"手"(100 股)、amount 为"元"（与 tushare daily / daily_kbars 一致）。
+# 按行判别：amount/(close*volume) ≈ 100 → 手；≈ 1 → 股（÷100）。阈值取几何中点 10，
+# 盘中均价/收盘偏差（±20% 涨跌停内）远到不了 10 倍，判别无歧义；已是"手"的行不动，幂等。
+VOLUME_UNIT = "lots"
+_LOTS_RATIO = 100.0
+_SHARE_LOT_SPLIT = 10.0
+
+
+def _vol_ratio() -> pl.Expr:
+    return pl.col("amount") / (pl.col("close") * pl.col("volume"))
+
+
+def normalize_volume_to_lots(df: pl.DataFrame) -> pl.DataFrame:
+    """把按"股"记录的行 ÷100 换成"手"；无法判别（缺 amount/close/volume 或为 0）的行原样保留。"""
+    if df.is_empty() or not {"amount", "close", "volume"} <= set(df.columns):
+        return df
+    is_shares = (pl.col("volume") > 0) & (pl.col("close") > 0) & (pl.col("amount") > 0) & (_vol_ratio() < _SHARE_LOT_SPLIT)
+    return df.with_columns(pl.when(is_shares).then(pl.col("volume") / 100.0).otherwise(pl.col("volume")).alias("volume"))
+
+
+def assert_volume_in_lots(df: pl.DataFrame, lo: float = 50.0, hi: float = 200.0) -> None:
+    """逐年中位 amount/(close*volume) 必须落在 [lo, hi]（≈100 即"手"），否则抛错，防止单位再次混用。"""
+    if df.is_empty() or not {"amount", "close", "volume", "trade_date"} <= set(df.columns):
+        return
+    chk = (df.filter((pl.col("volume") > 0) & (pl.col("close") > 0) & (pl.col("amount") > 0))
+             .group_by(pl.col("trade_date").cast(pl.Utf8).str.slice(0, 4).alias("y"))
+             .agg(_vol_ratio().median().alias("r")))
+    bad = chk.filter((pl.col("r") < lo) | (pl.col("r") > hi))
+    if bad.height:
+        raise AssertionError(f"volume 单位不一致（应为手，amount/(close*volume)≈100）: {bad.sort('y').rows()}")
 
 def basic(start=None, end=None) -> pl.DataFrame:
     start, end = _range(start, end)

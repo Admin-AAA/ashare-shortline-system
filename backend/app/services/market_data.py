@@ -249,7 +249,30 @@ def _fetch_first_kline(
     settings: Any,
     disabled_sources: set[str] | None = None,
 ) -> tuple[list[dict[str, Any]], str, list[str]]:
-    """获取单只股票的日K线（local-pool 优先，按配置的数据源顺序兜底）。"""
+    """获取单只股票的日K线（local-pool 优先，按配置的数据源顺序兜底）。
+
+    盘中（09:15–15:05）同一只股票当日只真实回退一次，结果（含「仍不足30根」）跨进程缓存，并受日上限约束，
+    见 kline_fallback_cache（2026-10-26：每 5 分钟的买入确认轮询把当日额度吃光）；窗口外行为不变。"""
+    from app.services import kline_fallback_cache as _kfc
+
+    code = str(quote.get("code") or "")
+    hit = _kfc.lookup(code) if code else None
+    if hit is not None:
+        return hit
+    if code and not _kfc.budget_allows_fetch():
+        return [], "", ["盘中逐股K线回退当日额度已用尽（kline_fallback_cache），跳过"]
+    result = _fetch_first_kline_uncached(quote, sources, settings, disabled_sources)
+    if code:
+        _kfc.store(code, *result)
+    return result
+
+
+def _fetch_first_kline_uncached(
+    quote: dict[str, Any],
+    sources: list[str],
+    settings: Any,
+    disabled_sources: set[str] | None = None,
+) -> tuple[list[dict[str, Any]], str, list[str]]:
     errors: list[str] = []
     for source in sources:
         if disabled_sources and source in disabled_sources:
@@ -418,30 +441,19 @@ def _fetch_stock_basics(pro: Any, settings: Any) -> list[dict[str, Any]]:
 
 
 def _recent_open_trade_dates(settings: Any, *, allow_current_session: bool = False) -> list[str]:
-    from app.services.tushare_client import get_pro
+    # 本地交易日历优先（trade_calendar 表）；未覆盖时才经网关拉取，盘中绝不在线拉 trade_cal。
+    from app.services.trade_calendar import TradeCalendarUnavailable, open_dates_between
 
-    pro = get_pro()
-    today_str = date.today().strftime("%Y%m%d")
-    start_str = (date.today() - timedelta(days=14)).strftime("%Y%m%d")
-    cal = _call_tushare_with_retry(
-        pro,
-        settings,
-        "trade_cal",
-        exchange="SSE",
-        start_date=start_str,
-        end_date=today_str,
-        is_open="1",
-    )
-    if cal is None or cal.empty:
+    try:
+        dates = open_dates_between(date.today() - timedelta(days=14), date.today())
+    except TradeCalendarUnavailable as exc:
+        raise MarketDataError(f"交易日历不可用：{exc}") from exc
+    if not dates:
         raise MarketDataError("Tushare 未返回交易日历。")
     latest_allowed = (
         _latest_allowed_quote_date() if allow_current_session else _latest_allowed_bar_date()
     ).replace("-", "")
-    return [
-        str(value)
-        for value in cal.sort_values("cal_date")["cal_date"].astype(str).tolist()
-        if str(value) <= latest_allowed
-    ]
+    return [str(value) for value in sorted(dates) if str(value) <= latest_allowed]
 
 
 def _batch_quote_tradeable_count(
@@ -1287,18 +1299,19 @@ def _normalize_code(code: str) -> str:
 def _exchange_from_code(code: str) -> str:
     if code.startswith(("60", "68", "900")):
         return "SH"
-    if code.startswith(("8", "4")):
+    if code.startswith(("8", "4", "920")):  # 920xxx 是北交所 2024 起的新代码段
         return "BJ"
     return "SZ"
 
 
 def _latest_tushare_trade_date(pro: Any) -> str:
-    today = date.today().strftime("%Y%m%d")
-    start = (date.today() - timedelta(days=14)).strftime("%Y%m%d")
-    cal = pro.trade_cal(exchange="SSE", start_date=start, end_date=today, is_open="1")
-    if cal.empty:
-        raise MarketDataError("Tushare 未返回交易日历。")
-    return str(cal.sort_values("cal_date").iloc[-1]["cal_date"])
+    # pro 保留签名兼容；读本地交易日历（不再在线调 trade_cal）。
+    from app.services.trade_calendar import TradeCalendarUnavailable, latest_trade_date
+
+    try:
+        return latest_trade_date()
+    except TradeCalendarUnavailable as exc:
+        raise MarketDataError(f"交易日历不可用：{exc}") from exc
 
 
 def _format_yyyymmdd(value: Any) -> str:

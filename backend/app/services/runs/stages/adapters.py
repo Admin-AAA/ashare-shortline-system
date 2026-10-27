@@ -694,6 +694,25 @@ class ProductionRecommendationAssembly(RecommendationAssemblyPort):
             "policy_verdict_summary": dict(policy_result.verdict_summary),
             "policy_verdicts": [asdict(item) for item in policy_result.verdicts],
         }
+        # 每策略每日新推荐上限（settings.max_daily_picks_per_strategy，默认 5）：仅实盘 formal run
+        # （回测回放 / 单股分析没有实盘 run 行 → 不触发）。按政策输出顺序（portfolio_rank_score 降序）取前 N，
+        # 单策略 run 把同日同策略已落库的推荐数计入，截断的卡写入 policy_drop_owner 与 pipeline_audit。
+        from app.services.daily_pick_cap import cap_cards_per_strategy, daily_pick_cap, is_live_formal_run
+
+        _cap = daily_pick_cap()
+        if _cap > 0 and formal_cards and is_live_formal_run(self._db, self._run_id):
+            _cap_ids = [standalone_sid] if standalone_sid else sorted(
+                {str(sid) for sid in skill_map if sid}
+            )
+            formal_cards, _cap_audit = cap_cards_per_strategy(
+                formal_cards,
+                strategy_ids=_cap_ids,
+                cap=_cap,
+                already_counts={standalone_sid: len(same_day_codes)} if standalone_sid else None,
+                scored_cards=scored_cards,
+            )
+            if _cap_audit:
+                pipeline_updates["daily_strategy_cap"] = _cap_audit
         # Sprint4 §104：短线策略级权益曲线冷却（仅 live_forward formal 单策略 run、已采纳的策略；出错放行）。
         if standalone_sid and formal_cards:
             from app.services.shortline_cooldown import apply_live_cooldown

@@ -4,10 +4,13 @@ import { api, type MetricsSampleScope } from "../api/client";
 import { strategyShortName } from "./strategyRules";
 
 /** 策略表现 · LIVE 前瞻 / 历史重建 分开统计（/api/metrics/by-strategy?sample_scope=），两类证据不混算。 */
-export function ScopedStrategyStats() {
+export function ScopedStrategyStats({ order }: { order?: string[] } = {}) {
   const [scope, setScope] = useState<MetricsSampleScope>("live_forward");
   const q = useQuery({ queryKey: ["by-strategy", scope], queryFn: () => api.metricsByStrategy(undefined, scope) });
-  const rows = [...(q.data ?? [])].sort((a, b) => b.sample_count - a.sample_count);
+  // 有综合分顺序（order）时与页面其他两块保持一致，名单外的（如已退役策略）排最后，其间仍按样本数降序；没有则按样本数降序。
+  const pos = new Map((order ?? []).map((id, i) => [id, i]));
+  const rows = [...(q.data ?? [])].sort((a, b) =>
+    (pos.get(a.strategy_id) ?? Number.MAX_SAFE_INTEGER) - (pos.get(b.strategy_id) ?? Number.MAX_SAFE_INTEGER) || b.sample_count - a.sample_count);
   const pct = (v: number | null | undefined) => (v == null ? "—" : `${(Math.abs(v) <= 1 ? v * 100 : v).toFixed(1)}%`);
   return (
     <section className="card" style={{ padding: 16, marginBottom: 16 }}>

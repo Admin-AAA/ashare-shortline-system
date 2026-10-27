@@ -8,6 +8,10 @@ export function useDataHealthQuery() {
   return useQuery({ queryKey: queryKeys.dataHealth(), queryFn: () => api.dataHealth() });
 }
 
+export function useDataQualityQuery() {
+  return useQuery({ queryKey: queryKeys.dataQuality(), queryFn: () => api.dataQuality(false), refetchInterval: 5 * 60_000 });
+}
+
 export function useDataHealthRemediationQuery() {
   return useQuery({
     queryKey: queryKeys.dataHealthRemediation(),

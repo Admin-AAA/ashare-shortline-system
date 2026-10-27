@@ -168,12 +168,22 @@ def llm_review_health(db: Session) -> dict[str, Any]:
             text("SELECT model FROM llm_review_cache ORDER BY created_at DESC LIMIT 1")
         ).fetchone()
         model = m[0] if m else None
+    # 与 async_llm_risk_notes.LLM_RISK_NOTES_ENABLED 同源：停用时不得报 stale（缓存陈旧是预期）
+    from app.services.async_llm_risk_notes import LLM_RISK_NOTES_ENABLED
+
+    enabled = bool(LLM_RISK_NOTES_ENABLED)
+    status = (
+        "disabled"
+        if not enabled
+        else _llm_health_status(last_at, recent_24h, total, now)
+    )
     return {
         "last_review_at": last_at.isoformat() if last_at else None,
         "recent_count_24h": recent_24h,
         "total_entries": total,
         "model": model,
-        "status": _llm_health_status(last_at, recent_24h, total, now),
+        "status": status,
+        "enabled": enabled,
         "checked_at": now.isoformat(),
     }
 

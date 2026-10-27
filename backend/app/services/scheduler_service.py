@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import datetime as _dt_mod
 import logging
 import threading
@@ -38,8 +39,23 @@ from app.services.registry.data_source import (
 from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     BLOCK_TRADE_BACKUP_CRON,
     DATA_FRESHNESS_CRON,
+    DATA_QUALITY_CHECKS,
     DATA_FRESHNESS_TASK_ID,
+    STOCK_IDENTITY_CRON,
+    STOCK_IDENTITY_TASK_ID,
+    STRATEGY_PROFILE_CRON,
+    STRATEGY_PROFILE_TASK_ID,
+    TASK_TYPE_STRATEGY_PROFILE_REFRESH,
+    DATA_HEALTH_RECHECK_CRON,
+    DATA_HEALTH_RECHECK_TASK_ID,
+    DATA_HEALTH_SNAPSHOT_CRON,
+    DATA_HEALTH_SNAPSHOT_TASK_ID,
+    TASK_TYPE_DATA_HEALTH_SNAPSHOT,
+    ROLLING_R12_CRON,
+    ROLLING_R12_TASK_ID,
+    TASK_TYPE_ROLLING_R12,
     TASK_TYPE_DATA_FRESHNESS_CHECK,
+    TASK_TYPE_STOCK_IDENTITY_REFRESH,
     BLOCK_TRADE_BACKUP_TASK_ID,
     TASK_TYPE_BLOCK_TRADE_BACKUP,
     EXPOSURE_TASK_ID,
@@ -146,7 +162,7 @@ def _run_block_trade_picks_hook(db, task_id: str) -> dict[str, Any]:
         trade_date = _latest_allowed_bar_date()
         from app.services.midterm_service import generate_block_trade_picks
 
-        out = generate_block_trade_picks(db, trade_date)
+        out = generate_block_trade_picks(db, trade_date, apply_daily_cap=True)
         logger.warning("midterm block-trade picks (%s, T=%s): %s", task_id, trade_date, out)
         return {"trade_date": trade_date, "trigger": task_id, "result": out}
     except Exception as exc:  # noqa: BLE001 - must not break the parent job
@@ -344,15 +360,302 @@ def _ensure_data_freshness_task() -> None:
         logger.exception("注册数据新鲜度巡检任务失败")
 
 
-def _run_data_freshness_check(db) -> dict:
+def _ensure_data_quality_tasks() -> None:
+    """注册盘前/晚间统一数据质量巡检（幂等，不覆盖手动调整；复用 data_freshness_check 任务类型，payload quality_only）。"""
+    try:
+        db = SessionLocal()
+        try:
+            for task_id, name, cron in DATA_QUALITY_CHECKS:
+                if db.get(ScheduledTask, task_id) is None:
+                    db.add(ScheduledTask(task_id=task_id, name=name, task_type=TASK_TYPE_DATA_FRESHNESS_CHECK,
+                                         cron_expression=cron, payload_json=json.dumps({"quality_only": True}), enabled=True))
+                    logger.info("已注册数据质量巡检任务: %s (cron=%s)", task_id, cron)
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册数据质量巡检任务失败")
+
+
+def _ensure_simple_task(task_id: str, name: str, task_type: str, cron: str, payload: dict | None = None) -> None:
+    """注册一个普通定时任务（幂等，已存在就不动，不覆盖手动调整）。"""
+    try:
+        db = SessionLocal()
+        try:
+            if db.get(ScheduledTask, task_id) is None:
+                db.add(ScheduledTask(task_id=task_id, name=name, task_type=task_type, cron_expression=cron,
+                                     payload_json=json.dumps(payload or {}), enabled=True))
+                db.commit()
+                logger.info("已注册调度任务: %s (cron=%s)", task_id, cron)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册调度任务失败: %s", task_id)
+
+
+def _ensure_health_snapshot_task() -> None:
+    _ensure_simple_task(DATA_HEALTH_SNAPSHOT_TASK_ID, "数据健康分每日快照（18:40 原始记录：健康分、红黄项、盘后出票是否成功）",
+                        TASK_TYPE_DATA_HEALTH_SNAPSHOT, DATA_HEALTH_SNAPSHOT_CRON, {"mode": "original"})
+    _ensure_simple_task(DATA_HEALTH_RECHECK_TASK_ID, "数据健康快照次日复核（08:55：只写复核字段，含大宗交易等晚发布数据）",
+                        TASK_TYPE_DATA_HEALTH_SNAPSHOT, DATA_HEALTH_RECHECK_CRON, {"mode": "recheck"})
+
+
+def _ensure_rolling_r12_task() -> None:
+    _ensure_simple_task(ROLLING_R12_TASK_ID, "现役策略近12个月指标每月滚动重算（每月第一个交易日 22:30）",
+                        TASK_TYPE_ROLLING_R12, ROLLING_R12_CRON)
+
+
+def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
+    """任务本身跑完即 completed；红项 / 出票失败 / 巡检失败写进摘要并单独告警，不把业务结果变成任务失败（否则又去扣健康分）。"""
+    from app.core.alerts import emit_alert
+    from app.services.data_health_snapshot import summarize, take_snapshot
+
+    from app.services.data_health_snapshot import recheck_too_late
+    from app.services.data_quality_monitor import _now as _dq_now
+    from app.services.honest_alerts import expire_stale, reemit_persistent, resolve_recovered
+
+    mode = str((payload or {}).get("mode") or "original")
+    now = _dq_now()
+    expired = expire_stale(now)
+    try:
+        expired_reemit = reemit_persistent(db, now)  # 条件还在的告警每天重发，不让它在自动解除后悄悄消失
+    except Exception:  # noqa: BLE001 - 重发失败不影响快照
+        logger.warning("持续告警重发失败", exc_info=True)
+        expired_reemit = []
+    if mode == "recheck" and recheck_too_late(now):
+        return {"status": "skipped", "expired_alerts": expired, "reemitted_alerts": expired_reemit,
+                "summary_text": f"次日复核 {now:%H:%M} 才开始，已过 09:15，跳过（不和交易时段抢资源）"}
+    res = take_snapshot(db, mode=mode)
+    s, td = res["sample"], res["trade_date"]
+    summ = summarize(20)
+    score_txt = f"健康分 {s['score']}（红 {len(s['red'])} / 黄 {len(s['yellow'])}）" if s["quality_ok"] else "巡检失败，本次不算分"
+    out_txt = {"ok": "盘后出票成功", "pending": "盘后出票待数据、未到点",
+               "failed": "盘后出票失败：" + s["output"]["reason"]}[s["output_status"]]
+    text_ = (f"{td} {'原始记录' if res['written'] == 'original' else '复核'}：{score_txt}，{out_txt}；"
+             f"近 {summ['days_with_original']} 个交易日均值 {summ['avg_score']}，出票成功率 {summ['output_success_rate']}"
+             + (f"，巡检失败 {summ['quality_failed_days']} 天" if summ["quality_failed_days"] else ""))
+    try:
+        # 告警 key=交易日：复核恢复时立即解除；一直不再触发的 24 小时后由 expire_stale 自动解除
+        if s["output_status"] == "failed":
+            emit_alert("daily_output_failed", td, f"{td} 盘后出票失败（{res['written']}）：{s['output']['reason']}")
+        else:
+            resolve_recovered("daily_output_failed", td, f"{td} {res['written']} 复核：盘后出票{s['output_status']}")
+        if not s["quality_ok"]:
+            emit_alert("data_health_snapshot", td, f"{td} 健康快照：数据质量巡检失败，本次不算分")
+        else:
+            resolve_recovered("data_health_snapshot", td, f"{td} {res['written']}：巡检恢复正常")
+    except Exception:  # noqa: BLE001 - 告警失败不影响任务
+        logger.warning("健康快照告警写入失败", exc_info=True)
+    return {"expired_alerts": expired, "reemitted_alerts": expired_reemit, "snapshot": {"trade_date": td, "written": res["written"],
+                         **{k: s.get(k) for k in ("quality_ok", "score", "score_db", "penalty", "output_status")}},
+            "summary_20d": {k: summ[k] for k in ("days_with_original", "avg_score", "output_success_rate",
+                                                 "red_days", "quality_failed_days")},
+            "status": "completed", "summary_text": text_}
+
+
+def _run_rolling_r12(db, payload: dict | None = None) -> dict:
+    from app.services.honest_alerts import expire_stale, reemit_persistent
+    from app.services.rolling_r12 import run_monthly
+
+    expired = expire_stale()
+    out = run_monthly(db, force=bool((payload or {}).get("force")))
+    out["expired_alerts"] = expired
+    out["reemitted_alerts"] = reemit_persistent(db)  # 每个交易日 22:30：条件还在就重发（读结果文件，不重算）
+    return out
+
+
+def _ensure_stock_identity_task() -> None:
+    """注册每日股票身份刷新任务（幂等，不覆盖手动调整）。"""
+    try:
+        db = SessionLocal()
+        try:
+            if db.get(ScheduledTask, STOCK_IDENTITY_TASK_ID) is None:
+                db.add(
+                    ScheduledTask(
+                        task_id=STOCK_IDENTITY_TASK_ID,
+                        name="股票身份每日刷新（stocks + 元数据区间：新股 / ST 状态 / 有效期）",
+                        task_type=TASK_TYPE_STOCK_IDENTITY_REFRESH,
+                        cron_expression=STOCK_IDENTITY_CRON,
+                        payload_json=json.dumps({}),
+                        enabled=True,
+                    )
+                )
+                db.commit()
+                logger.info("已注册股票身份刷新任务: %s (cron=%s)", STOCK_IDENTITY_TASK_ID, STOCK_IDENTITY_CRON)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册股票身份刷新任务失败")
+
+
+def _ensure_strategy_profile_task() -> None:
+    """注册每日策略回测画像补跑任务（幂等，不覆盖手动调整）。"""
+    try:
+        db = SessionLocal()
+        try:
+            if db.get(ScheduledTask, STRATEGY_PROFILE_TASK_ID) is None:
+                db.add(
+                    ScheduledTask(
+                        task_id=STRATEGY_PROFILE_TASK_ID,
+                        name="策略回测画像补跑（新策略版本无画像时，每次最多补 1 个）",
+                        task_type=TASK_TYPE_STRATEGY_PROFILE_REFRESH,
+                        cron_expression=STRATEGY_PROFILE_CRON,
+                        payload_json=json.dumps({"max_runs": 1}),
+                        enabled=True,
+                    )
+                )
+                db.commit()
+                logger.info("已注册策略画像补跑任务: %s (cron=%s)", STRATEGY_PROFILE_TASK_ID, STRATEGY_PROFILE_CRON)
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("注册策略画像补跑任务失败")
+
+
+def _run_strategy_profile_refresh(db, payload: dict | None = None) -> dict:
+    """给「当前版本没有任何可用画像（精确或向后滚动）」的策略补跑 180 天 canonical 回测，每次最多 max_runs 个。
+
+    已有画像的策略（含窗口随日滚动的）不重跑，所以稳态下这个任务几乎是空操作。
+    """
+    from app.services.backtest.strategy_profile import StrategyBacktestProfiles
+
+    from app.engine.skill_loader import lenient_missing_manifest
+
+    max_runs = max(0, int((payload or {}).get("max_runs", 1)))
+    profiles = StrategyBacktestProfiles(db)
+    # 缺 manifest.json 的策略目录（退役残留空壳/半成品，2026-10-26 main-line-leader-resonance 曾令整个任务 failed 并让
+    # /api/presets 500）：本任务里跳过并告警，其余策略照常补画像；主链路加载器的严格契约不变。
+    skipped_dirs: list[str] = []
+    with lenient_missing_manifest(skipped_dirs):
+        pending = [t for t in profiles.current_targets() if profiles.read_rolled(t) is None]
+        results = _refresh_pending_profiles(db, profiles, pending, max_runs)
+    skipped_dirs = sorted(set(skipped_dirs))
+    try:
+        from app.core.alerts import emit_alert, resolve_alert
+
+        if skipped_dirs:
+            names = ",".join(os.path.basename(p) for p in skipped_dirs)
+            emit_alert("strategy_profile_missing_manifest", "skills", f"策略目录缺少 manifest.json，已跳过其画像补跑：{names}")
+        else:
+            resolve_alert("strategy_profile_missing_manifest", "skills", "所有策略目录均有 manifest.json")
+    except Exception:  # noqa: BLE001 - 告警失败不影响任务
+        logger.warning("缺 manifest 告警同步失败", exc_info=True)
+    return _summarize_profile_refresh(pending, results, skipped_dirs)
+
+
+def _refresh_pending_profiles(db, profiles, pending, max_runs) -> list[dict]:
+    results = []
+    for target in pending[:max_runs]:
+        try:
+            outcome = profiles.refresh(target)
+            results.append({"strategy_id": target.strategy_id, "strategy_version": target.strategy_version,
+                            "status": outcome.get("status"), "reused": bool(outcome.get("reused"))})
+        except Exception as exc:  # noqa: BLE001 - 单个策略失败不影响其余，记入结果
+            db.rollback()
+            logger.warning("策略画像补跑失败 %s: %s", target.strategy_id, exc, exc_info=True)
+            results.append({"strategy_id": target.strategy_id, "strategy_version": target.strategy_version,
+                            "status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:200]}"})
+    return results
+
+
+def _summarize_profile_refresh(pending, results, skipped_dirs) -> dict:
+    failed = [r for r in results if r["status"] != "completed"]
+    deferred = max(0, len(pending) - len(results))
+    summary = f"策略画像补跑：待补 {len(pending)}，本次执行 {len(results)}，失败 {len(failed)}，顺延 {deferred}"
+    if skipped_dirs:
+        summary += f"，跳过缺 manifest 目录 {len(skipped_dirs)}"
+    out = {
+        "pending_before": len(pending), "executed": len(results), "deferred": deferred, "results": results,
+        "skipped_missing_manifest": sorted(skipped_dirs),
+        "summary_text": summary,
+    }
+    if failed:
+        out["status"] = "partial_failed"
+    return out
+
+
+def _run_stock_identity_refresh(db) -> dict:
+    """刷新 stocks / stock_metadata_history，并立即做三方对账；对账有问题走 emit_alert。"""
+    from app.core.alerts import emit_alert
+    from app.services.stock_identity import StockIdentityError, reconcile_stock_identity, refresh_stock_identity
+
+    try:
+        out = refresh_stock_identity(db)
+    except StockIdentityError as exc:
+        emit_alert("stock_identity_refresh_failed", datetime.now().strftime("%Y-%m-%d %H"), f"股票身份刷新放弃: {exc}")
+        return {"status": "failed", "error": str(exc), "summary_text": f"股票身份刷新放弃: {exc}"}
+    except Exception as exc:  # noqa: BLE001 - 取数/写库异常：告警并让任务记失败
+        db.rollback()
+        emit_alert("stock_identity_refresh_failed", datetime.now().strftime("%Y-%m-%d %H"), f"股票身份刷新失败: {exc}")
+        return {"status": "failed", "error": f"{type(exc).__name__}: {exc}", "summary_text": f"股票身份刷新失败: {exc}"}
+    rec = reconcile_stock_identity(db)
+    out["reconcile"] = rec
+    for warning in out.get("warnings") or []:
+        emit_alert("stock_identity_refresh_warning", datetime.now().strftime("%Y-%m-%d %H"), warning)
+    # key 不带日期，与 run_freshness_check 的「每表一条」一致；对账恢复正常自动解除
+    if rec["issues"]:
+        emit_alert("data_freshness", "stock_identity:reconcile", f"stock_identity:{rec['latest']}: " + "；".join(rec["issues"][:5]))
+    else:
+        from app.core.alerts import resolve_alert
+
+        resolve_alert("data_freshness", "stock_identity:reconcile", f"stock_identity 对账恢复正常（{rec['latest']}）")
+    stocks, intervals = out["stocks"], out["intervals"]
+    out["summary_text"] = (
+        f"股票身份刷新：stocks +{stocks['insert']}/~{stocks['update']}，区间 +{intervals['insert']}/~{intervals['update']}/-{intervals['delete']}；"
+        f"对账 {'正常' if not rec['issues'] else '异常 ' + str(len(rec['issues'])) + ' 项'}"
+    )
+    if out.get("warnings"):
+        out["status"] = "partial_completed"
+    return out
+
+
+_BAD_TASK_STATUSES = frozenset({"failed", "partial_failed", "diagnosis_failed", "post_diagnosis_failed"})
+
+
+def _sync_task_status_alert(task_id: str, task_run_id: str | None, status: str, summary: str) -> None:
+    """partial_failed / failed 作为一等告警：任务业务状态不好就 emit_alert，恢复（completed）后自动解除。
+
+    skipped 不改变告警状态。告警写入失败不影响任务本身。
+    """
+    try:
+        from app.core.alerts import emit_alert, resolve_alert
+
+        if status in _BAD_TASK_STATUSES:
+            emit_alert("task_status", task_id, f"调度任务 {task_id} 状态 {status}: {summary[:300]}（task_run_id={task_run_id}）")
+        elif status in {"completed", "partial_completed"}:
+            resolve_alert("task_status", task_id, f"调度任务 {task_id} 恢复为 {status}")
+    except Exception:  # noqa: BLE001
+        logger.warning("任务状态告警同步失败: %s", task_id, exc_info=True)
+
+
+def _run_data_freshness_check(db, payload: dict | None = None) -> dict:
     from app.services.data_freshness import run_freshness_check
 
-    out = run_freshness_check(db)
+    quality_only = bool((payload or {}).get("quality_only"))
+    out: dict = {"problems": {}} if quality_only else run_freshness_check(db)
     problems = out.get("problems") or {}
+    if problems:
+        out["status"] = "partial_failed"  # 巡检发现问题即业务状态 partial_failed（同时每张问题表已 emit_alert）
     out["summary_text"] = (
-        "数据新鲜度正常" if not problems
-        else f"数据新鲜度异常 {len(problems)} 张表: " + "；".join(f"{t}: {v[0]}" for t, v in list(problems.items())[:8])
+        ("数据新鲜度正常" if not problems
+         else f"数据新鲜度异常 {len(problems)} 张表: " + "；".join(f"{t}: {v[0]}" for t, v in list(problems.items())[:8]))
+        if not quality_only else ""
     )
+    # 统一数据质量巡检（只读，覆盖文件数据集/research 文件/调度/日志）：失败只记日志，绝不影响任务和选股主流程
+    try:
+        from app.services.data_quality_monitor import run_data_quality_check
+
+        dq = run_data_quality_check(db)
+        s = dq.get("summary") or {}
+        out["data_quality"] = {"overall": dq.get("overall"), "summary": s, "expected_trade_date": dq.get("expected_trade_date"),
+                               "red": [i["key"] for i in dq.get("items", []) if i["severity"] == "red"],
+                               "yellow": [i["key"] for i in dq.get("items", []) if i["severity"] == "yellow"]}
+        out["summary_text"] = (out["summary_text"] + "；" if out["summary_text"] else "") + (
+            f"数据质量巡检 红 {s.get('red', 0)} / 黄 {s.get('yellow', 0)} / 绿 {s.get('green', 0)}")
+        if s.get("red"):
+            out["status"] = "partial_failed"
+    except Exception:  # noqa: BLE001
+        logger.warning("数据质量巡检异常（已忽略，不影响主流程）", exc_info=True)
     return out
 
 
@@ -370,6 +673,36 @@ def ensure_scheduled_task_registrations() -> None:
     _ensure_intraday_lock_tasks()
     _ensure_formal_safety_net_task()
     _ensure_data_freshness_task()
+    _ensure_data_quality_tasks()
+    _ensure_stock_identity_task()
+    _ensure_strategy_profile_task()
+    _ensure_health_snapshot_task()
+    _ensure_rolling_r12_task()
+
+
+def _current_code_revision() -> str:
+    """当前主工作树 git HEAD（不走进程缓存：worker 每个任务从磁盘加载代码，HEAD 可能在任务运行中移动）。"""
+    try:
+        from app.core.deployment_identity import _git_head_revision
+
+        return _git_head_revision() or "unknown"
+    except Exception:  # noqa: BLE001 - 观测字段，失败不影响任务
+        return "unknown"
+
+
+def _stamp_code_revision(result: dict, start_revision: str) -> None:
+    """把任务开始/结束时的 code_revision 写进 result_json（scheduled_task_runs），暴露 worker 版本混用。
+
+    worker 常驻，每个任务从磁盘主工作树加载代码；合并/切分支发生在任务中间时，同一次运行前后半段会跑不同版本。
+    """
+    if not isinstance(result, dict):
+        return
+    end_revision = _current_code_revision()
+    result.setdefault("code_revision", start_revision)
+    if end_revision != start_revision:
+        result["code_revision_end"] = end_revision
+        result["code_revision_changed_during_run"] = True
+        logger.warning("调度任务运行期间 code_revision 变化: %s -> %s", start_revision[:12], end_revision[:12])
 
 
 def _execute_task(
@@ -390,7 +723,8 @@ def _execute_task(
         logger.warning("调度任务 %s 正在执行中，跳过重复触发", task_id)
         return
 
-    logger.info("调度任务开始: %s", task_id)
+    start_revision = _current_code_revision()
+    logger.info("调度任务开始: %s（code_revision=%s）", task_id, start_revision[:12])
     _mark_running(task_id)
 
     db = SessionLocal()
@@ -429,45 +763,58 @@ def _execute_task(
                 )
                 return
 
-        if task_type == "recommendation_run":
-            try:
-                result = asyncio.run(
-                    _run_postclose_pipeline(db, payload)
-                    if payload.get("pre_run_full_sync")
-                    else _run_recommendation(db, payload)
-                )
-            except ValueError as ve:
-                # 预设下 Skill 全部被禁用 → 优雅跳过而非报错。其它 ValueError 透传。
-                skip = _recommendation_run_error_to_skip(task_id, payload, ve)
-                if skip is not None:
-                    result = skip
-                else:
-                    raise
-        elif task_type == TASK_TYPE_FORMAL_SAFETY_NET:
-            result = asyncio.run(_safety_net_run(db, payload))
-        elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
-            result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
-        elif task_type == TASK_TYPE_BLOCK_TRADE_BACKUP:
-            # 实际出票由下方 BLOCK_TRADE_HOOK_TASK_IDS 钩子完成（T=上一交易日，幂等）。
-            result = {"summary_text": "盘前大宗交易备份出票"}
-        elif task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN:
-            result = {"skipped": True, "status": "skipped", "summary_text": "策略曝光补跑已退役（2026-10-19）"}
-        elif task_type == TASK_TYPE_OUTCOME_LABEL:
-            result = _run_outcome_label(db, payload)
-        elif task_type == TASK_TYPE_DATA_FRESHNESS_CHECK:
-            result = _run_data_freshness_check(db)
-        elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
-            result = _run_intraday_lock_shadow(db, payload)
-        elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
-            result = _run_data_sync(db, payload, task_type=task_type)
-        else:
-            raise RuntimeError(f"未知任务类型: {task_type}")
+        # 正式链路（出票/中长线/大宗钩子/结算/日更）：数据网关一律拒绝旧缓存（stale）数据。
+        from app.services.datasource.cache import formal_chain
 
-        # [中线] mid-block-trade-premium：Tushare 大宗交易约 21:00 发布。
-        # 主：21:00 晚间全域数据补数完成后跑当日；备：08:03 midterm_block_trade_premarket 补跑上一交易日（幂等）。
-        if task_id in BLOCK_TRADE_HOOK_TASK_IDS and isinstance(result, dict):
-            result["midterm_block_trade"] = _run_block_trade_picks_hook(db, task_id)
+        with formal_chain():
+            if task_type == "recommendation_run":
+                try:
+                    result = asyncio.run(
+                        _run_postclose_pipeline(db, payload)
+                        if payload.get("pre_run_full_sync")
+                        else _run_recommendation(db, payload)
+                    )
+                except ValueError as ve:
+                    # 预设下 Skill 全部被禁用 → 优雅跳过而非报错。其它 ValueError 透传。
+                    skip = _recommendation_run_error_to_skip(task_id, payload, ve)
+                    if skip is not None:
+                        result = skip
+                    else:
+                        raise
+            elif task_type == TASK_TYPE_FORMAL_SAFETY_NET:
+                result = asyncio.run(_safety_net_run(db, payload))
+            elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
+                result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
+            elif task_type == TASK_TYPE_BLOCK_TRADE_BACKUP:
+                # 实际出票由下方 BLOCK_TRADE_HOOK_TASK_IDS 钩子完成（T=上一交易日，幂等）。
+                result = {"summary_text": "盘前大宗交易备份出票"}
+            elif task_type == TASK_TYPE_STRATEGY_EXPOSURE_RUN:
+                result = {"skipped": True, "status": "skipped", "summary_text": "策略曝光补跑已退役（2026-10-19）"}
+            elif task_type == TASK_TYPE_OUTCOME_LABEL:
+                result = _run_outcome_label(db, payload)
+            elif task_type == TASK_TYPE_DATA_FRESHNESS_CHECK:
+                result = _run_data_freshness_check(db, payload)
+            elif task_type == TASK_TYPE_STOCK_IDENTITY_REFRESH:
+                result = _run_stock_identity_refresh(db)
+            elif task_type == TASK_TYPE_STRATEGY_PROFILE_REFRESH:
+                result = _run_strategy_profile_refresh(db, payload)
+            elif task_type == TASK_TYPE_DATA_HEALTH_SNAPSHOT:
+                result = _run_data_health_snapshot(db, payload)
+            elif task_type == TASK_TYPE_ROLLING_R12:
+                result = _run_rolling_r12(db, payload)
+            elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
+                result = _run_intraday_lock_shadow(db, payload)
+            elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
+                result = _run_data_sync(db, payload, task_type=task_type)
+            else:
+                raise RuntimeError(f"未知任务类型: {task_type}")
 
+            # [中线] mid-block-trade-premium：Tushare 大宗交易约 21:00 发布。
+            # 主：21:00 晚间全域数据补数完成后跑当日；备：08:03 midterm_block_trade_premarket 补跑上一交易日（幂等）。
+            if task_id in BLOCK_TRADE_HOOK_TASK_IDS and isinstance(result, dict):
+                result["midterm_block_trade"] = _run_block_trade_picks_hook(db, task_id)
+
+        _stamp_code_revision(result, start_revision)
         finish_task_run(
             db,
             task_run_id,
@@ -477,6 +824,7 @@ def _execute_task(
             result=result,
         )
         logger.info("调度任务完成: %s", task_id)
+        _sync_task_status_alert(task_id, task_run_id, _task_result_status(result), str(result.get("summary_text") or ""))
     except RetryablePostcloseReadinessError as exc:
         # 只把结构化确认的当日辅助数据滞后传播给 Prefect。每次重试都会重新进入
         # _execute_task、创建新 Session；这里先完整落盘本次同步/刷新证据。
@@ -887,6 +1235,16 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
             result["eastmoney_alt"] = sync_eastmoney_alt(db, str(payload.get("trade_date") or datetime.now().strftime("%Y%m%d")))
         except Exception as exc:  # pragma: no cover  # noqa: BLE001
             result["eastmoney_alt"] = {"errors": [str(exc)[:160]]}
+        # margin_detail 截断补缺（promax 分页上限 2001 行只有沪市）：独立于 eastmoney.alt 总开关，
+        # 只插缺失代码、不覆盖已有行；盘中只记待补，盘后处理。开关 ASHARE_MARGIN_FILL_ENABLED（默认开）。
+        try:
+            from app.services.margin_detail_fill import run_margin_detail_fill
+
+            result["margin_detail_fill"] = run_margin_detail_fill(
+                db, str(payload.get("trade_date") or datetime.now().strftime("%Y%m%d"))
+            )
+        except Exception as exc:  # pragma: no cover  # noqa: BLE001
+            result["margin_detail_fill"] = {"errors": [str(exc)[:160]]}
 
     # 4. 最终健康补数与诊断，确保后续推荐读取的是所有同步阶段之后的快照。
     if sync_scope in ("health_remediation", "all") and not bool(payload.get("skip_health_remediation")):
@@ -1043,6 +1401,8 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
                 "status": _batch_sync_item_status(item.dataset_key, item.errors),
                 "count": item.coverage.record_count,
                 "errors": [error.code.value for error in item.errors],
+                # 此前只留错误码（fetch_failed / persist_failed），根因无从查起；补上阶段、异常类型与上游原文。
+                **({"error_details": [_aux_error_detail(error) for error in item.errors]} if item.errors else {}),
                 **({"known_gap": _KNOWN_AUX_SOURCE_GAPS[item.dataset_key]}
                    if item.errors and item.dataset_key in _KNOWN_AUX_SOURCE_GAPS else {}),
             }
@@ -1054,6 +1414,9 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
             logger.warning("[WARN:AUX_KNOWN_GAP] 已知数据源长期缺口（不计失败）：%s", ", ".join(known))
         # S4 application boundary 明确把事务所有权交给调用方；调度入口必须提交，
         # 否则 Session close 会把已经拉取和 upsert 的批量数据全部回滚。
+        db.commit()
+        # 先提交再等限流窗口，避免事务悬挂；重试成功的数据集会覆盖 batch_sync 里的失败条目
+        _retry_rate_limited_aux_datasets(db, auxiliary, result, trade_date, payload)
         db.commit()
         if any(item["status"] == "failed" for item in result["batch_sync"].values()):
             result["status"] = "partial_failed"
@@ -1072,7 +1435,7 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
             result["window_backfill"] = window_backfill
 
         # stk_limit（涨跌停价）不在 S4 AUXILIARY_DATASET_INVENTORY，此前只靠
-        # 未调度的 daily_data_cron 补，长期 stale。它按 trade_date 批量
+        # 未调度的 daily_data_cron（已删除）补，长期 stale。它按 trade_date 批量
         # (pro.stk_limit(trade_date=))，与辅助窗口回填同节奏，这里一并补缺口日。
         if not bool(payload.get("skip_stk_limit_backfill")):
             stk_limit_backfill = _backfill_stk_limit_window(
@@ -1086,6 +1449,63 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
         return result
     finally:
         db.close()
+
+
+def _aux_error_detail(error) -> dict[str, Any]:
+    return {
+        "code": error.code.value,
+        "stage": getattr(error.stage, "value", str(error.stage)),
+        "exception_type": error.exception_type,
+        "message": str(error.message)[:400],
+    }
+
+
+_AUX_RETRYABLE_MARKERS = ("rate_limit", "circuit", "timeout", "timed out", "temporarily")
+
+
+def _aux_error_is_rate_limited(error) -> bool:
+    text_ = str(error.message).lower()
+    return any(m in text_ for m in _AUX_RETRYABLE_MARKERS)
+
+
+def _retry_rate_limited_aux_datasets(db, auxiliary, result: dict, trade_date: str, payload: dict) -> None:
+    """辅助数据集因 promax 限流窗口（5 分钟/30 分钟/1 小时）/熔断失败时，等窗口滚动后只重试这些数据集一次。
+
+    quota_exhausted（quantdata 日额度）不是等一等能好的，不重试。重试成功的数据集覆盖原结果并记 retried=True。
+    """
+    import time as _time
+
+    failed = {
+        item.dataset_key: item for item in auxiliary.orchestrated.results
+        if result["batch_sync"].get(item.dataset_key, {}).get("status") == "failed"
+        and item.errors and all(_aux_error_is_rate_limited(e) for e in item.errors)
+    }
+    wait = float(payload.get("auxiliary_retry_wait_seconds", 330))
+    if not failed or wait < 0 or payload.get("skip_auxiliary_retry"):
+        return
+    logger.warning("辅助数据集限流失败 %s，%.0fs 后重试一次", sorted(failed), wait)
+    _time.sleep(wait)
+    from app.services.auxiliary.application import run_auxiliary_application
+
+    try:
+        retry = run_auxiliary_application(db, instruments=(), trade_date=trade_date, refresh=True,
+                                          datasets=tuple(failed))
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        logger.warning("辅助数据集重试失败: %s", exc, exc_info=True)
+        for key in failed:
+            result["batch_sync"][key]["retry_error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+        return
+    for item in retry.orchestrated.results:
+        entry = {
+            "status": _batch_sync_item_status(item.dataset_key, item.errors),
+            "count": item.coverage.record_count,
+            "errors": [e.code.value for e in item.errors],
+            "retried": True,
+        }
+        if item.errors:
+            entry["error_details"] = [_aux_error_detail(e) for e in item.errors]
+        result["batch_sync"][item.dataset_key] = entry
 
 
 def _backfill_auxiliary_window_gaps(
@@ -1449,6 +1869,16 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
     sync_result = _run_data_sync(db, sync_payload)
     _plap("sync")
 
+    # 交易日历每日盘后刷新一次（经网关 tushare→akshare→baostock）；失败只告警，沿用本地表。
+    try:
+        from app.services.trade_calendar import refresh_trade_calendar
+
+        sync_result_calendar = refresh_trade_calendar()
+    except Exception as exc:  # noqa: BLE001
+        sync_result_calendar = {"status": "failed", "error": str(exc)[:300]}
+    logger.info("盘后交易日历刷新: %s", sync_result_calendar)
+    _plap("trade_calendar")
+
     # 补齐 Tushare stk_factor 缺失的 RSI/MACD（通达信口径，只填 NULL/0）；失败只告警。
     indicator_fill: dict[str, Any] = {}
     try:
@@ -1493,6 +1923,18 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         indicator_fill["local_indicators"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
         logger.warning("local indicator fill failed: %s", exc)
 
+    # KDJ/BOLL/CCI/vol_ratio_5/20：quantdata 额度耗尽 / promax 回退只给部分列时整列 NULL（10-20~10-23 事故）。
+    # 本地精确复算（已用源数据逐行核对），只填 NULL；失败只告警。窗口取近 15 天以覆盖补数/重跑。
+    try:
+        from app.services.kdj_boll_cci_fill import fill_kdj_boll_cci
+
+        _kb_since = (_dt_mod.date.fromisoformat(str(trade_date)[:10]) - _dt_mod.timedelta(days=15)).isoformat()
+        indicator_fill["kdj_boll_cci"] = fill_kdj_boll_cci(db, since=_kb_since, end=str(trade_date)[:10])
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        indicator_fill["kdj_boll_cci"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        logger.warning("kdj/boll/cci fill failed: %s", exc)
+
     # daily_basic（市值/PE/换手）此前从未接入日更，2026-10-09 后停更；补当日 + 停更告警。
     try:
         from app.services.daily_basic_ingest import ingest_daily_basic_with_alert
@@ -1503,13 +1945,23 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         indicator_fill["daily_basic"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
         logger.warning("daily_basic ingest failed: %s", exc)
 
+    # 机构调研 institutional_surveys / 两融汇总 margin_data 回到日更（2026-10-19）；失败只记录不阻断。
+    try:
+        from app.services.survey_margin_ingest import daily_survey_margin_update
+
+        indicator_fill["survey_margin"] = daily_survey_margin_update(db, str(trade_date)[:10])
+    except Exception as exc:  # noqa: BLE001
+        db.rollback()
+        indicator_fill["survey_margin"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        logger.warning("survey/margin_data daily update failed: %s", exc)
+
     # [中长线] 中线策略选股（周五信号日落盘，独立于短线出票）；失败只告警。
     # 结果写入 result_json.midterm_picks（之前只打 INFO，worker 日志不收，完全不可观测）。
     midterm_picks: dict[str, Any] = {}
     try:
         from app.services.midterm_service import generate_picks as _mid_generate_picks
 
-        midterm_picks = {"trade_date": str(trade_date)[:10], "result": _mid_generate_picks(db, trade_date)}
+        midterm_picks = {"trade_date": str(trade_date)[:10], "result": _mid_generate_picks(db, trade_date, apply_daily_cap=True)}
         logger.warning("midterm picks (T=%s): %s", trade_date, midterm_picks["result"])
     except Exception as exc:  # noqa: BLE001
         db.rollback()
@@ -1760,7 +2212,7 @@ async def _run_recommendation(db, payload: dict) -> dict:
 
     # 无 preset_id 时无法入队独立子进程（enqueue 前置条件），退化为原 in-process 执行，
     # 保留历史行为，避免破坏潜在的非预设触发路径。
-    if not run_payload.get("preset_id"):
+    if not run_payload.get("preset_id") and not run_payload.get("single_skill_id"):
         from app.services.workbench_service import run_workbench
 
         logger.warning("定时推荐缺少 preset_id，退化为进程内执行: %s", run_payload)
@@ -1808,8 +2260,12 @@ def _standalone_run_payloads(db, payload: dict) -> list[dict[str, Any]]:
     base = {
         k: v
         for k, v in payload.items()
-        if k not in {"selected_skill_ids", "skills", "single_skill_id", "score_line", "output_count", "run_name"}
+        if k not in {"selected_skill_ids", "skills", "single_skill_id", "score_line", "output_count", "run_name", "preset_id"}
     }
+    # 2026-10-19 用户删除 preset_formal_opening：单策略 run 不再挂组合预设。原预设贡献的
+    # 口径显式写死（与 10-14..10-16 live run 的 params_json 一致）。
+    base.setdefault("hide_recent_repeats", False)
+    base.setdefault("dedup_same_day", True)
     label = str(payload.get("trade_date_override") or datetime.now().strftime("%Y%m%d"))
     out: list[dict[str, Any]] = []
     for sid in standalone_strategy_ids(skills):
@@ -2013,6 +2469,20 @@ def check_formal_recommendation_gap(db) -> dict:
     if not missing_dates:
         latest = trade_dates[0]
         stats = by_date.get(latest, {})
+        # 只看「有没有任何 completed」会漏掉部分策略缺批次的日子（2026-10-26：短线 4 个策略批次缺失、其余已出）。
+        # 对最新交易日再按策略核对（历史日不核对：之后新增的策略不应回头补历史批次）；补跑按策略幂等，已完成的不重跑。
+        missing_sids = _missing_standalone_strategies(db, latest)
+        if missing_sids and not int(stats.get("inflight_count", 0)):
+            return {
+                "needs_retry": True,
+                "trade_date": latest,
+                "ok_count": int(stats.get("completed_count", 0)),
+                "productive_count": int(stats.get("productive_count", 0)),
+                "total_count": int(stats.get("total_count", 0)),
+                "missing_dates": [],
+                "missing_strategies": missing_sids,
+                "reason": f"{latest} 缺 {len(missing_sids)} 个策略的 completed formal 批次：{','.join(missing_sids)}；仅补这些策略",
+            }
         return {
             "needs_retry": False,
             "trade_date": latest,
@@ -2048,6 +2518,60 @@ def check_formal_recommendation_gap(db) -> dict:
         "missing_dates": missing_dates,
         "reason": f"最近 5 个交易日缺 formal：{','.join(missing_dates)}；先补 {target}",
     }
+
+
+def _missing_standalone_strategies(db, trade_date: str) -> list[str]:
+    """trade_date 当天缺 completed formal 单策略批次的有效策略（排序）。取不到信息（假库/异常）时返回空 = 不触发。"""
+    try:
+        from app.services.standalone_strategies import standalone_strategy_ids
+        from app.services.workbench_service import sync_skills
+
+        expected = set(standalone_strategy_ids(sync_skills(db)))
+        if not expected:
+            return []
+        done = _completed_standalone_runs(db, {"trade_date_override": trade_date})
+        return sorted(expected - set(done))
+    except Exception:  # noqa: BLE001 - 核对失败不影响原有安全网判断
+        logger.debug("_missing_standalone_strategies 核对失败", exc_info=True)
+        return []
+
+
+def _safety_net_midlong_repair(db) -> dict:
+    """盘前补跑最新已收盘交易日里 data_error（或从未记录）的中长线策略。
+
+    只补最新一个交易日：信号日 D 收盘选股、D+1 开盘买，08:30 补出的批次仍赶得上当天开盘；更早的日期买点已过，不回头补。
+    generate_picks 幂等（同日覆盖同一文件，非信号日只记 not_signal_day），实盘路径开每日新推荐上限。
+    非致命：任何异常只记日志并返回 error。
+    """
+    out: dict = {"date": None, "retried": [], "still_error": []}
+    try:
+        import json as _json
+
+        from app.services import midterm_service as ms
+
+        latest = _latest_allowed_bar_date()
+        out["date"] = latest
+        status_file = ms._status_dir() / f"{latest}.json"
+        stored = _json.loads(status_file.read_text()) if status_file.exists() else {}
+        todo = [sid for sid in ms.STRATEGIES if (stored.get(sid) or {}).get("status") in (None, "data_error")]
+        if not todo:
+            return out
+        out["retried"] = todo
+        res = ms.generate_picks(db, latest, strategy_ids=todo, apply_daily_cap=True)
+        out["still_error"] = [sid for sid in todo if ms.classify_daily_status(res.get(sid)) == "data_error"]
+        out["picks"] = {sid: res.get(sid) for sid in todo if isinstance(res.get(sid), int)}
+        if out["still_error"]:
+            from app.core.alerts import emit_alert
+
+            emit_alert(
+                "midlong_repair_data_error",
+                latest,
+                f"盘前安全网补跑 {latest} 中长线后仍 data_error：{','.join(out['still_error'])}",
+            )
+    except Exception as exc:  # noqa: BLE001 - 补跑失败不阻断 formal 安全网主流程
+        logger.warning("安全网中长线补跑失败（非阻塞）: %s", exc, exc_info=True)
+        out["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
+    return out
 
 
 async def _safety_net_run(db, payload: dict) -> dict:
@@ -2087,10 +2611,12 @@ async def _safety_net_run(db, payload: dict) -> dict:
     except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design
         logger.warning("安全网补 outcome 结算失败（非阻塞）: %s", exc)
 
+    midlong = _safety_net_midlong_repair(db)
     check = check_formal_recommendation_gap(db)
     if not check["needs_retry"]:
         logger.info("安全网跳过: %s", check["reason"])
-        return {"skipped": True, **check, "outcome": outcome_result, "summary_text": f"安全网跳过: {check['reason']}"}
+        return {"skipped": True, **check, "outcome": outcome_result, "midlong_repair": midlong,
+                "summary_text": f"安全网跳过: {check['reason']}" + (f"；中长线补跑 {len(midlong['retried'])} 个" if midlong.get("retried") else "")}
     if not check.get("trade_date"):
         return {
             "status": "failed",
@@ -2108,7 +2634,6 @@ async def _safety_net_run(db, payload: dict) -> dict:
         run_payload = json.loads(task.payload_json)
     else:
         run_payload = {
-            "preset_id": "preset_formal_opening",
             "run_name": "安全网补跑推荐",
             "data_source": DEFAULT_RECOMMENDATION_DATA_SOURCE,
             "risk_template": "balanced",
@@ -2171,6 +2696,7 @@ async def _safety_net_run(db, payload: dict) -> dict:
         "related_run_id": run_id,
         "final_run": final_run,
         "recommended_count": int(final_run.get("recommended_count") or 0),
+        "midlong_repair": midlong,
         "summary_text": f"formal 安全网已补齐 {check['trade_date']}，Run {run_id} completed",
     }
 

@@ -24,6 +24,7 @@ from app.services.outcome_service import exposure_sample_counts
 from app.services.registry.backtest_metrics import (
     backtest_returns_for,
     load_backtest_metrics,
+    short_quality_for,
 )
 from app.services.strategy_center_service import (
     StrategyVersionNotFoundError,
@@ -253,9 +254,12 @@ def list_strategies(
             ),
             "performance": perf,
             "backtest_returns": backtest_returns_for(sid, backtest_metrics),
+            "quality": short_quality_for(sid),
         }
         if gate is not None:
             item["last_exp_gate"] = gate
+        if item["performance_status"] == "pending_backtest":
+            item.update(_pending_backtest_info(db, sid, item["current_strategy_version"]))
         result.append(item)
 
     result.sort(
@@ -277,6 +281,36 @@ def list_strategies(
     return result
 
 
+
+def _pending_backtest_info(db: Session, strategy_id: str, current_version: str | None) -> dict:
+    """pending_backtest 时说明为什么待跑、旧版本画像何时产出（不混用旧版本指标，只给出处）。"""
+    from sqlalchemy import select
+
+    from app.models.tables import BacktestRunV2
+    from app.services.backtest.strategy_profile import STRATEGY_PROFILE_EXPERIMENT_ID
+
+    prev = db.execute(
+        select(BacktestRunV2.strategy_version, BacktestRunV2.date_to, BacktestRunV2.finished_at)
+        .where(
+            BacktestRunV2.experiment_id == STRATEGY_PROFILE_EXPERIMENT_ID,
+            BacktestRunV2.strategy_id == strategy_id,
+            BacktestRunV2.status == "completed",
+            BacktestRunV2.strategy_version != (current_version or ""),
+        )
+        .order_by(BacktestRunV2.finished_at.desc())
+        .limit(1)
+    ).first()
+    return {
+        "pending_reason": "当前策略版本尚无回测画像（新版本不跨版本复用旧画像），已排入每个交易日 19:40 的自动补跑（每次 1 个）",
+        "previous_version_profile": (
+            None if prev is None else {
+                "strategy_version": prev[0], "date_to": str(prev[1]),
+                "generated_at": prev[2].isoformat() if prev[2] else None,
+                "note": "旧版本画像，仅供参考出处，指标不展示以免跨版本混用",
+            }
+        ),
+    }
+
 STANDALONE_METRICS_PATH = Path(__file__).resolve().parents[2] / "data" / "strategy_metrics" / "standalone_metrics.json"
 
 
@@ -285,6 +319,15 @@ def _bj_offset(value):
     if isinstance(value, str) and len(value) >= 19 and value[10] in "T " and value[-6] not in "+-" and not value.endswith("Z"):
         return value.replace(" ", "T", 1) + "+08:00"
     return value
+
+
+@router.get("/rolling-r12")
+def rolling_r12():
+    """现役策略近12个月扣成本后每笔（每月第一个交易日 22:30 滚动重算；cutoff=截止日）。还没算过返回 available=false。"""
+    from app.services.rolling_r12 import load_latest
+
+    doc = load_latest()
+    return doc or {"available": False, "message": "还没有滚动重算结果（每月第一个交易日 22:30 自动跑）"}
 
 
 @router.get("/standalone-metrics")
@@ -315,11 +358,16 @@ def standalone_metrics(db: Session = Depends(get_db)):
         if sid in WATCH_STRATEGY_IDS and row.get("status") == "positive":
             row["status"] = "watch"
         rows.append(row)
+    from app.services.strategy_rank import rank_short_strategies
+
+    window = stored.get("window")
+    # 综合分（口径 A，仅短线周期内比较）；默认综合分降序，沉底的在后保持原序
+    ranked = rank_short_strategies(rows, (window or {}).get("end") if isinstance(window, dict) else None)
     return {
         "generated_at": _bj_offset(stored.get("generated_at")),
-        "window": stored.get("window"),
+        "window": window,
         "method": stored.get("method"),
-        "strategies": rows,
+        "strategies": ranked,
     }
 
 
@@ -358,4 +406,6 @@ def strategy_detail(
     detail["exposure_floor"] = EXPOSURE_SAMPLE_FLOOR
     if gate is not None:
         detail["last_exp_gate"] = gate
+    if detail["performance_status"] == "pending_backtest":
+        detail.update(_pending_backtest_info(db, strategy_id, target.strategy_version if target is not None else None))
     return detail

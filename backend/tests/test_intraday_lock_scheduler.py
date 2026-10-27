@@ -53,7 +53,8 @@ def test_run_create_explicit_trade_date(monkeypatch):
     captured = {}
     monkeypatch.setattr(
         "app.services.intraday_lock_service.create_monitors_for_trade_date",
-        lambda db, trade_date, **kw: captured.setdefault("trade_date", trade_date) or 0,
+        # 必须返回 int（真实实现返回新建数）；setdefault 返回日期字符串会让 %d 日志格式化抛 TypeError
+        lambda db, trade_date, **kw: captured.update(trade_date=trade_date) or 0,
     )
     db = _session()
     sched._run_intraday_lock_shadow(db, {"action": "create", "trade_date": "2026-07-28"})

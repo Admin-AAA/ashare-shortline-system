@@ -61,6 +61,8 @@ def _both(stub, monkeypatch, fn):
     out = []
     for cut in (set(), {"bar.minute"}):
         monkeypatch.setattr(gw, "_flag_set", lambda attr, cut=cut: cut if attr == "datasource_cutover" else set())
+        # bar.minute 已默认走网关（ALWAYS_GATEWAY）；对照腿临时移出，保留旧路径的逐字节对照。
+        monkeypatch.setattr(gw, "ALWAYS_GATEWAY", gw.ALWAYS_GATEWAY - {"bar.minute"} if not cut else gw.ALWAYS_GATEWAY | {"bar.minute"})
         stub["calls"].clear()
         out.append((gw.canonical(fn()), list(stub["calls"])))
     return out

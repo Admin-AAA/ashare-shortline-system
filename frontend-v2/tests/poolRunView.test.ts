@@ -59,12 +59,13 @@ test("daily summary keeps successful empty runs separate from failures", () => {
   );
 });
 
-test("naive backend UTC timestamps render in the browser local timezone", () => {
+test("backend UTC timestamps (Z) render in Beijing time", () => {
+  // owner 10-19（4cd93a1）：后端统一输出带时区 ISO；只有带时区的值才换算，naive 原样展示。
   const originalTimeZone = process.env.TZ;
   process.env.TZ = "Asia/Shanghai";
   try {
-    assert.equal(formatPoolRunTime("2026-07-19T08:18:02", "2026-07-19"), "16:18");
-    assert.equal(poolRunDate({ started_at: "2026-07-19T09:15:34", trade_date: "2026-07-17" }), "2026-07-19");
+    assert.equal(formatPoolRunTime("2026-07-19T08:18:02Z", "2026-07-19"), "16:18");
+    assert.equal(poolRunDate({ started_at: "2026-07-19T09:15:34Z", trade_date: "2026-07-17" }), "2026-07-19");
   } finally {
     process.env.TZ = originalTimeZone;
   }

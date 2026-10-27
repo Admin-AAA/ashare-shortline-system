@@ -801,7 +801,7 @@ function TaskFormBody({
               onChange={(e) => setPayload("score_line", Number(e.target.value))}
             />
           </Field>
-          <Field label="输出数量">
+          <Field label="输出数量（另受每策略每日上限约束）">
             <input
               className="cfg-input"
               type="number"

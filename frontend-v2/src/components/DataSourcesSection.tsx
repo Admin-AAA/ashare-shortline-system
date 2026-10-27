@@ -1,110 +1,110 @@
-import { useCallback, useEffect, useState } from "react";
-import { ArrowDown, ArrowUp, Loader2, Plug, RefreshCw, Server } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowDown, ArrowUp, Loader2, Plug, RefreshCw } from "lucide-react";
 import { api } from "../api/client";
-import type { DataSourceProvider, ProviderTestResult } from "../types";
-import { formatBj } from "../utils/time";
+import type { GatewayDataset, GatewayProvider, GatewaySwitch, GatewayTopology, ProviderTestResult } from "../types";
 
-// 参与路由调序的 pro provider（不在路由链的条目不调序）。
-const ROUTABLE = new Set(["promax", "quantdata"]);
+const MODE_LABEL: Record<GatewayDataset["mode"], string> = {
+  fill: "逐只补齐",
+  first: "首个命中",
+  chain: "按序回退",
+  router: "按接口路由",
+};
+const swKey = (s: GatewaySwitch) => `${s.source}/${s.source_type}`;
+const hhmm = (epoch: number) =>
+  new Date(epoch * 1000).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
 
 /**
- * 数据源管理 —— 配置页 Tab。
- * 对已接入的 tushare 系 provider（promax / quantdata 等）
- * 提供操作：启用 / 禁用（运行时即时生效，不动 config）/ 测试连通性 / 调整路由优先级。
- * 接入新数据源仍走开发（注册进代码/config），本页只做管理，不做动态新增。
+ * 数据源管理 —— 按数据网关的数据类型分列：每列一个数据类型，列内按回退顺序列出 provider，
+ * 回填 live 熔断状态（后端 + Prefect worker 共享），可直接启停 provider。
+ * 卡片按钮写数据项级开关（data_gateway_item_switch：只管这一列）；源总开关（data_source_config 的
+ * (source, source_type) 行，可能被多个数据类型共用）只在「Tushare Pro 路由」列操作，或在被总开关关掉的卡片上重新打开。
  */
 export function DataSourcesSection() {
-  const [providers, setProviders] = useState<DataSourceProvider[]>([]);
+  const [topo, setTopo] = useState<GatewayTopology | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [busyName, setBusyName] = useState<string | null>(null);
-  const [reordering, setReordering] = useState(false);
-  const [testResults, setTestResults] = useState<Record<string, ProviderTestResult>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [tests, setTests] = useState<Record<string, ProviderTestResult>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const data = await api.dataSourceProviders();
-      setProviders(sortProviders(data.providers));
+      setTopo(await api.dataGateway());
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
   }, []);
-
   useEffect(() => {
     load();
   }, [load]);
 
-  // 可路由 provider 按优先级排前，不可路由的排后（保持原序）。
-  function sortProviders(list: DataSourceProvider[]): DataSourceProvider[] {
-    const routable = list.filter((p) => ROUTABLE.has(p.provider_name)).sort((a, b) => a.priority - b.priority);
-    const rest = list.filter((p) => !ROUTABLE.has(p.provider_name));
-    return [...routable, ...rest];
-  }
+  // 开关 → 共用它的「数据类型 · provider」列表（提示：禁用会同时影响这些位置）。
+  const usage = useMemo(() => {
+    const m = new Map<string, string[]>();
+    for (const d of topo?.datasets ?? [])
+      for (const p of d.providers)
+        for (const s of p.switches) m.set(swKey(s), [...(m.get(swKey(s)) ?? []), `${d.label}·${p.label}`]);
+    return m;
+  }, [topo]);
 
-  async function handleToggle(p: DataSourceProvider) {
-    setBusyName(p.provider_name);
+  async function run(id: string, fn: () => Promise<GatewayTopology | void>) {
+    setBusy(id);
     setError(null);
     try {
-      await api.setProviderEnabled(p.provider_name, !p.enabled);
-      await load();
+      const next = await fn();
+      if (next) setTopo(next);
+      else await load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
-      setBusyName(null);
+      setBusy(null);
     }
   }
 
-  async function handleMove(name: string, dir: -1 | 1) {
-    const routable = providers.filter((p) => ROUTABLE.has(p.provider_name));
-    const idx = routable.findIndex((p) => p.provider_name === name);
-    const target = idx + dir;
-    if (idx < 0 || target < 0 || target >= routable.length) return;
-    const next = [...routable];
-    [next[idx], next[target]] = [next[target], next[idx]];
-    setReordering(true);
-    setError(null);
+  // 数据项级：只在这一列（数据类型）里启停该源，其他数据类型不受影响。
+  function toggleItem(p: GatewayProvider, id: string) {
+    return run(id, () => api.setGatewayItemSwitch(p.item_key, p.name, !p.item_enabled));
+  }
+
+  // 源总开关（Tushare Pro 路由列，或把被总开关关掉的源重新打开）：会影响共用该开关的所有数据类型。
+  function setSource(p: GatewayProvider, id: string, target: boolean) {
+    return run(id, async () => {
+      let last: GatewayTopology | undefined;
+      for (const s of p.switches) if (s.enabled !== target) last = await api.setGatewaySwitch(s.source, s.source_type, target);
+      return last;
+    });
+  }
+
+  function move(list: GatewayProvider[], idx: number, dir: -1 | 1) {
+    const names = list.map((p) => p.name);
+    [names[idx], names[idx + dir]] = [names[idx + dir], names[idx]];
+    return run(`reorder`, async () => {
+      await api.reorderProviders(names);
+    });
+  }
+
+  async function test(name: string) {
+    setBusy(`test:${name}`);
     try {
-      const data = await api.reorderProviders(next.map((p) => p.provider_name));
-      setProviders(sortProviders(data.providers));
+      const res = await api.testProvider(name);
+      setTests((m) => ({ ...m, [name]: res }));
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : String(e));
+      setTests((m) => ({ ...m, [name]: { provider_name: name, ok: false, status: "degraded", error: e instanceof Error ? e.message : String(e) } }));
     } finally {
-      setReordering(false);
+      setBusy(null);
     }
   }
 
-  async function handleTest(p: DataSourceProvider) {
-    setBusyName(p.provider_name);
-    try {
-      const res = await api.testProvider(p.provider_name);
-      setTestResults((m) => ({ ...m, [p.provider_name]: res }));
-    } catch (e: unknown) {
-      setTestResults((m) => ({
-        ...m,
-        [p.provider_name]: {
-          provider_name: p.provider_name,
-          ok: false,
-          status: "degraded",
-          error: e instanceof Error ? e.message : String(e),
-        },
-      }));
-    } finally {
-      setBusyName(null);
-    }
-  }
-
-  // 可路由 provider 在数组中的名次（用于上下移按钮的禁用态）。
-  const routableOrder = providers.filter((p) => ROUTABLE.has(p.provider_name)).map((p) => p.provider_name);
+  const openCount = (topo?.datasets ?? []).flatMap((d) => d.providers).filter((p) => p.breaker.state === "open").length;
 
   return (
     <div className="panel">
       <div className="panel__header">
         <div>
-          <span className="panel__kicker">行情上游</span>
+          <span className="panel__kicker">数据网关</span>
           <h3 className="panel__title" style={{ fontSize: "var(--text-xl)" }}>数据源管理</h3>
         </div>
         <button className="cfg-btn" onClick={load} disabled={loading}>
@@ -113,178 +113,115 @@ export function DataSourcesSection() {
         </button>
       </div>
 
-      <p style={{ color: "var(--text-muted)", fontSize: "var(--text-xs)", marginTop: "calc(-1 * var(--space-2))", marginBottom: "var(--space-3)", lineHeight: 1.6 }}>
-        已接入的行情数据源，按优先级参与同步 fallback（某源故障自动切下一个）。可启停（即时生效、无需重启）、可测试连通性、可用 ↑↓ 调整路由优先级（排在最上的为通用同步主源）。接入新源需开发注册。
+      <p className="gw-intro">
+        每列是一个数据类型，列内自上而下即网关的回退顺序。熔断状态取自实盘进程（后端与 Prefect）共享的熔断库：
+        <span className="gw-dot gw-dot--open" /> 熔断中（到点前不再请求）
+        <span className="gw-dot gw-dot--half_open" /> 待探测（冷却已过，下一次请求试探）
+        <span className="gw-dot gw-dot--closed" /> 正常。禁用 / 启用只作用于所在这一列的数据类型，其他列不受影响；
+        「Tushare Pro 路由」列的按钮是源总开关，会连带用到该源的所有数据类型。各进程 5 秒内生效、无需重启。
+        {openCount > 0 && <b className="gw-alert"> 当前 {openCount} 个数据源熔断中。</b>}
       </p>
 
-      {error && (
-        <div style={{ marginBottom: "var(--space-3)", padding: "var(--space-3)", borderRadius: 8, fontSize: "var(--text-sm)", background: "color-mix(in srgb, var(--warning) 14%, transparent)", color: "var(--warning)" }}>
-          {error}
-        </div>
-      )}
+      {error && <div className="gw-error">{error}</div>}
 
-      {loading && providers.length === 0 ? (
-        <div style={{ color: "var(--muted)", fontSize: "var(--text-sm)", padding: "var(--space-4)" }}>加载中…</div>
+      {!topo ? (
+        <div className="muted small" style={{ padding: "var(--space-4)" }}>{loading ? "加载中…" : "未加载"}</div>
       ) : (
-        <div style={{ display: "grid", gap: "var(--space-4)" }}>
-          {groupProviders(providers).map((g) => (
-          <section key={g.key}>
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8, margin: "4px 0 8px" }}>
-              <b style={{ fontSize: 14 }}>{g.label}</b>
-              <span className="muted small">{g.items.length} 个 · {g.hint}</span>
-            </div>
-          <div style={{ display: "grid", gap: "var(--space-3)" }}>
-          {g.items.map((p) => {
-            const res = testResults[p.provider_name];
-            const busy = busyName === p.provider_name;
-            const routable = ROUTABLE.has(p.provider_name);
-            const rank = routableOrder.indexOf(p.provider_name);
-            return (
-              <div
-                key={p.provider_name}
-                style={{
-                  padding: "var(--space-3) var(--space-4)",
-                  background: "var(--surface-1)",
-                  borderRadius: 8,
-                  border: "1px solid var(--line)",
-                }}
-              >
-                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
-                  {routable ? (
-                    <span style={{ display: "inline-flex", flexDirection: "column", gap: 2 }} title="调整路由优先级（越小越优先）">
-                      <button
-                        className="cfg-btn"
-                        style={{ padding: "1px 4px", lineHeight: 1 }}
-                        onClick={() => handleMove(p.provider_name, -1)}
-                        disabled={reordering || busy || rank <= 0}
-                        title="上移（更优先）"
-                      >
-                        <ArrowUp size={13} />
-                      </button>
-                      <button
-                        className="cfg-btn"
-                        style={{ padding: "1px 4px", lineHeight: 1 }}
-                        onClick={() => handleMove(p.provider_name, 1)}
-                        disabled={reordering || busy || rank < 0 || rank >= routableOrder.length - 1}
-                        title="下移（更靠后）"
-                      >
-                        <ArrowDown size={13} />
-                      </button>
-                    </span>
-                  ) : (
-                    <span
-                      style={{
-                        minWidth: 26,
-                        height: 26,
-                        borderRadius: 999,
-                        display: "inline-flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        background: "var(--surface-2)",
-                        color: "var(--text-muted)",
-                        fontSize: "var(--text-xs)",
-                        fontWeight: 700,
-                      }}
-                      title="独立爬虫，不参与路由调序"
-                    >
-                      —
-                    </span>
-                  )}
-
-                  <Server size={16} className="text-muted" />
-                  <div style={{ minWidth: 0, flex: 1 }}>
-                    <div style={{ fontWeight: 600 }}>
-                      {p.provider_name}
-                      {routable && rank === 0 && (
-                        <span style={{ marginLeft: "var(--space-2)", fontSize: "var(--text-xs)", fontWeight: 500, color: "var(--accent)" }}>主源</span>
+        <div className="gw-board">
+          {topo.datasets.map((d) => (
+            <section key={d.key} className="gw-col">
+              <header className="gw-col__head">
+                <b>{d.label}</b>
+                <span className="gw-chip">{MODE_LABEL[d.mode]}</span>
+                {!d.routed && <span className="gw-chip gw-chip--muted" title={d.note ?? ""}>未切网关</span>}
+                <code className="gw-col__key">{d.key}</code>
+              </header>
+              {d.note && d.routed && <p className="gw-col__note">{d.note}</p>}
+              <ol className="gw-list">
+                {d.providers.map((p, i) => {
+                  const id = `${d.key}:${p.name}`;
+                  const itemOff = p.item_switchable && !p.item_enabled;
+                  const sourceOff = !p.source_enabled;
+                  // 共用同一源总开关的其他位置（只在操作 / 查看总开关时提示）
+                  const shared = Array.from(new Set(p.switches.flatMap((s) => usage.get(swKey(s)) ?? []))).filter((u) => u !== `${d.label}·${p.label}`);
+                  const state = itemOff || sourceOff ? "disabled" : p.breaker.state;
+                  const router = d.mode === "router";
+                  const res = tests[p.name];
+                  return (
+                    <li key={p.name} className={`gw-src gw-src--${state}${p.active ? "" : " gw-src--inactive"}`}>
+                      <div className="gw-src__row">
+                        <span className="gw-src__idx">{i + 1}</span>
+                        <span className={`gw-dot gw-dot--${state}`} />
+                        <span className="gw-src__name" title={p.name}>{p.label}</span>
+                        {router && (
+                          <span className="gw-src__ord">
+                            <button className="cfg-btn gw-icon" disabled={busy !== null || i === 0} onClick={() => move(d.providers, i, -1)} title="上移（更优先）"><ArrowUp size={12} /></button>
+                            <button className="cfg-btn gw-icon" disabled={busy !== null || i === d.providers.length - 1} onClick={() => move(d.providers, i, 1)} title="下移"><ArrowDown size={12} /></button>
+                          </span>
+                        )}
+                        {router && (
+                          <button className="cfg-btn gw-btn" disabled={busy !== null} onClick={() => test(p.name)} title="测试连通性">
+                            {busy === `test:${p.name}` ? <Loader2 size={12} className="spin" /> : <Plug size={12} />}
+                          </button>
+                        )}
+                        {p.item_switchable ? (
+                          <button
+                            className={p.item_enabled ? "cfg-btn gw-btn" : "cfg-btn cfg-btn--primary gw-btn"}
+                            disabled={busy !== null}
+                            onClick={() => toggleItem(p, id)}
+                            title={`只在「${d.label}」里${p.item_enabled ? "禁用" : "启用"}，其他数据类型不受影响`}
+                          >
+                            {busy === id && <Loader2 size={12} className="spin" />}
+                            {p.item_enabled ? "禁用" : "启用"}
+                          </button>
+                        ) : (
+                          p.switches.length > 0 && (
+                            <button
+                              className={p.source_enabled ? "cfg-btn gw-btn" : "cfg-btn cfg-btn--primary gw-btn"}
+                              disabled={busy !== null}
+                              onClick={() => setSource(p, id, !p.source_enabled)}
+                              title={shared.length ? `源总开关，同时影响：\n${shared.join("\n")}` : "源总开关"}
+                            >
+                              {busy === id && <Loader2 size={12} className="spin" />}
+                              {p.source_enabled ? "禁用" : "启用"}
+                            </button>
+                          )
+                        )}
+                      </div>
+                      <div className="gw-src__meta">
+                        <StateText state={state} itemOff={itemOff} sourceOff={sourceOff} router={router} items={p.breaker.items} />
+                        {!p.active && <span>· {p.inactive_reason}</span>}
+                      </div>
+                      {p.breaker.items.length > 0 && (
+                        <div className="gw-src__brk">
+                          {p.breaker.items.slice(0, router ? 6 : 3).map((b) => (
+                            <Fragment key={b.key}>
+                              <span className={`gw-dot gw-dot--${b.state}`} />
+                              <code>{b.key.replace(/^tushare:[a-z]+:|^gw:[a-z_0-9]+:/, "")}</code>
+                              <span>{b.state === "open" ? `至 ${hhmm(b.open_until)}` : "待探测"}{b.reason ? ` · ${b.reason}` : ""}</span>
+                            </Fragment>
+                          ))}
+                          {p.breaker.items.length > (router ? 6 : 3) && <span className="gw-more">… 共 {p.breaker.items.length} 个接口</span>}
+                        </div>
                       )}
-                    </div>
-                    <div style={{ fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>
-                      {p.note || p.source}
-                    </div>
-                  </div>
-
-                  <StatusBadge status={p.status} />
-                  <span
-                    style={{
-                      fontSize: "var(--text-xs)",
-                      padding: "2px 10px",
-                      borderRadius: 999,
-                      color: p.enabled ? "var(--positive)" : "var(--muted)",
-                      background: p.enabled ? "color-mix(in srgb, var(--positive) 14%, transparent)" : "var(--surface-2)",
-                    }}
-                  >
-                    {p.enabled ? "启用" : "停用"}
-                  </span>
-
-                  <div style={{ display: "flex", gap: "var(--space-2)", marginLeft: "auto" }}>
-                    <button className="cfg-btn" onClick={() => handleTest(p)} disabled={busy}>
-                      {busy ? <Loader2 size={14} className="spin" /> : <Plug size={14} />}
-                      测试
-                    </button>
-                    <button
-                      className={p.enabled ? "cfg-btn" : "cfg-btn cfg-btn--primary"}
-                      onClick={() => handleToggle(p)}
-                      disabled={busy}
-                    >
-                      {busy ? <Loader2 size={14} className="spin" /> : null}
-                      {p.enabled ? "禁用" : "启用"}
-                    </button>
-                  </div>
-                </div>
-
-                {p.apis && p.apis.length > 0 && (
-                  <div style={{ marginTop: "var(--space-2)", display: "flex", gap: "var(--space-2)", flexWrap: "wrap" }}>
-                    {p.apis.map((a) => (
-                      <span
-                        key={a}
-                        style={{
-                          fontSize: "var(--text-xs)",
-                          padding: "2px 8px",
-                          borderRadius: 999,
-                          background: "var(--surface-2)",
-                          color: "var(--text-muted)",
-                        }}
-                      >
-                        {a}
-                      </span>
-                    ))}
-                  </div>
-                )}
-
-                <div style={{ marginTop: "var(--space-2)", display: "flex", gap: "var(--space-4)", flexWrap: "wrap", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-                  {p.last_success_at && <span>最近成功 {formatBj(p.last_success_at)}</span>}
-                  {p.last_failure_at && <span>最近失败 {formatBj(p.last_failure_at)}</span>}
-                  {p.latency_ms != null && <span>延迟 {p.latency_ms} ms</span>}
-                  {p.last_api && <span>last_api {p.last_api}</span>}
-                </div>
-
-                {p.last_error && (
-                  <div style={{ marginTop: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--warning)" }}>
-                    {p.last_error}
-                  </div>
-                )}
-
-                {res && (
-                  <div
-                    style={{
-                      marginTop: "var(--space-3)",
-                      padding: "var(--space-2) var(--space-3)",
-                      borderRadius: 6,
-                      fontSize: "var(--text-sm)",
-                      background: res.ok ? "color-mix(in srgb, var(--positive) 8%, transparent)" : "color-mix(in srgb, var(--warning) 8%, transparent)",
-                      color: res.ok ? "var(--positive)" : "var(--warning)",
-                    }}
-                  >
-                    {res.ok ? "连接正常" : `连接失败：${res.error || "未知错误"}`}
-                    {res.latency_ms != null && ` · ${res.latency_ms} ms`}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          </div>
-          </section>
+                      {router && shared.length > 0 && (
+                        <div className="gw-src__shared" title={shared.join("\n")}>总开关，同时影响：{shared.join("、")}</div>
+                      )}
+                      {!router && sourceOff && (
+                        <div className="gw-src__shared" title={shared.join("\n")}>
+                          整个源被总开关关闭{shared.length > 0 && `（同时影响：${shared.join("、")}）`}{" "}
+                          <button className="cfg-btn gw-btn" disabled={busy !== null} onClick={() => setSource(p, `${id}:source`, true)}>
+                            {busy === `${id}:source` && <Loader2 size={12} className="spin" />}
+                            打开总开关
+                          </button>
+                        </div>
+                      )}
+                      {res && <div className={res.ok ? "gw-src__ok" : "gw-src__fail"}>{res.ok ? "连接正常" : `连接失败：${res.error || "未知错误"}`}{res.latency_ms != null && ` · ${res.latency_ms} ms`}</div>}
+                    </li>
+                  );
+                })}
+              </ol>
+            </section>
           ))}
         </div>
       )}
@@ -292,26 +229,24 @@ export function DataSourcesSection() {
   );
 }
 
-/** 分组：Tushare Pro 兼容网关（可路由、参与优先级 fallback）vs 行情/K线直连源。分组完全由 API 返回的 provider 推导。 */
-function groupProviders(list: DataSourceProvider[]) {
-  const isTs = (p: DataSourceProvider) => ROUTABLE.has(p.provider_name) || /tushare/i.test(`${p.provider_name} ${p.source} ${p.source_type} ${p.layer ?? ""}`);
-  return [
-    { key: "quote", label: "行情 / K线", hint: "实时行情与日线直连源", items: list.filter((p) => !isTs(p)) },
-    { key: "ts", label: "Tushare Pro 系", hint: "按优先级自上而下 fallback，↑↓ 调整", items: list.filter(isTs) },
-  ].filter((g) => g.items.length > 0);
-}
-
-function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { label: string; color: string; bg: string }> = {
-    healthy: { label: "健康", color: "var(--positive)", bg: "color-mix(in srgb, var(--positive) 14%, transparent)" },
-    degraded: { label: "降级", color: "var(--warning)", bg: "color-mix(in srgb, var(--warning) 14%, transparent)" },
-    untested: { label: "未测试", color: "var(--muted)", bg: "var(--surface-2)" },
-    disabled: { label: "已禁用", color: "var(--muted)", bg: "var(--surface-2)" },
-  };
-  const s = map[status] || map.untested;
-  return (
-    <span style={{ fontSize: "var(--text-xs)", padding: "2px 10px", borderRadius: 999, color: s.color, background: s.bg }}>
-      {s.label}
-    </span>
-  );
+function StateText({ state, itemOff, sourceOff, router, items }: {
+  state: string;
+  itemOff: boolean;
+  sourceOff: boolean;
+  router: boolean;
+  items: GatewayProvider["breaker"]["items"];
+}) {
+  if (state === "disabled") {
+    if (router) return <span>已禁用（总开关）</span>;
+    if (itemOff && sourceOff) return <span>已禁用（本项 + 整源总开关）</span>;
+    if (itemOff) return <span>已禁用（仅本项）</span>;
+    return <span>已禁用（整源总开关）</span>;
+  }
+  if (state === "closed") return <span>正常</span>;
+  const open = items.filter((b) => b.state === "open");
+  if (state === "open") {
+    const until = Math.max(...open.map((b) => b.open_until));
+    return <span className="gw-text--open">熔断中 · {open.length} 项，最晚至 {hhmm(until)}</span>;
+  }
+  return <span className="gw-text--half_open">待探测 · {items.length} 项冷却已过</span>;
 }

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>com.wangao.ashare-xiaoshi-min-sync</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/nice</string>
+		<string>-n</string>
+		<string>10</string>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/backend/.venv/bin/python</string>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/backend/scripts/sync_xiaoshi_min_all.py</string>
+	</array>
+	<key>WorkingDirectory</key><string>/Users/wangao/Desktop/ashare-shortline-system/backend</string>
+	<key>EnvironmentVariables</key>
+	<dict><key>PYTHONPATH</key><string>.</string><key>XS_QPS</key><string>0.15</string></dict>
+	<!-- 每天 20:40：避开 17:35 日更与 16:35-18:35 重启窗口；脚本任何异常都 exit 0，不影响选股 -->
+	<key>StartCalendarInterval</key><dict><key>Hour</key><integer>20</integer><key>Minute</key><integer>40</integer></dict>
+	<key>Nice</key><integer>10</integer>
+	<key>StandardOutPath</key><string>/Users/wangao/Library/Logs/ashare-xiaoshi-min-sync.out.log</string>
+	<key>StandardErrorPath</key><string>/Users/wangao/Library/Logs/ashare-xiaoshi-min-sync.out.log</string>
+</dict>
+</plist>

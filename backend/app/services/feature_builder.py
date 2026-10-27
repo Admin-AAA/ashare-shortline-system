@@ -156,6 +156,7 @@ def _risk_score(stock: dict[str, Any]) -> float:
 
 def _apply_dsa_context(item: dict[str, Any], profile: dict[str, Any], dsa_weights: dict[str, float] | None = None) -> None:
     price = _num(item.get("price") or item.get("close"))
+    item["profile_fields_defaulted"] = [k for k in _PROFILE_CORE_FIELDS if profile.get(k) in (None, "")]
     bias_ma5 = _num(profile.get("bias_ma5"), _default_bias_ma5(item))
     bias_ma10 = _num(profile.get("bias_ma10"), bias_ma5 + 2.5)
     bias_ma20 = _num(profile.get("bias_ma20"), _num(item.get("dist20"), bias_ma5 + 5.0))
@@ -193,10 +194,11 @@ def _apply_dsa_context(item: dict[str, Any], profile: dict[str, Any], dsa_weight
     item["volume_ratio_vs_5d"] = round(volume_ratio_5d, 2)
     item["volume_ratio_vs_20d"] = round(volume_ratio_20d, 2)
     item["volume_trend_pct"] = _num(profile.get("volume_trend_pct"), round((volume_ratio_5d - 1) * 100, 1))
-    item["avg_up_day_volume"] = _num(profile.get("avg_up_day_volume"), round(_num(item.get("amount_yi")) * 0.52, 2))
-    item["avg_down_day_volume"] = _num(profile.get("avg_down_day_volume"), round(_num(item.get("amount_yi")) * 0.39, 2))
+    # 上涨/下跌日均量、量价相关：画像缺失时不再用 0.52/0.39×成交额、±0.15~0.35 这类拍脑袋数充当数据（None = 未知，无下游消费方）。
+    item["avg_up_day_volume"] = _opt_num(profile.get("avg_up_day_volume"))
+    item["avg_down_day_volume"] = _opt_num(profile.get("avg_down_day_volume"))
     item["high_volume_days"] = int(_num(profile.get("high_volume_days"), 1 if volume_ratio_20d > 1.5 else 0))
-    item["volume_price_corr"] = _num(profile.get("volume_price_corr"), 0.35 if _num(item.get("pct")) > 0 else -0.15)
+    item["volume_price_corr"] = _opt_num(profile.get("volume_price_corr"))
     item["volume_pattern"] = str(profile.get("volume_pattern", "中性"))
 
     support_ma5 = _bool(profile.get("support_ma5"), abs(item["bias_ma5"]) <= 2 and price >= ma5)
@@ -615,6 +617,21 @@ def _ma_from_bias(price: float, bias_pct: float) -> float:
     return price / (1 + bias_pct / 100) if (1 + bias_pct / 100) else price
 
 
+def _opt_num(value: Any) -> float | None:
+    """缺失/非法 → None（不编造默认值）。"""
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# 这些画像字段缺失时 _apply_dsa_context 会用推算值兜底（由乖离/现价反推均线等）；记录哪些被兜底，便于审计/排查。
+_PROFILE_CORE_FIELDS = ("ma5", "ma10", "ma20", "ma60", "bias_ma5", "bias_ma10", "bias_ma20", "bias_ma60",
+                        "volume_ratio_5d", "volume_ratio_vs_20d", "rsi_12")
+
+
 def _num(value: Any, default: float = 0.0) -> float:
     if value is None or value == "":
         return float(default)
@@ -829,6 +846,15 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
     holder_trade_map = aux.get("holder_trades", {})
     survey_map = aux.get("surveys", {})
     coverage = aux.get("coverage", {}) or {}
+    holder_trade_snapshot_ok = _event_snapshot_ok(coverage, "holder_trade")
+    # surveys 只有显式加载（aux 带 "surveys" 键，且 coverage 未标错误/停更）才算可用
+    survey_snapshot_ok = "surveys" in aux and _event_snapshot_ok(coverage, "institutional_survey", default=True)
+    # 公告：news 字段属 _SCORED_FEATURES，改“查过为空”判定会改变历史回放（早期日无快照指针）的真实性/完整度，
+    # 需 owner 批准后再改；此处只记录快照状态，不改判定。
+    _news_cov = coverage.get("news_announcement") if isinstance(coverage, Mapping) else None
+    news_snapshot_unavailable = bool(
+        isinstance(_news_cov, Mapping) and _news_cov.get("errors") and not int(_news_cov.get("record_count") or 0)
+    )
     auxiliary_trade_date = str(aux.get("as_of_trade_date") or trade_date)
     audit = (snapshot.get("breadth") or {}).get("auxiliary_data_audit") or {}
     checked_news_codes = _checked_codes_from_audit(audit.get("news"))
@@ -923,6 +949,8 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             data_quality["news_checked"] = True
             data_quality["announcements_checked"] = True
         else:
+            if news_snapshot_unavailable:
+                data_quality["news_snapshot_unavailable"] = True
             if code in checked_news_codes:
                 missing_fields.discard("news")
                 missing_fields.discard("announcements")
@@ -1135,28 +1163,44 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["holder_num_decreasing"] = False
 
         # ── 股东增减持特征 ──
+        # 2026-10-19：快照不可用（holder_trade 无覆盖/有错误）时报缺失（None + optional_missing_fields），
+        # 不再写 0 冒充“查过无增减持”。10-09 后快照 unknown_schema 期间全市场都被写成 0。
         ht = holder_trade_map.get(code)
         if ht:
             stock["holder_trade_count"] = ht.get("holder_trade_count", 0)
             stock["holder_trade_increase_count"] = ht.get("holder_trade_increase_count", 0)
             stock["holder_trade_decrease_count"] = ht.get("holder_trade_decrease_count", 0)
             stock["holder_trade_net_ratio"] = ht.get("holder_trade_net_ratio", 0.0)
-        else:
+        elif holder_trade_snapshot_ok:
             stock["holder_trade_count"] = 0
             stock["holder_trade_increase_count"] = 0
             stock["holder_trade_decrease_count"] = 0
             stock["holder_trade_net_ratio"] = 0.0
+        else:
+            for _f in ("holder_trade_count", "holder_trade_increase_count",
+                       "holder_trade_decrease_count", "holder_trade_net_ratio"):
+                stock[_f] = None
+            optional_missing_fields.add("holder_trade")
+            data_quality["holder_trade_snapshot_unavailable"] = True
 
         # ── 机构调研特征 ──
+        # 2026-10-19：机构调研未接入 feature views（S4 audit-only，aux 无 "surveys" 键）或本地表停更时报缺失，
+        # 不再写 0 冒充“近 30 天无调研”。
         sv = survey_map.get(code)
         if sv:
             stock["survey_count"] = sv.get("survey_count", 0)
             stock["survey_fund_visitors"] = sv.get("survey_fund_visitors", 0)
             stock["survey_latest_date"] = sv.get("survey_latest_date", "")
-        else:
+        elif survey_snapshot_ok:
             stock["survey_count"] = 0
             stock["survey_fund_visitors"] = 0
             stock["survey_latest_date"] = ""
+        else:
+            stock["survey_count"] = None
+            stock["survey_fund_visitors"] = None
+            stock["survey_latest_date"] = None
+            optional_missing_fields.add("survey")
+            data_quality["survey_snapshot_unavailable"] = True
 
         # ── 炸板数据（市场情绪温度计，limit_type='Z'） ──
         # 炸板=曾涨停后打开，炸板率高=市场情绪转弱
@@ -1170,6 +1214,14 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
         data_quality["missing_fields"] = sorted(missing_fields)
         data_quality["optional_missing_fields"] = sorted(optional_missing_fields)
         data_quality["fallback_fields"] = sorted(fallback_fields)
+
+def _event_snapshot_ok(coverage: Mapping[str, Any] | Any, dataset: str, *, default: bool = False) -> bool:
+    """事件快照是否可用：coverage 有该数据集且无错误码。无 coverage 条目时返回 default。"""
+    entry = coverage.get(dataset) if isinstance(coverage, Mapping) else None
+    if not isinstance(entry, Mapping):
+        return default
+    return not entry.get("errors")
+
 
 def _checked_codes_from_audit(audit_row: Any) -> set[str]:
     if not isinstance(audit_row, dict):

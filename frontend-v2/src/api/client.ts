@@ -7,6 +7,7 @@ import type {
   PrecisionAtKRow,
   PresetStatsRow,
   DataHealthDiagnostic,
+  DataQualityReport,
   RecommendationCard,
   RecommendationDetail,
   ExecutionConfirmation,
@@ -25,6 +26,7 @@ import type {
   DataSourceHealthRow,
   DataSourceProvider,
   DataSourceProvidersResponse,
+  GatewayTopology,
   ModelRoute,
   ModelRouteTestResult,
   ProviderTestResult,
@@ -218,19 +220,38 @@ export type HorizonStrategy = {
   id: string; name: string; horizon: string; summary: string; next_batch_note?: string | null;
   /** 当日出票状态（17:35 盘后才有）；缺失则不显示 */
   daily_status?: { status: "ok" | "no_signal" | "data_error" | "slots_full" | "not_signal_day" | string; reason?: string | null; date?: string | null } | string | null;
-  daily_status_reason?: string | null; schedule: string; hold_days: number; top_n: number;
-  metrics: { recent_12m?: HorizonMetrics; phases?: Record<string, HorizonMetrics>; window?: string; note?: string; quality?: StrategyQuality };
+  daily_status_reason?: string | null; schedule: string; hold_days: number; top_n: number | null;
+  metrics: { recent_12m?: HorizonMetrics; phases?: Record<string, HorizonMetrics>; window?: string; note?: string; quality?: import("../components/ReturnSourceBlock").ReturnSourceQuality };
+  /** 综合分（后端 strategy_rank.py，仅周期内比较）；沉底策略 rank_score/rank 为空，rank_flags 说明原因 */
+  rank_score?: number | null; rank?: number | null; rank_flags?: string[]; rank_flag_labels?: string[];
+  rank_components?: { n?: number | null; avg?: number | null; win?: number | null; pf?: number | null; mdd?: number | null; tot?: number | null;
+    notional_scale?: number; tot_20?: number | null; mdd_20?: number | null; avg_shrunk?: number; calmar?: number; pf_shrunk?: number;
+    n3_avg?: number; n3_source?: "N3" | "R12"; pos_ratio?: number;
+    metric_scores?: Record<"avg" | "calmar" | "pf" | "n3" | "pos", number>; note?: string };
 };
-export type HorizonStrategyStats = { strategy_id: string; strategy_name: string; n: number | null; win_rate: number | null; avg_ret: number | null; median_ret: number | null; pl_ratio: number | null; max_gain: number | null; max_loss: number | null };
-export type HorizonMetricsResponse = { horizon: string; by_origin?: Record<string, { n?: number | null }>; by_strategy: HorizonStrategyStats[] };
 export type HorizonStrategiesResponse = { horizon: string; strategies: HorizonStrategy[]; rejected?: { name: string; reason: string }[] };
 export type HorizonPick = { code: string; name: string; total_mv: number; status: string; entry_date?: string; exit_date?: string; mark_date?: string; ret?: number; days?: number;
   rule_score?: number | null; rule_score_label?: string | null; rule_score_better?: "higher" | "lower" | null; selection_reason?: string | null; selection_rank?: number | null;
   cancel_code?: string | null; cancel_reason?: string | null; ret_includes_cost?: boolean | null;
   entry_price?: number | null; exit_price?: number | null; mark_price?: number | null; exit_delayed_days?: number | null };
-export type HorizonBatch = { strategy_id: string; strategy_name: string; signal_date: string; status: string; avg_ret: number | null; picks: HorizonPick[] };
+export type HorizonBatch = { strategy_id: string; strategy_name: string; signal_date: string; status: string; avg_ret: number | null; picks: HorizonPick[]; origin?: string | null;
+  /** 生成时间封签（2026-10-27 起）：generated_at 晚于 entry_deadline（次日 09:25）= 开盘后补跑，不算实盘 */
+  generated_at?: string | null; entry_deadline?: string | null };
 export type HorizonPicksResponse = { batches: HorizonBatch[]; total?: number; total_picks?: number; page?: number; page_size?: number; has_more?: boolean };
 export type HorizonBar = { trade_date: string; open: number; high: number; low: number; close: number; pct_chg?: number; volume?: number; amount?: number };
+/** 中长线来源：replay=历史回放重建，live=盘后真实出票，legacy=无来源标记的旧文件（不当实盘算）。 */
+export type HorizonOrigin = "live" | "late" | "replay" | "legacy";
+export type HorizonTrade = Omit<HorizonPick, "total_mv"> & { strategy_id: string; strategy_name: string; signal_date: string; hold_days: number; origin: HorizonOrigin };
+export type HorizonTradesResponse = { horizon: string; origin: string; total: number; trades: HorizonTrade[] };
+export type HorizonStats = { n: number; win_rate: number | null; avg_ret: number | null; median_ret: number | null; total_ret: number | null;
+  pl_ratio: number | null; profit_factor: number | null; avg_win: number | null; avg_loss: number | null; max_gain: number | null; max_loss: number | null;
+  avg_days: number | null; delayed_exit: number; holding: number; pending: number; skipped: number; total_picks: number };
+export type HorizonMetricsResponse = { horizon: string; origin: string; window_days: number | null; window_start: string | null;
+  date_range: { first_signal: string | null; last_signal: string | null }; overview: HorizonStats; by_origin: Record<HorizonOrigin, HorizonStats>;
+  by_strategy: (HorizonStats & { strategy_id: string; strategy_name: string; hold_days: number; first_signal: string | null; last_signal: string | null })[];
+  top_k: (HorizonStats & { k: number })[]; by_month: (HorizonStats & { month: string })[] };
+export type HorizonRunItem = { strategy_id: string; strategy_name: string; status: string; recorded_at?: string | null; picks: number | null; detail: string | null };
+export type HorizonRunsResponse = { horizon: string; days: { date: string; items: HorizonRunItem[] }[] };
 export type HorizonPickDetail = { horizon: string; strategy_id: string; strategy_name: string; strategy_summary?: string; hold_days?: number; signal_date: string; code: string; name: string;
   batch_size?: number; batch_status?: string; pick: HorizonPick; bars: HorizonBar[]; other_signals?: { signal_date: string; strategy_id: string; strategy_name: string; horizon?: string }[] };
 export type HorizonRunSkip = { skipped: string };
@@ -369,6 +390,13 @@ export const api = {
     request<ProviderTestResult>(`/api/admin/data-sources/${providerName}/test`, json("POST"), { timeoutMs: 35_000 }),
   reorderProviders: (providerNames: string[]) =>
     request<DataSourceProvidersResponse>(`/api/admin/data-sources/reorder`, json("POST", { provider_names: providerNames })),
+  dataGateway: () =>
+    request<GatewayTopology>("/api/admin/data-gateway", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
+  setGatewaySwitch: (source: string, sourceType: string, enabled: boolean) =>
+    request<GatewayTopology>("/api/admin/data-gateway/switch", json("POST", { source, source_type: sourceType, enabled })),
+  /** 只在一个数据类型里启停一个 provider，不影响其他数据类型 */
+  setGatewayItemSwitch: (dataset: string, provider: string, enabled: boolean) =>
+    request<GatewayTopology>("/api/admin/data-gateway/item-switch", json("POST", { dataset, provider, enabled })),
 
   scheduledTasks: () => request<ScheduledTask[]>("/api/admin/tasks", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   scheduledTaskRuns: (limit = 100, taskId?: string) =>
@@ -391,8 +419,6 @@ export const api = {
     request<StandaloneMetricsResponse>("/api/strategies/standalone-metrics", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   horizonStrategies: (horizon: "mid" | "long") =>
     request<HorizonStrategiesResponse>(`/api/horizons/${horizon}/strategies`),
-  horizonMetrics: (horizon: "mid" | "long") =>
-    request<HorizonMetricsResponse>(`/api/horizons/${horizon}/metrics`),
   horizonPicks: (horizon: "mid" | "long", strategyId?: string, limit = 30) =>
     request<HorizonPicksResponse>(`/api/horizons/${horizon}/picks?limit=${limit}${strategyId ? `&strategy_id=${encodeURIComponent(strategyId)}` : ""}`),
   horizonPicksPage: (horizon: "mid" | "long", page: number, pageSize: number, strategyId?: string) =>
@@ -401,6 +427,12 @@ export const api = {
     request<HorizonPickDetail>(`/api/horizons/${horizon}/picks/${encodeURIComponent(strategyId)}/${signalDate}/${code}`),
   horizonRun: (horizon: "mid" | "long", payload: { as_of: string; strategy_ids?: string[]; force?: boolean }) =>
     requestWithTimeout<HorizonRunResponse>(`/api/horizons/${horizon}/run`, 900_000, json("POST", payload)),
+  horizonTrades: (horizon: "mid" | "long") =>
+    request<HorizonTradesResponse>(`/api/horizons/${horizon}/trades`),
+  horizonMetrics: (horizon: "mid" | "long", origin: "all" | HorizonOrigin, windowDays?: number | null) =>
+    request<HorizonMetricsResponse>(`/api/horizons/${horizon}/metrics?origin=${origin}${windowDays ? `&window_days=${windowDays}` : ""}`),
+  horizonRuns: (horizon: "mid" | "long", limit = 60) =>
+    request<HorizonRunsResponse>(`/api/horizons/${horizon}/runs?limit=${limit}`),
   strategies: () =>
     request<StrategyListItem[]>("/api/strategies", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   strategyDetail: (strategyId: string, versionId?: string) => {
@@ -432,7 +464,8 @@ export const api = {
   resumeRun: (id: string) => requestWithTimeout<RunResult>(`/api/runs/${id}/resume`, 300_000, json("POST")),
   deleteRun: (id: string) => request<{ deleted: string }>(`/api/runs/${id}`, json("DELETE")),
   deleteRecommendation: (id: string) => request<{ deleted: string }>(`/api/recommendations/${id}`, json("DELETE")),
-  deletePreset: (id: string) => request<{ deleted: string }>(`/api/presets/${id}`, json("DELETE")),
+  deletePreset: (id: string, confirmFormal = false) =>
+    request<{ deleted: string }>(`/api/presets/${id}${confirmFormal ? "?confirm_formal=true" : ""}`, json("DELETE")),
 
   // 时间窗口：windowDays=N 取最近 N 天并截到统一结算截止日；不传则全部历史累计。
   // sampleScope 必须显式传给质量指标，避免 LIVE 与历史回放研究证据混算。
@@ -456,6 +489,8 @@ export const api = {
       undefined,
       options,
     ),
+  dataQuality: (refresh = false) =>
+    request<DataQualityReport>(`/api/admin/data-quality${refresh ? "?refresh=true" : ""}`, undefined, { timeoutMs: refresh ? 60_000 : 15_000 }),
   startDataHealthRemediation: (payload?: {
     target_tables?: string[];
     capital_flow_code_limit?: number;

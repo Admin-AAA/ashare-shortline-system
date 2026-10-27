@@ -212,3 +212,36 @@ def test_buy_after_earlier_cancel_restores_buy_confirmed_fact():
         assert projected["first_buy_confirmed_price"] == 8.55
         # 取消发生过的事实仍然保留，供复盘；但不再冒充「买入前已取消」的终态
         assert projected["first_cancelled_at"] == "2026-07-29T09:33:00"
+
+
+def test_concurrent_insert_of_same_recommendation_is_upserted_not_a_batch_failure(tmp_path, monkeypatch):
+    """轮询进程与接口并发写同一推荐：db.get 看不到对方刚提交的行（可重复读快照），INSERT 撞主键 → 改为更新对方那行，
+    同批其他推荐不受影响（2026-10-26 09:31 rec_20261023_001_083b）。"""
+    engine = create_engine(f"sqlite:///{tmp_path / 's.db'}")
+    RecommendationExecutionState.__table__.create(engine)
+    # 对方先写入并提交一条 buy
+    with Session(engine) as other:
+        persist_execution_assessments(other, [_assessment("buy", checked_at="2026-07-29T10:05:01", price=8.41)])
+        other.commit()
+
+    other_row = _assessment("cancel", checked_at="2026-07-29T10:20:00", price=8.10)
+    second = {**_assessment("wait", checked_at="2026-07-29T10:20:00", price=5.0), "recommendation_id": "rec_state_2"}
+    with Session(engine) as db:
+        real_get = db.get
+        calls = {"n": 0}
+
+        def blind_get(model, ident, **kw):  # 模拟快照里看不到 rec_state_1
+            calls["n"] += 1
+            return None if (ident == "rec_state_1" and calls["n"] == 1) else real_get(model, ident, **kw)
+
+        monkeypatch.setattr(db, "get", blind_get)
+        persisted = persist_execution_assessments(db, [other_row, second])
+        db.commit()
+
+    with Session(engine) as db:
+        s1 = db.get(RecommendationExecutionState, "rec_state_1")
+        s2 = db.get(RecommendationExecutionState, "rec_state_2")
+        assert persisted == 2 and s2 is not None and s2.latest_decision_code == "wait"
+        assert s1.latest_decision_code == "cancel" and s1.latest_price == 8.10          # 更新而不是抛错
+        assert s1.ever_buy_confirmed is True and s1.first_buy_confirmed_price == 8.41  # 对方写入的首次 buy 事实保留
+        assert s1.cancelled_before_entry is False

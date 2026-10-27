@@ -293,3 +293,26 @@ def _fmt_date(val: str) -> str:
     if len(v) == 8:
         return f"{v[:4]}-{v[4:6]}-{v[6:]}"
     return val
+
+
+def keep_rows_for_trade_date(frame: "pd.DataFrame | None", trade_date: str, *, api_name: str = "") -> "pd.DataFrame | None":
+    """Drop rows whose own trade_date differs from the requested one (2026-10-19, chip freeze).
+
+    Some upstreams answer ``cyq_perf(trade_date=X)`` for a not-yet/never-published X with the
+    nearest earlier day's snapshot. Writers stamped every row with the *requested* date, so
+    the previous day's chips were copied onto X (24 days of 2026-07-31..09-18 frozen). A row
+    without a matching trade_date is treated as missing: the column stays NULL.
+    """
+    if frame is None or frame.empty or "trade_date" not in frame.columns:
+        return frame
+    want = str(trade_date).replace("-", "")[:8]
+    got = frame["trade_date"].astype(str).str.replace("-", "", regex=False).str[:8]
+    mask = got == want
+    if bool(mask.all()):
+        return frame
+    others = sorted(set(got[~mask]))[:5]
+    logger.warning(
+        "%s(trade_date=%s): 上游返回 %d/%d 行的 trade_date 不是请求日（%s），按缺失丢弃，不写成请求日",
+        api_name or "tushare", want, int((~mask).sum()), len(frame), ",".join(others),
+    )
+    return frame[mask].reset_index(drop=True)

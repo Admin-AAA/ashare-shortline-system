@@ -1,0 +1,85 @@
+import type { CSSProperties } from "react";
+
+/** §282/§285 收益来源指标（只展示，不参与选股/判定）：正常水平（两头各去 5% 后平均，标签依据）、压力测试（只去最赚 5% 后平均）、最赚 10 笔占总利润比例、中位数、最长连亏、稳健/彩票标签、新标准结论。 */
+export type ReturnSourceWindow = {
+  n?: number; avg?: number; pf?: number; mdd?: number; streak?: number; median?: number; trim5?: number; trim_both5?: number;
+  top10_share?: number | null; top10_red?: boolean; label?: string; robust?: boolean;
+  /** §309：每笔策略净收益 − 同持有期沪深300涨幅（按笔平均）；hs300_avg=指数同期平均涨幅；beat_hs300=跑赢沪深300的笔占比% */
+  excess_hs300?: number; hs300_avg?: number; beat_hs300?: number;
+};
+export type ReturnSourceQuality = {
+  standard?: string; basis?: string; R12?: ReturnSourceWindow; N3?: ReturnSourceWindow; label?: string;
+  pass?: boolean; fail?: string[]; pos_phases?: number; n_phases?: number; bear?: { W0?: number | null; W00?: number | null };
+};
+
+const FAIL_TEXT: Record<string, string> = {
+  "1_avg_pos": "平均每笔不为正", "2a_pf": "盈亏比<1.3", "2b_mdd": "最大回撤超上限",
+  "3a_phases": "为正的阶段不够", "3b_bear": "熊市段亏损超 5%", "4_n": "样本不足",
+};
+const muted: CSSProperties = { fontSize: "var(--text-xs)", color: "var(--muted)", fontFamily: "var(--font-mono)" };
+const pct = (v?: number | null, d = 2) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(d)}%`);
+
+function Row({ title, w }: { title: string; w?: ReturnSourceWindow }) {
+  if (!w) return null;
+  const red = w.top10_red;
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(96px, 1fr))", gap: 6, alignItems: "baseline" }}
+      title={`${title}：${w.label ?? ""}\n正常水平=去掉最赚 5% 和最亏 5% 的笔后，平均每笔收益（稳健/彩票标签按它判定：正常水平>0 且中位数>0 才算稳健）\n压力测试=只去掉最赚 5% 的笔后平均每笔（模拟「少数暴涨没抓到」，更苛刻）\n前10笔占比=最赚 10 笔收益之和÷全部笔收益之和（>50% 标红，说明利润靠少数几笔）；中位数=最典型一笔的收益`}>
+      <span style={muted}><b>{title}</b></span>
+      <span style={muted}>正常水平 <b style={{ color: (w.trim_both5 ?? 0) >= 0 ? "var(--market-up)" : "var(--market-down)" }}>{pct(w.trim_both5)}</b></span>
+      <span style={muted}>压力测试 <b style={{ color: (w.trim5 ?? 0) >= 0 ? "var(--market-up)" : "var(--market-down)" }}>{pct(w.trim5)}</b></span>
+      <span style={muted}>前10笔占比 <b style={{ color: red ? "var(--market-down)" : "var(--text)" }}>{w.top10_share == null ? "—" : `${Math.round(w.top10_share * 100)}%`}</b></span>
+      <span style={muted}>中位数 <b style={{ color: (w.median ?? 0) >= 0 ? "var(--market-up)" : "var(--market-down)" }}>{pct(w.median)}</b></span>
+      <span style={muted}>最长连亏 <b>{w.streak != null ? Math.round(w.streak) : "—"}</b></span>
+    </div>
+  );
+}
+
+export const HS300_HINT = "比沪深300多赚＝每笔策略收益（已扣成本）减去同一持有期（买入日到卖出日）买沪深300的涨幅，按笔取平均。" +
+  "和「每笔超额（同市值对照）」不同：同市值对照比的是同日同市值的股票，已把小盘风格的行情扣掉，看选股本事；沪深300没扣这个风格，小盘股行情好时这个数会偏大。只展示，不参与达标判定。";
+
+export function Hs300Line({ quality }: { quality?: ReturnSourceQuality | null }) {
+  const a = quality?.R12?.excess_hs300, b = quality?.N3?.excess_hs300;
+  if (a == null && b == null) return null;
+  const col = (v?: number) => (v == null ? "var(--muted)" : v >= 0 ? "var(--market-up)" : "var(--market-down)");
+  return (
+    <div style={{ ...muted, marginTop: 4 }} title={HS300_HINT}>
+      比沪深300多赚（每笔）：近12个月 <b style={{ color: col(a) }}>{pct(a)}</b>
+      {quality?.R12?.beat_hs300 != null ? `（${Math.round(quality.R12.beat_hs300)}%的笔跑赢）` : ""}
+      ，近3年 <b style={{ color: col(b) }}>{pct(b)}</b>
+      {quality?.N3?.beat_hs300 != null ? `（${Math.round(quality.N3.beat_hs300)}%的笔跑赢）` : ""}
+    </div>
+  );
+}
+
+export function ReturnSourceBlock({ quality, showHs300 = false }: { quality?: ReturnSourceQuality | null; showHs300?: boolean }) {
+  if (!quality || !quality.R12) return null;
+  const robust = (quality.label ?? "").startsWith("稳健");
+  const tone = robust ? "var(--market-up)" : "var(--amber, #d97706)";
+  const reasons = (quality.fail ?? []).map((k) => FAIL_TEXT[k] ?? k).join("、");
+  const wins: [string, ReturnSourceWindow | undefined][] = [["近12个月", quality.R12], ["近3年", quality.N3]];
+  // 前10笔占比 >100%：最赚的 10 笔就超过了全部净利润，说明其余交易合计是亏的
+  const over100 = wins.filter(([, w]) => (w?.top10_share ?? 0) > 1).map(([t]) => t);
+  // 稳健型但中位数几乎为 0：标签按规则成立，但典型的一笔几乎不赚钱
+  const nearZero = robust ? wins.filter(([, w]) => w?.median != null && w.median > 0 && w.median < 0.1).map(([t, w]) => `${t}中位数仅${pct(w?.median)}`) : [];
+  return (
+    <div style={{ marginTop: "var(--space-3)", paddingTop: "var(--space-3)", borderTop: "1px dashed var(--border)" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8, alignItems: "baseline", flexWrap: "wrap" }}>
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--text)", fontWeight: 600 }}>收益来源（钱是怎么赚的）</span>
+        <span style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: tone }} title="判定：两头各去 5% 后的平均每笔>0，且中位数>0（近12个月、近3年都满足才是稳健型）">{quality.label}</span>
+      </div>
+      <div style={{ display: "grid", gap: 4, marginTop: "var(--space-2)" }}>
+        <Row title="近12个月" w={quality.R12} />
+        <Row title="近3年" w={quality.N3} />
+      </div>
+      {showHs300 && <Hs300Line quality={quality} />}
+      {over100.length > 0 && <div style={{ ...muted, marginTop: 4 }}>※ {over100.join("、")}「前10笔占比」超过100%：最赚的10笔比全部净利润还多，说明其余交易合计是亏的。</div>}
+      {nearZero.length > 0 && <div style={{ ...muted, marginTop: 4 }}>※ 典型一笔几乎不赚钱（{nearZero.join("；")}）：标签按规则判为稳健型，但赚钱主要靠平均数。</div>}
+      <div style={{ ...muted, marginTop: 4 }} title={quality.basis}>
+        新标准（{quality.standard ?? "§282"}）：{quality.pass ? "达标" : `未达标（${reasons}）`}
+        {quality.pos_phases != null ? ` · ${quality.pos_phases}/${quality.n_phases} 段为正` : ""}
+        {quality.bear ? ` · 熊市段 ${pct(quality.bear.W0, 1)} / ${pct(quality.bear.W00, 1)}` : ""}
+      </div>
+    </div>
+  );
+}

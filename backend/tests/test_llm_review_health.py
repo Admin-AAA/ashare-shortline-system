@@ -5,6 +5,7 @@ LLM 审查只在【成功】时写 llm_review_cache；key 失效 / provider 故�
 
 1. 纯函数 _llm_health_status 的状态判定（ok / stale / never 各分支）。
 2. 服务函数 llm_review_health 对真实 DB 的聚合（seeded 行 → status ok + 字段齐全）。
+3. 停用开关 LLM_RISK_NOTES_ENABLED=False 时 status=disabled、enabled=False（不得报 stale）。
 """
 
 from datetime import datetime, timedelta, timezone
@@ -68,7 +69,11 @@ def test_status_stale_just_over_24h():
 # --------------------------------------------------------------------------- #
 # 服务函数：真实 DB 聚合（seeded 行）
 # --------------------------------------------------------------------------- #
-def test_service_returns_ok_with_seeded_row(db):
+def test_service_returns_ok_with_seeded_row(db, monkeypatch):
+    # 新鲜度路径：临时打开开关，否则停用时固定 status=disabled
+    monkeypatch.setattr(
+        "app.services.async_llm_risk_notes.LLM_RISK_NOTES_ENABLED", True
+    )
     now = _now()
     row = LLMReviewCache(
         cache_key="__test_health_key__",
@@ -85,8 +90,35 @@ def test_service_returns_ok_with_seeded_row(db):
     health = llm_review_health(db)
 
     assert health["status"] == "ok"
+    assert health["enabled"] is True
     assert health["total_entries"] >= 1
     assert health["recent_count_24h"] >= 1
     assert health["last_review_at"] is not None
     assert health["model"] == "gpt-5.4"
     assert health["checked_at"] is not None
+
+
+def test_service_disabled_when_switch_off(db, monkeypatch):
+    """停用时：即便缓存很新，也必须报 status=disabled + enabled=False，不得报 stale。"""
+    monkeypatch.setattr(
+        "app.services.async_llm_risk_notes.LLM_RISK_NOTES_ENABLED", False
+    )
+    now = _now()
+    row = LLMReviewCache(
+        cache_key="__test_health_disabled__",
+        skill_id="daily-stock-analysis-skill",
+        skill_hash="h123",
+        trade_date=now.strftime("%Y-%m-%d"),
+        code="600000",
+        review_json='{"delta_score": 1.2, "verdict": "ok"}',
+        model="gpt-5.4",
+    )
+    db.add(row)
+    db.commit()
+
+    health = llm_review_health(db)
+
+    assert health["enabled"] is False
+    assert health["status"] == "disabled"
+    assert health["status"] != "stale"
+    assert "enabled" in health

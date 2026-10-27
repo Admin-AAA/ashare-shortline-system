@@ -30,6 +30,7 @@ def _completed_formal_run(
     evaluation_scope: str = "live_forward",
     trade_date: str = "2026-08-04",
     started_at: datetime | None = datetime(2026, 8, 4, 1, 30, 0, 123456),
+    finished_at: datetime | None | str = "same",
     data_as_of: str | None = "2026-08-04",
     source_snapshot_id: str | None = "snapshot_pool_2026-08-04_formal",
     with_execution_audit: bool = True,
@@ -66,6 +67,8 @@ def _completed_formal_run(
         classification_reason=None,
         trade_date=trade_date,
         started_at=started_at,
+        # 2026-10-27：生成时刻 = 完成时刻（与最后一条推荐写入时刻取较晚者）；默认与 started_at 相同
+        finished_at=started_at if finished_at == "same" else finished_at,
         status="completed",
         data_as_of=data_as_of,
         source_snapshot_id=source_snapshot_id,
@@ -118,10 +121,17 @@ def test_same_day_formal_run_classifies_live_forward_and_persists_all_columns():
     assert run.reconstruction_batch_id is None
 
 
+def test_next_morning_before_open_is_live_after_open_is_unverified():
+    """2026-10-27：信号日收盘后到入场日 09:15 前生成（凌晨/安全网补跑）算实盘；开盘后才生成不算。"""
+    # 2026-08-05 01:00 UTC == 09:00 Beijing，入场日开盘前
+    early = _completed_formal_run(started_at=datetime(2026, 8, 5, 1, 0))
+    assert apply_formal_run_provenance(early, code_revision=_CODE_REVISION).evidence_class is EvidenceClass.LIVE_FORWARD
+
+
 def test_next_day_generation_classifies_unverified_with_full_identity():
     """**Validates: Requirements 2.2, 2.5**"""
-    # 2026-08-05 01:00 UTC == 2026-08-05 09:00 Beijing, one day after signal.
-    run = _completed_formal_run(started_at=datetime(2026, 8, 5, 1, 0))
+    # 2026-08-05 01:30 UTC == 2026-08-05 09:30 Beijing：入场日已开盘
+    run = _completed_formal_run(started_at=datetime(2026, 8, 5, 1, 30))
 
     identity = apply_formal_run_provenance(run, code_revision=_CODE_REVISION)
 
@@ -253,10 +263,10 @@ def test_run_name_and_scope_metadata_never_influence_classification(run_name: st
     assert identity is not None
     assert identity.evidence_class is EvidenceClass.LIVE_FORWARD
 
-    # A display name claiming "live" cannot rescue next-day generation.
+    # A display name claiming "live" cannot rescue generation after the entry session opened.
     late_run = _completed_formal_run(
         run_name=run_name,
-        started_at=datetime(2026, 8, 5, 1, 0),
+        started_at=datetime(2026, 8, 5, 1, 30),
     )
     late_identity = apply_formal_run_provenance(late_run, code_revision=_CODE_REVISION)
     assert late_identity is not None
@@ -287,3 +297,37 @@ def test_resolve_code_revision_default_path_uses_cached_git_head(monkeypatch):
     monkeypatch.delenv("ASHARE_APPLICATION_REVISION", raising=False)
     monkeypatch.setattr(deployment_identity, "_cached_git_head_revision", lambda: "deadbeefcafe1234")
     assert resolve_code_revision() == "deadbeefcafe1234"
+
+
+def test_generation_time_is_completion_not_queue_time():
+    """2026-10-27：09:10 排队、09:40 才完成 → 不算实盘（以完成时刻判，不看排队时刻）。"""
+    # 信号日 08-04，入场日 08-05；北京 09:10 = UTC 01:10，09:40 = UTC 01:40
+    run = _completed_formal_run(started_at=datetime(2026, 8, 5, 1, 10), finished_at=datetime(2026, 8, 5, 1, 40))
+    identity = apply_formal_run_provenance(run, code_revision=_CODE_REVISION)
+    assert identity.evidence_class is EvidenceClass.UNVERIFIED
+    assert run.actual_generated_at == datetime(2026, 8, 5, 1, 40)
+
+
+def test_retry_finishing_after_open_is_not_live():
+    """重试第 3 次：最初 08:30 排队，开盘后 09:55 才完成 → 不算实盘。"""
+    run = _completed_formal_run(started_at=datetime(2026, 8, 5, 0, 30), finished_at=datetime(2026, 8, 5, 1, 55))
+    assert apply_formal_run_provenance(run, code_revision=_CODE_REVISION).evidence_class is EvidenceClass.UNVERIFIED
+
+
+def test_latest_recommendation_write_later_than_finish_wins():
+    """最后一条推荐写入比完成时刻更晚：取更晚的（09:05 完成、09:20 才写完推荐 → 不算实盘）。"""
+    run = _completed_formal_run(started_at=datetime(2026, 8, 5, 0, 50), finished_at=datetime(2026, 8, 5, 1, 5))
+    identity = apply_formal_run_provenance(run, code_revision=_CODE_REVISION,
+                                           latest_recommendation_at=datetime(2026, 8, 5, 1, 20))
+    assert identity.evidence_class is EvidenceClass.UNVERIFIED
+    early = _completed_formal_run(started_at=datetime(2026, 8, 5, 0, 50), finished_at=datetime(2026, 8, 5, 1, 5))
+    assert apply_formal_run_provenance(early, code_revision=_CODE_REVISION,
+                                       latest_recommendation_at=datetime(2026, 8, 5, 1, 0)).evidence_class \
+        is EvidenceClass.LIVE_FORWARD
+
+
+def test_missing_finished_at_is_never_live():
+    run = _completed_formal_run(finished_at=None)
+    assert apply_formal_run_provenance(run, code_revision=_CODE_REVISION) is None
+    assert run.evidence_class == EvidenceClass.UNVERIFIED.value
+    assert run.classification_reason == INCOMPLETE_PROVENANCE_REASON

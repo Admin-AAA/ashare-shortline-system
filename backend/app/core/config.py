@@ -25,7 +25,7 @@ class ProviderSettings:
     api_rate_limits: dict = field(default_factory=dict)
 
 
-_PROVIDER_PREFIXES = ("promax", "quantdata")
+_PROVIDER_PREFIXES = ("promax", "quantdata", "teajoin")
 
 
 class Settings(BaseSettings):
@@ -59,6 +59,33 @@ class Settings(BaseSettings):
     tushare_quantdata_url: str = "https://quantdata888.duckdns.org"
     tushare_quantdata_token: str = Field(default="", repr=False)
     tushare_quantdata_rate_limit_per_minute: int = 120
+    # teajoin（DaoShare）：第三方 tushare pro 协议代理（JSON token，POST 根路径）。卖家口径 500 次/分钟（2026-10-26 19:32），我们默认只用 420。
+    tushare_teajoin_url: str = "https://teajoin.com"
+    tushare_teajoin_token: str = Field(default="", repr=False)
+    tushare_teajoin_rate_limit_per_minute: int = 420  # 卖家口径 500 次/分钟，留约 15% 余量
+    # research 命名空间盘中（工作日 09:15–15:05）对非 promax 源的限速（次/分钟）；0=不限。给 live 链路留额度。
+    tushare_teajoin_research_intraday_rpm: int = 30
+    # 单进程对 teajoin 的并发上限（上游「query capacity busy」多发生在多路同时重查询时）
+    tushare_teajoin_max_concurrency: int = 4
+    # teajoin 做「主源」（2026-10-26 用户指令）：在其支持的接口上排链首，失败/超时/容量忙立即降级到原链路。
+    # 总开关 ASHARE_TUSHARE_TEAJOIN_LEAD=false 即回到「仅兜底」；读超时（秒）只在主源且后面还有备源时生效。
+    tushare_teajoin_lead: bool = True
+    tushare_teajoin_lead_read_timeout_seconds: float = 40.0
+    tushare_teajoin_lead_heavy_timeout_seconds: float = 90.0
+    tushare_quantdata_research_intraday_rpm: int = 0
+    # 2026-10-26 21:00：promax 降为普通用户、额度很少；teajoin 是主力。
+    # * 盘中让位（36 个延迟敏感接口让 promax/quantdata 先走）默认关闭：promax 额度要专门留给 rt_k；
+    #   盘中 teajoin 做主源时读超时收紧到 intraday_read_timeout（超时立即降级）。ASHARE_TUSHARE_TEAJOIN_INTRADAY_YIELD=true 可恢复旧让位。
+    # AKShare 全市场实时快照（quote.realtime 第二备份，见 datasource/akshare_quote.py）。
+    quote_akshare_enabled: bool = True          # ASHARE_QUOTE_AKSHARE_ENABLED=false 整体关闭
+    quote_akshare_func: str = "sina"            # sina（实测可用、已对账）| em（东财，未对账，本机 IP 曾被 push2 断连）
+    tushare_teajoin_intraday_yield: bool = False
+    tushare_teajoin_intraday_read_timeout_seconds: float = 15.0
+    # * promax 额度专留实时行情（rt_k/rt_min）：其余接口的链路里只要还有别的上游，就不把 promax 放进去；
+    #   ASHARE_TUSHARE_PROMAX_RTK_RESERVED=false 恢复「promax 作为末位兜底」。
+    tushare_promax_rtk_reserved: bool = True
+    # * 补数/研究进程（research 命名空间）一律不动用 promax；ASHARE_TUSHARE_PROMAX_RESEARCH_ENABLED=true 恢复。
+    tushare_promax_research_enabled: bool = False
     # Xiaoshi v3：独立于 Tushare Pro 协议，提供全市场快照、复权日线、财务与量化数据。
     xiaoshi_api_base_url: str = "https://api.shizixi.com"
     xiaoshi_api_key: str = Field(default="", repr=False)
@@ -79,6 +106,15 @@ class Settings(BaseSettings):
     datasource_shadow_sample_rate: float = 0.1
     tushare_provider_failure_threshold: int = 3
     tushare_provider_recovery_seconds: float = 300.0
+    # 熔断阈值按失败类型（网关审计 1）：超时 N 次、错误数据（空/缺字段）N 次熔断；限流按上游等待时间。
+    breaker_threshold_timeout: int = 2
+    breaker_threshold_bad_data: int = 3
+    # 网关整体截止时间与重试预算（网关审计 2）
+    datasource_deadline_realtime_seconds: float = 3.0
+    datasource_deadline_default_seconds: float = 120.0
+    datasource_retry_budget: int = 2
+    # 按数据集覆盖缓存 TTL（秒），如 "quote.realtime=5,bar.minute=60"；默认见 datasource/cache.py
+    datasource_cache_ttl: str = ""
     tushare_provider_max_attempts: int = 2
     tushare_connect_timeout_seconds: float = 5.0
     tushare_read_timeout_seconds: float = 120.0
@@ -122,6 +158,11 @@ class Settings(BaseSettings):
     agent_temperature: float = 0.3
     agent_max_tokens: int = 40000
     agent_skill_weight: float = 0.50
+    # 每个策略（短/中/长线各策略独立计）每个交易日最多「新推荐」的股票数；仅作用于实盘每日出票路径
+    # （formal live run、中长线 generate_picks(apply_daily_cap=True)），不作用于历史/回放/回测。
+    # 超出时按该策略自身既有排序取前 N 只，与第 N 名同分的一起顺延，其余记入审计。0 = 不限制。环境变量 ASHARE_MAX_DAILY_PICKS_PER_STRATEGY。
+    # 注意：这不是持仓上限——中长线 20 仓位等持仓口径与本项无关。
+    max_daily_picks_per_strategy: int = 5
     # 正式推荐覆盖全 A 股；"20cm" 仅保留为显式研究实验选项。
     formal_board_universe: str = "all"
     # 辅助数据源（tushare 优先，eastmoney/akshare 备用）

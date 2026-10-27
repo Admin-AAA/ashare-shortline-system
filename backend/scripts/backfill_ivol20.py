@@ -7,6 +7,11 @@
   python backfill_ivol20.py --start 2024-06-01                      # 回填 ivol20（默认）
   python backfill_ivol20.py --start 2024-06-01 --metric ivol_dn20   # 回填 ivol_dn20
   python backfill_ivol20.py --start 2024-06-01 --missing            # 只补 NULL（日常增量）
+  python backfill_ivol20.py --start 2022-01-01 --missing --batch-rows 5000 --dry-run  # 只数可补行数
+
+--missing 只写原本为 NULL 的行（WHERE col IS NULL），已有值一律不动；--batch-rows 把每月的写入拆成
+小事务逐批提交（与同表其他列的回补并行时缩短行锁持有时间）。基准 000905.SH 本地只有 index_daily
+覆盖的区间，基准缺失的交易日算不出残差、保持 NULL（不请求上游）。
 """
 from __future__ import annotations
 import sys, argparse
@@ -40,7 +45,8 @@ def month_starts(start: str, end: str) -> list[tuple[str, str]]:
     return out
 
 
-def fill_chunk(s, c0: str, c1: str, only_missing: bool, metric: str = "ivol20") -> int:
+def fill_chunk(s, c0: str, c1: str, only_missing: bool, metric: str = "ivol20",
+               batch_rows: int = 0, dry_run: bool = False) -> int:
     col, builder = _METRICS[metric]
     if only_missing:
         n_missing = s.execute(text(
@@ -59,24 +65,39 @@ def fill_chunk(s, c0: str, c1: str, only_missing: bool, metric: str = "ivol20") 
     idx = pd.DataFrame(s.execute(text(
         "SELECT trade_date, pct_chg FROM index_daily WHERE ts_code=:c AND trade_date>=:w AND trade_date<=:b "
         "ORDER BY trade_date"), {"c": BENCHMARK_TS_CODE, "w": warm, "b": c1}).mappings().all())
+    if idx.empty:
+        return 0
     panel = builder(kbars, idx)
     panel = panel[(panel.trade_date >= c0) & (panel.trade_date <= c1)].dropna(subset=[col])
-    if only_missing:
-        panel = panel[panel[col].notna()]
     if panel.empty:
         return 0
+    panel = panel[["code", "trade_date", col]].copy()
     panel[col] = panel[col].astype(float).round(6)
-    conn = s.connection()
-    conn.execute(text("DROP TEMPORARY TABLE IF EXISTS _ivol_tmp"))
-    conn.execute(text(f"CREATE TEMPORARY TABLE _ivol_tmp (code VARCHAR(6), trade_date VARCHAR(10), {col} DOUBLE, "
-                      "PRIMARY KEY(code, trade_date))"))
-    panel.to_sql("_ivol_tmp", con=conn, if_exists="append", index=False, chunksize=20000)
-    res = conn.execute(text(
-        f"UPDATE daily_kbars k JOIN _ivol_tmp t ON k.code=t.code AND k.trade_date=t.trade_date "
-        f"SET k.{col}=t.{col}, k.updated_at=UTC_TIMESTAMP()"))
-    conn.execute(text("DROP TEMPORARY TABLE IF EXISTS _ivol_tmp"))
-    s.commit()
-    return int(res.rowcount or 0)
+    where_null = f" WHERE k.{col} IS NULL" if only_missing else ""
+    if dry_run:
+        if not only_missing:
+            return len(panel)
+        keys = s.execute(text(
+            f"SELECT code, trade_date FROM daily_kbars WHERE trade_date BETWEEN :a AND :b AND {col} IS NULL"),
+            {"a": c0, "b": c1}).all()
+        ks = {(str(a), str(b)) for a, b in keys}
+        return int(sum((c, d) in ks for c, d in zip(panel.code.astype(str), panel.trade_date.astype(str))))
+    step = batch_rows if batch_rows and batch_rows > 0 else len(panel)
+    total = 0
+    for i in range(0, len(panel), step):
+        part = panel.iloc[i:i + step]
+        conn = s.connection()
+        conn.execute(text("DROP TEMPORARY TABLE IF EXISTS _ivol_tmp"))
+        conn.execute(text(f"CREATE TEMPORARY TABLE _ivol_tmp (code VARCHAR(6), trade_date VARCHAR(10), {col} DOUBLE, "
+                          "PRIMARY KEY(code, trade_date))"))
+        part.to_sql("_ivol_tmp", con=conn, if_exists="append", index=False, chunksize=20000)
+        res = conn.execute(text(
+            f"UPDATE daily_kbars k JOIN _ivol_tmp t ON k.code=t.code AND k.trade_date=t.trade_date "
+            f"SET k.{col}=t.{col}, k.updated_at=UTC_TIMESTAMP(){where_null}"))
+        conn.execute(text("DROP TEMPORARY TABLE IF EXISTS _ivol_tmp"))
+        s.commit()
+        total += int(res.rowcount or 0)
+    return total
 
 
 def main():
@@ -84,7 +105,9 @@ def main():
     ap.add_argument("--start", default="2024-06-01")
     ap.add_argument("--end", default="2099-01-01")
     ap.add_argument("--metric", default="ivol20", choices=sorted(_METRICS))
-    ap.add_argument("--missing", action="store_true")
+    ap.add_argument("--missing", action="store_true", help="只写原本为 NULL 的行")
+    ap.add_argument("--batch-rows", type=int, default=0, help="每个小事务最多写多少行（0=整月一个事务）")
+    ap.add_argument("--dry-run", action="store_true", help="只计算并统计可写行数，不写库")
     args = ap.parse_args()
     col = _METRICS[args.metric][0]
     with SessionLocal() as s:
@@ -92,11 +115,11 @@ def main():
     end = min(pd.Timestamp(args.end), pd.Timestamp(last_dt)).strftime("%Y-%m-%d")
     chunks = month_starts(args.start, end)
     print(f"{len(chunks)} monthly chunks {args.start}..{end} metric={args.metric} "
-          f"missing_only={args.missing}", flush=True)
+          f"missing_only={args.missing} batch_rows={args.batch_rows} dry_run={args.dry_run}", flush=True)
     total = 0
     with SessionLocal() as s:
         for i, (c0, c1) in enumerate(chunks, 1):
-            n = fill_chunk(s, c0, c1, args.missing, args.metric)
+            n = fill_chunk(s, c0, c1, args.missing, args.metric, args.batch_rows, args.dry_run)
             total += n
             print(f"[{i}/{len(chunks)}] {c0}..{c1} {col} updated={n:,} cumulative={total:,}", flush=True)
     print(f"DONE metric={args.metric} total updated={total:,}")

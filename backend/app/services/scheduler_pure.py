@@ -101,7 +101,38 @@ BLOCK_TRADE_BACKUP_TASK_ID = "midterm_block_trade_premarket"
 BLOCK_TRADE_BACKUP_CRON = "3 8 * * mon-fri"  # 周一到周五 08:03（开盘前，T=上一交易日）
 TASK_TYPE_DATA_FRESHNESS_CHECK = "data_freshness_check"
 DATA_FRESHNESS_TASK_ID = "data_freshness_check_daily"
+# 股票身份（stocks + stock_metadata_history）每日增量刷新：08:10 盘前一次（新股 / ST 戴帽摘帽通常前一晚公告），
+# 17:10 盘后一次（在 17:35 日更之前补齐当天新股，让日更和 18:00 对账看到最新身份）。只读上游、只写 stocks / 元数据区间。
+TASK_TYPE_STOCK_IDENTITY_REFRESH = "stock_identity_refresh"
+STOCK_IDENTITY_TASK_ID = "stock_identity_refresh_daily"
+STOCK_IDENTITY_CRON = "10 8,17 * * mon-fri"
+# 策略版本回测画像补跑：策略出新版本后 current_target 的 strategy_version 变了，旧版本画像不能跨版本复用，
+# 页面会一直 pending_backtest（2026-10-25 审计：5 个短线策略里 4 个）。每个交易日 19:40（18:35 日更窗口之后、
+# 21:00 晚间补数之前）只给「没有任何可用画像」的当前版本补跑，每次最多 1 个，避免 16GB 内存下批量回测。
+TASK_TYPE_STRATEGY_PROFILE_REFRESH = "strategy_profile_refresh"
+STRATEGY_PROFILE_TASK_ID = "strategy_profile_refresh_daily"
+STRATEGY_PROFILE_CRON = "40 19 * * mon-fri"
 DATA_FRESHNESS_CRON = "0 18 * * mon-fri"  # 周一到周五 18:00 只读巡检（允许在 16:35–18:35 日更窗口内跑）
+# 统一数据质量巡检（data_quality_monitor：数据库表 + data/ 文件数据集 + research 静态文件 + 调度/日志静默失败，只读）：
+# 18:00 与 data_freshness 一起跑；另在盘前 08:50（隔夜失败/停更在开盘前暴露）和 21:40（21:00 晚间补数之后验收）各跑一次。
+DATA_QUALITY_CHECKS = (
+    ("data_quality_check_morning", "盘前数据质量巡检（只读：文件数据集/research 文件/调度/日志）", "50 8 * * mon-fri"),
+    ("data_quality_check_evening", "晚间补数后数据质量验收（只读）", "40 21 * * mon-fri"),
+)
+# 数据健康分每日快照：18:40（17:35 日更、18:35 出票截止之后）重跑一次统一巡检，按页面同一公式算分，
+# 连同红/黄项、当天盘后出票是否成功存一行，供近 20 个交易日均值 / 出票成功率（data_health_snapshot）。
+TASK_TYPE_DATA_HEALTH_SNAPSHOT = "data_health_snapshot"
+DATA_HEALTH_SNAPSHOT_TASK_ID = "data_health_snapshot_daily"
+DATA_HEALTH_SNAPSHOT_CRON = "40 18 * * mon-fri"
+# 次日复核：只写复核字段（大宗交易约 21:00 才发布，08:03 盘前备份出票后再核对）。08:55 而不是 08:50，
+# 错开 08:50 的盘前数据质量巡检，避免两次巡检同时写报告。
+DATA_HEALTH_RECHECK_TASK_ID = "data_health_snapshot_recheck"
+DATA_HEALTH_RECHECK_CRON = "55 8 * * mon-fri"
+# 现役策略近12个月指标每月滚动重算（rolling_r12）：每个交易日 22:30 触发，本月已算过就跳过，
+# 所以实际是每月第一个交易日晚上算一次（失败次日自动再试）。避开 09:15–15:05 与 16:35–18:35，也在 21:00 晚间补数之后。
+TASK_TYPE_ROLLING_R12 = "rolling_r12_recompute"
+ROLLING_R12_TASK_ID = "rolling_r12_monthly"
+ROLLING_R12_CRON = "30 22 * * mon-fri"
 
 
 # ── 盘中锁利影子链路（只记录不交易，见 intraday_lock_service）────────────────
@@ -167,7 +198,7 @@ def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[
         {
             "pre_run_full_sync": True,
             "sync_scope": "all",
-            "preset_id": payload.get("preset_id") or "preset_formal_opening",
+            "preset_id": None,  # 单策略独立 run 不挂组合预设（preset_formal_opening 已删除）
             "run_name": payload.get("run_name") or "盘后全量同步后正式推荐",
             "run_mode": "formal",
             # 同步和健康闸门已在推荐前完成；正式推荐只读本地池，
@@ -261,6 +292,11 @@ def _data_health_remediation_summary(result: dict) -> str:
     empty_count = int(summary.get("empty_count") or 0)
     comparison = result.get("comparison") if isinstance(result, dict) else None
     empty_suffix = f"，空结果待重试 {empty_count}" if empty_count else ""
+    # 结果状态是 partial_failed / failed 而 action 计数为 0 时（失败发生在 action 之外），摘要不能写「失败 0」
+    result_status = str(result.get("status") or "") if isinstance(result, dict) else ""
+    if result_status in {"partial_failed", "failed"} and not failed_count:
+        failed_count = 1
+        empty_suffix += f"（状态 {result_status}，失败发生在 action 之外）"
     if isinstance(comparison, dict) and comparison.get("status") != "skipped":
         resolved = int(comparison.get("resolved_missing_day_count") or 0)
         target = int(comparison.get("target_missing_day_count") or 0)
@@ -355,16 +391,16 @@ def _to_float(value: str | None) -> float | None:
 # 这些数据集失败只告警（status=known_gap），不再把整次补数任务记为 partial_failed；
 # 其余数据集失败（含可重试的覆盖不足）仍按 failed 处理。
 _KNOWN_AUX_SOURCE_GAPS: dict[str, str] = {
-    "news_announcement": "Tushare anns_d 40203 无权限；公告改由东方财富/巨潮/xiaoshi 补数链覆盖",
     "share_float": "promax share_float invalid_params、官方无权限；改由 xiaoshi restricted_unlock 兜底",
-    "holder_trade": "promax stk_holdertrade invalid_params / unknown_schema，长期不可用",
     "broker_recommend": "promax invalid_params、官方无权限，已从这两源路由排除；仅 quantdata 可用但该源在数据源管理中停用（未被任何策略使用）",
 }
 
 
 # 已知长期缺口中耗时显著的数据集（实测 2026-10-15：holder_trade 单独约 17.5s，结果恒为 0 行失败）。
 # 非周一跳过（DB 输出不变：失败时本就 0 行写入）；周一照常请求，用于发现上游恢复。
-_SLOW_KNOWN_GAPS: frozenset[str] = frozenset({"holder_trade"})
+# 2026-10-19：holder_trade 修复（contract 接受上游 11 字段 schema）后移出已知缺口，每日照常请求、失败如实计失败；
+# news_announcement 同日修复（raw 快照路径接 akshare 备源），也移出。
+_SLOW_KNOWN_GAPS: frozenset[str] = frozenset()
 
 
 def _skip_slow_known_gaps(datasets: tuple[str, ...], trade_date: str) -> tuple[tuple[str, ...], list[str]]:
@@ -448,8 +484,11 @@ def _sync_step_summary(label: str, result: dict) -> str:
     batch = result.get("batch_sync") if isinstance(result.get("batch_sync"), dict) else {}
     failed_sets = sorted(k for k, v in batch.items() if isinstance(v, dict) and v.get("status") == "failed")
     known_sets = sorted(k for k, v in batch.items() if isinstance(v, dict) and v.get("status") == "known_gap")
-    parts.append(f"失败 {failed + len(failed_sets)}")
+    step_bad = str(result.get("status") or "") in {"partial_failed", "failed"} and not (failed or failed_sets)
+    parts.append(f"失败 {failed + len(failed_sets) + (1 if step_bad else 0)}")
     text = " / ".join(parts)
+    if step_bad:
+        text += f"（步骤状态 {result.get('status')}，失败发生在 action 之外）"
     if failed_sets:
         text += f"（失败数据集: {','.join(failed_sets)}）"
     if known_sets:

@@ -42,7 +42,7 @@ def prep():
     df = df.with_columns(((1 + c("pct_chg").fill_null(0).clip(-35, 35) / 100).cum_prod().over("code")).alias("ac"))
     df = df.with_columns((c("open") * c("ac") / c("close")).alias("ao"), pl.int_range(pl.len()).over("code").alias("age"))
     df = df.sort("trade_date").join_asof(shares(), on="trade_date", by="code", strategy="backward")
-    st = pl.read_parquet(L.D / "st_hist.parquet").rename({"effective_from": "trade_date"}).sort("trade_date")
+    st = pl.read_parquet(__import__("os").environ.get("ST_HIST_PATH") or (L.D / "st_hist.parquet")).rename({"effective_from": "trade_date"}).sort("trade_date")
     df = df.join_asof(st, on="trade_date", by="code", strategy="backward").with_columns(c("st").fill_null(False))
     df = df.with_columns((c("total_share") * c("close")).alias("mvd"),
                          (c("amount") / (c("float_share") * 1e4 * c("close"))).alias("tov")).sort("code", "trade_date")

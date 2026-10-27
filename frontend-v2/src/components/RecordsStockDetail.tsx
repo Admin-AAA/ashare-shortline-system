@@ -139,6 +139,11 @@ function DecisionCard({ title, decision }: { title: string; decision?: Execution
       <div style={{ color: "var(--muted)", fontSize: "var(--text-xs)", marginBottom: 4 }}>{title}</div>
       <div style={{ color, fontWeight: 700, fontSize: "var(--text-lg)", marginBottom: 4 }}>{decision?.label || "—"}</div>
       <div style={{ color: "var(--ink-secondary)", fontSize: "var(--text-sm)", lineHeight: 1.55 }}>{decision?.reason || "暂无结论"}</div>
+      {decision?.backtest_rule === false && (
+        <div style={{ marginTop: 4, color: "var(--accent)", fontSize: "var(--text-xs)" }}>
+          {decision.rule_note || "非回测规则，仅提示：结算与回测不按这条退出"}
+        </div>
+      )}
     </div>
   );
 }

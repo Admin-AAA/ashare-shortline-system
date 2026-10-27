@@ -82,7 +82,7 @@ def test_unpublished_or_failed_returns_none(monkeypatch):
 def test_strategy_registered_and_no_data_not_written(monkeypatch, tmp_path):
     meta = ms.STRATEGIES["mid-block-trade-premium"]
     assert meta["horizon"] == "mid" and meta["kind"] == "block_trade_premium" and meta["hold_days"] == 20
-    assert (meta["k_slots"], meta["max_new"], meta["schedule"]) == (20, 5, "daily")
+    assert "k_slots" not in meta and "max_new" not in meta and meta["schedule"] == "daily"
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     monkeypatch.setattr(ms, "_held_codes", lambda db, sid, as_of: set())
     monkeypatch.setattr(mb, "block_trade_candidates", lambda db, as_of: None)

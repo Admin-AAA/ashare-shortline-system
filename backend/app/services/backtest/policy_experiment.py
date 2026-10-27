@@ -25,6 +25,7 @@ from app.services.backtest.release_policy import DEFAULT_RELEASE_POLICY
 from app.services.backtest.vectorbt_validation import cross_validate_trades
 from app.services.strategy_exit_overrides import apply_exit_overrides, exit_strategy_id
 from app.services.ma_break_exit import apply_ma_break_backtest, ma_break_window_for
+from app.services.entry_low_exit import apply_entry_low_backtest, entry_low_enabled_for
 
 
 POLICY_EVIDENCE_SCHEMA_VERSION = 2
@@ -737,6 +738,11 @@ def _simulate_card(
     if _ma_w:
         trade = apply_ma_break_backtest(
             trade, bars, _ma_w, lambda cut: simulate(_rec, cut, card_policy).trade
+        )
+    # Sprint4 §185：逐策略破买入日最低价出场（strategy.yaml entry_low_exit），未声明的策略不受影响。
+    if entry_low_enabled_for(_sid):
+        trade = apply_entry_low_backtest(
+            trade, bars, True, lambda cut: simulate(_rec, cut, card_policy).trade
         )
     return {"status": "simulated", "trade": trade}
 

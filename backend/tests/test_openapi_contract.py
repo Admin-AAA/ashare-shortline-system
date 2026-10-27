@@ -26,6 +26,6 @@ def test_every_operation_has_unique_id_and_typed_success_response() -> None:
             ):
                 missing.append(f"{method.upper()} {path}")
 
-    assert len(operation_ids) == 132  # 128 on main (+3 /api/horizons); +1 GET /api/metrics/runtime; +1 GET /api/horizons/long/picks; +2 POST /api/horizons/{horizon}/run, GET /api/horizons/{horizon}/picks/{sid}/{date}/{code}
+    assert len(operation_ids) == 137  # 128 on main (+3 /api/horizons); +1 GET /api/metrics/runtime; +1 GET /api/horizons/long/picks; +2 POST /api/horizons/{horizon}/run, GET /api/horizons/{horizon}/picks/{sid}/{date}/{code}; +2 GET /api/admin/data-gateway, POST /api/admin/data-gateway/switch; +3 GET /api/horizons/{horizon}/trades|metrics|runs
     assert len(operation_ids) == len(set(operation_ids))
     assert missing == []

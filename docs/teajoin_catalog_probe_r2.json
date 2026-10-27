@@ -1,0 +1,652 @@
+{
+ "probed_at": "2026-10-26 19:25:53",
+ "elapsed_s": 134,
+ "catalog_size": 16,
+ "results": [
+  {
+   "ms": 5070,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "month",
+    "PMI010000",
+    "PMI010100",
+    "PMI010200",
+    "PMI010300",
+    "PMI010400",
+    "PMI010500",
+    "PMI010600",
+    "PMI010700",
+    "PMI010800",
+    "PMI010900",
+    "PMI011000",
+    "PMI011100",
+    "PMI011200",
+    "PMI011300",
+    "PMI011400",
+    "PMI011500",
+    "PMI011600",
+    "PMI011700",
+    "PMI011800",
+    "PMI011900",
+    "PMI012000",
+    "PMI020100",
+    "PMI020200",
+    "PMI020300",
+    "PMI020400",
+    "PMI020500",
+    "PMI020600",
+    "PMI020700",
+    "PMI020800",
+    "PMI020900",
+    "PMI021000",
+    "PMI030000"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "month",
+   "date_min": "__NULL__",
+   "date_max": "__NULL__",
+   "params": {},
+   "status": "ok",
+   "api": "cn_pmi",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 5070,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 13605,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "price",
+    "percent"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20260625",
+   "date_max": "20260625",
+   "params": {
+    "ts_code": "000001.SZ",
+    "trade_date": "20260625"
+   },
+   "status": "ok",
+   "api": "cyq_chips",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "trade_date": "20260625"
+     },
+     "rows": 50,
+     "ms": 13605,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 1220,
+   "http": 200,
+   "code": 0,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "name",
+    "theme_code",
+    "industry_code",
+    "industry",
+    "reason",
+    "hot_num"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "trade_date": "20261023",
+    "theme_code": "BK1184"
+   },
+   "status": "empty",
+   "api": "dc_concept_cons",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023",
+      "theme_code": "BK1184"
+     },
+     "rows": 0,
+     "ms": 1220,
+     "msg": ""
+    },
+    {
+     "params": {
+      "theme_code": "BK1184"
+     },
+     "rows": 0,
+     "ms": 2380,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5481,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "name",
+    "leading",
+    "leading_code",
+    "pct_change",
+    "leading_pct",
+    "total_mv",
+    "turnover_rate",
+    "up_num",
+    "down_num",
+    "idx_type",
+    "level"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023",
+    "idx_type": "概念板块"
+   },
+   "status": "ok",
+   "api": "dc_index",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023",
+      "idx_type": "概念板块"
+     },
+     "rows": 50,
+     "ms": 5481,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4180,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "con_code",
+    "name"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "dc_member",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 4180,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7260,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "exchange",
+    "prd",
+    "name",
+    "vol",
+    "vol_yoy",
+    "amount",
+    "amout_yoy",
+    "cumvol",
+    "cumvol_yoy",
+    "cumamt",
+    "cumamt_yoy",
+    "open_interest",
+    "interest_wow",
+    "mc_close",
+    "close_wow",
+    "week",
+    "week_date"
+   ],
+   "msg": "",
+   "has_more": true,
+   "params": {
+    "prd": "RB",
+    "start_week": "202640",
+    "end_week": "202643"
+   },
+   "status": "ok",
+   "api": "fut_weekly_detail",
+   "attempts": [
+    {
+     "params": {
+      "prd": "RB",
+      "week": "202641"
+     },
+     "rows": 0,
+     "ms": 3260,
+     "msg": ""
+    },
+    {
+     "params": {
+      "prd": "RB",
+      "start_week": "202640",
+      "end_week": "202643"
+     },
+     "rows": 50,
+     "ms": 7260,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4461,
+   "http": 200,
+   "code": 0,
+   "rows": 7,
+   "fields": [
+    "trade_date",
+    "buy_amount",
+    "buy_volume",
+    "sell_amount",
+    "sell_volume"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20260901",
+   "date_max": "20260909",
+   "params": {
+    "start_date": "20260901",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "ggt_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 9824,
+     "msg": ""
+    },
+    {
+     "params": {
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 7,
+     "ms": 4461,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3493,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "name",
+    "desc",
+    "orgs"
+   ],
+   "msg": "",
+   "has_more": true,
+   "params": {},
+   "status": "ok",
+   "api": "hm_list",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 3493,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9574,
+   "http": 200,
+   "code": 0,
+   "rows": 6,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261016",
+   "date_max": "20261023",
+   "params": {
+    "ts_code": "000300.SH",
+    "start_date": "20261016",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "index_daily",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000300.SH",
+      "start_date": "20261016",
+      "end_date": "20261023"
+     },
+     "rows": 6,
+     "ms": 9574,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 2101,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "index_code",
+    "con_code",
+    "trade_date",
+    "weight"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20260930",
+   "date_max": "20260930",
+   "params": {
+    "index_code": "000300.SH",
+    "start_date": "20260901",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "index_weight",
+   "attempts": [
+    {
+     "params": {
+      "index_code": "000300.SH",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 2101,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3077,
+   "http": 200,
+   "code": 0,
+   "rows": 4,
+   "fields": [
+    "ts_code",
+    "name",
+    "start_date",
+    "end_date",
+    "ann_date",
+    "change_reason"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20061008",
+   "date_max": "20120801",
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "namechange",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 4,
+     "ms": 3077,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12625,
+   "http": 200,
+   "code": 0,
+   "rows": 2,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "holder_name",
+    "pledge_amount",
+    "start_date",
+    "end_date",
+    "is_release",
+    "release_date",
+    "pledgor",
+    "holding_amount",
+    "pledged_amount",
+    "p_total_ratio",
+    "h_total_ratio",
+    "is_buyback"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20161125",
+   "date_max": "20181114",
+   "params": {
+    "ts_code": "000014.SZ"
+   },
+   "status": "ok",
+   "api": "pledge_detail",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000014.SZ"
+     },
+     "rows": 2,
+     "ms": 12625,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3792,
+   "http": 200,
+   "code": 0,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "vol",
+    "amount",
+    "vwap"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "empty",
+   "api": "stk_auction_c",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3792,
+     "msg": ""
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 9002,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3986,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3812,
+     "msg": "bad request: 不支持的参数: ann_date"
+    }
+   ]
+  },
+  {
+   "ms": 12197,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "name",
+    "gender",
+    "lev",
+    "title",
+    "edu",
+    "national",
+    "birthday",
+    "begin_date",
+    "end_date",
+    "resume"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20251216",
+   "date_max": "20251216",
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "stk_managers",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 50,
+     "ms": 12197,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10129,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "count",
+    "exchange",
+    "list_date",
+    "type"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "list_date",
+   "date_min": "20061229",
+   "date_max": "20191231",
+   "params": {},
+   "status": "ok",
+   "api": "ths_index",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 10129,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3624,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "con_code",
+    "con_name"
+   ],
+   "msg": "",
+   "has_more": true,
+   "params": {
+    "ts_code": "885312.TI"
+   },
+   "status": "ok",
+   "api": "ths_member",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "885312.TI"
+     },
+     "rows": 50,
+     "ms": 3624,
+     "msg": ""
+    }
+   ]
+  }
+ ]
+}

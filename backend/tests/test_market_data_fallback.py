@@ -18,6 +18,20 @@ from app.services.market_data import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _calendar_from_fake_pro(monkeypatch):
+    """market_data reads the local trade calendar now; feed it from each test's fake pro.trade_cal."""
+
+    def fake_open_dates_between(start, end, **_kw):
+        import app.services.tushare_client as tcl
+
+        cal = tcl.get_pro().trade_cal(exchange="SSE", start_date=start.strftime("%Y%m%d"),
+                                      end_date=end.strftime("%Y%m%d"), is_open="1")
+        return sorted(str(v) for v in cal["cal_date"].astype(str).tolist())
+
+    monkeypatch.setattr("app.services.trade_calendar.open_dates_between", fake_open_dates_between)
+
+
 class DummySettings:
     market_request_timeout_seconds = 5
     market_scan_size = 60

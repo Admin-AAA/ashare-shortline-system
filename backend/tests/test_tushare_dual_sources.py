@@ -139,7 +139,13 @@ def test_realtime_route_prefers_promax() -> None:
     assert result["data"]["items"] == [["promax"]]
 
 
-def test_promax_is_only_excluded_from_incompatible_announcement_contract() -> None:
+def test_promax_is_only_excluded_from_incompatible_announcement_contract(monkeypatch) -> None:
+    # 本用例验证路由表语义（promax 仅被排除出 anns_d）；promax 额度专留 rt_k 的开关另有 test_promax_reserve_20261026
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ASHARE_TUSHARE_PROMAX_RTK_RESERVED", "false")
+    monkeypatch.setenv("ASHARE_TUSHARE_PROMAX_RESEARCH_ENABLED", "true")  # pytest 进程属 research 命名空间
+    get_settings.cache_clear()
     router = TushareProviderRouter(
         [
             _FakeProvider(
@@ -274,11 +280,11 @@ def test_permission_verdict_does_not_depend_on_message_wording() -> None:
     assert _business_envelope_category("40203", "") is FailureCategory.PERMISSION
 
 
-def test_token_quota_exhausted_is_rate_limit() -> None:
-    """配额耗尽等到重置即可恢复，与权限不足是两回事，必须保留限流归类。"""
+def test_token_quota_exhausted_is_quota_exhausted() -> None:
+    """42901 token 当日配额耗尽：单独归类 quota_exhausted（当天跳过该源），既不是权限不足也不是分钟级限流。"""
     assert (
         _business_envelope_category("42901", "token daily limit exceeded")
-        is FailureCategory.BUSINESS_RATE_LIMIT
+        is FailureCategory.QUOTA_EXHAUSTED
     )
 
 
@@ -435,3 +441,11 @@ def test_all_providers_failed_message_carries_each_upstream_detail() -> None:
     message = str(error)
     assert "quantdata:permission(40203: 抱歉，您没有接口(cyq_perf)访问权限)" in message
     assert "promax:http_rate_limit(upstream_pool_exhausted)" in message
+
+
+def test_business_code_40203_rate_limit_text_is_not_permission() -> None:
+    """40203 + 「频率超限(1次/小时)」是限流（等窗口恢复），不是无权限；真无权限原文含「没有接口…访问权限」。"""
+    rate = _business_envelope_category("40203", "抱歉，您访问接口(index_daily)频率超限(1次/小时)，具体频次详情：https://tushare.pro/document/1?doc_id=108。")
+    perm = _business_envelope_category("40203", "抱歉，您没有接口(hsgt_top10)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。")
+    assert rate is FailureCategory.BUSINESS_RATE_LIMIT
+    assert perm is FailureCategory.PERMISSION

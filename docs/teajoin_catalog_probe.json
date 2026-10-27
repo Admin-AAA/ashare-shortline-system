@@ -1,0 +1,9680 @@
+{
+ "probed_at": "2026-10-26 19:20:48",
+ "elapsed_s": 1756,
+ "catalog_size": 204,
+ "results": [
+  {
+   "ms": 10982,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "adj_factor"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "adj_factor",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 10982,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12659,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "industry",
+    "area",
+    "pe",
+    "float_share",
+    "total_share",
+    "total_assets",
+    "liquid_assets",
+    "fixed_assets",
+    "reserved",
+    "reserved_pershare",
+    "eps",
+    "bvps",
+    "pb",
+    "list_date",
+    "undp",
+    "per_undp",
+    "rev_yoy",
+    "profit_yoy",
+    "gpr",
+    "npr",
+    "holder_num"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "bak_basic",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 12659,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 14085,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "name",
+    "pct_change",
+    "close",
+    "change",
+    "open",
+    "high",
+    "low",
+    "pre_close",
+    "vol_ratio",
+    "turn_over",
+    "swing",
+    "vol",
+    "amount",
+    "selling",
+    "buying",
+    "total_share",
+    "float_share",
+    "pe",
+    "industry",
+    "area",
+    "float_mv",
+    "total_mv",
+    "avg_price",
+    "strength",
+    "activity",
+    "avg_turnover",
+    "attack",
+    "interval_3",
+    "interval_6"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "bak_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 14085,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12727,
+   "http": 200,
+   "code": 0,
+   "rows": 3,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "f_ann_date",
+    "end_date",
+    "report_type",
+    "comp_type",
+    "end_type",
+    "total_share",
+    "cap_rese",
+    "undistr_porfit",
+    "surplus_rese",
+    "special_rese",
+    "money_cap",
+    "trad_asset",
+    "notes_receiv",
+    "accounts_receiv",
+    "oth_receiv",
+    "prepayment",
+    "div_receiv",
+    "int_receiv",
+    "inventories",
+    "amor_exp",
+    "nca_within_1y",
+    "sett_rsrv",
+    "loanto_oth_bank_fi",
+    "premium_receiv",
+    "reinsur_receiv",
+    "reinsur_res_receiv",
+    "pur_resale_fa",
+    "oth_cur_assets",
+    "total_cur_assets",
+    "fa_avail_for_sale",
+    "htm_invest",
+    "lt_eqt_invest",
+    "invest_real_estate",
+    "time_deposits",
+    "oth_assets",
+    "lt_rec",
+    "fix_assets",
+    "cip",
+    "const_materials",
+    "fixed_assets_disp",
+    "produc_bio_assets",
+    "oil_and_gas_assets",
+    "intan_assets",
+    "r_and_d",
+    "goodwill",
+    "lt_amor_exp",
+    "defer_tax_assets",
+    "decr_in_disbur",
+    "oth_nca",
+    "total_nca",
+    "cash_reser_cb",
+    "depos_in_oth_bfi",
+    "prec_metals",
+    "deriv_assets",
+    "rr_reins_une_prem",
+    "rr_reins_outstd_cla",
+    "rr_reins_lins_liab",
+    "rr_reins_lthins_liab",
+    "refund_depos",
+    "ph_pledge_loans",
+    "refund_cap_depos",
+    "indep_acct_assets",
+    "client_depos",
+    "client_prov",
+    "transac_seat_fee",
+    "invest_as_receiv",
+    "total_assets",
+    "lt_borr",
+    "st_borr",
+    "cb_borr",
+    "depos_ib_deposits",
+    "loan_oth_bank",
+    "trading_fl",
+    "notes_payable",
+    "acct_payable",
+    "adv_receipts",
+    "sold_for_repur_fa",
+    "comm_payable",
+    "payroll_payable",
+    "taxes_payable",
+    "int_payable",
+    "div_payable",
+    "oth_payable",
+    "acc_exp",
+    "deferred_inc",
+    "st_bonds_payable",
+    "payable_to_reinsurer",
+    "rsrv_insur_cont",
+    "acting_trading_sec",
+    "acting_uw_sec",
+    "non_cur_liab_due_1y",
+    "oth_cur_liab",
+    "total_cur_liab",
+    "bond_payable",
+    "lt_payable",
+    "specific_payables",
+    "estimated_liab",
+    "defer_tax_liab",
+    "defer_inc_non_cur_liab",
+    "oth_ncl",
+    "total_ncl",
+    "depos_oth_bfi",
+    "deriv_liab",
+    "depos",
+    "agency_bus_liab",
+    "oth_liab",
+    "prem_receiv_adva",
+    "depos_received",
+    "ph_invest",
+    "reser_une_prem",
+    "reser_outstd_claims",
+    "reser_lins_liab",
+    "reser_lthins_liab",
+    "indept_acc_liab",
+    "pledge_borr",
+    "indem_payable",
+    "policy_div_payable",
+    "total_liab",
+    "treasury_share",
+    "ordin_risk_reser",
+    "forex_differ",
+    "invest_loss_unconf",
+    "minority_int",
+    "total_hldr_eqy_exc_min_int",
+    "total_hldr_eqy_inc_min_int",
+    "total_liab_hldr_eqy",
+    "lt_payroll_payable",
+    "oth_comp_income",
+    "oth_eqt_tools",
+    "oth_eqt_tools_p_shr",
+    "lending_funds",
+    "acc_receivable",
+    "st_fin_payable",
+    "payables",
+    "hfs_assets",
+    "hfs_sales",
+    "cost_fin_assets",
+    "fair_value_fin_assets",
+    "cip_total",
+    "oth_pay_total",
+    "long_pay_total",
+    "debt_invest",
+    "oth_debt_invest",
+    "contract_assets",
+    "contract_liab",
+    "accounts_receiv_bill",
+    "accounts_pay",
+    "oth_rcv_total",
+    "fix_assets_total",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20260630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "000001.SZ",
+    "period": "20260630"
+   },
+   "status": "ok",
+   "api": "balancesheet",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 3,
+     "ms": 12727,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6519,
+   "http": 200,
+   "code": 0,
+   "rows": 3,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "f_ann_date",
+    "end_date",
+    "report_type",
+    "comp_type",
+    "end_type",
+    "total_share",
+    "cap_rese",
+    "undistr_porfit",
+    "surplus_rese",
+    "special_rese",
+    "money_cap",
+    "trad_asset",
+    "notes_receiv",
+    "accounts_receiv",
+    "oth_receiv",
+    "prepayment",
+    "div_receiv",
+    "int_receiv",
+    "inventories",
+    "amor_exp",
+    "nca_within_1y",
+    "sett_rsrv",
+    "loanto_oth_bank_fi",
+    "premium_receiv",
+    "reinsur_receiv",
+    "reinsur_res_receiv",
+    "pur_resale_fa",
+    "oth_cur_assets",
+    "total_cur_assets",
+    "fa_avail_for_sale",
+    "htm_invest",
+    "lt_eqt_invest",
+    "invest_real_estate",
+    "time_deposits",
+    "oth_assets",
+    "lt_rec",
+    "fix_assets",
+    "cip",
+    "const_materials",
+    "fixed_assets_disp",
+    "produc_bio_assets",
+    "oil_and_gas_assets",
+    "intan_assets",
+    "r_and_d",
+    "goodwill",
+    "lt_amor_exp",
+    "defer_tax_assets",
+    "decr_in_disbur",
+    "oth_nca",
+    "total_nca",
+    "cash_reser_cb",
+    "depos_in_oth_bfi",
+    "prec_metals",
+    "deriv_assets",
+    "rr_reins_une_prem",
+    "rr_reins_outstd_cla",
+    "rr_reins_lins_liab",
+    "rr_reins_lthins_liab",
+    "refund_depos",
+    "ph_pledge_loans",
+    "refund_cap_depos",
+    "indep_acct_assets",
+    "client_depos",
+    "client_prov",
+    "transac_seat_fee",
+    "invest_as_receiv",
+    "total_assets",
+    "lt_borr",
+    "st_borr",
+    "cb_borr",
+    "depos_ib_deposits",
+    "loan_oth_bank",
+    "trading_fl",
+    "notes_payable",
+    "acct_payable",
+    "adv_receipts",
+    "sold_for_repur_fa",
+    "comm_payable",
+    "payroll_payable",
+    "taxes_payable",
+    "int_payable",
+    "div_payable",
+    "oth_payable",
+    "acc_exp",
+    "deferred_inc",
+    "st_bonds_payable",
+    "payable_to_reinsurer",
+    "rsrv_insur_cont",
+    "acting_trading_sec",
+    "acting_uw_sec",
+    "non_cur_liab_due_1y",
+    "oth_cur_liab",
+    "total_cur_liab",
+    "bond_payable",
+    "lt_payable",
+    "specific_payables",
+    "estimated_liab",
+    "defer_tax_liab",
+    "defer_inc_non_cur_liab",
+    "oth_ncl",
+    "total_ncl",
+    "depos_oth_bfi",
+    "deriv_liab",
+    "depos",
+    "agency_bus_liab",
+    "oth_liab",
+    "prem_receiv_adva",
+    "depos_received",
+    "ph_invest",
+    "reser_une_prem",
+    "reser_outstd_claims",
+    "reser_lins_liab",
+    "reser_lthins_liab",
+    "indept_acc_liab",
+    "pledge_borr",
+    "indem_payable",
+    "policy_div_payable",
+    "total_liab",
+    "treasury_share",
+    "ordin_risk_reser",
+    "forex_differ",
+    "invest_loss_unconf",
+    "minority_int",
+    "total_hldr_eqy_exc_min_int",
+    "total_hldr_eqy_inc_min_int",
+    "total_liab_hldr_eqy",
+    "lt_payroll_payable",
+    "oth_comp_income",
+    "oth_eqt_tools",
+    "oth_eqt_tools_p_shr",
+    "lending_funds",
+    "acc_receivable",
+    "st_fin_payable",
+    "payables",
+    "hfs_assets",
+    "hfs_sales",
+    "cost_fin_assets",
+    "fair_value_fin_assets",
+    "cip_total",
+    "oth_pay_total",
+    "long_pay_total",
+    "debt_invest",
+    "oth_debt_invest",
+    "contract_assets",
+    "contract_liab",
+    "accounts_receiv_bill",
+    "accounts_pay",
+    "oth_rcv_total",
+    "fix_assets_total",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20260630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "000001.SZ",
+    "period": "20260630"
+   },
+   "status": "ok",
+   "api": "balancesheet_vip",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 3,
+     "ms": 6519,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9492,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "remain_maturity",
+    "bond_type",
+    "best_buy_bank",
+    "best_buy_yield",
+    "best_buy_price",
+    "best_sell_bank",
+    "best_sell_yield",
+    "best_sell_price"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "bc_bestotcqt",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 9492,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9307,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "qt_time",
+    "bank",
+    "ts_code",
+    "name",
+    "maturity",
+    "remain_maturity",
+    "bond_type",
+    "coupon_rate",
+    "buy_price",
+    "sell_price",
+    "buy_yield",
+    "sell_yield"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "bc_otcqt",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 9307,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8683,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "price",
+    "vol",
+    "amount",
+    "buyer",
+    "seller"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261012",
+   "date_max": "20261012",
+   "params": {
+    "ts_code": "000001.SZ",
+    "start_date": "20260901",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "block_trade",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 9694,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 1,
+     "ms": 8683,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12040,
+   "http": 200,
+   "code": 0,
+   "rows": 19,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "price",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261016",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "bond_blk",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 19,
+     "ms": 12040,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 11403,
+   "http": 200,
+   "code": 0,
+   "rows": 40,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "price",
+    "vol",
+    "amount",
+    "buy_dp",
+    "sell_dp"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261016",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "bond_blk_detail",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 40,
+     "ms": 11403,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 11809,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "month",
+    "broker",
+    "ts_code",
+    "name"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "month",
+   "date_min": "202610",
+   "date_max": "202610",
+   "params": {
+    "month": "202610"
+   },
+   "status": "ok",
+   "api": "broker_recommend",
+   "attempts": [
+    {
+     "params": {
+      "month": "202610"
+     },
+     "rows": 50,
+     "ms": 11809,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10786,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "name",
+    "o_code",
+    "n_code",
+    "list_date"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "list_date",
+   "date_min": "20200727",
+   "date_max": "20240111",
+   "params": {},
+   "status": "ok",
+   "api": "bse_mapping",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 10786,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7036,
+   "http": 200,
+   "code": 0,
+   "rows": 2,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "f_ann_date",
+    "end_date",
+    "comp_type",
+    "report_type",
+    "end_type",
+    "net_profit",
+    "finan_exp",
+    "c_fr_sale_sg",
+    "recp_tax_rends",
+    "n_depos_incr_fi",
+    "n_incr_loans_cb",
+    "n_inc_borr_oth_fi",
+    "prem_fr_orig_contr",
+    "n_incr_insured_dep",
+    "n_reinsur_prem",
+    "n_incr_disp_tfa",
+    "ifc_cash_incr",
+    "n_incr_disp_faas",
+    "n_incr_loans_oth_bank",
+    "n_cap_incr_repur",
+    "c_fr_oth_operate_a",
+    "c_inf_fr_operate_a",
+    "c_paid_goods_s",
+    "c_paid_to_for_empl",
+    "c_paid_for_taxes",
+    "n_incr_clt_loan_adv",
+    "n_incr_dep_cbob",
+    "c_pay_claims_orig_inco",
+    "pay_handling_chrg",
+    "pay_comm_insur_plcy",
+    "oth_cash_pay_oper_act",
+    "st_cash_out_act",
+    "n_cashflow_act",
+    "oth_recp_ral_inv_act",
+    "c_disp_withdrwl_invest",
+    "c_recp_return_invest",
+    "n_recp_disp_fiolta",
+    "n_recp_disp_sobu",
+    "stot_inflows_inv_act",
+    "c_pay_acq_const_fiolta",
+    "c_paid_invest",
+    "n_disp_subs_oth_biz",
+    "oth_pay_ral_inv_act",
+    "n_incr_pledge_loan",
+    "stot_out_inv_act",
+    "n_cashflow_inv_act",
+    "c_recp_borrow",
+    "proc_issue_bonds",
+    "oth_cash_recp_ral_fnc_act",
+    "stot_cash_in_fnc_act",
+    "free_cashflow",
+    "c_prepay_amt_borr",
+    "c_pay_dist_dpcp_int_exp",
+    "incl_dvd_profit_paid_sc_ms",
+    "oth_cashpay_ral_fnc_act",
+    "stot_cashout_fnc_act",
+    "n_cash_flows_fnc_act",
+    "eff_fx_flu_cash",
+    "n_incr_cash_cash_equ",
+    "c_cash_equ_beg_period",
+    "c_cash_equ_end_period",
+    "c_recp_cap_contrib",
+    "incl_cash_rec_saims",
+    "uncon_invest_loss",
+    "prov_depr_assets",
+    "depr_fa_coga_dpba",
+    "amort_intang_assets",
+    "lt_amort_deferred_exp",
+    "decr_deferred_exp",
+    "incr_acc_exp",
+    "loss_disp_fiolta",
+    "loss_scr_fa",
+    "loss_fv_chg",
+    "invest_loss",
+    "decr_def_inc_tax_assets",
+    "incr_def_inc_tax_liab",
+    "decr_inventories",
+    "decr_oper_payable",
+    "incr_oper_payable",
+    "others",
+    "im_net_cashflow_oper_act",
+    "conv_debt_into_cap",
+    "conv_copbonds_due_within_1y",
+    "fa_fnc_leases",
+    "im_n_incr_cash_equ",
+    "net_dism_capital_add",
+    "net_cash_rece_sec",
+    "credit_impa_loss",
+    "use_right_asset_dep",
+    "oth_loss_asset",
+    "end_bal_cash",
+    "beg_bal_cash",
+    "end_bal_cash_equ",
+    "beg_bal_cash_equ",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20260630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "000001.SZ",
+    "period": "20260630"
+   },
+   "status": "ok",
+   "api": "cashflow",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 2,
+     "ms": 7036,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9691,
+   "http": 200,
+   "code": 0,
+   "rows": 2,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "f_ann_date",
+    "end_date",
+    "comp_type",
+    "report_type",
+    "end_type",
+    "net_profit",
+    "finan_exp",
+    "c_fr_sale_sg",
+    "recp_tax_rends",
+    "n_depos_incr_fi",
+    "n_incr_loans_cb",
+    "n_inc_borr_oth_fi",
+    "prem_fr_orig_contr",
+    "n_incr_insured_dep",
+    "n_reinsur_prem",
+    "n_incr_disp_tfa",
+    "ifc_cash_incr",
+    "n_incr_disp_faas",
+    "n_incr_loans_oth_bank",
+    "n_cap_incr_repur",
+    "c_fr_oth_operate_a",
+    "c_inf_fr_operate_a",
+    "c_paid_goods_s",
+    "c_paid_to_for_empl",
+    "c_paid_for_taxes",
+    "n_incr_clt_loan_adv",
+    "n_incr_dep_cbob",
+    "c_pay_claims_orig_inco",
+    "pay_handling_chrg",
+    "pay_comm_insur_plcy",
+    "oth_cash_pay_oper_act",
+    "st_cash_out_act",
+    "n_cashflow_act",
+    "oth_recp_ral_inv_act",
+    "c_disp_withdrwl_invest",
+    "c_recp_return_invest",
+    "n_recp_disp_fiolta",
+    "n_recp_disp_sobu",
+    "stot_inflows_inv_act",
+    "c_pay_acq_const_fiolta",
+    "c_paid_invest",
+    "n_disp_subs_oth_biz",
+    "oth_pay_ral_inv_act",
+    "n_incr_pledge_loan",
+    "stot_out_inv_act",
+    "n_cashflow_inv_act",
+    "c_recp_borrow",
+    "proc_issue_bonds",
+    "oth_cash_recp_ral_fnc_act",
+    "stot_cash_in_fnc_act",
+    "free_cashflow",
+    "c_prepay_amt_borr",
+    "c_pay_dist_dpcp_int_exp",
+    "incl_dvd_profit_paid_sc_ms",
+    "oth_cashpay_ral_fnc_act",
+    "stot_cashout_fnc_act",
+    "n_cash_flows_fnc_act",
+    "eff_fx_flu_cash",
+    "n_incr_cash_cash_equ",
+    "c_cash_equ_beg_period",
+    "c_cash_equ_end_period",
+    "c_recp_cap_contrib",
+    "incl_cash_rec_saims",
+    "uncon_invest_loss",
+    "prov_depr_assets",
+    "depr_fa_coga_dpba",
+    "amort_intang_assets",
+    "lt_amort_deferred_exp",
+    "decr_deferred_exp",
+    "incr_acc_exp",
+    "loss_disp_fiolta",
+    "loss_scr_fa",
+    "loss_fv_chg",
+    "invest_loss",
+    "decr_def_inc_tax_assets",
+    "incr_def_inc_tax_liab",
+    "decr_inventories",
+    "decr_oper_payable",
+    "incr_oper_payable",
+    "others",
+    "im_net_cashflow_oper_act",
+    "conv_debt_into_cap",
+    "conv_copbonds_due_within_1y",
+    "fa_fnc_leases",
+    "im_n_incr_cash_equ",
+    "net_dism_capital_add",
+    "net_cash_rece_sec",
+    "credit_impa_loss",
+    "use_right_asset_dep",
+    "oth_loss_asset",
+    "end_bal_cash",
+    "beg_bal_cash",
+    "end_bal_cash_equ",
+    "beg_bal_cash_equ",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20260630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "000001.SZ",
+    "period": "20260630"
+   },
+   "status": "ok",
+   "api": "cashflow_vip",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 2,
+     "ms": 9691,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 11642,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "bond_full_name",
+    "bond_short_name",
+    "cb_type",
+    "cb_code",
+    "stk_code",
+    "stk_short_name",
+    "maturity",
+    "par",
+    "issue_price",
+    "issue_size",
+    "remain_size",
+    "value_date",
+    "maturity_date",
+    "rate_type",
+    "coupon_rate",
+    "add_rate",
+    "pay_per_year",
+    "list_date",
+    "delist_date",
+    "exchange",
+    "conv_start_date",
+    "conv_end_date",
+    "conv_stop_date",
+    "first_conv_price",
+    "conv_price",
+    "rate_clause"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "list_date",
+   "date_min": "19980902",
+   "date_max": "20171129",
+   "params": {},
+   "status": "ok",
+   "api": "cb_basic",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 11642,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9028,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "call_type",
+    "is_call",
+    "ann_date",
+    "call_date",
+    "call_price",
+    "call_price_tax",
+    "call_vol",
+    "call_amount",
+    "payment_date",
+    "call_reg_date"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "ann_date",
+   "date_min": "20260806",
+   "date_max": "20261022",
+   "params": {},
+   "status": "ok",
+   "api": "cb_call",
+   "attempts": [
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 10990,
+     "msg": ""
+    },
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 9028,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6815,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "pre_close",
+    "open",
+    "high",
+    "low",
+    "close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount",
+    "bond_value",
+    "bond_over_rate",
+    "cb_value",
+    "cb_over_rate"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "cb_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 6815,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9052,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "change",
+    "pct_change",
+    "vol",
+    "amount",
+    "asi_bfq",
+    "asit_bfq",
+    "atr_bfq",
+    "bbi_bfq",
+    "bias1_bfq",
+    "bias2_bfq",
+    "bias3_bfq",
+    "boll_lower_bfq",
+    "boll_mid_bfq",
+    "boll_upper_bfq",
+    "brar_ar_bfq",
+    "brar_br_bfq",
+    "cci_bfq",
+    "cr_bfq",
+    "dfma_dif_bfq",
+    "dfma_difma_bfq",
+    "dmi_adx_bfq",
+    "dmi_adxr_bfq",
+    "dmi_mdi_bfq",
+    "dmi_pdi_bfq",
+    "downdays",
+    "updays",
+    "dpo_bfq",
+    "madpo_bfq",
+    "ema_bfq_10",
+    "ema_bfq_20",
+    "ema_bfq_250",
+    "ema_bfq_30",
+    "ema_bfq_5",
+    "ema_bfq_60",
+    "ema_bfq_90",
+    "emv_bfq",
+    "maemv_bfq",
+    "expma_12_bfq",
+    "expma_50_bfq",
+    "kdj_bfq",
+    "kdj_d_bfq",
+    "kdj_k_bfq",
+    "ktn_down_bfq",
+    "ktn_mid_bfq",
+    "ktn_upper_bfq",
+    "lowdays",
+    "topdays",
+    "ma_bfq_10",
+    "ma_bfq_20",
+    "ma_bfq_250",
+    "ma_bfq_30",
+    "ma_bfq_5",
+    "ma_bfq_60",
+    "ma_bfq_90",
+    "macd_bfq",
+    "macd_dea_bfq",
+    "macd_dif_bfq",
+    "mass_bfq",
+    "ma_mass_bfq",
+    "mfi_bfq",
+    "mtm_bfq",
+    "mtmma_bfq",
+    "obv_bfq",
+    "psy_bfq",
+    "psyma_bfq",
+    "roc_bfq",
+    "maroc_bfq",
+    "rsi_bfq_12",
+    "rsi_bfq_24",
+    "rsi_bfq_6",
+    "taq_down_bfq",
+    "taq_mid_bfq",
+    "taq_up_bfq",
+    "trix_bfq",
+    "trma_bfq",
+    "vr_bfq",
+    "wr_bfq",
+    "wr1_bfq",
+    "xsii_td1_bfq",
+    "xsii_td2_bfq",
+    "xsii_td3_bfq",
+    "xsii_td4_bfq"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "cb_factor_pro",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 9052,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3520,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "res_ann_date",
+    "plan_issue_size",
+    "issue_size",
+    "issue_price",
+    "issue_type",
+    "issue_cost",
+    "onl_code",
+    "onl_name",
+    "onl_date",
+    "onl_size",
+    "onl_pch_vol",
+    "onl_pch_num",
+    "onl_pch_excess",
+    "onl_winning_rate",
+    "shd_ration_code",
+    "shd_ration_name",
+    "shd_ration_date",
+    "shd_ration_record_date",
+    "shd_ration_pay_date",
+    "shd_ration_price",
+    "shd_ration_ratio",
+    "shd_ration_size",
+    "shd_ration_vol",
+    "shd_ration_num",
+    "shd_ration_excess",
+    "offl_size",
+    "offl_deposit",
+    "offl_pch_vol",
+    "offl_pch_num",
+    "offl_pch_excess",
+    "offl_winning_rate",
+    "lead_underwriter",
+    "lead_underwriter_vol"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "ann_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "ann_date": "20261023"
+   },
+   "status": "ok",
+   "api": "cb_issue",
+   "attempts": [
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 1,
+     "ms": 3520,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9248,
+   "http": 200,
+   "code": 0,
+   "rows": 6,
+   "fields": [
+    "ts_code",
+    "rate_freq",
+    "rate_start_date",
+    "rate_end_date",
+    "coupon_rate"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "ts_code": "113008.SH"
+   },
+   "status": "ok",
+   "api": "cb_rate",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "113008.SH"
+     },
+     "rows": 6,
+     "ms": 9248,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6302,
+   "http": 200,
+   "code": 0,
+   "rows": 7,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "rating_date",
+    "rating_com_name",
+    "rating_way",
+    "rating_type",
+    "rating",
+    "rating_outlook"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "ann_date",
+   "date_min": "20150129",
+   "date_max": "20200518",
+   "params": {
+    "ts_code": "113008.SH"
+   },
+   "status": "ok",
+   "api": "cb_rating",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "113008.SH"
+     },
+     "rows": 7,
+     "ms": 6302,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7183,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "bond_short_name",
+    "publish_date",
+    "end_date",
+    "issue_size",
+    "convert_price_initial",
+    "convert_price",
+    "convert_val",
+    "convert_vol",
+    "convert_ratio",
+    "acc_convert_val",
+    "acc_convert_vol",
+    "acc_convert_ratio",
+    "remain_size",
+    "total_shares"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20201104",
+   "date_max": "20210201",
+   "params": {
+    "ts_code": "113008.SH"
+   },
+   "status": "ok",
+   "api": "cb_share",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "113008.SH"
+     },
+     "rows": 50,
+     "ms": 7183,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8374,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "shareholding",
+    "hold_nums",
+    "hold_ratio"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "ccass_hold",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 8374,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8318,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "open",
+    "low",
+    "high",
+    "close",
+    "pre_close",
+    "change",
+    "pct_change",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "ci_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 8318,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12924,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "l1_code",
+    "l1_name",
+    "l2_code",
+    "l2_name",
+    "l3_code",
+    "l3_name",
+    "ts_code",
+    "name",
+    "in_date",
+    "out_date",
+    "is_new"
+   ],
+   "msg": "",
+   "has_more": true,
+   "params": {},
+   "status": "ok",
+   "api": "ci_index_member",
+   "attempts": [
+    {
+     "params": {
+      "index_code": "CI005001.CI"
+     },
+     "rows": 0,
+     "ms": 3516,
+     "msg": "bad request: 不支持的参数: index_code"
+    },
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 12924,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 16190,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "month",
+    "nt_val",
+    "nt_yoy",
+    "nt_mom",
+    "nt_accu",
+    "town_val",
+    "town_yoy",
+    "town_mom",
+    "town_accu",
+    "cnt_val",
+    "cnt_yoy",
+    "cnt_mom",
+    "cnt_accu"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "month",
+   "date_min": "195112",
+   "date_max": "200712",
+   "params": {},
+   "status": "ok",
+   "api": "cn_cpi",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 16190,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6387,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "quarter",
+    "gdp",
+    "gdp_yoy",
+    "pi",
+    "pi_yoy",
+    "si",
+    "si_yoy",
+    "ti",
+    "ti_yoy"
+   ],
+   "msg": "",
+   "has_more": true,
+   "params": {},
+   "status": "ok",
+   "api": "cn_gdp",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 6387,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 13668,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "month",
+    "m0",
+    "m0_yoy",
+    "m0_mom",
+    "m1",
+    "m1_yoy",
+    "m1_mom",
+    "m2",
+    "m2_yoy",
+    "m2_mom"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "month",
+   "date_min": "197812",
+   "date_max": "202512",
+   "params": {},
+   "status": "ok",
+   "api": "cn_m",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 13668,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5197,
+   "http": 429,
+   "code": -1,
+   "rows": 0,
+   "fields": [],
+   "msg": "query capacity busy",
+   "has_more": null,
+   "params": {},
+   "status": "error",
+   "api": "cn_pmi",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 0,
+     "ms": 5197,
+     "msg": "query capacity busy"
+    }
+   ]
+  },
+  {
+   "ms": 7089,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "month",
+    "ppi_yoy",
+    "ppi_mp_yoy",
+    "ppi_mp_qm_yoy",
+    "ppi_mp_rm_yoy",
+    "ppi_mp_p_yoy",
+    "ppi_cg_yoy",
+    "ppi_cg_f_yoy",
+    "ppi_cg_c_yoy",
+    "ppi_cg_adu_yoy",
+    "ppi_cg_dcg_yoy",
+    "ppi_mom",
+    "ppi_mp_mom",
+    "ppi_mp_qm_mom",
+    "ppi_mp_rm_mom",
+    "ppi_mp_p_mom",
+    "ppi_cg_mom",
+    "ppi_cg_f_mom",
+    "ppi_cg_c_mom",
+    "ppi_cg_adu_mom",
+    "ppi_cg_dcg_mom",
+    "ppi_accu",
+    "ppi_mp_accu",
+    "ppi_mp_qm_accu",
+    "ppi_mp_rm_accu",
+    "ppi_mp_p_accu",
+    "ppi_cg_accu",
+    "ppi_cg_f_accu",
+    "ppi_cg_c_accu",
+    "ppi_cg_adu_accu",
+    "ppi_cg_dcg_accu"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "month",
+   "date_min": "197812",
+   "date_max": "202512",
+   "params": {},
+   "status": "ok",
+   "api": "cn_ppi",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 7089,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6528,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "month",
+    "publish_date",
+    "title",
+    "issuing_org",
+    "data_api"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "month",
+   "date_min": "202609",
+   "date_max": "202612",
+   "params": {},
+   "status": "ok",
+   "api": "cn_schedule",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 6528,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 2087,
+   "http": 200,
+   "code": -1,
+   "rows": 0,
+   "fields": [],
+   "msg": "bad request: 缺少必填参数: ts_code",
+   "has_more": false,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "error",
+   "api": "cyq_chips",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 2087,
+     "msg": "bad request: 缺少必填参数: ts_code"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 8624,
+     "msg": ""
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3384,
+     "msg": "bad request: 缺少必填参数: ts_code"
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 2090,
+     "msg": "bad request: 不支持的参数: ann_date"
+    }
+   ]
+  },
+  {
+   "ms": 12028,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "his_low",
+    "his_high",
+    "cost_5pct",
+    "cost_15pct",
+    "cost_50pct",
+    "cost_85pct",
+    "cost_95pct",
+    "weight_avg",
+    "winner_rate"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "cyq_perf",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 12028,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4915,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 4915,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 11666,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "turnover_rate",
+    "turnover_rate_f",
+    "volume_ratio",
+    "pe",
+    "pe_ttm",
+    "pb",
+    "ps",
+    "ps_ttm",
+    "dv_ratio",
+    "dv_ttm",
+    "total_share",
+    "float_share",
+    "free_share",
+    "total_mv",
+    "circ_mv"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "daily_basic",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 11666,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5209,
+   "http": 200,
+   "code": 0,
+   "rows": 12,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "ts_name",
+    "com_count",
+    "total_share",
+    "float_share",
+    "total_mv",
+    "float_mv",
+    "amount",
+    "vol",
+    "trans_count",
+    "pe",
+    "tr",
+    "exchange"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "daily_info",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 12,
+     "ms": 5209,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6485,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "theme_code",
+    "trade_date",
+    "name",
+    "pct_change",
+    "hot",
+    "sort",
+    "strength",
+    "z_t_num",
+    "main_change",
+    "lead_stock",
+    "lead_stock_code",
+    "lead_stock_pct_change"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "dc_concept",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 6485,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12884,
+   "http": 200,
+   "code": 0,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "name",
+    "theme_code",
+    "industry_code",
+    "industry",
+    "reason",
+    "hot_num"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "empty",
+   "api": "dc_concept_cons",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 12884,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 13844,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "change",
+    "pct_change",
+    "vol",
+    "amount",
+    "swing",
+    "turnover_rate",
+    "category"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "dc_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 13844,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7712,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "data_type",
+    "ts_code",
+    "ts_name",
+    "rank",
+    "pct_change",
+    "current_price",
+    "rank_time"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023",
+    "market": "A股市场",
+    "hot_type": "人气榜"
+   },
+   "status": "ok",
+   "api": "dc_hot",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023",
+      "market": "A股市场",
+      "hot_type": "人气榜"
+     },
+     "rows": 50,
+     "ms": 7712,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3017,
+   "http": 200,
+   "code": -1,
+   "rows": 0,
+   "fields": [],
+   "msg": "bad request: 缺少必填参数: idx_type",
+   "has_more": false,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "error",
+   "api": "dc_index",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3017,
+     "msg": "bad request: 缺少必填参数: idx_type"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 2389,
+     "msg": "bad request: 缺少必填参数: idx_type"
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3594,
+     "msg": "bad request: 缺少必填参数: idx_type"
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 2503,
+     "msg": "bad request: 不支持的参数: ann_date"
+    }
+   ]
+  },
+  {
+   "ms": 75007,
+   "http": null,
+   "code": null,
+   "rows": 0,
+   "fields": [],
+   "msg": "ConnectTimeout: HTTPSConnectionPool(host='teajoin.com', port=443): Max retries exceeded with url: / (Caused by ConnectTimeoutError(<HTTP",
+   "has_more": null,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "error",
+   "api": "dc_member",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 75007,
+     "msg": "ConnectTimeout: HTTPSConnectionPool(host='teajoin.com', port=443): Max retries e"
+    }
+   ]
+  },
+  {
+   "ms": 7811,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "pre_date",
+    "actual_date"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20260930",
+   "date_max": "20260930",
+   "params": {
+    "end_date": "20260930"
+   },
+   "status": "ok",
+   "api": "disclosure_date",
+   "attempts": [
+    {
+     "params": {
+      "end_date": "20260930"
+     },
+     "rows": 50,
+     "ms": 7811,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10940,
+   "http": 200,
+   "code": 0,
+   "rows": 8,
+   "fields": [
+    "ts_code",
+    "end_date",
+    "ann_date",
+    "div_proc",
+    "stk_div",
+    "stk_bo_rate",
+    "stk_co_rate",
+    "cash_div",
+    "cash_div_tax",
+    "record_date",
+    "ex_date",
+    "pay_date",
+    "div_listdate",
+    "imp_ann_date"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20260630",
+   "date_max": "20260930",
+   "params": {
+    "ann_date": "20261023"
+   },
+   "status": "ok",
+   "api": "dividend",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 1802,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 1602,
+     "msg": "bad request: 不支持的参数: start_date"
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3874,
+     "msg": "bad request: 不支持的参数: start_date"
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 8,
+     "ms": 10940,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6558,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "date",
+    "time",
+    "currency",
+    "country",
+    "event",
+    "value",
+    "pre_value",
+    "fore_value"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "date": "20261023"
+   },
+   "status": "ok",
+   "api": "eco_cal",
+   "attempts": [
+    {
+     "params": {
+      "date": "20261023"
+     },
+     "rows": 50,
+     "ms": 6558,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5994,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "vol",
+    "price",
+    "amount",
+    "pre_close",
+    "turnover_rate",
+    "volume_ratio",
+    "float_share"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "etf_auction",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 5994,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 2367,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "csname",
+    "extname",
+    "cname",
+    "index_code",
+    "index_name",
+    "setup_date",
+    "list_date",
+    "list_status",
+    "exchange",
+    "mgr_name",
+    "custod_name",
+    "mgt_fee",
+    "etf_type"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "list_date",
+   "date_min": "20141020",
+   "date_max": "20260611",
+   "params": {},
+   "status": "ok",
+   "api": "etf_basic",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 2367,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12425,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "indx_name",
+    "indx_csname",
+    "pub_party_name",
+    "pub_date",
+    "base_date",
+    "bp",
+    "adj_circle"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "pub_date",
+   "date_min": "19910715",
+   "date_max": "20250120",
+   "params": {},
+   "status": "ok",
+   "api": "etf_index",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 12425,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3683,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "pre_close",
+    "up_limit",
+    "down_limit",
+    "asset_type",
+    "exchange"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "etf_limit",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 3683,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3444,
+   "http": 200,
+   "code": 0,
+   "rows": 6,
+   "fields": [
+    "ts_code",
+    "trade_time",
+    "open",
+    "close",
+    "high",
+    "low",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_time",
+   "date_min": "2026-10-23 09:30:00",
+   "date_max": "2026-10-23 09:35:00",
+   "params": {
+    "ts_code": "510300.SH",
+    "freq": "1min",
+    "start_date": "2026-10-23 09:30:00",
+    "end_date": "2026-10-23 09:35:00"
+   },
+   "status": "ok",
+   "api": "etf_mins",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "510300.SH",
+      "freq": "1min",
+      "start_date": "2026-10-23 09:30:00",
+      "end_date": "2026-10-23 09:35:00"
+     },
+     "rows": 6,
+     "ms": 3444,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10165,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "con_code",
+    "con_name",
+    "qty",
+    "sub_flag",
+    "cpr",
+    "rdr",
+    "sca",
+    "exchange"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "etf_sh_cons",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 10165,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5190,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "etf_name",
+    "total_share",
+    "total_size",
+    "exchange",
+    "nav",
+    "close"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "etf_share_size",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 5190,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3885,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "con_code",
+    "con_name",
+    "qty",
+    "sub_flag",
+    "cpr",
+    "rdr",
+    "sub_cc",
+    "red_cc",
+    "exchange"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "etf_sz_cons",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 3885,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 1582,
+   "http": 200,
+   "code": 0,
+   "rows": 4,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "revenue",
+    "operate_profit",
+    "total_profit",
+    "n_income",
+    "total_assets",
+    "total_hldr_eqy_exc_min_int",
+    "diluted_eps",
+    "diluted_roe",
+    "yoy_net_profit",
+    "bps",
+    "yoy_sales",
+    "yoy_op",
+    "yoy_tp",
+    "yoy_dedu_np",
+    "yoy_eps",
+    "yoy_roe",
+    "growth_assets",
+    "yoy_equity",
+    "growth_bps",
+    "or_last_year",
+    "op_last_year",
+    "tp_last_year",
+    "np_last_year",
+    "eps_last_year",
+    "open_net_assets",
+    "open_bps",
+    "perf_summary",
+    "is_audit",
+    "remark",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20181231",
+   "date_max": "20221231",
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "express",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 0,
+     "ms": 5330,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 4,
+     "ms": 1582,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6797,
+   "http": 200,
+   "code": 0,
+   "rows": 4,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "revenue",
+    "operate_profit",
+    "total_profit",
+    "n_income",
+    "total_assets",
+    "total_hldr_eqy_exc_min_int",
+    "diluted_eps",
+    "diluted_roe",
+    "yoy_net_profit",
+    "bps",
+    "yoy_sales",
+    "yoy_op",
+    "yoy_tp",
+    "yoy_dedu_np",
+    "yoy_eps",
+    "yoy_roe",
+    "growth_assets",
+    "yoy_equity",
+    "growth_bps",
+    "or_last_year",
+    "op_last_year",
+    "tp_last_year",
+    "np_last_year",
+    "eps_last_year",
+    "open_net_assets",
+    "open_bps",
+    "perf_summary",
+    "is_audit",
+    "remark",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20181231",
+   "date_max": "20221231",
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "express_vip",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 0,
+     "ms": 10425,
+     "msg": ""
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 4,
+     "ms": 6797,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8151,
+   "http": 200,
+   "code": 0,
+   "rows": 39,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "audit_result",
+    "audit_fees",
+    "audit_agency",
+    "audit_sign"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "19991231",
+   "date_max": "20251231",
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "fina_audit",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 0,
+     "ms": 6844,
+     "msg": ""
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 39,
+     "ms": 8151,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 17470,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "eps",
+    "dt_eps",
+    "total_revenue_ps",
+    "revenue_ps",
+    "capital_rese_ps",
+    "surplus_rese_ps",
+    "undist_profit_ps",
+    "extra_item",
+    "profit_dedt",
+    "gross_margin",
+    "current_ratio",
+    "quick_ratio",
+    "cash_ratio",
+    "ar_turn",
+    "ca_turn",
+    "fa_turn",
+    "assets_turn",
+    "op_income",
+    "ebit",
+    "ebitda",
+    "fcff",
+    "fcfe",
+    "current_exint",
+    "noncurrent_exint",
+    "interestdebt",
+    "netdebt",
+    "tangible_asset",
+    "working_capital",
+    "networking_capital",
+    "invest_capital",
+    "retained_earnings",
+    "diluted2_eps",
+    "bps",
+    "ocfps",
+    "retainedps",
+    "cfps",
+    "ebit_ps",
+    "fcff_ps",
+    "fcfe_ps",
+    "netprofit_margin",
+    "grossprofit_margin",
+    "cogs_of_sales",
+    "expense_of_sales",
+    "profit_to_gr",
+    "saleexp_to_gr",
+    "adminexp_of_gr",
+    "finaexp_of_gr",
+    "impai_ttm",
+    "gc_of_gr",
+    "op_of_gr",
+    "ebit_of_gr",
+    "roe",
+    "roe_waa",
+    "roe_dt",
+    "roa",
+    "npta",
+    "roic",
+    "roe_yearly",
+    "roa2_yearly",
+    "debt_to_assets",
+    "assets_to_eqt",
+    "dp_assets_to_eqt",
+    "ca_to_assets",
+    "nca_to_assets",
+    "tbassets_to_totalassets",
+    "int_to_talcap",
+    "eqt_to_talcapital",
+    "currentdebt_to_debt",
+    "longdeb_to_debt",
+    "ocf_to_shortdebt",
+    "debt_to_eqt",
+    "eqt_to_debt",
+    "eqt_to_interestdebt",
+    "tangibleasset_to_debt",
+    "tangasset_to_intdebt",
+    "tangibleasset_to_netdebt",
+    "ocf_to_debt",
+    "turn_days",
+    "roa_yearly",
+    "roa_dp",
+    "fixed_assets",
+    "profit_to_op",
+    "q_saleexp_to_gr",
+    "q_gc_to_gr",
+    "q_roe",
+    "q_dt_roe",
+    "q_npta",
+    "q_ocf_to_sales",
+    "basic_eps_yoy",
+    "dt_eps_yoy",
+    "cfps_yoy",
+    "op_yoy",
+    "ebt_yoy",
+    "netprofit_yoy",
+    "dt_netprofit_yoy",
+    "ocf_yoy",
+    "roe_yoy",
+    "bps_yoy",
+    "assets_yoy",
+    "eqt_yoy",
+    "tr_yoy",
+    "or_yoy",
+    "q_sales_yoy",
+    "q_op_qoq",
+    "equity_yoy"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20190630",
+   "date_max": "20260930",
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "fina_indicator",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 50,
+     "ms": 17470,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6323,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "eps",
+    "dt_eps",
+    "total_revenue_ps",
+    "revenue_ps",
+    "capital_rese_ps",
+    "surplus_rese_ps",
+    "undist_profit_ps",
+    "extra_item",
+    "profit_dedt",
+    "gross_margin",
+    "current_ratio",
+    "quick_ratio",
+    "cash_ratio",
+    "ar_turn",
+    "ca_turn",
+    "fa_turn",
+    "assets_turn",
+    "op_income",
+    "ebit",
+    "ebitda",
+    "fcff",
+    "fcfe",
+    "current_exint",
+    "noncurrent_exint",
+    "interestdebt",
+    "netdebt",
+    "tangible_asset",
+    "working_capital",
+    "networking_capital",
+    "invest_capital",
+    "retained_earnings",
+    "diluted2_eps",
+    "bps",
+    "ocfps",
+    "retainedps",
+    "cfps",
+    "ebit_ps",
+    "fcff_ps",
+    "fcfe_ps",
+    "netprofit_margin",
+    "grossprofit_margin",
+    "cogs_of_sales",
+    "expense_of_sales",
+    "profit_to_gr",
+    "saleexp_to_gr",
+    "adminexp_of_gr",
+    "finaexp_of_gr",
+    "impai_ttm",
+    "gc_of_gr",
+    "op_of_gr",
+    "ebit_of_gr",
+    "roe",
+    "roe_waa",
+    "roe_dt",
+    "roa",
+    "npta",
+    "roic",
+    "roe_yearly",
+    "roa2_yearly",
+    "debt_to_assets",
+    "assets_to_eqt",
+    "dp_assets_to_eqt",
+    "ca_to_assets",
+    "nca_to_assets",
+    "tbassets_to_totalassets",
+    "int_to_talcap",
+    "eqt_to_talcapital",
+    "currentdebt_to_debt",
+    "longdeb_to_debt",
+    "ocf_to_shortdebt",
+    "debt_to_eqt",
+    "eqt_to_debt",
+    "eqt_to_interestdebt",
+    "tangibleasset_to_debt",
+    "tangasset_to_intdebt",
+    "tangibleasset_to_netdebt",
+    "ocf_to_debt",
+    "turn_days",
+    "roa_yearly",
+    "roa_dp",
+    "fixed_assets",
+    "profit_to_op",
+    "q_saleexp_to_gr",
+    "q_gc_to_gr",
+    "q_roe",
+    "q_dt_roe",
+    "q_npta",
+    "q_ocf_to_sales",
+    "basic_eps_yoy",
+    "dt_eps_yoy",
+    "cfps_yoy",
+    "op_yoy",
+    "ebt_yoy",
+    "netprofit_yoy",
+    "dt_netprofit_yoy",
+    "ocf_yoy",
+    "roe_yoy",
+    "bps_yoy",
+    "assets_yoy",
+    "eqt_yoy",
+    "tr_yoy",
+    "or_yoy",
+    "q_sales_yoy",
+    "q_op_qoq",
+    "equity_yoy"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20260930",
+   "date_max": "20260930",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fina_indicator_vip",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4874,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 16552,
+     "msg": ""
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 6323,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 1413,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "end_date",
+    "bz_item",
+    "bz_code",
+    "bz_sales",
+    "bz_profit",
+    "bz_cost",
+    "curr_type",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20260630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "000001.SZ",
+    "period": "20260630"
+   },
+   "status": "ok",
+   "api": "fina_mainbz",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 50,
+     "ms": 1413,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8932,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "end_date",
+    "bz_item",
+    "bz_code",
+    "bz_sales",
+    "bz_profit",
+    "bz_cost",
+    "curr_type",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20260630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "000001.SZ",
+    "period": "20260630"
+   },
+   "status": "ok",
+   "api": "fina_mainbz_vip",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 50,
+     "ms": 8932,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5122,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "type",
+    "p_change_min",
+    "p_change_max",
+    "net_profit_min",
+    "net_profit_max",
+    "last_parent_net",
+    "first_ann_date",
+    "summary",
+    "change_reason",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20260930",
+   "date_max": "20260930",
+   "params": {
+    "ann_date": "20261023"
+   },
+   "status": "ok",
+   "api": "forecast",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 2459,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 6813,
+     "msg": ""
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4408,
+     "msg": "bad request: 以下参数至少传一个: ts_code, ann_date"
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 1,
+     "ms": 5122,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8204,
+   "http": 200,
+   "code": 0,
+   "rows": 16,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "type",
+    "p_change_min",
+    "p_change_max",
+    "net_profit_min",
+    "net_profit_max",
+    "last_parent_net",
+    "first_ann_date",
+    "summary",
+    "change_reason",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20060630",
+   "date_max": "20151231",
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "forecast_vip",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 0,
+     "ms": 5580,
+     "msg": ""
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 16,
+     "ms": 8204,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10415,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "up_limit",
+    "down_limit",
+    "m_ratio",
+    "cont",
+    "exchange"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "ft_limit",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 10415,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 1494,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "adj_factor"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fund_adj",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 1494,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3412,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "management",
+    "custodian",
+    "fund_type",
+    "found_date",
+    "due_date",
+    "list_date",
+    "issue_date",
+    "delist_date",
+    "issue_amount",
+    "m_fee",
+    "c_fee",
+    "duration_year",
+    "p_value",
+    "min_amount",
+    "exp_return",
+    "benchmark",
+    "status",
+    "invest_type",
+    "type",
+    "trustee",
+    "purc_startdate",
+    "redm_startdate",
+    "market"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "list_date",
+   "date_min": "20070907",
+   "date_max": "20120817",
+   "params": {
+    "market": "E"
+   },
+   "status": "ok",
+   "api": "fund_basic",
+   "attempts": [
+    {
+     "params": {
+      "market": "E"
+     },
+     "rows": 50,
+     "ms": 3412,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 13786,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "name",
+    "shortname",
+    "short_enname",
+    "province",
+    "city",
+    "address",
+    "phone",
+    "office",
+    "website",
+    "chairman",
+    "manager",
+    "reg_capital",
+    "setup_date",
+    "end_date",
+    "employees",
+    "main_business",
+    "org_code",
+    "credit_code"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20091229",
+   "date_max": "20091229",
+   "params": {},
+   "status": "ok",
+   "api": "fund_company",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 13786,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8742,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "pre_close",
+    "open",
+    "high",
+    "low",
+    "close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fund_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 8742,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8193,
+   "http": 200,
+   "code": 0,
+   "rows": 28,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "imp_anndate",
+    "base_date",
+    "div_proc",
+    "record_date",
+    "ex_date",
+    "pay_date",
+    "earpay_date",
+    "net_ex_date",
+    "div_cash",
+    "base_unit",
+    "ear_distr",
+    "ear_amount",
+    "account_date",
+    "base_year"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "ann_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "ann_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fund_div",
+   "attempts": [
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 28,
+     "ms": 8193,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12988,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "change",
+    "pct_change",
+    "vol",
+    "amount",
+    "asi_bfq",
+    "asit_bfq",
+    "atr_bfq",
+    "bbi_bfq",
+    "bias1_bfq",
+    "bias2_bfq",
+    "bias3_bfq",
+    "boll_lower_bfq",
+    "boll_mid_bfq",
+    "boll_upper_bfq",
+    "brar_ar_bfq",
+    "brar_br_bfq",
+    "cci_bfq",
+    "cr_bfq",
+    "dfma_dif_bfq",
+    "dfma_difma_bfq",
+    "dmi_adx_bfq",
+    "dmi_adxr_bfq",
+    "dmi_mdi_bfq",
+    "dmi_pdi_bfq",
+    "downdays",
+    "updays",
+    "dpo_bfq",
+    "madpo_bfq",
+    "ema_bfq_10",
+    "ema_bfq_20",
+    "ema_bfq_250",
+    "ema_bfq_30",
+    "ema_bfq_5",
+    "ema_bfq_60",
+    "ema_bfq_90",
+    "emv_bfq",
+    "maemv_bfq",
+    "expma_12_bfq",
+    "expma_50_bfq",
+    "kdj_bfq",
+    "kdj_d_bfq",
+    "kdj_k_bfq",
+    "ktn_down_bfq",
+    "ktn_mid_bfq",
+    "ktn_upper_bfq",
+    "lowdays",
+    "topdays",
+    "ma_bfq_10",
+    "ma_bfq_20",
+    "ma_bfq_250",
+    "ma_bfq_30",
+    "ma_bfq_5",
+    "ma_bfq_60",
+    "ma_bfq_90",
+    "macd_bfq",
+    "macd_dea_bfq",
+    "macd_dif_bfq",
+    "mass_bfq",
+    "ma_mass_bfq",
+    "mfi_bfq",
+    "mtm_bfq",
+    "mtmma_bfq",
+    "obv_bfq",
+    "psy_bfq",
+    "psyma_bfq",
+    "roc_bfq",
+    "maroc_bfq",
+    "rsi_bfq_12",
+    "rsi_bfq_24",
+    "rsi_bfq_6",
+    "taq_down_bfq",
+    "taq_mid_bfq",
+    "taq_up_bfq",
+    "trix_bfq",
+    "trma_bfq",
+    "vr_bfq",
+    "wr_bfq",
+    "wr1_bfq",
+    "xsii_td1_bfq",
+    "xsii_td2_bfq",
+    "xsii_td3_bfq",
+    "xsii_td4_bfq"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fund_factor_pro",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 12988,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10834,
+   "http": 200,
+   "code": 0,
+   "rows": 2,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "name",
+    "gender",
+    "birth_year",
+    "edu",
+    "nationality",
+    "begin_date",
+    "end_date",
+    "resume"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20150612",
+   "date_max": "20150612",
+   "params": {
+    "ts_code": "510300.SH"
+   },
+   "status": "ok",
+   "api": "fund_manager",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "510300.SH"
+     },
+     "rows": 2,
+     "ms": 10834,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4972,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "nav_date",
+    "unit_nav",
+    "accum_nav",
+    "accum_div",
+    "net_asset",
+    "total_netasset",
+    "adj_nav",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "ann_date",
+   "date_min": "20261023",
+   "date_max": "20261024",
+   "params": {
+    "nav_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fund_nav",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "510300.SH"
+     },
+     "rows": 0,
+     "ms": 36429,
+     "msg": "service unavailable: query timeout"
+    },
+    {
+     "params": {
+      "nav_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 4972,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 23788,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "symbol",
+    "mkv",
+    "amount",
+    "stk_mkv_ratio",
+    "stk_float_ratio"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20260630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "510300.SH"
+   },
+   "status": "ok",
+   "api": "fund_portfolio",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "510300.SH"
+     },
+     "rows": 50,
+     "ms": 23788,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4631,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "fd_share",
+    "fund_type",
+    "market"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fund_share",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 4631,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5310,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "symbol",
+    "exchange",
+    "name",
+    "fut_code",
+    "multiplier",
+    "trade_unit",
+    "per_unit",
+    "quote_unit",
+    "quote_unit_desc",
+    "d_mode_desc",
+    "list_date",
+    "delist_date",
+    "d_month",
+    "last_ddate"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "list_date",
+   "date_min": "19990118",
+   "date_max": "20060717",
+   "params": {
+    "exchange": "DCE"
+   },
+   "status": "ok",
+   "api": "fut_basic",
+   "attempts": [
+    {
+     "params": {
+      "exchange": "DCE"
+     },
+     "rows": 50,
+     "ms": 5310,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5008,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "pre_close",
+    "pre_settle",
+    "open",
+    "high",
+    "low",
+    "close",
+    "settle",
+    "change1",
+    "change2",
+    "vol",
+    "amount",
+    "oi",
+    "oi_chg",
+    "delv_settle"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fut_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 5008,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3081,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "pre_close",
+    "pre_settle",
+    "open",
+    "high",
+    "low",
+    "close",
+    "settle",
+    "change1",
+    "change2",
+    "vol",
+    "amount",
+    "oi",
+    "oi_chg",
+    "delv_settle",
+    "exchange"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fut_daily_adj",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 3081,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 23360,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "symbol",
+    "broker",
+    "vol",
+    "vol_chg",
+    "long_hld",
+    "long_chg",
+    "short_hld",
+    "short_chg"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fut_holding",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 23360,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8618,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fut_index_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 8618,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9052,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "fut_name",
+    "exchange",
+    "area",
+    "warehouse",
+    "grade",
+    "pre_total",
+    "pre_futures",
+    "cur_total",
+    "cur_futures",
+    "chg_total",
+    "chg_futures",
+    "pre_capacity",
+    "cur_capacity",
+    "chg_capacity",
+    "unit"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261001",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fut_inv_weekly",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261001",
+      "end_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 9052,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 11765,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "mapping_ts_code"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20260810",
+   "date_max": "20261026",
+   "params": {
+    "ts_code": "RB.SHF"
+   },
+   "status": "ok",
+   "api": "fut_mapping",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "RB.SHF"
+     },
+     "rows": 50,
+     "ms": 11765,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6392,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "exchange",
+    "ts_code",
+    "fut_name",
+    "unit",
+    "cur_month",
+    "next_month",
+    "next_two_month"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20260807",
+   "date_max": "20261009",
+   "params": {},
+   "status": "ok",
+   "api": "fut_rcpt_mat",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "RB.SHF"
+     },
+     "rows": 0,
+     "ms": 12924,
+     "msg": ""
+    },
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 6392,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5315,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "settle",
+    "trading_fee_rate",
+    "trading_fee",
+    "delivery_fee",
+    "b_hedging_margin_rate",
+    "s_hedging_margin_rate",
+    "long_margin_rate",
+    "short_margin_rate"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fut_settle",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 5315,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4095,
+   "http": 200,
+   "code": 0,
+   "rows": 12,
+   "fields": [
+    "exchange",
+    "cal_date",
+    "is_open",
+    "pretrade_date"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "cal_date",
+   "date_min": "20261020",
+   "date_max": "20261031",
+   "params": {
+    "exchange": "DCE",
+    "start_date": "20261020",
+    "end_date": "20261031"
+   },
+   "status": "ok",
+   "api": "fut_trade_cal",
+   "attempts": [
+    {
+     "params": {
+      "exchange": "DCE",
+      "start_date": "20261020",
+      "end_date": "20261031"
+     },
+     "rows": 12,
+     "ms": 4095,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7994,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "fut_code",
+    "exchange",
+    "trade_unit",
+    "tick_size",
+    "pre_settle_price",
+    "price_limit",
+    "position_limit",
+    "trade_limit",
+    "min_order_qty",
+    "max_limit_order_qty",
+    "max_market_order_qty"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261012",
+   "date_max": "20261023",
+   "params": {},
+   "status": "ok",
+   "api": "fut_trade_param",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 7994,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 2988,
+   "http": 200,
+   "code": 0,
+   "rows": 0,
+   "fields": [
+    "exchange",
+    "prd",
+    "name",
+    "vol",
+    "vol_yoy",
+    "amount",
+    "amout_yoy",
+    "cumvol",
+    "cumvol_yoy",
+    "cumamt",
+    "cumamt_yoy",
+    "open_interest",
+    "interest_wow",
+    "mc_close",
+    "close_wow",
+    "week",
+    "week_date"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "prd": "RB",
+    "week": "202642"
+   },
+   "status": "empty",
+   "api": "fut_weekly_detail",
+   "attempts": [
+    {
+     "params": {
+      "prd": "RB",
+      "week": "202642"
+     },
+     "rows": 0,
+     "ms": 2988,
+     "msg": ""
+    },
+    {
+     "params": {
+      "week": "202642"
+     },
+     "rows": 0,
+     "ms": 10387,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6283,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "end_date",
+    "freq",
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "settle",
+    "pre_settle",
+    "vol",
+    "amount",
+    "oi",
+    "oi_chg",
+    "exchange",
+    "change1",
+    "change2"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023",
+    "freq": "week"
+   },
+   "status": "ok",
+   "api": "fut_weekly_monthly",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023",
+      "freq": "week"
+     },
+     "rows": 50,
+     "ms": 6283,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4179,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "symbol",
+    "fut_name",
+    "warehouse",
+    "pre_vol",
+    "vol",
+    "vol_chg",
+    "unit"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fut_wsr",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 4179,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 2589,
+   "http": 200,
+   "code": 0,
+   "rows": 11,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "bid_open",
+    "bid_close",
+    "bid_high",
+    "bid_low",
+    "ask_open",
+    "ask_close",
+    "ask_high",
+    "ask_low",
+    "tick_qty"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "fx_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 11,
+     "ms": 2589,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3896,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "classify",
+    "exchange",
+    "min_unit",
+    "max_unit",
+    "pip",
+    "pip_cost",
+    "traget_spread",
+    "min_stop_distance",
+    "trading_hours",
+    "break_time"
+   ],
+   "msg": "",
+   "has_more": true,
+   "params": {},
+   "status": "ok",
+   "api": "fx_obasic",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 3896,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6817,
+   "http": 200,
+   "code": 0,
+   "rows": 0,
+   "fields": [
+    "trade_date",
+    "buy_amount",
+    "buy_volume",
+    "sell_amount",
+    "sell_volume"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "empty",
+   "api": "ggt_daily",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 6817,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3263,
+   "http": 200,
+   "code": 0,
+   "rows": 20,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "close",
+    "p_change",
+    "rank",
+    "market_type",
+    "amount",
+    "net_amount",
+    "sh_amount",
+    "sh_net_amount",
+    "sh_buy",
+    "sh_sell",
+    "sz_amount",
+    "sz_net_amount",
+    "sz_buy",
+    "sz_sell"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "ggt_top10",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 20,
+     "ms": 3263,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3588,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "date",
+    "d10_rate",
+    "m1_rate",
+    "m3_rate",
+    "m6_rate",
+    "m12_rate",
+    "long_rate"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20190304",
+   "date_max": "20190304",
+   "params": {
+    "start_date": "20190301",
+    "end_date": "20190304"
+   },
+   "status": "ok",
+   "api": "gz_index",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20190301",
+      "end_date": "20190304"
+     },
+     "rows": 1,
+     "ms": 3588,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12998,
+   "http": 200,
+   "code": 0,
+   "rows": 6,
+   "fields": [
+    "date",
+    "on",
+    "1w",
+    "2w",
+    "1m",
+    "2m",
+    "3m",
+    "6m",
+    "12m"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20261015",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "hibor",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 6,
+     "ms": 12998,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6277,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "fullname",
+    "enname",
+    "cn_spell",
+    "market",
+    "list_status",
+    "list_date",
+    "delist_date",
+    "trade_unit",
+    "isin",
+    "curr_type"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "list_date",
+   "date_min": "19210101",
+   "date_max": "20211230",
+   "params": {
+    "list_status": "L"
+   },
+   "status": "ok",
+   "api": "hk_basic",
+   "attempts": [
+    {
+     "params": {
+      "list_status": "L"
+     },
+     "rows": 50,
+     "ms": 6277,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7078,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "code",
+    "trade_date",
+    "ts_code",
+    "name",
+    "vol",
+    "ratio",
+    "exchange"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "hk_hold",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 7078,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 17531,
+   "http": 200,
+   "code": 0,
+   "rows": 12,
+   "fields": [
+    "cal_date",
+    "is_open",
+    "pretrade_date"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "cal_date",
+   "date_min": "20261020",
+   "date_max": "20261031",
+   "params": {
+    "start_date": "20261020",
+    "end_date": "20261031"
+   },
+   "status": "ok",
+   "api": "hk_tradecal",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261020",
+      "end_date": "20261031"
+     },
+     "rows": 12,
+     "ms": 17531,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5197,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "ts_name",
+    "buy_amount",
+    "sell_amount",
+    "net_amount",
+    "hm_name",
+    "hm_orgs"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "hm_detail",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 5197,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3004,
+   "http": 200,
+   "code": -1,
+   "rows": 0,
+   "fields": [],
+   "msg": "bad request: 不支持的参数: trade_date",
+   "has_more": false,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "no_permission",
+   "api": "hm_list",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3004,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 2688,
+     "msg": "bad request: 不支持的参数: ts_code"
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3650,
+     "msg": "bad request: 不支持的参数: start_date"
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 5132,
+     "msg": "bad request: 不支持的参数: ann_date"
+    }
+   ]
+  },
+  {
+   "ms": 7172,
+   "http": 200,
+   "code": 0,
+   "rows": 20,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "close",
+    "change",
+    "rank",
+    "market_type",
+    "amount",
+    "net_amount",
+    "buy",
+    "sell"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "hsgt_top10",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 20,
+     "ms": 7172,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7442,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "ann_date",
+    "title",
+    "url",
+    "source",
+    "type"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "ann_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "ann_date": "20261023"
+   },
+   "status": "ok",
+   "api": "idx_anns",
+   "attempts": [
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 1,
+     "ms": 7442,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6392,
+   "http": 200,
+   "code": 0,
+   "rows": 6,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "change",
+    "pct_change",
+    "vol",
+    "amount",
+    "asi_bfq",
+    "asit_bfq",
+    "atr_bfq",
+    "bbi_bfq",
+    "bias1_bfq",
+    "bias2_bfq",
+    "bias3_bfq",
+    "boll_lower_bfq",
+    "boll_mid_bfq",
+    "boll_upper_bfq",
+    "brar_ar_bfq",
+    "brar_br_bfq",
+    "cci_bfq",
+    "cr_bfq",
+    "dfma_dif_bfq",
+    "dfma_difma_bfq",
+    "dmi_adx_bfq",
+    "dmi_adxr_bfq",
+    "dmi_mdi_bfq",
+    "dmi_pdi_bfq",
+    "downdays",
+    "updays",
+    "dpo_bfq",
+    "madpo_bfq",
+    "ema_bfq_10",
+    "ema_bfq_20",
+    "ema_bfq_250",
+    "ema_bfq_30",
+    "ema_bfq_5",
+    "ema_bfq_60",
+    "ema_bfq_90",
+    "emv_bfq",
+    "maemv_bfq",
+    "expma_12_bfq",
+    "expma_50_bfq",
+    "kdj_bfq",
+    "kdj_d_bfq",
+    "kdj_k_bfq",
+    "ktn_down_bfq",
+    "ktn_mid_bfq",
+    "ktn_upper_bfq",
+    "lowdays",
+    "topdays",
+    "ma_bfq_10",
+    "ma_bfq_20",
+    "ma_bfq_250",
+    "ma_bfq_30",
+    "ma_bfq_5",
+    "ma_bfq_60",
+    "ma_bfq_90",
+    "macd_bfq",
+    "macd_dea_bfq",
+    "macd_dif_bfq",
+    "mass_bfq",
+    "ma_mass_bfq",
+    "mfi_bfq",
+    "mtm_bfq",
+    "mtmma_bfq",
+    "obv_bfq",
+    "psy_bfq",
+    "psyma_bfq",
+    "roc_bfq",
+    "maroc_bfq",
+    "rsi_bfq_12",
+    "rsi_bfq_24",
+    "rsi_bfq_6",
+    "taq_down_bfq",
+    "taq_mid_bfq",
+    "taq_up_bfq",
+    "trix_bfq",
+    "trma_bfq",
+    "vr_bfq",
+    "wr_bfq",
+    "wr1_bfq",
+    "xsii_td1_bfq",
+    "xsii_td2_bfq",
+    "xsii_td3_bfq",
+    "xsii_td4_bfq"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261016",
+   "date_max": "20261023",
+   "params": {
+    "ts_code": "000300.SH",
+    "start_date": "20261016",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "idx_factor_pro",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000300.SH",
+      "start_date": "20261016",
+      "end_date": "20261023"
+     },
+     "rows": 6,
+     "ms": 6392,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3496,
+   "http": 200,
+   "code": 0,
+   "rows": 3,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "f_ann_date",
+    "end_date",
+    "report_type",
+    "comp_type",
+    "end_type",
+    "basic_eps",
+    "diluted_eps",
+    "total_revenue",
+    "revenue",
+    "int_income",
+    "prem_earned",
+    "comm_income",
+    "n_commis_income",
+    "n_oth_income",
+    "n_oth_b_income",
+    "prem_income",
+    "out_prem",
+    "une_prem_reser",
+    "reins_income",
+    "n_sec_tb_income",
+    "n_sec_uw_income",
+    "n_asset_mg_income",
+    "oth_b_income",
+    "fv_value_chg_gain",
+    "invest_income",
+    "ass_invest_income",
+    "forex_gain",
+    "total_cogs",
+    "oper_cost",
+    "int_exp",
+    "comm_exp",
+    "biz_tax_surchg",
+    "sell_exp",
+    "admin_exp",
+    "fin_exp",
+    "assets_impair_loss",
+    "prem_refund",
+    "compens_payout",
+    "reser_insur_liab",
+    "div_payt",
+    "reins_exp",
+    "oper_exp",
+    "compens_payout_refu",
+    "insur_reser_refu",
+    "reins_cost_refund",
+    "other_bus_cost",
+    "operate_profit",
+    "non_oper_income",
+    "non_oper_exp",
+    "nca_disploss",
+    "total_profit",
+    "income_tax",
+    "n_income",
+    "n_income_attr_p",
+    "minority_gain",
+    "oth_compr_income",
+    "t_compr_income",
+    "compr_inc_attr_p",
+    "compr_inc_attr_m_s",
+    "ebit",
+    "ebitda",
+    "insurance_exp",
+    "undist_profit",
+    "distable_profit",
+    "rd_exp",
+    "fin_exp_int_exp",
+    "fin_exp_int_inc",
+    "transfer_surplus_rese",
+    "transfer_housing_imprest",
+    "transfer_oth",
+    "adj_lossgain",
+    "withdra_legal_surplus",
+    "withdra_legal_pubfund",
+    "withdra_biz_devfund",
+    "withdra_rese_fund",
+    "withdra_oth_ersu",
+    "workers_welfare",
+    "distr_profit_shrhder",
+    "prfshare_payable_dvd",
+    "comshare_payable_dvd",
+    "capit_comstock_div",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20260630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "000001.SZ",
+    "period": "20260630"
+   },
+   "status": "ok",
+   "api": "income",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 3,
+     "ms": 3496,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 11276,
+   "http": 200,
+   "code": 0,
+   "rows": 3,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "f_ann_date",
+    "end_date",
+    "report_type",
+    "comp_type",
+    "end_type",
+    "basic_eps",
+    "diluted_eps",
+    "total_revenue",
+    "revenue",
+    "int_income",
+    "prem_earned",
+    "comm_income",
+    "n_commis_income",
+    "n_oth_income",
+    "n_oth_b_income",
+    "prem_income",
+    "out_prem",
+    "une_prem_reser",
+    "reins_income",
+    "n_sec_tb_income",
+    "n_sec_uw_income",
+    "n_asset_mg_income",
+    "oth_b_income",
+    "fv_value_chg_gain",
+    "invest_income",
+    "ass_invest_income",
+    "forex_gain",
+    "total_cogs",
+    "oper_cost",
+    "int_exp",
+    "comm_exp",
+    "biz_tax_surchg",
+    "sell_exp",
+    "admin_exp",
+    "fin_exp",
+    "assets_impair_loss",
+    "prem_refund",
+    "compens_payout",
+    "reser_insur_liab",
+    "div_payt",
+    "reins_exp",
+    "oper_exp",
+    "compens_payout_refu",
+    "insur_reser_refu",
+    "reins_cost_refund",
+    "other_bus_cost",
+    "operate_profit",
+    "non_oper_income",
+    "non_oper_exp",
+    "nca_disploss",
+    "total_profit",
+    "income_tax",
+    "n_income",
+    "n_income_attr_p",
+    "minority_gain",
+    "oth_compr_income",
+    "t_compr_income",
+    "compr_inc_attr_p",
+    "compr_inc_attr_m_s",
+    "ebit",
+    "ebitda",
+    "insurance_exp",
+    "undist_profit",
+    "distable_profit",
+    "rd_exp",
+    "fin_exp_int_exp",
+    "fin_exp_int_inc",
+    "transfer_surplus_rese",
+    "transfer_housing_imprest",
+    "transfer_oth",
+    "adj_lossgain",
+    "withdra_legal_surplus",
+    "withdra_legal_pubfund",
+    "withdra_biz_devfund",
+    "withdra_rese_fund",
+    "withdra_oth_ersu",
+    "workers_welfare",
+    "distr_profit_shrhder",
+    "prfshare_payable_dvd",
+    "comshare_payable_dvd",
+    "capit_comstock_div",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20260630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "000001.SZ",
+    "period": "20260630"
+   },
+   "status": "ok",
+   "api": "income_vip",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "period": "20260630"
+     },
+     "rows": 3,
+     "ms": 11276,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12268,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "market",
+    "publisher",
+    "category",
+    "base_date",
+    "base_point",
+    "list_date"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "list_date",
+   "date_min": "19910715",
+   "date_max": "20120109",
+   "params": {
+    "market": "SSE"
+   },
+   "status": "ok",
+   "api": "index_basic",
+   "attempts": [
+    {
+     "params": {
+      "market": "SSE"
+     },
+     "rows": 50,
+     "ms": 12268,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8567,
+   "http": 200,
+   "code": 0,
+   "rows": 31,
+   "fields": [
+    "index_code",
+    "industry_name",
+    "level",
+    "industry_code",
+    "is_pub",
+    "parent_code",
+    "src"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "level": "L1",
+    "src": "SW2021"
+   },
+   "status": "ok",
+   "api": "index_classify",
+   "attempts": [
+    {
+     "params": {
+      "level": "L1",
+      "src": "SW2021"
+     },
+     "rows": 31,
+     "ms": 8567,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4621,
+   "http": 200,
+   "code": -1,
+   "rows": 0,
+   "fields": [],
+   "msg": "bad request: 缺少必填参数: ts_code",
+   "has_more": false,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "error",
+   "api": "index_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4621,
+     "msg": "bad request: 缺少必填参数: ts_code"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 17486,
+     "msg": ""
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 5977,
+     "msg": "bad request: 缺少必填参数: ts_code"
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 2612,
+     "msg": "bad request: 不支持的参数: ann_date"
+    }
+   ]
+  },
+  {
+   "ms": 2798,
+   "http": 200,
+   "code": 0,
+   "rows": 15,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "total_mv",
+    "float_mv",
+    "total_share",
+    "float_share",
+    "free_share",
+    "turnover_rate",
+    "turnover_rate_f",
+    "pe",
+    "pe_ttm",
+    "pb"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "index_dailybasic",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 15,
+     "ms": 2798,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 992,
+   "http": 200,
+   "code": 0,
+   "rows": 7,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "open",
+    "close",
+    "high",
+    "low",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "swing",
+    "vol"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261015",
+   "date_max": "20261023",
+   "params": {
+    "ts_code": "SPX",
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "index_global",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "SPX",
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 7,
+     "ms": 992,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 1437,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "l1_code",
+    "l1_name",
+    "l2_code",
+    "l2_name",
+    "l3_code",
+    "l3_name",
+    "ts_code",
+    "name",
+    "in_date",
+    "out_date",
+    "is_new"
+   ],
+   "msg": "",
+   "has_more": true,
+   "params": {
+    "l1_code": "801010.SI"
+   },
+   "status": "ok",
+   "api": "index_member_all",
+   "attempts": [
+    {
+     "params": {
+      "l1_code": "801010.SI"
+     },
+     "rows": 50,
+     "ms": 1437,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6439,
+   "http": 200,
+   "code": 0,
+   "rows": 9,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20260130",
+   "date_max": "20260930",
+   "params": {
+    "ts_code": "000300.SH",
+    "start_date": "20260101",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "index_monthly",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000300.SH",
+      "start_date": "20260101",
+      "end_date": "20261023"
+     },
+     "rows": 9,
+     "ms": 6439,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3597,
+   "http": 200,
+   "code": 0,
+   "rows": 8,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20260904",
+   "date_max": "20261023",
+   "params": {
+    "ts_code": "000300.SH",
+    "start_date": "20260901",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "index_weekly",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000300.SH",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 8,
+     "ms": 3597,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9002,
+   "http": 200,
+   "code": 0,
+   "rows": 0,
+   "fields": [
+    "index_code",
+    "con_code",
+    "trade_date",
+    "weight"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "index_code": "000300.SH",
+    "start_date": "20261001",
+    "end_date": "20261023"
+   },
+   "status": "empty",
+   "api": "index_weight",
+   "attempts": [
+    {
+     "params": {
+      "index_code": "000300.SH",
+      "start_date": "20261001",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 9002,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4875,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "z_t_num",
+    "up_num"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "kpl_concept",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 4875,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8937,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "con_name",
+    "con_code",
+    "trade_date",
+    "desc",
+    "hot_num"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "kpl_concept_cons",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 8937,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10713,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "trade_date",
+    "lu_time",
+    "ld_time",
+    "open_time",
+    "last_time",
+    "lu_desc",
+    "tag",
+    "theme",
+    "net_change",
+    "bid_amount",
+    "status",
+    "bid_change",
+    "bid_turnover",
+    "lu_bid_vol",
+    "pct_chg",
+    "bid_pct_chg",
+    "rt_pct_chg",
+    "limit_order",
+    "amount",
+    "turnover_rate",
+    "free_float",
+    "lu_limit_order"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "kpl_list",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 10713,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 16143,
+   "http": 200,
+   "code": 0,
+   "rows": 37,
+   "fields": [
+    "date",
+    "curr_type",
+    "on",
+    "1w",
+    "1m",
+    "2m",
+    "3m",
+    "6m",
+    "12m"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20200501",
+   "date_max": "20200624",
+   "params": {
+    "start_date": "20200501",
+    "end_date": "20200624"
+   },
+   "status": "ok",
+   "api": "libor",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20200501",
+      "end_date": "20200624"
+     },
+     "rows": 37,
+     "ms": 16143,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 2720,
+   "http": 200,
+   "code": 0,
+   "rows": 20,
+   "fields": [
+    "ts_code",
+    "name",
+    "trade_date",
+    "days",
+    "up_stat",
+    "cons_nums",
+    "up_nums",
+    "pct_chg",
+    "rank"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "limit_cpt_list",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 20,
+     "ms": 2720,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9037,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "industry",
+    "name",
+    "close",
+    "pct_chg",
+    "amount",
+    "limit_amount",
+    "float_mv",
+    "total_mv",
+    "turnover_ratio",
+    "fd_amount",
+    "first_time",
+    "last_time",
+    "open_times",
+    "up_stat",
+    "limit_times",
+    "limit",
+    "exchange"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "limit_list_d",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4031,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 12197,
+     "msg": ""
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 9037,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3752,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "price",
+    "pct_chg",
+    "open_num",
+    "lu_desc",
+    "limit_type",
+    "tag",
+    "status",
+    "limit_order",
+    "limit_amount",
+    "turnover_rate",
+    "free_float",
+    "lu_limit_order",
+    "limit_up_suc_rate",
+    "turnover",
+    "market_type",
+    "first_lu_time",
+    "last_lu_time",
+    "first_ld_time",
+    "last_ld_time",
+    "rise_rate",
+    "sum_float"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "limit_list_ths",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 3752,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10185,
+   "http": 200,
+   "code": 0,
+   "rows": 12,
+   "fields": [
+    "ts_code",
+    "name",
+    "trade_date",
+    "nums"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "limit_step",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 12,
+     "ms": 10185,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 1946,
+   "http": 200,
+   "code": 0,
+   "rows": 3,
+   "fields": [
+    "trade_date",
+    "exchange_id",
+    "rzye",
+    "rzmre",
+    "rzche",
+    "rqye",
+    "rqmcl",
+    "rzrqye",
+    "rqyl"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "margin",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 3,
+     "ms": 1946,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8374,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "rzye",
+    "rqye",
+    "rzmre",
+    "rqyl",
+    "rzche",
+    "rqchl",
+    "rqmcl",
+    "rzrqye",
+    "name"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "margin_detail",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 8374,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4601,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "exchange"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "margin_secs",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 4601,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5482,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "symbol",
+    "name",
+    "fullname",
+    "bmk_level",
+    "bmk_type",
+    "bmk_src",
+    "idx_type"
+   ],
+   "msg": "",
+   "has_more": true,
+   "params": {},
+   "status": "ok",
+   "api": "mkt_idx_bmk",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4611,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 5482,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6083,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "buy_sm_vol",
+    "buy_sm_amount",
+    "sell_sm_vol",
+    "sell_sm_amount",
+    "buy_md_vol",
+    "buy_md_amount",
+    "sell_md_vol",
+    "sell_md_amount",
+    "buy_lg_vol",
+    "buy_lg_amount",
+    "sell_lg_vol",
+    "sell_lg_amount",
+    "buy_elg_vol",
+    "buy_elg_amount",
+    "sell_elg_vol",
+    "sell_elg_amount",
+    "net_mf_vol",
+    "net_mf_amount"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "moneyflow",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 6083,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6451,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "lead_stock",
+    "close_price",
+    "pct_change",
+    "industry_index",
+    "company_num",
+    "pct_change_stock",
+    "net_buy_amount",
+    "net_sell_amount",
+    "net_amount"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "moneyflow_cnt_ths",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 6451,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 11199,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "pct_change",
+    "close",
+    "net_amount",
+    "net_amount_rate",
+    "buy_elg_amount",
+    "buy_elg_amount_rate",
+    "buy_lg_amount",
+    "buy_lg_amount_rate",
+    "buy_md_amount",
+    "buy_md_amount_rate",
+    "buy_sm_amount",
+    "buy_sm_amount_rate"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "moneyflow_dc",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 11199,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9371,
+   "http": 200,
+   "code": 0,
+   "rows": 6,
+   "fields": [
+    "trade_date",
+    "ggt_ss",
+    "ggt_sz",
+    "hgt",
+    "sgt",
+    "north_money",
+    "south_money"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261015",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "moneyflow_hsgt",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 6,
+     "ms": 9371,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3818,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "content_type",
+    "ts_code",
+    "name",
+    "pct_change",
+    "close",
+    "net_amount",
+    "net_amount_rate",
+    "buy_elg_amount",
+    "buy_elg_amount_rate",
+    "buy_lg_amount",
+    "buy_lg_amount_rate",
+    "buy_md_amount",
+    "buy_md_amount_rate",
+    "buy_sm_amount",
+    "buy_sm_amount_rate",
+    "buy_sm_amount_stock",
+    "rank"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "moneyflow_ind_dc",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 3818,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 14371,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "industry",
+    "lead_stock",
+    "close",
+    "pct_change",
+    "company_num",
+    "pct_change_stock",
+    "close_price",
+    "net_buy_amount",
+    "net_sell_amount",
+    "net_amount"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "moneyflow_ind_ths",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 14371,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 13493,
+   "http": 200,
+   "code": 0,
+   "rows": 7,
+   "fields": [
+    "trade_date",
+    "close_sh",
+    "pct_change_sh",
+    "close_sz",
+    "pct_change_sz",
+    "net_amount",
+    "net_amount_rate",
+    "buy_elg_amount",
+    "buy_elg_amount_rate",
+    "buy_lg_amount",
+    "buy_lg_amount_rate",
+    "buy_md_amount",
+    "buy_md_amount_rate",
+    "buy_sm_amount",
+    "buy_sm_amount_rate"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261015",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "moneyflow_mkt_dc",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 7,
+     "ms": 13493,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6632,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "pct_change",
+    "latest",
+    "net_amount",
+    "net_d5_amount",
+    "buy_lg_amount",
+    "buy_lg_amount_rate",
+    "buy_md_amount",
+    "buy_md_amount_rate",
+    "buy_sm_amount",
+    "buy_sm_amount_rate"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "moneyflow_ths",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 6632,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5702,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20260831",
+   "date_max": "20260831",
+   "params": {
+    "trade_date": "20260831"
+   },
+   "status": "ok",
+   "api": "monthly",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20260831"
+     },
+     "rows": 50,
+     "ms": 5702,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6382,
+   "http": 200,
+   "code": -1,
+   "rows": 0,
+   "fields": [],
+   "msg": "bad request: 不支持的参数: trade_date",
+   "has_more": false,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "no_permission",
+   "api": "namechange",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 6382,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 1740,
+     "msg": ""
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 10738,
+     "msg": ""
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 2005,
+     "msg": "bad request: 不支持的参数: ann_date"
+    }
+   ]
+  },
+  {
+   "ms": 17394,
+   "http": 200,
+   "code": 0,
+   "rows": 5,
+   "fields": [
+    "ts_code",
+    "sub_code",
+    "name",
+    "ipo_date",
+    "issue_date",
+    "amount",
+    "market_amount",
+    "price",
+    "pe",
+    "limit_amount",
+    "funds",
+    "ballot"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "start_date": "20261001",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "new_share",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261001",
+      "end_date": "20261023"
+     },
+     "rows": 5,
+     "ms": 17394,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3170,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "exchange",
+    "name",
+    "per_unit",
+    "opt_code",
+    "opt_type",
+    "call_put",
+    "exercise_type",
+    "exercise_price",
+    "s_month",
+    "maturity_date",
+    "list_price",
+    "list_date",
+    "delist_date",
+    "last_edate",
+    "last_ddate",
+    "quote_unit",
+    "min_price_chg"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "list_date",
+   "date_min": "20150209",
+   "date_max": "20150212",
+   "params": {
+    "exchange": "SSE"
+   },
+   "status": "ok",
+   "api": "opt_basic",
+   "attempts": [
+    {
+     "params": {
+      "exchange": "SSE"
+     },
+     "rows": 50,
+     "ms": 3170,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10458,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "exchange",
+    "pre_settle",
+    "pre_close",
+    "open",
+    "high",
+    "low",
+    "close",
+    "settle",
+    "vol",
+    "amount",
+    "oi"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "opt_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 10458,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3966,
+   "http": 200,
+   "code": 0,
+   "rows": 0,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "holder_name",
+    "pledge_amount",
+    "start_date",
+    "end_date",
+    "is_release",
+    "release_date",
+    "pledgor",
+    "holding_amount",
+    "pledged_amount",
+    "p_total_ratio",
+    "h_total_ratio",
+    "is_buyback"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "empty",
+   "api": "pledge_detail",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 0,
+     "ms": 3966,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6621,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "end_date",
+    "pledge_count",
+    "unrest_pledge",
+    "rest_pledge",
+    "total_share",
+    "pledge_ratio"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20261016",
+   "date_max": "20261016",
+   "params": {
+    "end_date": "20261016"
+   },
+   "status": "ok",
+   "api": "pledge_stat",
+   "attempts": [
+    {
+     "params": {
+      "end_date": "20261016"
+     },
+     "rows": 50,
+     "ms": 6621,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10911,
+   "http": 200,
+   "code": 0,
+   "rows": 36,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "repo_maturity",
+    "pre_close",
+    "open",
+    "high",
+    "low",
+    "close",
+    "weight",
+    "weight_r",
+    "amount",
+    "num"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "repo_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 36,
+     "ms": 10911,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10913,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "report_date",
+    "report_title",
+    "report_type",
+    "classify",
+    "org_name",
+    "author_name",
+    "quarter",
+    "op_rt",
+    "op_pr",
+    "tp",
+    "np",
+    "eps",
+    "pe",
+    "rd",
+    "roe",
+    "ev_ebitda",
+    "rating",
+    "max_price",
+    "min_price"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "report_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "report_date": "20261023"
+   },
+   "status": "ok",
+   "api": "report_rc",
+   "attempts": [
+    {
+     "params": {
+      "report_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 10913,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 11510,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "proc",
+    "exp_date",
+    "vol",
+    "amount",
+    "high_limit",
+    "low_limit"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20261020",
+   "date_max": "20261027",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "repurchase",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4807,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 5288,
+     "msg": "bad request: 不支持的参数: ts_code"
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 11510,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12402,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "month",
+    "inc_month",
+    "inc_cumval",
+    "stk_endval"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "month",
+   "date_min": "200211",
+   "date_max": "202512",
+   "params": {},
+   "status": "ok",
+   "api": "sf_month",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 12402,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7674,
+   "http": 200,
+   "code": 0,
+   "rows": 13,
+   "fields": [
+    "ts_code",
+    "ts_name",
+    "trade_type",
+    "t_unit",
+    "p_unit",
+    "min_change",
+    "price_limit",
+    "min_vol",
+    "max_vol",
+    "trade_mode",
+    "margin_rate",
+    "liq_rate",
+    "trade_time",
+    "list_date"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_time",
+   "date_min": "上午:9:00 至 11:30，下午:13:30 至 15:30，夜间:19:50 至次日 02:30",
+   "date_max": "白天：9:00至15:30，夜间：20:00至次日02:30",
+   "params": {},
+   "status": "ok",
+   "api": "sge_basic",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 13,
+     "ms": 7674,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9498,
+   "http": 200,
+   "code": 0,
+   "rows": 41,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "price_avg",
+    "change",
+    "pct_change",
+    "vol",
+    "amount",
+    "oi",
+    "settle_vol",
+    "settle_dire"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "sge_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 41,
+     "ms": 9498,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6947,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "float_date",
+    "float_share",
+    "float_ratio",
+    "holder_name",
+    "share_type"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "ann_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "share_float",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 1981,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 11155,
+     "msg": ""
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 6947,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5173,
+   "http": 200,
+   "code": 0,
+   "rows": 7,
+   "fields": [
+    "date",
+    "on",
+    "1w",
+    "2w",
+    "1m",
+    "3m",
+    "6m",
+    "9m",
+    "1y"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20261015",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "shibor",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 7,
+     "ms": 5173,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 2403,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "date",
+    "1y",
+    "5y"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20260820",
+   "date_max": "20260820",
+   "params": {
+    "start_date": "20260801",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "shibor_lpr",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20260801",
+      "end_date": "20261023"
+     },
+     "rows": 1,
+     "ms": 2403,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 11578,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "date",
+    "bank",
+    "on_b",
+    "on_a",
+    "1w_b",
+    "1w_a",
+    "2w_b",
+    "2w_a",
+    "1m_b",
+    "1m_a",
+    "3m_b",
+    "3m_a",
+    "6m_b",
+    "6m_a",
+    "9m_b",
+    "9m_a",
+    "1y_b",
+    "1y_a"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "date",
+   "date_min": "20261021",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "shibor_quote",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 11578,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5910,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "trade_date",
+    "ob",
+    "auc_amount",
+    "repo_amount",
+    "repay_amount",
+    "cb"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20250725",
+   "date_max": "20250725",
+   "params": {
+    "trade_date": "20250725"
+   },
+   "status": "ok",
+   "api": "slb_len",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20250725"
+     },
+     "rows": 1,
+     "ms": 5910,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8834,
+   "http": 200,
+   "code": 0,
+   "rows": 12,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "ope_inv",
+    "lent_qnt",
+    "cls_inv",
+    "end_bal"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20250725",
+   "date_max": "20250725",
+   "params": {
+    "trade_date": "20250725"
+   },
+   "status": "ok",
+   "api": "slb_len_mm",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20250725"
+     },
+     "rows": 12,
+     "ms": 8834,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5101,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "ope_inv",
+    "lent_qnt",
+    "cls_inv",
+    "end_bal"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20240930",
+   "date_max": "20240930",
+   "params": {
+    "trade_date": "20240930"
+   },
+   "status": "ok",
+   "api": "slb_sec",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20240930"
+     },
+     "rows": 1,
+     "ms": 5101,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3799,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "tenor",
+    "fee_rate",
+    "lent_qnt"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20240710",
+   "date_max": "20240710",
+   "params": {
+    "trade_date": "20240710"
+   },
+   "status": "ok",
+   "api": "slb_sec_detail",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20240710"
+     },
+     "rows": 50,
+     "ms": 3799,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 13937,
+   "http": 200,
+   "code": 0,
+   "rows": 2,
+   "fields": [
+    "ts_code",
+    "name",
+    "pub_date",
+    "imp_date",
+    "st_type",
+    "st_reason",
+    "st_explain"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "pub_date",
+   "date_min": "20260701",
+   "date_max": "20260701",
+   "params": {
+    "pub_date": "20260701"
+   },
+   "status": "ok",
+   "api": "st",
+   "attempts": [
+    {
+     "params": {
+      "pub_date": "20260714"
+     },
+     "rows": 0,
+     "ms": 4176,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "pub_date": "20260701"
+     },
+     "rows": 2,
+     "ms": 13937,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10115,
+   "http": 200,
+   "code": 0,
+   "rows": 6,
+   "fields": [
+    "date",
+    "weekly_new",
+    "total",
+    "weekly_hold",
+    "weekly_trade"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20190104",
+   "date_max": "20190222",
+   "params": {
+    "start_date": "20190101",
+    "end_date": "20190222"
+   },
+   "status": "ok",
+   "api": "stk_account",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20190101",
+      "end_date": "20190222"
+     },
+     "rows": 6,
+     "ms": 10115,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4866,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "hk_code",
+    "ts_code",
+    "trade_date",
+    "hk_name",
+    "hk_pct_chg",
+    "hk_close",
+    "name",
+    "close",
+    "pct_chg",
+    "ah_comparison",
+    "ah_premium"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261026",
+   "date_max": "20261026",
+   "params": {},
+   "status": "ok",
+   "api": "stk_ah_comparison",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 6090,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 4866,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10314,
+   "http": 200,
+   "code": 0,
+   "rows": 49,
+   "fields": [
+    "ts_code",
+    "name",
+    "start_date",
+    "end_date",
+    "type"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20260915",
+   "date_max": "20261103",
+   "params": {
+    "start_date": "20260901",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_alert",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 49,
+     "ms": 10314,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9003,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "vol",
+    "price",
+    "amount",
+    "pre_close",
+    "turnover_rate",
+    "volume_ratio",
+    "float_share"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_auction",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 9003,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7730,
+   "http": 429,
+   "code": -1,
+   "rows": 0,
+   "fields": [],
+   "msg": "query capacity busy",
+   "has_more": null,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "error",
+   "api": "stk_auction_c",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 7730,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 10050,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4895,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3402,
+     "msg": "bad request: 不支持的参数: ann_date"
+    }
+   ]
+  },
+  {
+   "ms": 1102,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "vol",
+    "amount",
+    "vwap"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261022",
+   "date_max": "20261022",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_auction_o",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 5369,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4862,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 1102,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10501,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "pre_close",
+    "change",
+    "pct_change",
+    "vol",
+    "amount",
+    "adj_factor",
+    "open_hfq",
+    "open_qfq",
+    "close_hfq",
+    "close_qfq",
+    "high_hfq",
+    "high_qfq",
+    "low_hfq",
+    "low_qfq",
+    "pre_close_hfq",
+    "pre_close_qfq",
+    "macd_dif",
+    "macd_dea",
+    "macd",
+    "kdj_k",
+    "kdj_d",
+    "kdj_j",
+    "rsi_6",
+    "rsi_12",
+    "rsi_24",
+    "boll_upper",
+    "boll_mid",
+    "boll_lower",
+    "cci"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_factor",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 10501,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8209,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "open",
+    "open_hfq",
+    "open_qfq",
+    "high",
+    "high_hfq",
+    "high_qfq",
+    "low",
+    "low_hfq",
+    "low_qfq",
+    "close",
+    "close_hfq",
+    "close_qfq",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount",
+    "turnover_rate",
+    "turnover_rate_f",
+    "volume_ratio",
+    "pe",
+    "pe_ttm",
+    "pb",
+    "ps",
+    "ps_ttm",
+    "dv_ratio",
+    "dv_ttm",
+    "total_share",
+    "float_share",
+    "free_share",
+    "total_mv",
+    "circ_mv",
+    "adj_factor",
+    "asi_bfq",
+    "asi_hfq",
+    "asi_qfq",
+    "asit_bfq",
+    "asit_hfq",
+    "asit_qfq",
+    "atr_bfq",
+    "atr_hfq",
+    "atr_qfq",
+    "bbi_bfq",
+    "bbi_hfq",
+    "bbi_qfq",
+    "bias1_bfq",
+    "bias1_hfq",
+    "bias1_qfq",
+    "bias2_bfq",
+    "bias2_hfq",
+    "bias2_qfq",
+    "bias3_bfq",
+    "bias3_hfq",
+    "bias3_qfq",
+    "boll_lower_bfq",
+    "boll_lower_hfq",
+    "boll_lower_qfq",
+    "boll_mid_bfq",
+    "boll_mid_hfq",
+    "boll_mid_qfq",
+    "boll_upper_bfq",
+    "boll_upper_hfq",
+    "boll_upper_qfq",
+    "brar_ar_bfq",
+    "brar_ar_hfq",
+    "brar_ar_qfq",
+    "brar_br_bfq",
+    "brar_br_hfq",
+    "brar_br_qfq",
+    "cci_bfq",
+    "cci_hfq",
+    "cci_qfq",
+    "cr_bfq",
+    "cr_hfq",
+    "cr_qfq",
+    "dfma_dif_bfq",
+    "dfma_dif_hfq",
+    "dfma_dif_qfq",
+    "dfma_difma_bfq",
+    "dfma_difma_hfq",
+    "dfma_difma_qfq",
+    "dmi_adx_bfq",
+    "dmi_adx_hfq",
+    "dmi_adx_qfq",
+    "dmi_adxr_bfq",
+    "dmi_adxr_hfq",
+    "dmi_adxr_qfq",
+    "dmi_mdi_bfq",
+    "dmi_mdi_hfq",
+    "dmi_mdi_qfq",
+    "dmi_pdi_bfq",
+    "dmi_pdi_hfq",
+    "dmi_pdi_qfq",
+    "downdays",
+    "updays",
+    "dpo_bfq",
+    "dpo_hfq",
+    "dpo_qfq",
+    "madpo_bfq",
+    "madpo_hfq",
+    "madpo_qfq",
+    "ema_bfq_10",
+    "ema_bfq_20",
+    "ema_bfq_250",
+    "ema_bfq_30",
+    "ema_bfq_5",
+    "ema_bfq_60",
+    "ema_bfq_90",
+    "ema_hfq_10",
+    "ema_hfq_20",
+    "ema_hfq_250",
+    "ema_hfq_30",
+    "ema_hfq_5",
+    "ema_hfq_60",
+    "ema_hfq_90",
+    "ema_qfq_10",
+    "ema_qfq_20",
+    "ema_qfq_250",
+    "ema_qfq_30",
+    "ema_qfq_5",
+    "ema_qfq_60",
+    "ema_qfq_90",
+    "emv_bfq",
+    "emv_hfq",
+    "emv_qfq",
+    "maemv_bfq",
+    "maemv_hfq",
+    "maemv_qfq",
+    "expma_12_bfq",
+    "expma_12_hfq",
+    "expma_12_qfq",
+    "expma_50_bfq",
+    "expma_50_hfq",
+    "expma_50_qfq",
+    "kdj_bfq",
+    "kdj_hfq",
+    "kdj_qfq",
+    "kdj_d_bfq",
+    "kdj_d_hfq",
+    "kdj_d_qfq",
+    "kdj_k_bfq",
+    "kdj_k_hfq",
+    "kdj_k_qfq",
+    "ktn_down_bfq",
+    "ktn_down_hfq",
+    "ktn_down_qfq",
+    "ktn_mid_bfq",
+    "ktn_mid_hfq",
+    "ktn_mid_qfq",
+    "ktn_upper_bfq",
+    "ktn_upper_hfq",
+    "ktn_upper_qfq",
+    "lowdays",
+    "topdays",
+    "ma_bfq_10",
+    "ma_bfq_20",
+    "ma_bfq_250",
+    "ma_bfq_30",
+    "ma_bfq_5",
+    "ma_bfq_60",
+    "ma_bfq_90",
+    "ma_hfq_10",
+    "ma_hfq_20",
+    "ma_hfq_250",
+    "ma_hfq_30",
+    "ma_hfq_5",
+    "ma_hfq_60",
+    "ma_hfq_90",
+    "ma_qfq_10",
+    "ma_qfq_20",
+    "ma_qfq_250",
+    "ma_qfq_30",
+    "ma_qfq_5",
+    "ma_qfq_60",
+    "ma_qfq_90",
+    "macd_bfq",
+    "macd_hfq",
+    "macd_qfq",
+    "macd_dea_bfq",
+    "macd_dea_hfq",
+    "macd_dea_qfq",
+    "macd_dif_bfq",
+    "macd_dif_hfq",
+    "macd_dif_qfq",
+    "mass_bfq",
+    "mass_hfq",
+    "mass_qfq",
+    "ma_mass_bfq",
+    "ma_mass_hfq",
+    "ma_mass_qfq",
+    "mfi_bfq",
+    "mfi_hfq",
+    "mfi_qfq",
+    "mtm_bfq",
+    "mtm_hfq",
+    "mtm_qfq",
+    "mtmma_bfq",
+    "mtmma_hfq",
+    "mtmma_qfq",
+    "obv_bfq",
+    "obv_hfq",
+    "obv_qfq",
+    "psy_bfq",
+    "psy_hfq",
+    "psy_qfq",
+    "psyma_bfq",
+    "psyma_hfq",
+    "psyma_qfq",
+    "roc_bfq",
+    "roc_hfq",
+    "roc_qfq",
+    "maroc_bfq",
+    "maroc_hfq",
+    "maroc_qfq",
+    "rsi_bfq_12",
+    "rsi_bfq_24",
+    "rsi_bfq_6",
+    "rsi_hfq_12",
+    "rsi_hfq_24",
+    "rsi_hfq_6",
+    "rsi_qfq_12",
+    "rsi_qfq_24",
+    "rsi_qfq_6",
+    "taq_down_bfq",
+    "taq_down_hfq",
+    "taq_down_qfq",
+    "taq_mid_bfq",
+    "taq_mid_hfq",
+    "taq_mid_qfq",
+    "taq_up_bfq",
+    "taq_up_hfq",
+    "taq_up_qfq",
+    "trix_bfq",
+    "trix_hfq",
+    "trix_qfq",
+    "trma_bfq",
+    "trma_hfq",
+    "trma_qfq",
+    "vr_bfq",
+    "vr_hfq",
+    "vr_qfq",
+    "wr_bfq",
+    "wr_hfq",
+    "wr_qfq",
+    "wr1_bfq",
+    "wr1_hfq",
+    "wr1_qfq",
+    "xsii_td1_bfq",
+    "xsii_td1_hfq",
+    "xsii_td1_qfq",
+    "xsii_td2_bfq",
+    "xsii_td2_hfq",
+    "xsii_td2_qfq",
+    "xsii_td3_bfq",
+    "xsii_td3_hfq",
+    "xsii_td3_qfq",
+    "xsii_td4_bfq",
+    "xsii_td4_hfq",
+    "xsii_td4_qfq"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_factor_pro",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 8209,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5321,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "name",
+    "trade_market",
+    "reason",
+    "period"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_high_shock",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 1,
+     "ms": 5321,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5621,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "holder_num"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20261020",
+   "date_max": "20261022",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_holdernumber",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 1127,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4677,
+     "msg": ""
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 5621,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4686,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "holder_name",
+    "holder_type",
+    "in_de",
+    "change_vol",
+    "change_ratio",
+    "after_share",
+    "after_ratio",
+    "avg_price",
+    "total_share"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "ann_date",
+   "date_min": "20261012",
+   "date_max": "20261012",
+   "params": {
+    "ts_code": "000001.SZ",
+    "start_date": "20260901",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_holdertrade",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 2391,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 1,
+     "ms": 4686,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3315,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "up_limit",
+    "down_limit"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_limit",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 3315,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9109,
+   "http": 429,
+   "code": -1,
+   "rows": 0,
+   "fields": [],
+   "msg": "query capacity busy",
+   "has_more": null,
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "error",
+   "api": "stk_managers",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 0,
+     "ms": 9109,
+     "msg": "query capacity busy"
+    }
+   ]
+  },
+  {
+   "ms": 5468,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "freq",
+    "open",
+    "high",
+    "low",
+    "close",
+    "vol",
+    "amount",
+    "up_count",
+    "down_count",
+    "nine_up_turn",
+    "nine_down_turn"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "2026-10-23 00:00:00",
+   "date_max": "2026-10-23 00:00:00",
+   "params": {
+    "trade_date": "20261023",
+    "freq": "daily"
+   },
+   "status": "ok",
+   "api": "stk_nineturn",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023",
+      "freq": "daily"
+     },
+     "rows": 50,
+     "ms": 5468,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9894,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "name",
+    "title",
+    "reward",
+    "hold_vol"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20231231",
+   "date_max": "20251231",
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "stk_rewards",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 50,
+     "ms": 9894,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5998,
+   "http": 200,
+   "code": 0,
+   "rows": 4,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "first_ann_date",
+    "proj_info_source",
+    "board_approval_dt",
+    "sh_approval_dt",
+    "sasac_approval_dt",
+    "csrc_approval_dt",
+    "fo_type",
+    "fo_stock_type",
+    "cur_stage",
+    "valid_st_dt",
+    "valid_end_dt",
+    "plan_chg_type",
+    "plan_chg_ann_dt",
+    "pricing_method",
+    "pricing_base_dt",
+    "price_basis",
+    "fo_vol_high",
+    "fo_vol_low",
+    "fo_price_high",
+    "fo_price_low",
+    "fo_price_ratio",
+    "fo_raise_total",
+    "fo_purpose",
+    "fo_investor",
+    "sub_method",
+    "fo_price_act",
+    "fo_vol_act",
+    "fo_raise_total_act",
+    "fo_raise_net_act",
+    "fo_exp_total",
+    "uw_fee",
+    "fo_exp_audit",
+    "fo_exp_legal",
+    "fo_exp_inst",
+    "fo_exp_pub",
+    "fo_exp_reg",
+    "fo_exp_other",
+    "fo_exp_per_share",
+    "issue_obj_type",
+    "pe_issue",
+    "pub_plac_qty",
+    "onl_pch_vol",
+    "onl_pch_num",
+    "onl_pch_excess",
+    "onl_winning_rate",
+    "inst_plac_qty",
+    "inst_sub_eff_total",
+    "inst_sub_eff_cnt",
+    "inst_oversub_times",
+    "a_inv_plac_qty",
+    "b_inv_plac_qty",
+    "old_sh_pre_plac_qty",
+    "old_sh_pre_plac_ratio",
+    "clw_between_inst_pub",
+    "prospectus_pub_dt",
+    "offer_intent_pub_dt",
+    "apply_date",
+    "old_sh_pre_plac_dt",
+    "onl_issue_date",
+    "uw_start_dt",
+    "uw_end_dt",
+    "uw_mode",
+    "new_share_list_dt",
+    "list_circ_qty",
+    "right_reg_dt",
+    "ex_right_dt",
+    "update_flag"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "ann_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "ann_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_seasoned",
+   "attempts": [
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 4,
+     "ms": 5998,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9092,
+   "http": 200,
+   "code": 0,
+   "rows": 25,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "name",
+    "trade_market",
+    "reason",
+    "period"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_shock",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 25,
+     "ms": 9092,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4425,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "surv_date",
+    "fund_visitors",
+    "rece_place",
+    "rece_mode",
+    "rece_org",
+    "org_type",
+    "comp_rece",
+    "content"
+   ],
+   "msg": "",
+   "has_more": true,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stk_surv",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 4425,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 11279,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "freq",
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "vol",
+    "amount",
+    "change",
+    "pct_chg",
+    "end_date",
+    "open_qfq",
+    "high_qfq",
+    "low_qfq",
+    "close_qfq",
+    "open_hfq",
+    "high_hfq",
+    "low_hfq",
+    "close_hfq"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023",
+    "freq": "week"
+   },
+   "status": "ok",
+   "api": "stk_week_month_adj",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023",
+      "freq": "week"
+     },
+     "rows": 50,
+     "ms": 11279,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5114,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "end_date",
+    "freq",
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "vol",
+    "amount",
+    "change",
+    "pct_chg"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023",
+    "freq": "week"
+   },
+   "status": "ok",
+   "api": "stk_weekly_monthly",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023",
+      "freq": "week"
+     },
+     "rows": 50,
+     "ms": 5114,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10582,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "symbol",
+    "name",
+    "area",
+    "industry",
+    "cnspell",
+    "market",
+    "list_date",
+    "act_name",
+    "act_ent_type"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "list_date",
+   "date_min": "19910129",
+   "date_max": "20000511",
+   "params": {
+    "list_status": "L"
+   },
+   "status": "ok",
+   "api": "stock_basic",
+   "attempts": [
+    {
+     "params": {
+      "list_status": "L"
+     },
+     "rows": 50,
+     "ms": 10582,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5828,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "ts_code",
+    "com_name",
+    "com_id",
+    "exchange",
+    "chairman",
+    "manager",
+    "secretary",
+    "reg_capital",
+    "setup_date",
+    "province",
+    "city",
+    "introduction",
+    "website",
+    "email",
+    "office",
+    "employees",
+    "main_business",
+    "business_scope"
+   ],
+   "msg": "",
+   "has_more": false,
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "stock_company",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 1,
+     "ms": 5828,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 1827,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "type",
+    "name",
+    "type_name"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261026",
+   "date_max": "20261026",
+   "params": {
+    "type": "HK_SZ"
+   },
+   "status": "ok",
+   "api": "stock_hsgt",
+   "attempts": [
+    {
+     "params": {
+      "type": "HK_SZ"
+     },
+     "rows": 50,
+     "ms": 1827,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7749,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "trade_date",
+    "type",
+    "type_name"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "stock_st",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 9644,
+     "msg": "query capacity busy"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 11036,
+     "msg": ""
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 7749,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 2744,
+   "http": 200,
+   "code": 0,
+   "rows": 8,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "suspend_timing",
+    "suspend_type"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "suspend_d",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 8,
+     "ms": 2744,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8613,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "name",
+    "open",
+    "low",
+    "high",
+    "close",
+    "change",
+    "pct_change",
+    "vol",
+    "amount",
+    "pe",
+    "pb",
+    "float_mv",
+    "total_mv"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "sw_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 8613,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5945,
+   "http": 200,
+   "code": 0,
+   "rows": 14,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "count",
+    "amount",
+    "vol",
+    "total_share",
+    "total_mv",
+    "float_share",
+    "float_mv"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "sz_daily_info",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 14,
+     "ms": 5945,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10231,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "pre_close",
+    "change",
+    "pct_change",
+    "vol",
+    "amount",
+    "rise",
+    "vol_ratio",
+    "turnover_rate",
+    "swing",
+    "up_num",
+    "down_num",
+    "limit_up_num",
+    "limit_down_num",
+    "lu_days",
+    "3day",
+    "5day",
+    "10day",
+    "20day",
+    "60day",
+    "mtd",
+    "ytd",
+    "1year",
+    "pe",
+    "pb",
+    "float_mv",
+    "ab_total_mv",
+    "float_share",
+    "total_share",
+    "bm_buy_net",
+    "bm_buy_ratio",
+    "bm_net",
+    "bm_ratio"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "tdx_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 10231,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4520,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "name",
+    "idx_type",
+    "idx_count",
+    "total_share",
+    "float_share",
+    "total_mv",
+    "float_mv"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "tdx_index",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 4520,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7788,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "con_code",
+    "con_name"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "tdx_member",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 7788,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 7339,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "pre_close",
+    "avg_price",
+    "change",
+    "pct_change",
+    "vol",
+    "turnover_rate",
+    "total_mv",
+    "float_mv"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "ths_daily",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 7339,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 5336,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "data_type",
+    "ts_code",
+    "ts_name",
+    "rank",
+    "pct_change",
+    "current_price",
+    "hot",
+    "concept",
+    "rank_time",
+    "rank_reason"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "ths_hot",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 5336,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 1667,
+   "http": 200,
+   "code": -1,
+   "rows": 0,
+   "fields": [],
+   "msg": "bad request: 不支持的参数: trade_date",
+   "has_more": false,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "no_permission",
+   "api": "ths_index",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 1667,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 13214,
+     "msg": "bad request: 不支持的参数: start_date"
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 5067,
+     "msg": "bad request: 不支持的参数: start_date"
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 6718,
+     "msg": "bad request: 不支持的参数: ann_date"
+    }
+   ]
+  },
+  {
+   "ms": 13158,
+   "http": 200,
+   "code": -1,
+   "rows": 0,
+   "fields": [],
+   "msg": "bad request: 不支持的参数: trade_date",
+   "has_more": false,
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "no_permission",
+   "api": "ths_member",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 13158,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4436,
+     "msg": "bad request: 不支持的参数: start_date"
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 6544,
+     "msg": "bad request: 不支持的参数: start_date"
+    },
+    {
+     "params": {
+      "ann_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 3011,
+     "msg": "bad request: 不支持的参数: ann_date"
+    }
+   ]
+  },
+  {
+   "ms": 4498,
+   "http": 200,
+   "code": 0,
+   "rows": 20,
+   "fields": [
+    "ts_code",
+    "end_date",
+    "holder_rank",
+    "holder_name",
+    "hold_amount",
+    "hold_ratio"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "end_date",
+   "date_min": "20200630",
+   "date_max": "20201231",
+   "params": {
+    "ts_code": "113008.SH"
+   },
+   "status": "ok",
+   "api": "top10_cb_holders",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "113008.SH"
+     },
+     "rows": 20,
+     "ms": 4498,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6040,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "holder_name",
+    "hold_amount",
+    "hold_ratio",
+    "hold_float_ratio",
+    "hold_change",
+    "holder_type"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20250630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "top10_floatholders",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 50,
+     "ms": 6040,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9680,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "ann_date",
+    "end_date",
+    "holder_name",
+    "hold_amount",
+    "hold_ratio",
+    "hold_float_ratio",
+    "hold_change",
+    "holder_type"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "end_date",
+   "date_min": "20250630",
+   "date_max": "20260630",
+   "params": {
+    "ts_code": "000001.SZ"
+   },
+   "status": "ok",
+   "api": "top10_holders",
+   "attempts": [
+    {
+     "params": {
+      "ts_code": "000001.SZ"
+     },
+     "rows": 50,
+     "ms": 9680,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 3160,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "exalter",
+    "side",
+    "buy",
+    "buy_rate",
+    "sell",
+    "sell_rate",
+    "net_buy",
+    "reason"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "top_inst",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 3160,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 4083,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "trade_date",
+    "ts_code",
+    "name",
+    "close",
+    "pct_change",
+    "turnover_rate",
+    "amount",
+    "l_sell",
+    "l_buy",
+    "l_amount",
+    "net_amount",
+    "net_rate",
+    "amount_rate",
+    "float_values",
+    "reason"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "top_list",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 4083,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6471,
+   "http": 200,
+   "code": 0,
+   "rows": 9,
+   "fields": [
+    "exchange",
+    "cal_date",
+    "is_open",
+    "pretrade_date"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "cal_date",
+   "date_min": "20261015",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "trade_cal",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 4318,
+     "msg": "bad request: 不支持的参数: trade_date"
+    },
+    {
+     "params": {
+      "ts_code": "000001.SZ",
+      "start_date": "20260901",
+      "end_date": "20261023"
+     },
+     "rows": 0,
+     "ms": 6927,
+     "msg": "bad request: 不支持的参数: ts_code"
+    },
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 9,
+     "ms": 6471,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8918,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "name",
+    "enname",
+    "classify",
+    "list_date",
+    "delist_date"
+   ],
+   "msg": "",
+   "has_more": true,
+   "params": {},
+   "status": "ok",
+   "api": "us_basic",
+   "attempts": [
+    {
+     "params": {},
+     "rows": 50,
+     "ms": 8918,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8462,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "date",
+    "w4_bd",
+    "w4_ce",
+    "w8_bd",
+    "w8_ce",
+    "w13_bd",
+    "w13_ce",
+    "w17_bd",
+    "w17_ce",
+    "w26_bd",
+    "w26_ce",
+    "w52_bd",
+    "w52_ce"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "date": "20261023"
+   },
+   "status": "ok",
+   "api": "us_tbr",
+   "attempts": [
+    {
+     "params": {
+      "date": "20261023"
+     },
+     "rows": 1,
+     "ms": 8462,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 9003,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "date",
+    "ltc",
+    "cmt",
+    "e_factor"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "date": "20261023"
+   },
+   "status": "ok",
+   "api": "us_tltr",
+   "attempts": [
+    {
+     "params": {
+      "date": "20261023"
+     },
+     "rows": 1,
+     "ms": 9003,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 10280,
+   "http": 200,
+   "code": 0,
+   "rows": 12,
+   "fields": [
+    "cal_date",
+    "is_open",
+    "pretrade_date"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "cal_date",
+   "date_min": "20261020",
+   "date_max": "20261031",
+   "params": {
+    "start_date": "20261020",
+    "end_date": "20261031"
+   },
+   "status": "ok",
+   "api": "us_tradecal",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261020",
+      "end_date": "20261031"
+     },
+     "rows": 12,
+     "ms": 10280,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8269,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "date",
+    "ltr_avg"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "date": "20261023"
+   },
+   "status": "ok",
+   "api": "us_trltr",
+   "attempts": [
+    {
+     "params": {
+      "date": "20261023"
+     },
+     "rows": 1,
+     "ms": 8269,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 12516,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "date",
+    "y5",
+    "y7",
+    "y10",
+    "y20",
+    "y30"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "date": "20261023"
+   },
+   "status": "ok",
+   "api": "us_trycr",
+   "attempts": [
+    {
+     "params": {
+      "date": "20261023"
+     },
+     "rows": 1,
+     "ms": 12516,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6291,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "date",
+    "m1",
+    "m2",
+    "m3",
+    "m4",
+    "m6",
+    "y1",
+    "y2",
+    "y3",
+    "y5",
+    "y7",
+    "y10",
+    "y20",
+    "y30"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "date": "20261023"
+   },
+   "status": "ok",
+   "api": "us_tycr",
+   "attempts": [
+    {
+     "params": {
+      "date": "20261023"
+     },
+     "rows": 1,
+     "ms": 6291,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 8333,
+   "http": 200,
+   "code": 0,
+   "rows": 7,
+   "fields": [
+    "trade_date",
+    "high",
+    "low",
+    "open",
+    "close",
+    "pct_change"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "trade_date",
+   "date_min": "20261015",
+   "date_max": "20261023",
+   "params": {
+    "start_date": "20261015",
+    "end_date": "20261023"
+   },
+   "status": "ok",
+   "api": "vix_index",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20261015",
+      "end_date": "20261023"
+     },
+     "rows": 7,
+     "ms": 8333,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 1696,
+   "http": 200,
+   "code": 0,
+   "rows": 50,
+   "fields": [
+    "ts_code",
+    "trade_date",
+    "close",
+    "open",
+    "high",
+    "low",
+    "pre_close",
+    "change",
+    "pct_chg",
+    "vol",
+    "amount"
+   ],
+   "msg": "",
+   "has_more": true,
+   "datecol": "trade_date",
+   "date_min": "20261023",
+   "date_max": "20261023",
+   "params": {
+    "trade_date": "20261023"
+   },
+   "status": "ok",
+   "api": "weekly",
+   "attempts": [
+    {
+     "params": {
+      "trade_date": "20261023"
+     },
+     "rows": 50,
+     "ms": 1696,
+     "msg": ""
+    }
+   ]
+  },
+  {
+   "ms": 6604,
+   "http": 200,
+   "code": 0,
+   "rows": 1,
+   "fields": [
+    "date",
+    "comp_rate",
+    "center_rate",
+    "micro_rate",
+    "cm_rate",
+    "sdb_rate",
+    "om_rate",
+    "aa_rate",
+    "m1_rate",
+    "m3_rate",
+    "m6_rate",
+    "m12_rate",
+    "long_rate"
+   ],
+   "msg": "",
+   "has_more": false,
+   "datecol": "date",
+   "date_min": "20190301",
+   "date_max": "20190301",
+   "params": {
+    "start_date": "20190301",
+    "end_date": "20190304"
+   },
+   "status": "ok",
+   "api": "wz_index",
+   "attempts": [
+    {
+     "params": {
+      "start_date": "20190301",
+      "end_date": "20190304"
+     },
+     "rows": 1,
+     "ms": 6604,
+     "msg": ""
+    }
+   ]
+  }
+ ]
+}

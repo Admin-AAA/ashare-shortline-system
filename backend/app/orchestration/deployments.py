@@ -10,6 +10,7 @@ from app.db.session import SessionLocal
 from app.models.tables import ScheduledTask
 from app.orchestration.contracts import DeploymentSyncResult
 from app.orchestration.flows import (
+    execution_confirmation_poll_flow,
     intraday_lock_poll_flow,
     manual_data_health_remediation_flow,
     manual_preset_matrix_flow,
@@ -72,6 +73,18 @@ def schedule_all_enabled_tasks() -> DeploymentSyncResult:
         name="default",
         work_pool_name=WORK_POOL_NAME,
         schedules=[Cron("*/5 * * * mon-fri", timezone="Asia/Shanghai")],
+        tags=["ashare", "periodic"],
+        job_variables=_JOB_VARIABLES,
+    ).apply()
+    # 盘中买入确认：连续竞价时段每 5 分钟（9:30~11:30、13:00~14:55）。
+    execution_confirmation_poll_flow.to_deployment(
+        name="default",
+        work_pool_name=WORK_POOL_NAME,
+        schedules=[
+            Cron("30-55/5 9 * * mon-fri", timezone="Asia/Shanghai"),
+            Cron("*/5 10,13-14 * * mon-fri", timezone="Asia/Shanghai"),
+            Cron("0-30/5 11 * * mon-fri", timezone="Asia/Shanghai"),
+        ],
         tags=["ashare", "periodic"],
         job_variables=_JOB_VARIABLES,
     ).apply()

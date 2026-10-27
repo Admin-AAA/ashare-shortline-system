@@ -408,6 +408,8 @@ AUXILIARY_DATASET_INVENTORY: tuple[AuxiliaryDatasetInventoryEntry, ...] = (
         key="auction", category="auction", view_key="market_pool.auctions", model=AuctionData,
         natural_key=("code", "trade_date"), freshness_field="trade_date",
         update_policy=_atomic(("vol", "price", "amount", "pre_close", "turnover_rate", "volume_ratio", "float_share")),
+        # 全市场约 6090 只；低于下限说明当日只写了部分（10-16 仅 4 行），需重新取数而非判“新鲜”。
+        minimum_record_count=5000,
     ),
     AuxiliaryDatasetInventoryEntry(
         key="holder_number", category="holder_number", view_key="market_pool.holder_numbers", model=HolderNumber,

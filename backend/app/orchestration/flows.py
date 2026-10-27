@@ -98,7 +98,10 @@ def execute_recommendation_run(
             record = SQLAlchemyRunRepository(db).get_run(run_id)
             if record is None:
                 raise RuntimeError(f"Run {run_id} has no canonical request")
-            asyncio.run(run_staged_pipeline(db, run_id=run_id, request=record.request))
+            from app.services.datasource.cache import formal_chain
+
+            with formal_chain():  # 正式出票链路拒绝旧缓存数据
+                asyncio.run(run_staged_pipeline(db, run_id=run_id, request=record.request))
         except Exception as exc:
             db.rollback()
             _mark_run_failed(db, run_id, exc)
@@ -170,6 +173,71 @@ def poll_intraday_lock(scheduled_at: str) -> dict:
 def intraday_lock_poll_flow() -> None:
     _ensure_app_logging()
     poll_intraday_lock(_scheduled_start_iso())
+
+
+@task(retries=0)
+def poll_execution_confirmation(scheduled_at: str) -> dict:
+    """交易时段服务端轮询盘中买入确认。
+
+    此前确认只由前端持仓/复盘页按钮触发：没人打开页面的交易日一次都不确认，
+    推荐到盘后统一被判过期 missed（2026-10-14 批次全军覆没）。
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.db.session import SessionLocal
+    from app.services.batch_execution_confirmation import (
+        MAX_BATCH_IDS,
+        confirm_batch_executions,
+        list_unsettled_confirmation_ids,
+    )
+    from app.services.schedule_gate import schedule_skip_reason
+    from app.services.tushare_client import is_open_trade_date
+
+    skip_reason = schedule_skip_reason(
+        datetime.fromisoformat(scheduled_at), datetime.now(timezone.utc), is_open_trade_date
+    )
+    if skip_reason is not None:
+        logger.info("盘中买入确认轮询%s", skip_reason)
+        return {"skipped": True, "reason": skip_reason}
+    try:
+        db = SessionLocal()
+        try:
+            ids = list_unsettled_confirmation_ids(db)
+            if not ids:
+                # 没有未结算（待确认）的正式推荐：不进入确认批次，不拉全市场行情/逐股K线，省上游额度（2026-10-26 额度耗尽根因）
+                logger.info("盘中买入确认轮询：没有未结算推荐，跳过")
+                # 没有待确认推荐也要清理跨日告警（漏查日 / 逐只过期 / 第 1 日缺 K），否则旧告警永远不消
+                from app.services.execution_confirmation_coverage import sweep_coverage_alerts
+
+                try:
+                    sweep_coverage_alerts(db, datetime.now(timezone.utc).astimezone(
+                        timezone(timedelta(hours=8))).date().isoformat())
+                except Exception:  # noqa: BLE001
+                    logger.exception("买入确认告警清理失败")
+                return {"skipped": True, "reason": "no_unsettled_recommendations", "pending": 0}
+            summaries = []
+            for start in range(0, len(ids), MAX_BATCH_IDS):
+                result = confirm_batch_executions(db, ids[start:start + MAX_BATCH_IDS], refresh=True)
+                summaries.append(result.get("summary") or {})
+                if result.get("error"):
+                    logger.warning("盘中买入确认轮询批次失败: %s", result["error"])
+            # 覆盖率：入场日 09:45 后仍没被检查到的待确认推荐 → 告警（全覆盖则解除）
+            from app.services.execution_confirmation_coverage import report_coverage
+
+            coverage = report_coverage(db)
+            return {"pending": len(ids), "batches": summaries,
+                    "unchecked": len(coverage.get("unchecked") or [])}
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("盘中买入确认轮询失败")
+        return {"error": True}
+
+
+@flow(name="execution-confirmation-poll", timeout_seconds=900)
+def execution_confirmation_poll_flow() -> None:
+    _ensure_app_logging()
+    poll_execution_confirmation(_scheduled_start_iso())
 
 
 @task(retries=0)

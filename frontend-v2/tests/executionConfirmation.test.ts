@@ -144,6 +144,26 @@ test("未结算记录把后端持仓判断展示为条件式卖出提示", () =>
   );
 });
 
+test("推荐止损/硬风控判的退出标明非回测规则", () => {
+  const out = holdingDecisionPresentation({
+    ...item("buy"),
+    holding_decision: {
+      code: "exit",
+      label: "退出持仓",
+      reason: "当前价格已经跌破原推荐止损位",
+      backtest_rule: false,
+      rule_basis: "recommend_stop_loss",
+    },
+  });
+  assert.equal(out?.text, "如果已持有：退出持仓（非回测规则）");
+  // 后端 label 已带后缀时不重复
+  const again = holdingDecisionPresentation({
+    ...item("buy"),
+    holding_decision: { code: "exit", label: "退出持仓（非回测规则）", reason: "x", backtest_rule: false },
+  });
+  assert.equal(again?.text, "如果已持有：退出持仓（非回测规则）");
+});
+
 test("没有持仓判断时不展示卖出提示", () => {
   assert.equal(holdingDecisionPresentation(item("wait")), null);
 });

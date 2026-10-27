@@ -7,6 +7,8 @@ from pathlib import Path
 # 历史事故：test_recover_interrupted_runs_marks_active_runs 把事务内假 queued run
 # 重新派发到生产 Prefect，worker 看不到未提交行 → 每天数条 recommendation-run FAILED。
 os.environ["PREFECT_API_URL"] = "http://127.0.0.1:9/api"
+# 派生子进程也要被 app.db.session 的生产库闸拦住（子进程里没有 pytest 模块）。
+os.environ["ASHARE_UNDER_PYTEST"] = "1"
 # 事务内造数的测试需要现算数据池统计，不能读生产落盘的预计算缓存。
 os.environ.setdefault("ASHARE_POOL_STATS_CACHE", "off")
 
@@ -50,7 +52,16 @@ def _resolve_test_db_url() -> str:
     return raw
 
 
-TEST_DB_URL = _resolve_test_db_url()
+try:
+    TEST_DB_URL = _resolve_test_db_url()
+except RuntimeError as _exc:
+    pytest.exit(str(_exc), returncode=4)
+if TEST_DB_URL.startswith("mysql"):
+    from sqlalchemy.engine import make_url as _mu
+
+    _db = _mu(TEST_DB_URL).database
+    if _db != TEST_DB_NAME or PRODUCTION_DB_NAME in TEST_DB_URL:
+        pytest.exit(f"tests only run on {TEST_DB_NAME!r}, got {_db!r}", returncode=4)
 _HAS_TEST_DB = bool(TEST_DB_URL and TEST_DB_URL.startswith("mysql"))
 _MYSQL_LOCK_NAME = "ashare_pytest_db_lock"
 _MYSQL_LOCK_WAIT_SECONDS = int(os.environ.get("ASHARE_PYTEST_DB_LOCK_SECONDS", "5"))
@@ -141,6 +152,20 @@ def db(production_mysql):
 
 class ProductionPrefectDispatchBlocked(RuntimeError):
     """测试中试图向 Prefect 投递 deployment run。"""
+
+
+@pytest.fixture(autouse=True)
+def _reset_gateway_breakers():
+    """Gateway breakers are module-level singletons: isolate per test (failure kinds now accumulate)."""
+    yield
+    try:
+        from app.services.datasource.cache import clear_fresh
+        from app.services.datasource.gateway import reset_all_breakers
+
+        reset_all_breakers()
+        clear_fresh()
+    except Exception:  # noqa: BLE001
+        pass
 
 
 @pytest.fixture(autouse=True)

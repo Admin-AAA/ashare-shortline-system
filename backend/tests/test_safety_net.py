@@ -16,6 +16,20 @@ from app.services.scheduler_service import check_formal_recommendation_gap
 
 
 @pytest.fixture(autouse=True)
+def _no_cached_skill_registry(monkeypatch):
+    """隔离进程级 Skill 同步缓存（registry.skills 有 TTL 缓存）。
+
+    别的测试文件（如 test_e2e_recommendation_flow）先跑过真实 sync_skills 后，缓存里留着 4 个现役短线策略；
+    本文件用假 db 的用例会直接命中缓存，`_missing_standalone_strategies` 不再 fail-open，导致只在合跑时失败。
+    """
+    import app.services.registry.skills as skills_registry
+
+    monkeypatch.setattr(skills_registry, "_cached_skill_list", None)
+    monkeypatch.setattr(skills_registry, "_cached_skill_cache_key", None)
+    monkeypatch.setattr(skills_registry, "_last_skill_sync_time", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _single_standalone_strategy(monkeypatch):
     """单策略独立运行后，盘后/安全网对每个策略各派发一个 run；这里固定为 1 个策略，
     保持原有「派发 → 等待」时序断言。"""
@@ -25,6 +39,14 @@ def _single_standalone_strategy(monkeypatch):
         lambda _db, payload: [{**payload, "single_skill_id": "s1", "run_mode": "formal"}],
     )
 
+
+
+@pytest.fixture(autouse=True)
+def _no_midlong_repair(monkeypatch, request):
+    """既有用例只关心 formal 补跑；中长线补跑另有专门用例（test_safety_net_midlong_*）。"""
+    if "midlong" in request.node.name or "missing_strategies" in request.node.name:
+        return
+    monkeypatch.setattr(scheduler_service, "_safety_net_midlong_repair", lambda _db: {"date": None, "retried": [], "still_error": []})
 
 
 def test_check_gap_no_runs(db):
@@ -192,3 +214,94 @@ def test_safety_net_task_id_constant():
     """任务 ID 常量正确定义。"""
     from app.services.scheduler_service import SAFETY_NET_TASK_ID
     assert SAFETY_NET_TASK_ID == "formal_run_safety_net"
+
+
+# ---- 2026-10-26 复盘后的加强：部分策略缺批次 / 中长线 data_error 盘前补跑 ----
+
+def _gap_db_all_dates_completed():
+    """5 个交易日都有 completed formal（旧逻辑判无缺口）。"""
+    dates = ["2026-10-26", "2026-10-23", "2026-10-22", "2026-10-21", "2026-10-20"]
+
+    class _R:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def fetchall(self):
+            return self._rows
+
+    class _D:
+        def execute(self, stmt, params=None):
+            sql = str(stmt)
+            if "DISTINCT trade_date" in sql and "GROUP BY" not in sql:
+                return _R([(d,) for d in dates])
+            return _R([(d, 1, 1, 0, 1) for d in dates])
+
+    return _D()
+
+
+def test_gap_missing_strategies_triggers_partial_retry_for_latest_date(monkeypatch):
+    monkeypatch.setattr(scheduler_service, "_latest_allowed_bar_date", lambda: "2026-10-26")
+    monkeypatch.setattr(scheduler_service, "_missing_standalone_strategies", lambda _db, d: ["s2", "s3"])
+    res = check_formal_recommendation_gap(_gap_db_all_dates_completed())
+    assert res["needs_retry"] is True and res["trade_date"] == "2026-10-26"
+    assert res["missing_strategies"] == ["s2", "s3"] and res["missing_dates"] == []
+
+
+def test_gap_missing_strategies_none_keeps_old_behaviour(monkeypatch):
+    monkeypatch.setattr(scheduler_service, "_latest_allowed_bar_date", lambda: "2026-10-26")
+    monkeypatch.setattr(scheduler_service, "_missing_standalone_strategies", lambda _db, d: [])
+    res = check_formal_recommendation_gap(_gap_db_all_dates_completed())
+    assert res["needs_retry"] is False
+
+
+def test_missing_strategies_fails_open_on_fake_db():
+    assert scheduler_service._missing_standalone_strategies(object(), "2026-10-26") == []
+
+
+def test_safety_net_midlong_repairs_only_data_error_or_unrecorded(monkeypatch, tmp_path):
+    from app.services import midterm_service as ms
+
+    monkeypatch.setattr(ms, "OUT_DIR", tmp_path / "picks")
+    monkeypatch.setattr(scheduler_service, "_latest_allowed_bar_date", lambda: "2026-10-26")
+    status = ms._status_dir()
+    status.mkdir(parents=True, exist_ok=True)
+    rows = {sid: {"status": "ok"} for sid in ms.STRATEGIES}
+    rows["long-growth-streak"] = {"status": "data_error"}
+    rows["mid-incentive-option"] = {"status": "no_signal"}
+    del rows["long-net-cash-switch"]  # 从未记录
+    (status / "2026-10-26.json").write_text(json.dumps(rows))
+    seen = {}
+
+    def fake_generate(db, as_of, force=False, horizon=None, strategy_ids=None, apply_daily_cap=False):
+        seen.update(as_of=as_of, ids=sorted(strategy_ids), cap=apply_daily_cap)
+        return {"long-growth-streak": "no_data", "long-net-cash-switch": 3}
+
+    monkeypatch.setattr(ms, "generate_picks", fake_generate)
+    emitted = []
+    monkeypatch.setattr("app.core.alerts.emit_alert", lambda kind, key, msg, **k: emitted.append((kind, key, msg)) or True)
+    out = scheduler_service._safety_net_midlong_repair(None)
+    assert seen == {"as_of": "2026-10-26", "ids": ["long-growth-streak", "long-net-cash-switch"], "cap": True}
+    assert out["still_error"] == ["long-growth-streak"] and out["picks"] == {"long-net-cash-switch": 3}
+    assert emitted and emitted[0][0] == "midlong_repair_data_error"
+
+
+def test_safety_net_midlong_noop_when_all_ok(monkeypatch, tmp_path):
+    from app.services import midterm_service as ms
+
+    monkeypatch.setattr(ms, "OUT_DIR", tmp_path / "picks")
+    monkeypatch.setattr(scheduler_service, "_latest_allowed_bar_date", lambda: "2026-10-26")
+    status = ms._status_dir()
+    status.mkdir(parents=True, exist_ok=True)
+    (status / "2026-10-26.json").write_text(json.dumps({sid: {"status": "ok"} for sid in ms.STRATEGIES}))
+    monkeypatch.setattr(ms, "generate_picks", lambda *a, **k: pytest.fail("不应调用"))
+    out = scheduler_service._safety_net_midlong_repair(None)
+    assert out["retried"] == [] and "error" not in out
+
+
+def test_safety_net_midlong_failure_is_non_blocking(monkeypatch):
+    def boom():
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(scheduler_service, "_latest_allowed_bar_date", boom)
+    out = scheduler_service._safety_net_midlong_repair(None)
+    assert "RuntimeError" in out["error"]

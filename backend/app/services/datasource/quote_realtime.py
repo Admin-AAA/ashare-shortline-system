@@ -1,4 +1,4 @@
-"""Dataset ``quote.realtime``: promax rt_k -> sina realtime_quote -> quantdata rt_min -> xiaoshi snapshot.
+"""Dataset ``quote.realtime``: promax rt_k -> sina realtime_quote -> tencent (flag) -> akshare snapshot -> quantdata rt_min -> xiaoshi snapshot.
 
 Fill mode: each provider is asked only for codes still missing.  Every adapter
 returns ``{code6: row}`` normalized to ``SCHEMAS["quote.realtime"]``.
@@ -49,7 +49,9 @@ class RtkProvider:
         from app.engine.trading_calendar import latest_allowed_quote_date
         from app.services.tushare_client import get_pro
 
-        fut = _RTK_POOL.submit(get_pro().rt_k, ts_code=",".join(_ts(c) for c in query["keys"]))
+        from app.services.datasource.cache import submit_ctx
+
+        fut = submit_ctx(_RTK_POOL, get_pro().rt_k, ts_code=",".join(_ts(c) for c in query["keys"]))
         try:
             df = fut.result(timeout=RTK_DEADLINE_SECONDS)
         except _FutTimeout:
@@ -146,13 +148,19 @@ def _tencent():
     return TencentQuoteProvider()  # flag quote.realtime.tencent (default off => skipped)
 
 
+def _akshare():
+    from app.services.datasource.akshare_quote import AkshareSnapshotProvider
+
+    return AkshareSnapshotProvider()  # 全市场快照（新浪翻页），ASHARE_QUOTE_AKSHARE_ENABLED=false 关闭
+
+
 _GATEWAY: DatasetGateway | None = None
 
 
 def gateway() -> DatasetGateway:
     global _GATEWAY
     if _GATEWAY is None:
-        _GATEWAY = DatasetGateway([RtkProvider(), _sina(), _tencent(), RtMinProvider(), XiaoshiSnapshotProvider()])
+        _GATEWAY = DatasetGateway([RtkProvider(), _sina(), _tencent(), _akshare(), RtMinProvider(), XiaoshiSnapshotProvider()])
     return _GATEWAY
 
 

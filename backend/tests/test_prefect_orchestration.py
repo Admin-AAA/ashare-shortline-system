@@ -114,6 +114,7 @@ def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
     monkeypatch.setattr("app.orchestration.deployments.manual_data_health_remediation_flow", _FakeFlow("manual_data_health_remediation_flow"))
     monkeypatch.setattr("app.orchestration.deployments.intraday_lock_poll_flow", _FakeFlow("intraday_lock_poll_flow"))
     monkeypatch.setattr("app.orchestration.deployments.stale_run_recovery_flow", _FakeFlow("stale_run_recovery_flow"))
+    monkeypatch.setattr("app.orchestration.deployments.execution_confirmation_poll_flow", _FakeFlow("execution_confirmation_poll_flow"))
     monkeypatch.setattr("app.orchestration.deployments.SessionLocal", lambda: SimpleNamespace(
         query=lambda *a, **k: SimpleNamespace(filter=lambda *a, **k: SimpleNamespace(all=lambda: [])),
         close=lambda: None,
@@ -124,14 +125,66 @@ def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
     # Every infrastructure flow must be registered, not just DB-backed tasks.
     assert "intraday_lock_poll_flow" in calls
     assert "stale_run_recovery_flow" in calls
+    assert "execution_confirmation_poll_flow" in calls
     # 推荐子 run 必须走独立队列，否则父 flow 占满 default 槽会死锁
     assert queues == ["recommendation"]
     assert result.scheduled_task_count == 0
-    # 5 non-DB flows: recommendation + 2 manual + 2 periodic (no enabled DB tasks).
-    assert len(applied) == 5
+    # 6 non-DB flows: recommendation + 2 manual + 3 periodic (no enabled DB tasks).
+    assert len(applied) == 6
     # Every deployment must pin the backend working_dir so the Process worker
     # does not spawn flow-run subprocesses in a throwaway temp directory.
     assert job_vars_list and all(
         jv is not None and jv.get("working_dir", "").endswith("backend")
         for jv in job_vars_list
     )
+
+
+def test_execution_confirmation_poll_confirms_all_unsettled_in_batches(monkeypatch) -> None:
+    """盘中买入确认必须由服务端轮询，而不是只靠前端按钮（10-14 批次无人点击全判 missed）。"""
+    from app.orchestration.flows import poll_execution_confirmation
+    import app.services.batch_execution_confirmation as bec
+
+    ids = [f"rec_{i:03d}" for i in range(bec.MAX_BATCH_IDS + 3)]
+    calls: list[tuple[list[str], bool]] = []
+    monkeypatch.setattr(bec, "list_unsettled_confirmation_ids", lambda db: ids)
+    monkeypatch.setattr(
+        bec, "confirm_batch_executions",
+        lambda db, batch, refresh=False: calls.append((batch, refresh)) or {"summary": {"requested_count": len(batch)}},
+    )
+    monkeypatch.setattr("app.services.tushare_client.is_open_trade_date", lambda d: True)
+    monkeypatch.setattr("app.services.schedule_gate.schedule_skip_reason", lambda *a, **k: None)  # 不受真实当前时间(迟到超时)影响
+    monkeypatch.setattr("app.db.session.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+
+    result = poll_execution_confirmation.fn("2026-10-21T10:00:00+08:00")
+
+    assert result["pending"] == len(ids)
+    assert [len(batch) for batch, _ in calls] == [bec.MAX_BATCH_IDS, 3]
+    assert all(refresh for _, refresh in calls)
+
+
+def test_execution_confirmation_poll_skips_closed_market(monkeypatch) -> None:
+    from app.orchestration.flows import poll_execution_confirmation
+    import app.services.batch_execution_confirmation as bec
+
+    monkeypatch.setattr("app.services.tushare_client.is_open_trade_date", lambda d: False)
+    monkeypatch.setattr(bec, "list_unsettled_confirmation_ids", lambda db: (_ for _ in ()).throw(AssertionError("must not query")))
+
+    result = poll_execution_confirmation.fn("2026-10-24T10:00:00+08:00")
+
+    assert result["skipped"] is True
+
+
+def test_execution_confirmation_poll_skips_when_no_unsettled_recommendations(monkeypatch) -> None:
+    """没有待确认推荐时不进入确认批次（不拉行情/逐股K线），直接跳过省额度。"""
+    from app.orchestration.flows import poll_execution_confirmation
+    import app.services.batch_execution_confirmation as bec
+
+    monkeypatch.setattr("app.services.tushare_client.is_open_trade_date", lambda d: True)
+    monkeypatch.setattr("app.services.schedule_gate.schedule_skip_reason", lambda *a, **k: None)  # 不受真实当前时间(迟到超时)影响
+    monkeypatch.setattr("app.db.session.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(bec, "list_unsettled_confirmation_ids", lambda db: [])
+    monkeypatch.setattr(bec, "confirm_batch_executions", lambda *a, **k: (_ for _ in ()).throw(AssertionError("must not confirm")))
+
+    result = poll_execution_confirmation.fn("2026-10-26T10:00:00+08:00")
+
+    assert result == {"skipped": True, "reason": "no_unsettled_recommendations", "pending": 0}

@@ -18,6 +18,8 @@ from enum import StrEnum
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from app.services.evidence.live_window import is_before_entry_open, within_live_window
+
 
 PROVENANCE_SCHEMA_VERSION = 1
 _BEIJING_TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -176,13 +178,12 @@ class RecommendationEvidenceIdentity:
             )
 
         if self.evidence_class is EvidenceClass.LIVE_FORWARD:
-            generated_business_date = actual_generated_at.astimezone(
-                _BEIJING_TIMEZONE
-            ).date().isoformat()
-            if generated_business_date != signal_date:
+            # 精确判定（入场日 09:15 前）在生成时按交易日历做（见 _classify / live_window）；
+            # 读回时只校验生成日落在信号日之后的实盘窗口内，挡住手写或错位的 LIVE 记录。
+            if not within_live_window(date.fromisoformat(signal_date), actual_generated_at):
                 raise EvidenceIdentityError(
                     "live_generation_date_mismatch",
-                    "LIVE_FORWARD requires actual generation on the signal business date",
+                    "LIVE_FORWARD requires generation after the signal date and before the entry session",
                 )
 
         object.__setattr__(self, "signal_date", signal_date)
@@ -258,7 +259,9 @@ class EvidenceIdentityBuilder:
         execution_policy: object,
         code_revision: str,
         reconstruction_batch_id: str | None = None,
+        next_open_date: date | None = None,
     ) -> RecommendationEvidenceIdentity:
+        """next_open_date：信号日之后的第一个开市日（适配器查交易日历得到）；None 时按下一个工作日（偏严）。"""
         if not isinstance(run_source, RunSource):
             raise EvidenceIdentityError(
                 "invalid_run_source",
@@ -292,6 +295,7 @@ class EvidenceIdentityBuilder:
             signal_date=normalized_signal_date,
             snapshot=snapshot,
             code_revision=normalized_revision,
+            next_open_date=next_open_date,
         )
         return RecommendationEvidenceIdentity(
             evidence_class=evidence_class,
@@ -314,6 +318,7 @@ class EvidenceIdentityBuilder:
         signal_date: str,
         snapshot: EvidenceSnapshotIdentity,
         code_revision: str,
+        next_open_date: date | None = None,
     ) -> EvidenceClass:
         if run_source is RunSource.HISTORICAL_REPLAY:
             return EvidenceClass.HISTORICAL_RECONSTRUCTION
@@ -324,10 +329,8 @@ class EvidenceIdentityBuilder:
         if run_source is not RunSource.FORMAL:
             return EvidenceClass.UNVERIFIED
 
-        generated_business_date = actual_generated_at.astimezone(
-            _BEIJING_TIMEZONE
-        ).date().isoformat()
-        if generated_business_date != signal_date:
+        # 入场日开盘（09:15）前生成才算实盘：信号日盘后、凌晨补跑、安全网补跑都一样按生成时间判（live_window）
+        if not is_before_entry_open(date.fromisoformat(signal_date), actual_generated_at, next_open_date):
             return EvidenceClass.UNVERIFIED
         if snapshot.data_as_of > signal_date:
             return EvidenceClass.UNVERIFIED
@@ -348,6 +351,7 @@ def build_recommendation_evidence_identity(
     execution_policy: object,
     code_revision: str,
     reconstruction_batch_id: str | None = None,
+    next_open_date: date | None = None,
 ) -> RecommendationEvidenceIdentity:
     """Functional façade for adapters that do not need to retain a builder."""
 
@@ -360,6 +364,7 @@ def build_recommendation_evidence_identity(
         execution_policy=execution_policy,
         code_revision=code_revision,
         reconstruction_batch_id=reconstruction_batch_id,
+        next_open_date=next_open_date,
     )
 
 

@@ -1120,9 +1120,25 @@ function MetricsWindowBar({
             fontSize: 12,
             color: "var(--text-muted)",
           }}
-          title={`batch ${historicalCohort.batch_id}\ncohort seal ${historicalCohort.cohort_identity_hash}\nstrategy policy ${historicalCohort.strategy_policy_fingerprint}\nexecution policy ${historicalCohort.execution_policy_fingerprint}\ncode ${historicalCohort.code_revision}`}
+          title={
+            (historicalCohort.batches?.length ?? 0) > 1
+              ? [
+                  `合并 ${historicalCohort.batches!.length} 个策略批次（每个策略取最新有效批次）`,
+                  `cohort seal ${historicalCohort.cohort_identity_hash}`,
+                  ...historicalCohort.batches!.map(
+                    (b) =>
+                      `· ${b.strategy_label || b.strategy_key || "?"}  ${b.window_start}~${b.window_end}  ${b.completed_trade_date_count} 天  batch ${b.batch_id.slice(0, 17)}  code ${b.code_revision.slice(0, 8)}  完成于 ${b.completed_at.slice(0, 16)}`,
+                  ),
+                ].join("\n")
+              : `batch ${historicalCohort.batch_id}${historicalCohort.strategy_label ? `\nstrategy ${historicalCohort.strategy_label}` : ""}\ncohort seal ${historicalCohort.cohort_identity_hash}\nstrategy policy ${historicalCohort.strategy_policy_fingerprint}\nexecution policy ${historicalCohort.execution_policy_fingerprint}\ncode ${historicalCohort.code_revision}`
+          }
         >
           <span>研究 cohort</span>
+          {(historicalCohort.batch_count ?? 1) > 1 ? (
+            <span className="tag">{historicalCohort.batch_count} 个策略批次合并</span>
+          ) : historicalCohort.strategy_label ? (
+            <span>{historicalCohort.strategy_label}</span>
+          ) : null}
           <span style={{ fontFamily: "var(--font-mono)" }}>
             {historicalCohort.window_start} ~ {historicalCohort.window_end}
           </span>
@@ -1133,7 +1149,7 @@ function MetricsWindowBar({
             seal {historicalCohort.cohort_identity_hash.slice(0, 12)}
           </span>
           <span style={{ fontFamily: "var(--font-mono)" }}>
-            code {historicalCohort.code_revision.slice(0, 12)}
+            code {historicalCohort.code_revision.split(",").map((rev) => rev.slice(0, 8)).join(",")}
           </span>
         </div>
       )}
@@ -1200,10 +1216,11 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
       sub: "win/loss",
     },
     {
-      label: "平均收益",
-      value: data.average_net_return != null ? `${data.average_net_return.toFixed(2)}%` : "—",
-      tone: data.average_net_return >= 0 ? "up" : "down",
-      sub: `中位 ${(data.median_net_return ?? 0).toFixed(2)}%`,
+      // 只算已成交并卖出的每笔净收益；没成交的推荐只计入成交率，不当 0% 摊进均值（旧 average_net_return 会把亏损冲淡）。
+      label: "每笔净收益（已成交）",
+      value: data.executed_trade_count ? `${data.avg_executed_return.toFixed(2)}%` : "—",
+      tone: (data.avg_executed_return ?? 0) >= 0 ? "up" : "down",
+      sub: `${data.executed_trade_count} 笔已成交 · 已扣成本`,
     },
     {
       label: "最大亏损",
@@ -1218,10 +1235,10 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
       sub: "vs 基准",
     },
     {
-      label: "触发率",
+      label: "成交率",
       value: data.trigger_rate != null ? `${(data.trigger_rate * 100).toFixed(1)}%` : "—",
       tone: "neutral",
-      sub: `${data.executed_trade_count}/${data.total_recommendations}`,
+      sub: `${data.executed_trade_count}/${data.labeled_count} 已结算推荐`,
     },
     {
       label: "MFE / MAE",

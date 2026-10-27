@@ -27,6 +27,10 @@ def _disable_xiaoshi_minute_fetch_for_legacy_unit_tests(monkeypatch):
         "app.services.tushare_client._fetch_xiaoshi_minute_kbars",
         lambda *args, **kwargs: [],
     )
+    # 本文件测的是 legacy 取数分支；本机 .env 打开 bar.minute 网关切换后会绕过这里的桩、
+    # 走真实网关，结果随环境变化。固定走 legacy 分支。
+    monkeypatch.setattr("app.services.datasource.gateway.is_cutover", lambda _ds: False)
+    monkeypatch.setattr("app.services.datasource.gateway.is_shadow", lambda _ds: False)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -68,6 +72,11 @@ def test_fetch_tushare_news_maps_announcements(monkeypatch):
 
     monkeypatch.setattr("app.services.tushare_client.get_pro", lambda: FakePro())
 
+    # 主源巨潮（真实网络）不可用时才回退 anns_d；这里测回退映射，先让巨潮失败
+    def _cninfo_down(*_a, **_kw):
+        raise RuntimeError("cninfo down")
+
+    monkeypatch.setattr("app.services.cninfo_news.fetch_announcements_for_code", _cninfo_down)
     rows = _fetch_news("tushare", "002475", DummySettings(), trade_date="2026-05-29")
 
     assert len(rows) == 1

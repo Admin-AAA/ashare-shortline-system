@@ -45,11 +45,19 @@ def load_baseline(period: str, fina_dir: Path = FINA_DIR) -> pd.DataFrame:
     if not files:
         return pd.DataFrame()
     with ThreadPoolExecutor(8) as pool:
-        parts = [p for p in pool.map(lambda f: _read_one(f, period), files) if p is not None]
+        from app.services.datasource.cache import submit_ctx
+
+        futs = [submit_ctx(pool, _read_one, f, period) for f in files]
+        parts = [p for p in (fu.result() for fu in futs) if p is not None]
     return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
 
 
 def recent_periodic_announcers(today: date, lookback_days: int = LOOKBACK_DAYS) -> list[str]:
+    """近 lookback_days 天发了定期报告的股票。
+
+    主源是公告事件快照（盘后日更，全市场按日）；MySQL news_announcement 只由逐股补数写入、
+    10-16 后不再日更，单用它会在财报季漏掉几乎全部新公告（10-20 只识别出 1 只），只作补充。
+    """
     from sqlalchemy import text
 
     from app.db.session import SessionLocal
@@ -60,7 +68,36 @@ def recent_periodic_announcers(today: date, lookback_days: int = LOOKBACK_DAYS) 
             "SELECT DISTINCT code FROM news_announcement WHERE announce_date >= :s AND announce_date <= :t "
             "AND title REGEXP :re AND title NOT LIKE '%摘要%'"), {"s": since, "t": today.isoformat(), "re": PERIODIC_TITLE_RE}
         ).all()
-    return sorted(str(r[0]) for r in rows if r[0] and len(str(r[0])) == 6)
+        codes = {str(r[0]) for r in rows}
+        try:
+            codes |= _snapshot_periodic_announcers(db.connection(), today, lookback_days)
+        except Exception as exc:  # noqa: BLE001 - 快照读失败仍保留 MySQL 结果
+            logger.warning("fina fallback: announcement snapshot lookup failed: %s", exc)
+    return sorted(c for c in codes if c and len(c) == 6)
+
+
+def _snapshot_periodic_announcers(connection, today: date, lookback_days: int) -> set[str]:
+    import re
+
+    from app.services.auxiliary.composition import EVENT_SNAPSHOT_CONTRACTS
+    from app.services.auxiliary.event_snapshot import ActiveEventSnapshotReader, EventSnapshotRequest
+    from app.services.auxiliary.snapshot_codec import decode_canonical_payload
+    from app.services.auxiliary.snapshot_repository import SQLAlchemyImmutablePartitionSnapshotRepository
+
+    reader = ActiveEventSnapshotReader(
+        EVENT_SNAPSHOT_CONTRACTS["news_announcement"], SQLAlchemyImmutablePartitionSnapshotRepository(connection)
+    )
+    pattern = re.compile(PERIODIC_TITLE_RE)
+    codes: set[str] = set()
+    for offset in range(lookback_days + 1):
+        day = (today - timedelta(days=offset)).strftime("%Y%m%d")
+        snapshot = reader.load(EventSnapshotRequest.from_mapping({"ann_date": day}))
+        for row in snapshot.rows if snapshot is not None else ():
+            payload = decode_canonical_payload(row.lossless_payload)
+            title = str(payload.get("title") or "")
+            if pattern.search(title) and "摘要" not in title:
+                codes.add(str(payload.get("ts_code") or "").split(".")[0])
+    return codes
 
 
 def _ts_code(code: str) -> str:

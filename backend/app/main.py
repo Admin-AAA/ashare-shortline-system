@@ -134,6 +134,19 @@ def _normalize_api_path(path: str) -> str:
     return "/" + "/".join(parts)
 
 
+# 性能测量脚本（backend/scripts/perf/）发的请求带这个头：不写 api_request_metrics，免得上千条测量样本
+# 污染 self_check 的 api_p95。只认来自本机回环地址的请求，外部带这个头也照常记录。
+PERF_PROBE_HEADER = "x-ashare-perf-probe"
+_LOOPBACK_HOSTS = {"127.0.0.1", "::1", "localhost"}
+
+
+def _is_perf_probe(request: Request) -> bool:
+    if request.headers.get(PERF_PROBE_HEADER) != "1":
+        return False
+    client = request.client
+    return client is not None and client.host in _LOOPBACK_HOSTS
+
+
 def _record_api_metric(method: str, path: str, status_code: int, duration_ms: float) -> None:
     """持久化 /api/ GET 只读端点延迟，供 self_check 计算 api_p95。
 
@@ -177,13 +190,15 @@ async def catch_unhandled_exceptions(request: Request, call_next):
             access_logger.warning("%s %s → %s (%.0fms) [SLOW]", request.method, request.url.path, response.status_code, elapsed)
         else:
             access_logger.info("%s %s → %s (%.0fms)", request.method, request.url.path, response.status_code, elapsed)
-        await run_in_threadpool(_record_api_metric, request.method, request.url.path, response.status_code, elapsed)
+        if not _is_perf_probe(request):
+            await run_in_threadpool(_record_api_metric, request.method, request.url.path, response.status_code, elapsed)
         return response
     except Exception:
         elapsed = (__import__("time").time() - start) * 1000
         access_logger.error("%s %s → 500 (%.0fms) [ERROR]", request.method, request.url.path, elapsed)
         logger.exception("Unhandled request exception: %s %s", request.method, request.url.path)
-        await run_in_threadpool(_record_api_metric, request.method, request.url.path, 500, elapsed)
+        if not _is_perf_probe(request):
+            await run_in_threadpool(_record_api_metric, request.method, request.url.path, 500, elapsed)
         return JSONResponse(
             status_code=500,
             content={"detail": "Internal server error"},
@@ -283,6 +298,25 @@ def on_startup() -> None:
     _warmup_initial_state()
     _warmup_data_health_cache()
     _warmup_pool_cache(delay_seconds=2.0)
+    _warmup_horizon_realized(delay_seconds=5.0)
+
+
+def _warmup_horizon_realized(delay_seconds: float = 0.0) -> None:
+    """后台预热中长线已平仓结算缓存（midterm_service._REALIZED_FINAL），首开复盘/诊断页免等约 2 秒。"""
+    import threading
+    import time as _time
+
+    def _warm():
+        _time.sleep(delay_seconds)
+        from app.services.midterm_service import warm_realized_cache
+        started_at = perf_counter()
+        try:
+            warm_realized_cache()
+            logger.info("中长线结算缓存预热完成 (%.0fms)", (perf_counter() - started_at) * 1000)
+        except Exception:
+            logger.exception("中长线结算缓存预热失败")
+
+    threading.Thread(target=_warm, name="horizon-realized-warmup", daemon=True).start()
 
 
 def _cleanup_logs(log_dir: str) -> None:

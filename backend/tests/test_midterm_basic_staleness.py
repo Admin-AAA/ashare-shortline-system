@@ -38,3 +38,13 @@ def test_missing_snapshot_alerts():
         info = m.check_daily_basic_staleness(_DB(None, 0), "2026-10-16")
     assert info["stale"] and info["lag_trading_days"] is None
     ea.assert_called_once()
+
+
+def test_small_cap_refuses_stale_daily_basic():
+    result = {}
+    with mock.patch.object(m, "small_cap_guard") as g:
+        m._generate_picks_loop(_DB("2026-10-09", 5), "2026-10-16", __import__("datetime").date(2026, 10, 16),
+                               True, None, ["mid-small-cap-weekly"], result)
+    g.assert_not_called()
+    assert result["mid-small-cap-weekly"]["error"] == "daily_basic_stale"
+    assert m.classify_daily_status(result["mid-small-cap-weekly"]) == "data_error"

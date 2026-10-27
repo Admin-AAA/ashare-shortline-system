@@ -34,12 +34,14 @@ from app.services.tushare_transport import (
     AuthMode,
     FailureCategory,
     HttpMethod,
+    LeaderSpec,
     ProviderConfig,
     ProviderFailure,
     TushareHttpProvider,
     TushareProviderError,
     TushareProviderRouter,
 )
+from app.services.tushare_client_pure import keep_rows_for_trade_date  # noqa: E402
 from app.services.tushare_client_pure import (  # noqa: F401,E402  re-export (split)
     TushareRawEnvelopeError,
     _BAOSTOCK_FREQ_MAP,
@@ -141,6 +143,11 @@ class _PromaxHttpProvider(TushareHttpProvider):
             retryable=False,
             fallback_allowed=True,
         )
+
+
+class _TeajoinHttpProvider(_PromaxHttpProvider):
+    """teajoin transport; ``stk_mins`` goes through the same canonical minute-K gate as promax
+    (whole minutes, continuous session only, no duplicate minutes)."""
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -267,6 +274,12 @@ class TushareRawEnvelope:
         )
 
 
+def _akshare_backup_apis() -> frozenset[str]:
+    from app.services.datasource.akshare_backup import AKSHARE_BACKUP_APIS
+
+    return AKSHARE_BACKUP_APIS
+
+
 class _TushareSession:
     """Tushare ``pro_api`` compatible facade over the provider router."""
 
@@ -296,16 +309,58 @@ class _TushareSession:
             raise TushareRawEnvelopeError(
                 "tushare_raw_invalid_request", "raw fields request must be a string"
             )
-        envelope = self._router.request(
-            api_name,
-            params=dict(params or {}),
-            fields=fields,
-        )
+        if api_name in _akshare_backup_apis():
+            envelope = self._raw_envelope_with_akshare_backup(api_name, fields=fields, params=dict(params or {}))
+        else:
+            envelope = self._router.request(
+                api_name,
+                params=dict(params or {}),
+                fields=fields,
+            )
         return TushareRawEnvelope.from_envelope(
             api_name=api_name,
             requested_fields=fields,
             envelope=envelope,
         )
+
+    def _raw_envelope_with_akshare_backup(
+        self, api_name: str, *, fields: str, params: Mapping[str, Any]
+    ) -> Mapping[str, Any]:
+        """Raw 快照路径也走 akshare 备源（与 _call_with_akshare_backup 同一网关/熔断/限速）。
+
+        2026-08-17 起 anns_d 在 promax/quantdata 均 unsupported，fetch_raw 只走 router → 每天
+        event_provider_request_failed，公告快照停更。备源行原样带 ``source`` 列，由事件 contract
+        的 alternate_field_schemas 显式核准。
+        """
+        primary_exc: BaseException | None = None
+        try:
+            envelope = self._router.request(api_name, params=params, fields=fields)
+            data = envelope.get("data") if isinstance(envelope, Mapping) else None
+            if isinstance(data, Mapping) and data.get("items"):
+                return envelope
+        except Exception as exc:  # noqa: BLE001 - fall through to backup; re-raised if backup also fails
+            primary_exc = exc
+            envelope = None
+        from app.services.datasource.akshare_backup import backup_gateway
+
+        res = backup_gateway().fetch_first(
+            f"tushare.{api_name}", {"params": dict(params), "fields": fields}, allow_stale=False
+        )
+        if res.provider is not None and res.rows:
+            rows = [dict(r) for r in res.rows]
+            cols = list(rows[0].keys())
+            for r in rows[1:]:
+                for k in r:
+                    if k not in cols:
+                        cols.append(k)
+            logger.warning(
+                "tushare raw %s %s; served by backup %s (%d rows)", api_name,
+                f"failed ({type(primary_exc).__name__})" if primary_exc else "empty", res.provider, len(rows),
+            )
+            return {"code": 0, "msg": "", "data": {"fields": cols, "items": [[r.get(c) for c in cols] for r in rows]}}
+        if primary_exc is not None:
+            raise primary_exc
+        return envelope
 
     def _call(self, api_name: str, *, fields: str = "", params: Mapping[str, Any]) -> pd.DataFrame:
         if api_name == "fina_indicator_vip" and params.get("period"):
@@ -317,8 +372,34 @@ class _TushareSession:
                 from app.services.datasource.fina_fallback import fina_period_fallback
 
                 return fina_period_fallback(self, str(params["period"]), fields)
+        elif api_name in _akshare_backup_apis():
+            return self._call_with_akshare_backup(api_name, fields=fields, params=params)
         else:
             envelope = self._router.request(api_name, params=params, fields=fields)
+            envelope = self._recheck_truncated(api_name, fields, params, envelope)
+        return self._envelope_frame(api_name, fields, envelope)
+
+    # 返回条数明显偏少的「全量列表」类接口：条数 < 阈值即视为被截断，改问 teajoin 核实（2026-10-26）。
+    _TRUNCATION_GUARD = {"ths_index": 500}
+
+    def _recheck_truncated(self, api_name: str, fields: str, params: Mapping[str, Any], envelope: Mapping[str, Any]):
+        floor = self._TRUNCATION_GUARD.get(api_name)
+        if not floor or params:
+            return envelope
+        try:
+            n = len((envelope.get("data") or {}).get("items") or [])
+            if n >= floor:
+                return envelope
+            alt = self._router.request_pinned("teajoin", api_name, params=params, fields=fields)
+            m = len((alt.get("data") or {}).get("items") or [])
+            if m > n:
+                logger.warning("tushare %s 主源只返回 %d 条（疑似截断），teajoin 返回 %d 条，采用 teajoin", api_name, n, m)
+                return alt
+        except Exception as exc:  # noqa: BLE001 - 核实失败就保留原结果，绝不影响主流程
+            logger.debug("truncation recheck for %s skipped: %r", api_name, exc)
+        return envelope
+
+    def _envelope_frame(self, api_name: str, fields: str, envelope: Mapping[str, Any]) -> pd.DataFrame:
         data = envelope.get("data")
         if not data:
             return pd.DataFrame()
@@ -330,6 +411,37 @@ class _TushareSession:
         if not raw.items:
             return pd.DataFrame(columns=list(raw.fields))
         return pd.DataFrame.from_records(raw.items, columns=list(raw.fields))
+
+    def _call_with_akshare_backup(self, api_name: str, *, fields: str, params: Mapping[str, Any]) -> pd.DataFrame:
+        """Tushare first; on failure/empty, akshare via DatasetGateway (breaker/timeout/limiter/enabled)."""
+        primary_exc: BaseException | None = None
+        try:
+            frame = self._envelope_frame(
+                api_name, fields, self._router.request(api_name, params=params, fields=fields)
+            )
+            if not frame.empty:
+                return frame
+        except Exception as exc:  # noqa: BLE001 - fall through to the backup source, re-raised if it fails
+            primary_exc = exc
+            frame = pd.DataFrame()
+        from app.services.datasource.akshare_backup import backup_gateway
+
+        res = backup_gateway().fetch_first(
+            f"tushare.{api_name}", {"params": dict(params), "fields": fields}, allow_stale=False
+        )
+        if res.provider is not None and res.rows:
+            logger.warning(
+                "tushare %s %s; served by backup %s (%d rows)", api_name,
+                f"failed ({type(primary_exc).__name__})" if primary_exc else "empty", res.provider, len(res.rows),
+            )
+            out = pd.DataFrame.from_records(list(res.rows))
+            wanted = [f.strip() for f in (fields or "").split(",") if f.strip()]
+            if wanted:
+                out = out[[c for c in wanted if c in out.columns] + (["source"] if "source" not in wanted else [])]
+            return out
+        if primary_exc is not None:
+            raise primary_exc
+        return frame
 
     def query(self, api_name: str, fields: str = "", **params: Any) -> pd.DataFrame:
         """Compatibility with ``tushare.pro_bar(api=...)`` query calls."""
@@ -351,6 +463,15 @@ class _TushareSession:
             return self._call(api_name, fields=fields, params=request_params)
 
         return caller
+
+
+# teajoin 允许服务的接口名单见 datasource/teajoin_capability.py（官方目录逐个实测，docs/teajoin_catalog_probe*.json）。
+from app.services.datasource.teajoin_capability import (  # noqa: E402
+    FAST_APIS as TEAJOIN_FAST_APIS,
+    HEAVY_APIS as TEAJOIN_HEAVY_APIS,
+    INTRADAY_SENSITIVE as TEAJOIN_INTRADAY_SENSITIVE,
+    TEAJOIN_APIS,
+)
 
 
 def _build_provider_router() -> tuple[TushareProviderRouter, str]:
@@ -409,6 +530,46 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
             )
         )
 
+    teajoin_token = str(getattr(settings, "tushare_teajoin_token", "") or "").strip()
+    leaders: list[LeaderSpec] = []
+    if teajoin_token:
+        # teajoin（DaoShare）：JSON token 协议；只服务已探测验证过的接口（TEAJOIN_APIS，204 个，docs/datasource-teajoin.md）。
+        # 默认优先级 6 = 其余接口的末位兜底；在名单接口上做「主源」由 LeaderSpec 控制（可用 ASHARE_TUSHARE_TEAJOIN_LEAD=false 关闭）。
+        # rt_k/rt_min 等实时接口不在名单内，永不进入实盘行情链路；stk_mins（历史分钟）2026-10-26 21:00 起 teajoin 主源。
+        providers.append(
+            _TeajoinHttpProvider(
+                ProviderConfig(
+                    name="teajoin",
+                    base_url=settings.tushare_teajoin_url,
+                    credential=teajoin_token,
+                    auth_mode=AuthMode.JSON_TOKEN,
+                    rate_limit_per_minute=max(0, int(settings.tushare_teajoin_rate_limit_per_minute)),
+                    max_concurrency=max(0, int(getattr(settings, "tushare_teajoin_max_concurrency", 4))),
+                    append_api_path=False,
+                    included_apis=TEAJOIN_APIS,
+                    source="teajoin",
+                    priority=6,
+                    **{**common, "timeout": (max(float(common["timeout"][0]), 15.0), common["timeout"][1])},  # 上游拥塞时建连慢，5s 连接超时会误判
+
+                )
+            )
+        )
+        if bool(getattr(settings, "tushare_teajoin_lead", True)):
+            leaders.append(
+                LeaderSpec(
+                    provider="teajoin",
+                    apis=TEAJOIN_APIS,
+                    intraday_sensitive=(
+                        TEAJOIN_INTRADAY_SENSITIVE if bool(getattr(settings, "tushare_teajoin_intraday_yield", False)) else frozenset()
+                    ),
+                    intraday_read_timeout=max(1.0, float(getattr(settings, "tushare_teajoin_intraday_read_timeout_seconds", 15.0))),
+                    heavy_apis=TEAJOIN_HEAVY_APIS,
+                    fast_apis=TEAJOIN_FAST_APIS,
+                    read_timeout=max(1.0, float(getattr(settings, "tushare_teajoin_lead_read_timeout_seconds", 40.0))),
+                    heavy_timeout=max(1.0, float(getattr(settings, "tushare_teajoin_lead_heavy_timeout_seconds", 90.0))),
+                )
+            )
+
     if not providers:
         raise RuntimeError(
             "Tushare 上游未配置：请至少设置一个 Provider 凭据。"
@@ -421,6 +582,7 @@ def _build_provider_router() -> tuple[TushareProviderRouter, str]:
             api_tiers=_routing_tiers(),
             enabled_override=_provider_enabled_override,
             priority_override=_provider_priority_override,
+            leaders=leaders,
         ),
         settings.tushare_promax_url,
     )
@@ -634,6 +796,17 @@ def get_tushare_provider_health() -> list[dict[str, Any]]:
             "api_rate_limits": {},
             "max_concurrency": 0,
         },
+        {
+            "name": "teajoin",
+            "source": "teajoin",
+            "configured": bool(str(getattr(settings, "tushare_teajoin_token", "") or "").strip()),
+            "priority": 6,
+            "note": "DaoShare 第三方 pro 协议源；204 个已实测接口上做主源（盘中延迟敏感接口除外，失败/超时自动降级回 promax/quantdata；开关 ASHARE_TUSHARE_TEAJOIN_LEAD）；无 rt_k/分钟线权限（见 docs/datasource-teajoin.md）",
+            "auth_mode": AuthMode.JSON_TOKEN.value,
+            "rate_limit_per_minute": max(0, int(getattr(settings, "tushare_teajoin_rate_limit_per_minute", 420))),
+            "api_rate_limits": {},
+            "max_concurrency": max(0, int(getattr(settings, "tushare_teajoin_max_concurrency", 4))),
+        },
     )
 
     snapshots: dict[str, dict[str, Any]] = {}
@@ -758,7 +931,7 @@ def fetch_daily_kbars(
     except MarketFrameContractError:
         raise
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars: 非阻断数据集 stk_factor 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # 3. daily_basic — turnover_rate, pe_ttm, total_mv
     basic_map: dict[str, dict] = {}
@@ -769,7 +942,7 @@ def fetch_daily_kbars(
             for _, r in basic.iterrows():
                 basic_map[str(r["trade_date"])] = dict(r)
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars: 非阻断数据集 daily_basic 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # 4. cyq_perf — 筹码分布
     chip_map: dict[str, dict] = {}
@@ -780,7 +953,7 @@ def fetch_daily_kbars(
             for _, r in chips.iterrows():
                 chip_map[str(r["trade_date"])] = dict(r)
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars: 非阻断数据集 cyq_perf 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # 5. stk_factor_pro — 扩展因子（ASI/ATR/BBI/DPO/OBV/PSY/VR/WR 等）
     factor_pro_map: dict[str, dict] = {}
@@ -791,7 +964,7 @@ def fetch_daily_kbars(
             for _, r in fp.iterrows():
                 factor_pro_map[str(r["trade_date"])] = dict(r)
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars: 非阻断数据集 stk_factor_pro 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     bars: list[dict[str, Any]] = []
     for td, row in daily_rows.items():
@@ -922,7 +1095,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
             for _, row in basic.iterrows():
                 basic_map[str(row.get("ts_code") or "")] = dict(row)
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars_for_trade_date: 非阻断数据集 daily_basic 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # 2026-10-19：17:35 盘后写入时 stk_factor 常未发布 → factor_map 为空 → adj_factor 被 _f 写成 0.0
     # （214 个交易日全市场 adj_factor=0）。adj_factor 改从专用 adj_factor 接口补（盘前即发布），
@@ -936,7 +1109,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
                 if value > 0:
                     adj_map[str(row.get("ts_code") or "")] = value
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars_for_trade_date: adj_factor fetch failed: %s", exc)
+        logger.warning("fetch_daily_kbars_for_trade_date: 非阻断数据集 adj_factor 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     factor_map: dict[str, dict[str, Any]] = {}
     try:
@@ -948,7 +1121,7 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
     except MarketFrameContractError:
         raise
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars_for_trade_date: 非阻断数据集 stk_factor 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # 筹码分布（cyq_perf）——按 trade_date 批量一次拉全市场。此前批量补数只拉
     # daily/daily_basic/stk_factor，导致盘后写入的 DailyKbar 行 chip_cost_50/15/85
@@ -962,12 +1135,13 @@ def fetch_daily_kbars_for_trade_date(trade_date: str) -> list[dict[str, Any]]:
             trade_date=target,
             fields="ts_code,trade_date,cost_15pct,cost_50pct,cost_85pct,weight_avg,winner_rate",
         )
+        chips = keep_rows_for_trade_date(chips, target, api_name="cyq_perf")
         if chips is not None and not chips.empty:
             validate_market_frame("cyq_perf", chips)
             for _, row in chips.iterrows():
                 chip_map[str(row.get("ts_code") or "")] = dict(row)
     except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-        logger.warning("fetch_daily_kbars_for_trade_date: ignored non-fatal error: %s", exc)
+        logger.warning("fetch_daily_kbars_for_trade_date: 非阻断数据集 cyq_perf 获取失败（对应列将为 NULL）: %s: %s", type(exc).__name__, exc)
 
     # stk_factor 指标列缺失时写 None（上游 upsert 对 0/NULL 都保留旧值），不再写 0（2026-10-19）
     bars: list[dict[str, Any]] = []
@@ -1539,7 +1713,8 @@ def fetch_index_daily(
             "open": _f(row.get("open")),
             "high": _f(row.get("high")),
             "low": _f(row.get("low")),
-            "volume": _f(row.get("volume")),
+            # Tushare index_daily 的成交量字段叫 vol（手），不是 volume；只读 volume 会恒写 0。
+            "volume": _f(row.get("vol") if row.get("vol") is not None else row.get("volume")),
         })
     return result
 
@@ -2403,6 +2578,21 @@ def _trim_recent_trade_dates(rows: list[dict[str, Any]], ndays: int) -> list[dic
 # ═════════════════════════════════════════════════════════════════════════════
 
 
+def _opt_f(value: Any) -> float | None:
+    """None/NaN stay None (backup sources lack some fields: SSE has no rqye/rzrqye, SZSE no rzche)."""
+    if value is None or (isinstance(value, float) and value != value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _yi(value: Any) -> float | None:
+    v = _opt_f(value)
+    return None if v is None else v / 1e8
+
+
 def fetch_margin_detail_batch(trade_date: str | None = None) -> list[dict[str, Any]]:
     """按交易日批量获取全市场融资融券明细（margin_detail 接口）。
 
@@ -2425,14 +2615,15 @@ def fetch_margin_detail_batch(trade_date: str | None = None) -> list[dict[str, A
         result.append({
             "code": code,
             "trade_date": _fmt_date(str(row.get("trade_date", td))),
-            "rzye": _f(row.get("rzye")) / 1e8,         # 融资余额(亿)
-            "rqye": _f(row.get("rqye")) / 1e8,         # 融券余额(亿)
-            "rzmre": _f(row.get("rzmre")) / 1e8,        # 融资买入额(亿)
-            "rzche": _f(row.get("rzche")) / 1e8,        # 融资偿还额(亿)
-            "rzrqye": _f(row.get("rzrqye")) / 1e8,      # 融资融券余额(亿)
-            "rqyl": _f(row.get("rqyl")),                 # 融券余量(股)
-            "rqmcl": _f(row.get("rqmcl")),               # 融券卖出量(股)
-            "rzrqye_md": _f(row.get("rzrqye")) / 1e8,   # 融资融券余额(亿,同字段)
+            "rzye": _yi(row.get("rzye")),         # 融资余额(亿)
+            "rqye": _yi(row.get("rqye")),         # 融券余额(亿)
+            "rzmre": _yi(row.get("rzmre")),        # 融资买入额(亿)
+            "rzche": _yi(row.get("rzche")),        # 融资偿还额(亿)
+            "rzrqye": _yi(row.get("rzrqye")),      # 融资融券余额(亿)
+            "rqyl": _opt_f(row.get("rqyl")),        # 融券余量(股)
+            "rqmcl": _opt_f(row.get("rqmcl")),      # 融券卖出量(股)
+            "rzrqye_md": _yi(row.get("rzrqye")),   # 融资融券余额(亿,同字段)
+            "source": str(row.get("source") or "tushare"),
         })
     return result
 

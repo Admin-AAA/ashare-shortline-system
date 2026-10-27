@@ -27,7 +27,7 @@ def build():
     df = df.sort("trade_date").join_asof(b.rename({"trade_date": "bd"}).with_columns(c("bd").alias("trade_date")),
                                          on="trade_date", by="code", strategy="backward")
     df = df.filter(c("bd").is_not_null())  # keep rows with basic within reach
-    st = pl.read_parquet(L.D / "st_hist.parquet").rename({"effective_from": "trade_date"}).sort("trade_date")
+    st = pl.read_parquet(__import__("os").environ.get("ST_HIST_PATH") or (L.D / "st_hist.parquet")).rename({"effective_from": "trade_date"}).sort("trade_date")
     df = df.join_asof(st, on="trade_date", by="code", strategy="backward").with_columns(c("st").fill_null(False))
     df = add_limits(df.sort("code", "trade_date"))
     d = c("trade_date").str.to_date()
