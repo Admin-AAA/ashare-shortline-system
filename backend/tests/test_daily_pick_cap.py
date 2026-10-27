@@ -31,6 +31,12 @@ def _set_cap(monkeypatch, cap: int) -> None:
     monkeypatch.setattr("app.core.config.get_settings", lambda: SimpleNamespace(max_daily_picks_per_strategy=cap))
 
 
+@pytest.fixture(autouse=True)
+def _seal_open(monkeypatch):
+    # 测试里写死的信号日会随真实时间过 D+1 09:15 封签；这里只测上限，固定为未封签。
+    monkeypatch.setattr("app.services.midterm_live_seal.past_deadline", lambda *_a, **_k: False)
+
+
 def test_default_cap_is_five_in_settings():
     from app.core.config import Settings
 
