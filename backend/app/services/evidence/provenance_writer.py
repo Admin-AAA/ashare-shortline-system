@@ -59,6 +59,7 @@ def apply_formal_run_provenance(
     run: Any,
     *,
     code_revision: str | None = None,
+    latest_recommendation_at: datetime | None = None,
 ) -> RecommendationEvidenceIdentity | None:
     """Derive and persist Complete_Provenance on one completed formal run row.
 
@@ -80,8 +81,17 @@ def apply_formal_run_provenance(
     if str(getattr(run, "status", "") or "") != _COMPLETED_STATUS:
         return None
 
-    generated_at = _run_generated_at(run)
+    generated_at = _run_generated_at(run, latest_recommendation_at)
     signal_date = str(getattr(run, "trade_date", "") or "")
+    if generated_at is None:
+        # 没有完成时刻（失败/未完/旧数据缺字段）：生成时间无法证明，一律不算实盘
+        return _apply_incomplete_provenance(
+            run,
+            generated_at=datetime.now(timezone.utc),
+            data_as_of=str(getattr(run, "data_as_of", "") or ""),
+            source_snapshot_id=str(getattr(run, "source_snapshot_id", "") or "") or _UNKNOWN_SNAPSHOT_ID,
+            code_revision=code_revision or resolve_code_revision(),
+        )
     data_as_of = str(getattr(run, "data_as_of", "") or "")
     source_snapshot_id = str(getattr(run, "source_snapshot_id", "") or "") or _UNKNOWN_SNAPSHOT_ID
     revision = code_revision or resolve_code_revision()
@@ -118,17 +128,28 @@ def apply_formal_run_provenance(
     return identity
 
 
-def _run_generated_at(run: Any) -> datetime:
-    """Return the run's real creation time as aware UTC (naive rows are UTC)."""
+def _as_utc(value: Any) -> datetime | None:
+    if not isinstance(value, datetime):
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=timezone.utc)  # 库内 naive = UTC
+    return value.astimezone(timezone.utc)
 
-    started_at = getattr(run, "started_at", None)
-    if isinstance(started_at, datetime):
-        if started_at.tzinfo is None or started_at.utcoffset() is None:
-            return started_at.replace(tzinfo=timezone.utc)
-        return started_at.astimezone(timezone.utc)
-    # A completed formal run always has started_at; reaching this fallback
-    # means the row is legacy/corrupt, so use the truthful finalize time.
-    return datetime.now(timezone.utc)
+
+def run_generated_at(run: Any, latest_recommendation_at: datetime | None = None) -> datetime | None:
+    """推荐真正「生成好」的时刻（aware UTC）：任务完成时刻 finished_at，与最后一条推荐写入时刻取较晚者。
+
+    2026-10-27：不用 started_at——那是排队时刻，开跑/重试时不更新（09:10 排队、09:40 才跑完的补跑会被错算成实盘）。
+    没有 finished_at（失败/未完）返回 None，调用方一律不算实盘。
+    """
+    finished = _as_utc(getattr(run, "finished_at", None))
+    if finished is None:
+        return None
+    latest = _as_utc(latest_recommendation_at)
+    return max(finished, latest) if latest is not None else finished
+
+
+_run_generated_at = run_generated_at
 
 
 def _build_identity(
@@ -147,8 +168,16 @@ def _build_identity(
         return None
     strategy_policy, execution_policy = policies
     try:
+        from app.services.midterm_live_seal import calendar_next_open
+
+        next_open = calendar_next_open(signal_date)
+    except Exception:  # noqa: BLE001 - 日历不可用：按下一个工作日（偏严）判定
+        logger.debug("calendar lookup failed for %s", signal_date, exc_info=True)
+        next_open = None
+    try:
         return build_recommendation_evidence_identity(
             run_source=RunSource.FORMAL,
+            next_open_date=next_open,
             actual_generated_at=generated_at,
             signal_date=signal_date,
             snapshot=EvidenceSnapshotIdentity(
@@ -239,4 +268,5 @@ __all__ = [
     "INCOMPLETE_PROVENANCE_REASON",
     "apply_formal_run_provenance",
     "resolve_code_revision",
+    "run_generated_at",
 ]

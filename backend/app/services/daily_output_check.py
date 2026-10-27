@@ -2,8 +2,8 @@
 
 「出票成功」= 两条都满足：
 1. 短线：每个现役单策略（standalone_strategy_ids）当天都有一个 completed、evaluation_scope=live_forward 的 formal run，
-   且生成时间在次日 09:25 之前。0 只推荐也算成功（策略规则否决是正常结果），只有"没跑出来"才算失败。
-   带 trade_date_override 的补跑会被记成 historical_replay，不算实盘，因此不算成功。
+   且生成时间在入场日 09:15 之前。0 只推荐也算成功（策略规则否决是正常结果），只有"没跑出来"才算失败。
+   安全网等带 trade_date_override 的补跑：入场日开盘前生成的同样记为 live_forward、算出票成功；开盘后才补的记 historical_replay，不算。
 2. 中长线：status/{date}.json 里现役策略没有 data_error，也没有缺记录。
    例外：晚发布数据的策略（LATE_DATA_STRATEGIES，大宗交易约 21:00 发布）在次日 08:30 之前没有结果只记「待数据、未到点」，
    不算失败；次日 08:50 复核时仍没有才算失败。
