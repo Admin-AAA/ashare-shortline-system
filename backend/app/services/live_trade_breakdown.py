@@ -55,6 +55,58 @@ def classify_era(preset_id: str | None, selected_skills_json: str | None) -> str
     return "other"
 
 
+DEFAULT_LIVE_ERA = "single"
+ERA_LABELS = {
+    "single": "单策略（现行方案）",
+    "combo": "已删除的旧组合方案，只作历史参考",
+    "other": "其它",
+}
+
+
+def run_ids_for_era(db: Session, run_ids: Any, era: str | None) -> tuple[str, ...]:
+    """把一批 run_id 按 classify_era 过滤到某个时代；era=None/'all' 原样返回。实盘统计口径的唯一过滤入口。
+
+    era='single'（现行时代）= 去掉已删除的旧组合方案（combo）后的全部 run：单技能 run，加上少量 ``other``
+    （非旧组合 preset 的手动多技能 / 无技能 run，生产库目前没有）。它们不是那个被删的方案，不该被一起排除；
+    two-column 展示里 other 若存在会单列（见 era_split_for_overview）。era='combo' 只取旧组合方案。"""
+    ids = tuple(str(r) for r in (run_ids or ()))
+    if not ids or era in (None, "all"):
+        return ids
+    rows = db.execute(
+        select(RecommendationRun.run_id, RecommendationRun.preset_id, RecommendationRun.selected_skills_json)
+        .where(RecommendationRun.run_id.in_(ids))
+    ).all()
+    if era == "single":
+        return tuple(str(rid) for rid, preset_id, skills in rows if classify_era(preset_id, skills) != "combo")
+    return tuple(str(rid) for rid, preset_id, skills in rows if classify_era(preset_id, skills) == era)
+
+
+def era_split_for_overview(db: Session, *, start_date: str | None = None, end_date: str | None = None,
+                           era: str = DEFAULT_LIVE_ERA) -> dict[str, Any]:
+    """实盘总览用：本时代的「确认买入 / 开盘模拟」两栏 + 组合时代单列一行（直接取 live_trade_breakdown，不另算）。"""
+    eras = live_trade_breakdown(db, start_date=start_date, end_date=end_date).get("eras") or {}
+
+    def pick(block: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not block:
+            return None
+        return {
+            "settled_count": block["settled_count"],
+            "confirmed": block["confirmed"],
+            "open_simulated": block["open_simulated"],
+            "confirmed_not_filled_count": block["confirmed_not_filled_count"],
+            "not_filled_count": block["not_filled_count"],
+        }
+
+    out: dict[str, Any] = {"era": era, "era_label": ERA_LABELS.get(era, era), "fill_split": pick(eras.get(era))}
+    if era != "combo":
+        combo = pick(eras.get("combo"))
+        out["combo_reference"] = {**combo, "label": ERA_LABELS["combo"]} if combo else None
+        other = pick(eras.get("other"))  # 非旧组合的多技能/无技能 run：算进现行时代总览，两栏里单列，不混进单策略那一行
+        if other:
+            out["other_reference"] = {**other, "label": "其它（手动多策略 / 无策略）"}
+    return out
+
+
 def classify_fill(outcome: Any, state: Any | None) -> str:
     buy_confirmed = state is not None and bool(getattr(state, "ever_buy_confirmed", False))
     if not bool(getattr(outcome, "entry_triggered", False)):
@@ -155,4 +207,5 @@ _BASIS = {
     "net_return_pct": "executed_return 扣统一附加成本",
 }
 
-__all__ = ["classify_era", "classify_fill", "live_trade_breakdown", "summarize"]
+__all__ = ["DEFAULT_LIVE_ERA", "ERA_LABELS", "classify_era", "classify_fill", "era_split_for_overview",
+           "live_trade_breakdown", "run_ids_for_era", "summarize"]

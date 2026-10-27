@@ -76,6 +76,10 @@ def overview(
     start_date: str | None = _start_date_q(),
     end_date: str | None = _end_date_q(),
     sample_scope: Literal["live_forward", "historical_replay"] = _sample_scope_q(),
+    era: Literal["single", "combo", "all"] = Query(
+        default="single",
+        description="实盘时代：single=现行单策略（默认）；combo=已删除的旧组合方案；all=不分时代（旧口径，会混算）",
+    ),
 ):
     return overview_metrics(
         db,
@@ -83,6 +87,7 @@ def overview(
         start_date=start_date,
         end_date=end_date,
         sample_scope=sample_scope,
+        era=era,
     )
 
 

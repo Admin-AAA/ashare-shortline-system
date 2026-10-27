@@ -13,6 +13,8 @@ import type {
   HistoricalReconstructionCohort,
   LlmReviewHealth,
   LlmRouteHealthItem,
+  LiveFillSplit,
+  LiveFillStats,
   MetricsOverview,
   PrecisionAtKRow,
   ScoreLineStatsRow,
@@ -1220,7 +1222,7 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
       label: "每笔净收益（已成交）",
       value: data.executed_trade_count ? `${data.avg_executed_return.toFixed(2)}%` : "—",
       tone: (data.avg_executed_return ?? 0) >= 0 ? "up" : "down",
-      sub: `${data.executed_trade_count} 笔已成交 · 已扣成本`,
+      sub: `${data.executed_trade_count} 笔已成交 · 已扣成本${data.fill_split ? " · 含按开盘价算的，分开看见下表" : ""}`,
     },
     {
       label: "最大亏损",
@@ -1257,7 +1259,7 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
   return (
     <MetricCard
       kicker="推荐质量概览"
-      title="核心 KPI"
+      title={data.era_label ? `核心 KPI · ${data.era_label}` : "核心 KPI"}
       actions={
         data.sample_confidence === "low" ? (
           <span className="tag tag--warning">样本不足</span>
@@ -1299,7 +1301,67 @@ function OverviewKpiPanel({ data }: { data: MetricsOverview | null | undefined }
           </div>
         ))}
       </div>
+      {data.fill_split && (
+        <LiveFillSplitTable split={data.fill_split} combo={data.combo_reference ?? null} other={data.other_reference ?? null} />
+      )}
     </MetricCard>
+  );
+}
+
+/** 实盘成交分两栏：盘中真的确认买入 vs 只是按开盘价模拟成交；旧组合方案单列一行，只作历史参考。 */
+type LabeledSplit = LiveFillSplit & { label: string };
+
+function LiveFillSplitTable({ split, combo, other }: { split: LiveFillSplit; combo: LabeledSplit | null; other: LabeledSplit | null }) {
+  const pctText = (v: number | null | undefined) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`);
+  const tone = (v: number | null | undefined) =>
+    v == null ? "var(--text-muted)" : v >= 0 ? "var(--market-up)" : "var(--market-down)";
+  const cell = (s: LiveFillStats) => (
+    <span style={{ fontFamily: "var(--font-mono, monospace)" }}>
+      {s.n} 笔 · <span style={{ color: tone(s.avg_net_return) }}>{pctText(s.avg_net_return)}</span>
+    </span>
+  );
+  const th = { textAlign: "left" as const, padding: "var(--space-2)", fontWeight: 600, color: "var(--text-muted)" };
+  const td = { padding: "var(--space-2)" };
+  return (
+    <div style={{ marginTop: "var(--space-3)", overflowX: "auto" }}>
+      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "var(--text-sm)" }}>
+        <caption style={{ textAlign: "left", fontSize: "var(--text-xs)", color: "var(--text-muted)", paddingBottom: "var(--space-1)" }}>
+          已卖出的票，每笔扣成本后的收益。「真买到」= 盘中确认过买入；「按开盘价算」= 盘中没确认，只是假设开盘买到。
+        </caption>
+        <thead>
+          <tr style={{ borderBottom: "1px solid var(--line)" }}>
+            <th scope="col" style={th}>方案</th>
+            <th scope="col" style={th}>真买到（盘中确认）</th>
+            <th scope="col" style={th}>按开盘价算（没确认）</th>
+            <th scope="col" style={th}>没买成</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr style={{ borderBottom: "1px solid var(--line)" }}>
+            <th scope="row" style={{ ...td, textAlign: "left", fontWeight: 600 }}>单策略（现在用的）</th>
+            <td style={td}>{cell(split.confirmed)}</td>
+            <td style={td}>{cell(split.open_simulated)}</td>
+            <td style={td}>{split.not_filled_count + split.confirmed_not_filled_count} 只</td>
+          </tr>
+          {other && (
+            <tr style={{ borderBottom: "1px solid var(--line)" }}>
+              <th scope="row" style={{ ...td, textAlign: "left", fontWeight: 400 }}>{other.label}</th>
+              <td style={td}>{cell(other.confirmed)}</td>
+              <td style={td}>{cell(other.open_simulated)}</td>
+              <td style={td}>{other.not_filled_count + other.confirmed_not_filled_count} 只</td>
+            </tr>
+          )}
+          {combo && (
+            <tr style={{ color: "var(--text-muted)" }}>
+              <th scope="row" style={{ ...td, textAlign: "left", fontWeight: 400 }}>{combo.label}</th>
+              <td style={td}>{cell(combo.confirmed)}</td>
+              <td style={td}>{cell(combo.open_simulated)}</td>
+              <td style={td}>{combo.not_filled_count + combo.confirmed_not_filled_count} 只</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
