@@ -1,10 +1,11 @@
 import { ReturnSourceBlock, HS300_HINT } from "../components/ReturnSourceBlock";
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, CalendarClock, Layers, Archive } from "lucide-react";
-import { api, type HorizonBatch, type HorizonMetrics, type HorizonPick, type HorizonStrategy, type HorizonStrategiesResponse, type HorizonPicksResponse } from "../api/client";
+import { api, type HorizonBatch, type HorizonMetrics, type HorizonPick, type HorizonStrategy, type HorizonStrategiesResponse, type HorizonPicksResponse, type HorizonMetricsResponse } from "../api/client";
 import { EmptyState, ErrorPage, PageSkeleton } from "../components/StateViews";
 import { useApi } from "../app/useApi";
 import "../styles/horizon.css";
+import { QualityChip, QualityTable, MIN_SAMPLE, type QualityRow } from "../components/StrategyQuality";
 import { RunPanel, PickDrawer, PickStatusLine } from "./HorizonExtras";
 import { EquityCurve } from "../components/EquityCurve";
 import { classifyHorizon } from "../utils/equityCurve";
@@ -277,6 +278,7 @@ function ReviewView({ horizon, list, onPick }: { horizon: H; list: HorizonStrate
     },
   };
   const curvePicks = useMemo(() => (allQ.data?.batches ?? []).flatMap((b) => b.picks), [allQ.data]);
+  const mt = useApi<HorizonMetricsResponse>(() => api.horizonMetrics(horizon, "all"), [horizon]);
   const kw = q.trim();
   const batches = res.data?.batches ?? [];
   const shown = batches
@@ -292,8 +294,23 @@ function ReviewView({ horizon, list, onPick }: { horizon: H; list: HorizonStrate
   const winPick = closedPicks.length ? (closedPicks.filter((p) => (p.ret ?? 0) > 0).length / closedPicks.length) * 100 : null;
   const total = res.data?.total ?? 0, pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const filtered = st !== "all" || !!kw;
+  const liveN = mt.data?.by_origin?.live?.n ?? null;
+  const stats = new Map((mt.data?.by_strategy ?? []).map((x) => [x.strategy_id, x]));
+  const qrows: QualityRow[] = list.map((s) => {
+    const x = stats.get(s.id);
+    return { id: s.id, name: s.name, quality: s.metrics.quality, realized: x ? { n: x.n, avg: x.avg_ret, median: x.median_ret } : null };
+  });
+  const steadyNegMedian = qrows.filter((r) => r.quality?.label?.startsWith("稳健") && (r.realized?.n ?? 0) >= MIN_SAMPLE && (r.realized?.median ?? 0) < 0);
+  const notes: React.ReactNode[] = [];
+  if (liveN === 0) notes.push(<>真实前瞻已平仓 0 笔，表中「回放已平仓」全部是历史回放（用当前规则回放历史行情），不代表实盘前瞻表现。</>);
+  if (steadyNegMedian.length) notes.push(<><b>注意：</b>{steadyNegMedian.map((r) => `${r.name}（回放中位数 ${r.realized!.median!.toFixed(2)}%）`).join("、")} 的标签是「稳健型」（依据回测），但回放已平仓的中位数为负，回测标签与近期回放表现不一致，请留意。</>);
+  notes.push(<>回放笔数不足 {MIN_SAMPLE} 笔显示「样本不足」；无回测画像的策略标签显示「—」。收益含 0.3% 成本，标签规则见鼠标悬停。</>);
   return (
     <>
+      {mt.error
+        ? <section className="qt"><span className="hz-muted">各策略每笔收益加载失败：{mt.error}</span></section>
+        : mt.loading ? null
+        : <QualityTable title="各策略每笔收益" rows={qrows} realizedTitle={liveN === 0 ? "回放已平仓（历史回放）" : "已平仓（前瞻+回放）"} notes={notes} />}
       <section className="panel hz-pad">
         <div className="hz-sechead">
           <b>前瞻批次复盘</b>
@@ -358,6 +375,7 @@ function BatchCard({ b, defaultOpen, list, highlight, onPick }: { b: HorizonBatc
         {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         <span className="hz-num">{b.signal_date}</span>
         <span className="hz-batch__name">{b.strategy_name}</span>
+        <QualityChip quality={list.find((s) => s.id === b.strategy_id)?.metrics.quality} />
         {b.origin === "replay" && <span className="hz-pill hz-pill--amber">回放</span>}
         {b.origin !== "replay" && b.generated_at && b.entry_deadline && new Date(b.generated_at) > new Date(b.entry_deadline) && (
           <span className="hz-pill hz-pill--gray" title={`生成于 ${b.generated_at}，晚于次日开盘前截止 ${b.entry_deadline}，不计入实盘统计`}>开盘后补跑</span>

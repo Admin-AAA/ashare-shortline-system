@@ -1,0 +1,23 @@
+/* 策略画像：彩票型（琥珀）/ 稳健型（绿）标签 + 各策略每笔收益表。标签文字取自后端 quality.label，前端不计算。 */
+.qchip { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; border-radius: 4px; font-size: 12px; font-weight: 600; white-space: nowrap; border: 1px solid transparent; cursor: help; }
+.qchip--steady { color: var(--market-down); background: color-mix(in srgb, var(--market-down) 12%, transparent); border-color: color-mix(in srgb, var(--market-down) 40%, transparent); }
+.qchip--lottery { color: var(--warning); background: color-mix(in srgb, var(--warning) 12%, transparent); border-color: color-mix(in srgb, var(--warning) 40%, transparent); }
+.qchip--none { color: var(--muted); font-weight: 400; cursor: default; }
+.qt { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-bottom: 16px; }
+.qt__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.qt__head b { font-size: 14px; }
+.qt__sub { font-size: 12px; color: var(--muted); }
+.qt__wrap { overflow-x: auto; }
+.qt table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.qt th { background: var(--surface-soft); color: var(--muted); font-weight: 500; font-size: 12px; padding: 6px 8px; text-align: right; white-space: nowrap; }
+.qt th.l, .qt td.l { text-align: left; }
+.qt th.grp { text-align: center; border-left: 1px solid var(--line); }
+.qt td { padding: 7px 8px; border-top: 1px solid var(--line); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.qt td.sep, .qt th.sep { border-left: 1px solid var(--line); }
+.qt td.l { white-space: normal; min-width: 110px; }
+.qt__up { color: var(--market-up); }
+.qt__down { color: var(--market-down); }
+.qt__low { color: var(--muted); }
+.qt__notes { margin: 8px 0 0; padding: 0; list-style: none; font-size: 12px; color: var(--muted); line-height: 1.7; }
+.qt__notes li::before { content: "· "; }
+.qt__notes b { color: var(--warning); font-weight: 600; }

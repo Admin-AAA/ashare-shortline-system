@@ -59,6 +59,7 @@ import type {
 } from "../types";
 import { createDashboardApi } from "./dashboard";
 import { logger } from "../utils/logger";
+import type { StrategyQuality } from "../components/StrategyQuality";
 
 type PresetPayload = Omit<Partial<Preset>, "skills"> & {
   skills?: Array<{ skill_id: string; weight: number; sort_order?: number }>;
