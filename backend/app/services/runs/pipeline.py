@@ -65,7 +65,17 @@ def _finalize_completed_run_provenance(db: Session, run_id: str) -> bool:
     run = db.get(RecommendationRun, run_id)
     if run is None:
         raise RuntimeError(f"Run {run_id} 在完成 provenance 时不存在")
-    apply_formal_run_provenance(run)
+    from sqlalchemy import func
+
+    from app.models.tables import Recommendation
+    from app.services.evidence.provenance_writer import run_generated_at
+    from app.services.official_sample_scope import finalize_override_scope
+
+    db.flush()
+    latest_rec_at = db.scalar(select(func.max(Recommendation.recommended_at)).where(Recommendation.run_id == run_id))
+    # 带 trade_date_override 的补跑（安全网等）：开跑时按开始时刻暂定的口径，在完成时按真实生成时刻定稿
+    finalize_override_scope(run, run_generated_at(run, latest_rec_at))
+    apply_formal_run_provenance(run, latest_recommendation_at=latest_rec_at)
     if _is_reconstruction_marked(run):
         finalize_reconstruction_run(db, run_id)
         return True

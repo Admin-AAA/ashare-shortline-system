@@ -1532,7 +1532,7 @@ def _persist_run_start(
         run_mode=request.run_mode.value,
         trade_date_override=request.trade_date_override,
         matrix_run=request.matrix_run,
-        generated_at=run.started_at or now,
+        generated_at=now,  # 开跑时刻（暂定）；完成时按真实生成时刻定稿（finalize_override_scope）
     )
     run.trade_date = run.trade_date or _latest_trade_date(db)
     run.finished_at = None

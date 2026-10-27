@@ -47,7 +47,7 @@ def _scope(created_cn, override=SIGNAL, matrix=False):
                                     generated_at=_utc_naive(created_cn))
 
 
-def _run(started_cn, scope):
+def _run(started_cn, scope, finished_cn="same"):
     summary = {"execution": {
         "strategy_fingerprints": [{"strategy_id": "oversold-capital-reversal", "strategy_version": "v1",
                                    "fingerprint": "a" * 64}],
@@ -59,6 +59,8 @@ def _run(started_cn, scope):
         strategy_policy_fingerprint=None, execution_policy_fingerprint=None, code_revision=None,
         reconstruction_batch_id=None, provenance_schema_version=None, classification_reason=None,
         trade_date=SIGNAL, started_at=_utc_naive(started_cn), status="completed", data_as_of=SIGNAL,
+        finished_at=_utc_naive(started_cn if finished_cn == "same" else finished_cn),
+        request_json=json.dumps({"trade_date_override": SIGNAL, "run_mode": "formal"}),
         source_snapshot_id=f"snapshot_pool_historical_{SIGNAL}", result_summary_json=json.dumps(summary),
     )
 
@@ -122,3 +124,38 @@ def test_explicit_reconstruction_keeps_replay_scope():
     with pytest.raises(Exception):
         rad._reserve_reconstruction_run(None, run, identity, "2026-10-26")  # 后续校验会因日期不符失败
     assert run.evaluation_scope == "historical_replay"
+
+
+def _finalize(run):
+    """模拟完成时定稿：先按真实生成时刻定 scope，再写证据（与 pipeline._finalize_completed_run_provenance 同序）。"""
+    from app.services.evidence.provenance_writer import run_generated_at
+    from app.services.official_sample_scope import finalize_override_scope
+
+    finalize_override_scope(run, run_generated_at(run))
+    identity = apply_formal_run_provenance(run, code_revision="c" * 40)
+    return run.evaluation_scope, (identity.evidence_class if identity else None)
+
+
+def test_queued_0910_finished_0940_is_replay():
+    """09:10 排队（暂定 live_forward）、09:40 才跑完：完成时按真实生成时刻改回回放。"""
+    queued = _cn(2026, 10, 27, 9, 10)
+    assert _scope(queued) == "live_forward"  # 排队/开跑时只能暂定
+    run = _run(queued, _scope(queued), finished_cn=_cn(2026, 10, 27, 9, 40))
+    assert _finalize(run) == ("historical_replay", None)
+
+
+def test_third_retry_finishing_after_open_is_replay():
+    """安全网 08:30 排队，前两次中断，第 3 次 09:52 才完成 → 回放。"""
+    run = _run(_cn(2026, 10, 27, 8, 30), "live_forward", finished_cn=_cn(2026, 10, 27, 9, 52))
+    assert _finalize(run) == ("historical_replay", None)
+
+
+def test_finished_before_open_stays_live():
+    run = _run(_cn(2026, 10, 27, 8, 30), "live_forward", finished_cn=_cn(2026, 10, 27, 8, 41))
+    assert _finalize(run) == ("live_forward", EvidenceClass.LIVE_FORWARD)
+
+
+def test_unfinished_override_run_is_never_live():
+    run = _run(_cn(2026, 10, 27, 8, 30), "live_forward")
+    run.finished_at = None
+    assert _finalize(run)[0] == "historical_replay"

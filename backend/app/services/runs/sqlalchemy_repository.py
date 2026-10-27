@@ -69,7 +69,7 @@ class SQLAlchemyRunRepository:
                 run_mode=request.run_mode.value,
                 trade_date_override=request.trade_date_override,
                 matrix_run=request.matrix_run,
-                generated_at=command.created_at,
+                generated_at=command.created_at,  # 排队时刻，仅暂定；开跑时重算、完成时按真实生成时刻定稿
             ),
             trade_date=request.trade_date_override or command.created_at.date().isoformat(),
             started_at=command.created_at,

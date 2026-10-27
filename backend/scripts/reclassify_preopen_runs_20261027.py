@@ -11,7 +11,8 @@
   cd backend && .venv/bin/python scripts/reclassify_preopen_runs_20261027.py --restore <备份文件> --write
 
 改判对象：run_mode=formal、status=completed、不是历史重建批次（evidence_class != historical_reconstruction、无 batch）、
-不是矩阵批跑，生成时间（started_at，库内 UTC）在入场日 09:15 前，且当前不是规范的实盘记录。
+不是矩阵批跑，真实生成时刻（完成时刻 finished_at 与最后一条推荐写入时刻取较晚者，库内 UTC；
+没有完成时刻的不算）在入场日 09:15 前，且当前不是规范的实盘记录。
 同一信号日同一策略已经有规范实盘批次的，跳过（不制造重复实盘）。
 写库只改 run 行的口径字段：evaluation_scope=live_forward，并用该 run 自己记录的代码版本重新生成证据身份；
 推荐、结算、执行状态都不动。
@@ -32,7 +33,7 @@ from sqlalchemy import func, select  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.models.tables import Recommendation, RecommendationRun  # noqa: E402
 from app.services.evidence.identity import EvidenceClass  # noqa: E402
-from app.services.evidence.provenance_writer import apply_formal_run_provenance  # noqa: E402
+from app.services.evidence.provenance_writer import apply_formal_run_provenance, run_generated_at  # noqa: E402
 from app.services.evidence.validation import canonical_live_forward_run_ids  # noqa: E402
 from app.services.midterm_live_seal import generated_before_entry_open  # noqa: E402
 from app.services.standalone_strategies import run_skill_ids  # noqa: E402
@@ -85,9 +86,11 @@ def find_candidates(db, days: int) -> list[dict]:
             continue
         if run.evidence_class == EvidenceClass.HISTORICAL_RECONSTRUCTION.value or run.reconstruction_batch_id:
             continue
-        if _is_matrix(run) or run.started_at is None:
+        if _is_matrix(run):
             continue
-        if not generated_before_entry_open(str(run.trade_date), run.started_at):
+        last_rec = db.scalar(select(func.max(Recommendation.recommended_at)).where(Recommendation.run_id == run.run_id))
+        generated = run_generated_at(run, last_rec)
+        if generated is None or not generated_before_entry_open(str(run.trade_date), generated):
             continue
         ids = run_skill_ids(run.selected_skills_json)
         skill = ids[0] if len(ids) == 1 else "multi"
@@ -100,7 +103,7 @@ def find_candidates(db, days: int) -> list[dict]:
             action = "改判为实盘"
         out.append({
             "run_id": run.run_id, "trade_date": str(run.trade_date), "strategy": skill,
-            "started_at_utc": run.started_at.isoformat(), "recommendations": int(n_recs or 0),
+            "generated_at_utc": generated.replace(tzinfo=None).isoformat(), "recommendations": int(n_recs or 0),
             "now": f"{run.evaluation_scope}/{run.evidence_class}", "action": action,
         })
     return out
@@ -152,9 +155,9 @@ def main() -> None:
             return
         cands = find_candidates(db, args.days)
         print(f"近 {args.days} 天入场日开盘前生成、但没记成实盘的 formal run：{len(cands)} 个")
-        print("信号日 | 策略 | 生成时间(UTC) | 推荐数 | 现在 scope/class | 处理")
+        print("信号日 | 策略 | 生成完成(UTC) | 推荐数 | 现在 scope/class | 处理")
         for c in cands:
-            print(f"{c['trade_date']} | {c['strategy']} | {c['started_at_utc']} | {c['recommendations']} | {c['now']} | {c['action']}")
+            print(f"{c['trade_date']} | {c['strategy']} | {c['generated_at_utc']} | {c['recommendations']} | {c['now']} | {c['action']}")
         todo = [c["run_id"] for c in cands if c["action"] == "改判为实盘"]
         print(f"\n将改判 {len(todo)} 个 run（{sum(c['recommendations'] for c in cands if c['action'] == '改判为实盘')} 条推荐）")
         if not args.write:
@@ -167,7 +170,9 @@ def main() -> None:
             run = db.get(RecommendationRun, rid)
             run.evaluation_scope = "live_forward"
             run.evidence_identity_hash = None  # 让写入器按新规则重新生成身份
-            identity = apply_formal_run_provenance(run, code_revision=_recorded_revision(run))
+            last_rec = db.scalar(select(func.max(Recommendation.recommended_at)).where(Recommendation.run_id == rid))
+            identity = apply_formal_run_provenance(run, code_revision=_recorded_revision(run),
+                                                   latest_recommendation_at=last_rec)
             if identity is not None and identity.evidence_class is EvidenceClass.LIVE_FORWARD:
                 done += 1
             else:
