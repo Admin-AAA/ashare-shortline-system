@@ -209,6 +209,8 @@ def test_cached_local_pool_status_cache_only_returns_unready_without_heavy_call(
 
 
 def test_cached_local_pool_status_cache_only_can_use_stale_cache(monkeypatch):
+    import time
+
     calls = []
 
     def fake_pool_status(*args, **kwargs):
@@ -218,8 +220,9 @@ def test_cached_local_pool_status_cache_only_can_use_stale_cache(monkeypatch):
     monkeypatch.setattr(data_sources_api, "get_local_pool_status", fake_pool_status)
     with data_sources_api._pool_status_lock:
         data_sources_api._pool_status_cache.clear()
+        # 缓存时间戳用的是 monotonic。写成 0 时，开机不足 TTL 的 CI 会把它当成新鲜缓存。
         data_sources_api._pool_status_cache[data_sources_api._POOL_CACHE_KEY + ":full"] = {
-            "ts": 0.0,
+            "ts": time.monotonic() - 301,
             "data": {
                 "summary": {"unified_quote_count": 10},
                 "recommendation_readiness": {"status": "ready", "can_run_local_recommendation": True},

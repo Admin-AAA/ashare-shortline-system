@@ -1352,7 +1352,8 @@ def test_setup_and_release_worktree(tmp_memory_dir):
     release-worktree --remove removes it."""
     claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
 
-    r = setup_worktree("r1", memory_dir=tmp_memory_dir)
+    # CI 浅克隆只有当前提交，没有本地 main 分支。HEAD 在两种环境下都存在。
+    r = setup_worktree("r1", base_ref="HEAD", memory_dir=tmp_memory_dir)
     assert r.get("ok") is True
     wt = Path(r["worktree_path"])
     assert wt.exists()
@@ -1379,8 +1380,8 @@ def test_setup_and_release_worktree(tmp_memory_dir):
 def test_setup_worktree_registers_in_researcher(tmp_memory_dir):
     """Re-setup is idempotent: same worktree path re-registered."""
     claim_direction("r1", max_workers=3, memory_dir=tmp_memory_dir)
-    r1 = setup_worktree("r1", memory_dir=tmp_memory_dir)
-    r2 = setup_worktree("r1", memory_dir=tmp_memory_dir)
+    r1 = setup_worktree("r1", base_ref="HEAD", memory_dir=tmp_memory_dir)
+    r2 = setup_worktree("r1", base_ref="HEAD", memory_dir=tmp_memory_dir)
     assert r1["worktree_path"] == r2["worktree_path"]
     assert r2.get("ok") is True
 
