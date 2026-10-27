@@ -226,3 +226,29 @@ cd backend && .venv/bin/python -m pytest -q tests/<某个测试文件>.py
 - 后端：`backend/logs/app.log`、`backend/logs/access.log`
 - 告警：`grep '\[ALERT:' backend/logs/app.log`
 - launchd：`~/Library/Logs/ashare-backend.err.log`、`~/Library/Logs/ashare-frontend.err.log`
+
+---
+
+## 九、持续集成（CI）
+
+仓库为 GitHub 公开仓库（公开仓库 Actions 免费、不限量）。
+
+推送到 `main` / `kiro_refactoring`、或向 `main` 发 PR 时，自动跑 `.github/workflows/verify.yml`：
+
+| 任务 | 做什么 |
+|---|---|
+| Python compile + import | 编译 `app` 并 `import app.main` 冒烟 |
+| Python unit tests | `backend/app/` 下单测（不连 MySQL） |
+| Python regression (no db) | `backend/tests/` 非 `integration` 用例，`sqlite://` |
+| Python MySQL integration | 起 MySQL 8.0 服务，`alembic upgrade head` 后跑少量 utf8mb4 / 幂等 / 序列化冒烟 |
+| Architecture check | `scripts/check_architecture.py` 依赖方向检查 |
+| Governance store check | `backend/scripts/check_governance_store.py` 不可变治理产物布局 |
+| Git diff check | `git diff --check` 查行尾/冲突标记 |
+| Frontend v2 build | `npm ci && npm run build` |
+
+本地想先验证，不必等 CI：
+
+```bash
+cd backend && .venv/bin/python -m compileall app -q && .venv/bin/python -c "import app.main"
+cd ../frontend-v2 && npm run build
+```
