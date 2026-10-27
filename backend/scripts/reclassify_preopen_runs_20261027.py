@@ -138,6 +138,26 @@ def restore(db, path: Path) -> int:
     return n
 
 
+CACHE_NOTE = (
+    "缓存：后端的统计缓存都在后端进程内存里，本脚本只能清自己进程里的那份。后端会自动过期——"
+    "指标/复盘历史/首页约 30 秒、策略门槛约 60 秒、时间一致性页最长 10 分钟。要立刻生效请重启后端"
+    "（避开 09:15–15:05 交易时段和 16:35–18:35 日更窗口）。"
+)
+
+
+def clear_caches() -> None:
+    """清掉本进程里与 run 口径相关的统计缓存（后端进程的缓存见 CACHE_NOTE）。"""
+    from app.services.outcome_service import invalidate_outcome_metrics_cache
+    from app.services.runs.bootstrap_cache import invalidate_bootstrap_cache
+    from app.services.workbench_service import invalidate_recommendation_history_cache
+
+    for fn in (invalidate_outcome_metrics_cache, invalidate_recommendation_history_cache, invalidate_bootstrap_cache):
+        try:
+            fn()
+        except Exception as exc:  # noqa: BLE001 - 清缓存失败不影响已提交的数据
+            print(f"  清缓存 {fn.__name__} 失败：{exc!r}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--days", type=int, default=30, help="往回看多少个自然日（默认 30）")
@@ -151,7 +171,9 @@ def main() -> None:
                 return
             n = restore(db, args.restore)
             db.commit()
+            clear_caches()
             print(f"已恢复 {n} 个 run")
+            print(CACHE_NOTE)
             return
         cands = find_candidates(db, args.days)
         print(f"近 {args.days} 天入场日开盘前生成、但没记成实盘的 formal run：{len(cands)} 个")
@@ -178,6 +200,8 @@ def main() -> None:
             else:
                 print(f"  {rid} 证据不完整，未能记成实盘（已按写入器结果保留）")
         db.commit()
+        clear_caches()
+        print(CACHE_NOTE)
         print(f"已改判 {done} 个。撤销：.venv/bin/python scripts/reclassify_preopen_runs_20261027.py --restore {path} --write")
 
 
