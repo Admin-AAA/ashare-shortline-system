@@ -1368,9 +1368,12 @@ def _realize_rows(rows: list[Any], hold: int) -> dict[str, Any]:
             "ret": round(ret * 100, 2), "days": len(rows) - 1, "entry_price": e.open, "mark_price": last.close}
 
 
+# 统一 rule_score：各策略自己的排序指标（原单位，见 label / better），selection_reason 为中文入选依据。
+# 业绩加速 / 预告预喜例外：列表展示真实同比（或预告增幅下限）；排序分仍是落盘的 score=min(原值, 300)，
+# 批内名次按该分再按代码，这里不重排、也不改选股。
+_RANK_CAP_NOTE = "排序时≥300%同等优先，平手按代码"
 
 
-# 统一 rule_score：各策略自己的排序指标（原单位，见 label / better），selection_reason 为中文入选依据
 def _f(x: Any, nd: int = 2) -> str:
     try:
         return f"{float(x):.{nd}f}"
@@ -1378,9 +1381,18 @@ def _f(x: Any, nd: int = 2) -> str:
         return "—"
 
 
+def _shown_pct(raw: Any, fallback: Any) -> float:
+    """列表上的同比：有原始值就按 1 位小数展示（与入选理由同一格式）；缺字段时退回已落盘的排序分。"""
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        v = float(fallback)
+    return float(f"{v:.1f}")
+
+
 def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[str, Any]:
     kind = STRATEGIES.get(sid, {}).get("kind", "small_cap" if sid == "mid-small-cap-weekly" else None)
-    score = label = better = reason = None
+    score = label = better = reason = note = None
     try:
         if kind == "small_cap":
             score, label, better = round(float(p["total_mv"]) / 1e4, 2), "总市值(亿元)", "lower"
@@ -1406,11 +1418,13 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
             reason = f"{p.get('ann_date', '')} 回购预案，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，占总市值 {_f(score)}%"
         elif kind == "earnings_accel":
-            score, label, better = float(p["score"]), "扣非净利同比(%)，封顶300", "higher"
+            score, label, better = _shown_pct(p.get("dt_netprofit_yoy"), p["score"]), "扣非净利同比(%)", "higher"
+            note = _RANK_CAP_NOTE
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%")
         elif kind == "forecast_beat":
-            score, label, better = float(p["score"]), "预告净利增幅下限(%)，封顶300", "higher"
+            score, label, better = _shown_pct(p.get("p_change_min"), p["score"]), "预告净利增幅下限(%)", "higher"
+            note = _RANK_CAP_NOTE
             reason = (f"{p.get('ann_date', '')} 首次业绩预告（{p.get('forecast_type', '')}，{p.get('end_date', '')}）："
                       f"增幅下限 {_f(p.get('p_change_min'), 1)}%，净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e4)} 亿元")
         elif kind == "incentive_option":
@@ -1448,8 +1462,9 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = float(p["score"]), "股息率排名+60日波动排名(越低越好)", "lower"
             reason = f"市值第 {p.get('mv_rank', '')} 名；股息率(TTM) {_f(p.get('dv_ttm'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"
     except (KeyError, TypeError, ValueError):
-        score = label = better = reason = None
+        score = label = better = reason = note = None
     p["rule_score"], p["rule_score_label"], p["rule_score_better"] = score, label, better
+    p["rule_score_note"] = note
     p["selection_reason"] = reason
     if rank is not None:
         p["selection_rank"] = rank

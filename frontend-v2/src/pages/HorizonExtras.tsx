@@ -97,7 +97,7 @@ export function PickDrawer({ horizon, target, onClose, onOpen }: { horizon: H; t
               <div><span>{p.exit_date ? "卖出" : "估值"}</span><b className="hz-num">{(p.exit_date ?? p.mark_date) ?? "—"} @ {price(p.exit_price ?? p.mark_price)}</b></div>
               <div><span>收益</span><b className={`hz-num ${pnl(p.ret)}`}>{pct(p.ret)}</b></div>
               <div><span>持有天数</span><b className="hz-num">{p.days ?? "—"}</b></div>
-              <div><span>{p.rule_score_label ?? "规则分"}</span><b className="hz-num">{p.rule_score ?? "—"}{p.rule_score_better ? `（${p.rule_score_better === "lower" ? "越低越优先" : "越高越优先"}）` : ""}</b></div>
+              <div><span>{p.rule_score_label ?? "规则分"}</span><b className="hz-num">{p.rule_score ?? "—"}{p.rule_score_better ? `（${p.rule_score_better === "lower" ? "越低越优先" : "越高越优先"}）` : ""}</b>{p.rule_score_note ? <span className="hz-score-note">{p.rule_score_note}</span> : null}</div>
               <div><span>批内排名</span><b className="hz-num">{p.selection_rank ?? "—"}</b></div>
             </div>
             <div className="hz-card__sec">入选原因</div><p className="hz-note">{p.selection_reason ?? "—"}</p>

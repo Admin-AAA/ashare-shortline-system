@@ -22,14 +22,46 @@ def test_annotate_each_kind():
         "long-dividend-lowvol": {"code": "1", "score": 9.0, "dv_ttm": 5.2, "vol60": 1.0},
     }
     expect = {"mid-small-cap-weekly": 16.64, "mid-lowprice-smallcap-weekly": 18.1, "mid-smallcap-dividend-weekly": 5.46, "mid-smallcap-lowps-weekly": 0.39, "mid-smallcap-reversal-weekly": -25.32, "mid-repurchase-plan": 1.157, "mid-incentive-option": -5.12,
-              "mid-block-trade-premium": 0.61}
+              "mid-block-trade-premium": 0.61, "mid-earnings-accel": 592.1, "mid-forecast-beat": 3318.0}
     for sid, p in cases.items():
         out = ms.annotate_pick(sid, dict(p), 1)
         assert out["rule_score"] is not None and out["rule_score_label"] and out["selection_reason"], sid
         assert out["rule_score_better"] in ("higher", "lower")
         if sid in expect:
             assert out["rule_score"] == expect[sid], sid
+        if sid in ("mid-earnings-accel", "mid-forecast-beat"):
+            assert out["score"] == 300.0 and out["rule_score"] != out["score"], sid
+            assert "封顶" not in out["rule_score_label"]
+            assert out["rule_score_note"] == "排序时≥300%同等优先，平手按代码"
+        else:
+            assert out.get("rule_score_note") is None
     assert ms.annotate_pick("mid-repurchase-plan", {"code": "1"})["rule_score"] is None
+
+
+def test_capped_yoy_display_keeps_saved_rank(tmp_path, monkeypatch):
+    """列表展示真实同比，批内名次仍按已落盘的封顶分（同分再按代码），不按展示值重排。"""
+    monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
+    monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: {"status": "pending"})
+    picks = [
+        {"code": "000688", "name": "国城矿业", "score": 300.0, "dt_netprofit_yoy": 784.7, "or_yoy": 51.7, "prev_dt_netprofit_yoy": 100.0},
+        {"code": "002265", "name": "建设工业", "score": 300.0, "dt_netprofit_yoy": 1750.7, "or_yoy": 35.7, "prev_dt_netprofit_yoy": 40.0},
+        {"code": "600001", "name": "低于封顶", "score": 80.0, "dt_netprofit_yoy": 80.0, "or_yoy": 25.0, "prev_dt_netprofit_yoy": 30.0},
+    ]
+    (tmp_path / "2026-10-26_mid-earnings-accel.json").write_text(json.dumps(
+        {"strategy_id": "mid-earnings-accel", "signal_date": "2026-10-26", "picks": picks}, ensure_ascii=False))
+    batch = ms.list_picks(None, "mid-earnings-accel", 5)[0]
+    assert [p["code"] for p in batch["picks"]] == ["000688", "002265", "600001"]
+    assert [p["selection_rank"] for p in batch["picks"]] == [1, 2, 3]
+    assert [p["score"] for p in batch["picks"]] == [300.0, 300.0, 80.0]
+    assert [p["rule_score"] for p in batch["picks"]] == [784.7, 1750.7, 80.0]
+    assert batch["picks"][0]["rule_score_label"] == "扣非净利同比(%)"
+    assert "784.7%" in batch["picks"][0]["selection_reason"]
+    # 旧批次没有原始同比时，列退回封顶分，避免空白
+    old = ms.annotate_pick("mid-earnings-accel", {"code": "1", "score": 300.0})
+    assert old["rule_score"] == 300.0 and "封顶" not in old["rule_score_label"]
+    fb = ms.annotate_pick("mid-forecast-beat", {"code": "300002", "score": 300.0, "p_change_min": 900.0, "net_profit_min": 1e4})
+    assert fb["rule_score"] == 900.0 and fb["score"] == 300.0
+    assert fb["rule_score_label"] == "预告净利增幅下限(%)"
 
 
 def test_cancel_fields():

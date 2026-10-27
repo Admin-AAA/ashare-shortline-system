@@ -231,7 +231,7 @@ export type HorizonStrategy = {
 };
 export type HorizonStrategiesResponse = { horizon: string; strategies: HorizonStrategy[]; rejected?: { name: string; reason: string }[] };
 export type HorizonPick = { code: string; name: string; total_mv: number; status: string; entry_date?: string; exit_date?: string; mark_date?: string; ret?: number; days?: number;
-  rule_score?: number | null; rule_score_label?: string | null; rule_score_better?: "higher" | "lower" | null; selection_reason?: string | null; selection_rank?: number | null;
+  rule_score?: number | null; rule_score_label?: string | null; rule_score_better?: "higher" | "lower" | null; rule_score_note?: string | null; selection_reason?: string | null; selection_rank?: number | null;
   cancel_code?: string | null; cancel_reason?: string | null; ret_includes_cost?: boolean | null;
   entry_price?: number | null; exit_price?: number | null; mark_price?: number | null; exit_delayed_days?: number | null };
 export type HorizonBatch = { strategy_id: string; strategy_name: string; signal_date: string; status: string; avg_ret: number | null; picks: HorizonPick[]; origin?: string | null;

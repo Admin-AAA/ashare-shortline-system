@@ -385,7 +385,7 @@ function BatchCard({ b, defaultOpen, list, highlight, rz, onPick }: { b: Horizon
         {rz && <div style={{ padding: "0 14px" }}><QualityStrip quality={list.find((x) => x.id === b.strategy_id)?.metrics.quality} realized={rz.of(b.strategy_id)} realizedKind={rz.kind} /></div>}
         <div className="hz-tablewrap">
           <table className="hz-table">
-            <thead><tr><th className="r">排名</th><th>代码</th><th>名称</th><th className="r">{first ? `${first.rule_score_label}（${better(first.rule_score_better)}）` : "规则分"}</th><th>状态</th><th>买入</th><th>卖出 / 估值</th><th className="r">天数</th><th className="r">{retHead}</th><th>入选原因</th></tr></thead>
+            <thead><tr><th className="r">排名</th><th>代码</th><th>名称</th><th className="r" title={first?.rule_score_note || undefined}>{first ? <>{`${first.rule_score_label}（${better(first.rule_score_better)}）`}{first.rule_score_note ? <span className="hz-score-note">{first.rule_score_note}</span> : null}</> : "规则分"}</th><th>状态</th><th>买入</th><th>卖出 / 估值</th><th className="r">天数</th><th className="r">{retHead}</th><th>入选原因</th></tr></thead>
             <tbody>
               {picks.map((p) => (
                 <tr key={p.code} className={`hz-row${isCancelled(p) ? " hz-row--cancel" : ""}${highlight && (p.code.includes(highlight) || p.name.includes(highlight)) ? " hz-hl" : ""}`}
