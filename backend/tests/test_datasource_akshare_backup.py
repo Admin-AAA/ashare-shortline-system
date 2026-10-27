@@ -80,12 +80,20 @@ def test_pledge_non_friday_falls_back_to_previous_friday(_iso):
 def test_surv_and_anns_mapping(_iso, monkeypatch):
     import datetime as _dt
     today = _dt.date.today().strftime("%Y%m%d")
+    # 窗口含工作日且不足 MIN_SURV_ROWS_MARKET 时整段当不完整丢弃。凑满 20 条才验字段映射。
+    filler = [
+        {"代码": f"{600001 + i:06d}", "名称": "填充", "接待机构数量": 1, "接待方式": "特定对象调研",
+         "接待人员": "李四", "接待地点": "公司", "接待日期": today, "公告日期": today}
+        for i in range(19)
+    ]
     _iso.reg("stock_jgdy_tj_em", lambda date: pd.DataFrame([
         {"代码": "300750", "名称": "宁德时代", "接待机构数量": 12, "接待方式": "特定对象调研", "接待人员": "张三",
          "接待地点": "公司", "接待日期": today, "公告日期": today},
-        {"代码": "300750", "名称": "宁德时代", "接待机构数量": 1, "接待日期": "20200101", "公告日期": today}]))
+        {"代码": "300750", "名称": "宁德时代", "接待机构数量": 1, "接待日期": "20200101", "公告日期": today},
+        *filler]))
     rows = ab.AkshareProvider().fetch("tushare.stk_surv", {"params": {"trade_date": today}})
-    assert len(rows) == 1 and rows[0]["ts_code"] == "300750.SZ" and rows[0]["org_count"] == 12 and rows[0]["surv_date"] == today
+    hit = next(r for r in rows if r["ts_code"] == "300750.SZ")
+    assert len(rows) == 20 and hit["org_count"] == 12 and hit["surv_date"] == today
     _iso.reg("stock_notice_report", lambda symbol, date: pd.DataFrame([
         {"代码": "600519", "名称": "贵州茅台", "公告标题": "关于xx的公告", "公告类型": "重大事项", "公告日期": "2026-10-16",
          "网址": "https://data.eastmoney.com/notices/detail/600519/AN1.html"}]))

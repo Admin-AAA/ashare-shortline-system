@@ -77,7 +77,9 @@ jobs:
         image: mysql:8.0
         env:
           MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
-          MYSQL_DATABASE: ashare_workbench
+          # tests/conftest.py 会把 ashare_workbench 改写成 ashare_test 再连接。
+          # 服务只建 ashare_workbench 时，alembic 迁完的库测试用不到，连接报 1049。
+          MYSQL_DATABASE: ashare_test
         ports:
           - 3306:3306
         options: >-
@@ -89,7 +91,7 @@ jobs:
       run:
         working-directory: backend
     env:
-      ASHARE_DATABASE_URL: mysql+pymysql://root@127.0.0.1:3306/ashare_workbench?charset=utf8mb4
+      ASHARE_DATABASE_URL: mysql+pymysql://root@127.0.0.1:3306/ashare_test?charset=utf8mb4
       RUN_REAL_MYSQL_S6: "0"
     steps:
       - uses: actions/checkout@v4

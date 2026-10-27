@@ -26,6 +26,9 @@ def test_every_operation_has_unique_id_and_typed_success_response() -> None:
             ):
                 missing.append(f"{method.upper()} {path}")
 
-    assert len(operation_ids) == 137  # 128 on main (+3 /api/horizons); +1 GET /api/metrics/runtime; +1 GET /api/horizons/long/picks; +2 POST /api/horizons/{horizon}/run, GET /api/horizons/{horizon}/picks/{sid}/{date}/{code}; +2 GET /api/admin/data-gateway, POST /api/admin/data-gateway/switch; +3 GET /api/horizons/{horizon}/trades|metrics|runs
+    # 137 之后补上的入口：POST /api/admin/data-gateway/item-switch，
+    # GET /api/strategies/rolling-r12 与 standalone-metrics，
+    # POST /api/stock-matrix/analysis 与 /backtest。
+    assert len(operation_ids) == 142
     assert len(operation_ids) == len(set(operation_ids))
     assert missing == []

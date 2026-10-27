@@ -61,7 +61,10 @@ def test_order_rtk_then_sina_then_rtmin(env, monkeypatch):
     monkeypatch.setattr(tc, "fetch_realtime_minute_kbar", lambda code: (_ for _ in ()).throw(AssertionError("rt_min not needed")))
     rows = qr.fetch(["000001", "600519"])
     assert {r["source"] for r in rows.values()} == {"realtime_quote"}
-    assert [p.name for p in qr.gateway()._providers] == ["tushare_rt_k", "sina_realtime", "tencent_qt", "tushare_rt_min", "xiaoshi_snapshot"]  # tencent_qt gated by flag quote.realtime.tencent
+    # 顺序见 quote_realtime 模块说明：rt_k → sina → tencent（默认关）→ akshare 快照 → rt_min → 小石。
+    assert [p.name for p in qr.gateway()._providers] == [
+        "tushare_rt_k", "sina_realtime", "tencent_qt", "akshare_snapshot", "tushare_rt_min", "xiaoshi_snapshot",
+    ]
 
 
 def test_gateway_failure_raises_like_legacy(monkeypatch):
