@@ -32,6 +32,25 @@ def test_over_cap_keeps_top5_in_given_order_and_audits():
     assert audit["cap"] == 5 and audit["candidates_before_cap"] == 8
 
 
+def test_ties_extend_all_same_score_kept():
+    picks = [{"code": f"{i:06d}", "score": 100} for i in range(1, 11)]
+    kept, audit = dpc.cap_ordered_picks(picks, 5)
+    assert len(kept) == 10 and audit is None
+
+
+def test_top5_score_levels_with_ties():
+    scores = [100, 100, 90, 90, 90, 80, 70, 60, 60, 50, 40]
+    picks = [{"code": f"{i:06d}", "score": s} for i, s in enumerate(scores, 1)]
+    kept, audit = dpc.cap_ordered_picks(picks, 5)
+    assert [p["score"] for p in kept] == [100, 100, 90, 90, 90, 80, 70, 60, 60]
+    assert audit["truncated_codes"] == ["000010", "000011"] and audit["cap_unit"] == "score_levels"
+
+
+def test_missing_score_falls_back_to_top_n():
+    kept, audit = dpc.cap_ordered_picks([{"code": f"{i:06d}"} for i in range(8)], 5)
+    assert len(kept) == 5 and audit["truncated_count"] == 3
+
+
 @pytest.mark.parametrize("n", [0, 3, 5])
 def test_not_over_cap_unchanged(n):
     kept, audit = dpc.cap_ordered_picks(_picks(n), 5)
@@ -121,6 +140,19 @@ def test_shortline_single_strategy_over_cap_truncates_and_marks_audit():
     assert all(c["policy_drop_owner"] == "daily_strategy_cap" for c in dropped_scored)
     assert all(c["policy_verdict_steps"][-1]["rule_id"] == "daily_strategy_cap" for c in dropped_scored)
     assert "policy_drop_owner" not in scored[0]
+
+
+def test_shortline_ties_extend_by_portfolio_rank_score():
+    scores = [95, 95, 95, 95, 95, 95, 95, 88, 80]  # 7 张同为 95 分
+    cards = [{"code": f"{i:06d}", "portfolio_rank_score": s, "final_score": 99} for i, s in enumerate(scores, 1)]
+    kept, audit = dpc.cap_cards_per_strategy(cards, strategy_ids=["s1"], cap=5, already_counts={"s1": 0})
+    assert len(kept) == 9 and audit is None  # 只有 3 个分数档，全保留
+    kept, audit = dpc.cap_cards_per_strategy(cards, strategy_ids=["s1"], cap=1, already_counts={"s1": 0})
+    assert [c["code"] for c in kept] == [f"{i:06d}" for i in range(1, 8)]
+    assert audit["truncated_codes"] == ["000008", "000009"]
+    # 同日已推过 4 只：只剩 1 个分数档名额，同分顺延
+    kept, _ = dpc.cap_cards_per_strategy(cards, strategy_ids=["s1"], cap=5, already_counts={"s1": 4})
+    assert len(kept) == 7
 
 
 def test_shortline_under_cap_unchanged():
