@@ -1,3 +1,4 @@
+import { ShortStrip } from "../components/StrategyQuality";
 import { ReturnSourceBlock, type ReturnSourceQuality } from "../components/ReturnSourceBlock";
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, FileText, History, Layers, Target } from "lucide-react";
@@ -252,6 +253,8 @@ function CalledCard({ item, windowDays, rank }: { item: StrategyListItem; window
         <StatusPill enabled={item.enabled} />
       </div>
 
+      <ShortStrip id={item.skill_id} />
+
       <p style={{ margin: "var(--space-3) 0 0", color: "var(--muted)", fontSize: "var(--text-sm)", lineHeight: 1.5, minHeight: 38 }}>
         {item.description || "（无简介）"}
       </p>
@@ -431,6 +434,8 @@ function DormantCard({ item, rank }: { item: StrategyListItem; rank?: RankFields
         </div>
         <span style={pillStyle("var(--muted)", "color-mix(in srgb, var(--muted) 14%, transparent)")}>待回测</span>
       </div>
+
+      <ShortStrip id={item.skill_id} />
 
       <p style={{ margin: "var(--space-3) 0 0", color: "var(--muted)", fontSize: "var(--text-sm)", lineHeight: 1.5, minHeight: 38 }}>
         {item.description || "（无简介）"}

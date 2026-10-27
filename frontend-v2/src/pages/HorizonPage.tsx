@@ -5,7 +5,7 @@ import { api, type HorizonBatch, type HorizonMetrics, type HorizonPick, type Hor
 import { EmptyState, ErrorPage, PageSkeleton } from "../components/StateViews";
 import { useApi } from "../app/useApi";
 import "../styles/horizon.css";
-import { QualityChip, QualityTable, MIN_SAMPLE, type QualityRow } from "../components/StrategyQuality";
+import { QualityChip, QualityStrip, type RealizedStats } from "../components/StrategyQuality";
 import { RunPanel, PickDrawer, PickStatusLine } from "./HorizonExtras";
 import { EquityCurve } from "../components/EquityCurve";
 import { classifyHorizon } from "../utils/equityCurve";
@@ -24,6 +24,7 @@ export function HorizonPage({ horizon, view = "strategies" }: { horizon: H; view
   const strategies = useApi<HorizonStrategiesResponse>(() => api.horizonStrategies(horizon), [horizon]);
   const picks = useApi<HorizonPicksResponse | null>(() => api.horizonPicks(horizon, undefined, 60), [horizon]);
   const hz = horizon === "mid" ? "中线" : "长线";
+  const rz = useHorizonRealized(horizon);
   const [runOpen, setRunOpen] = useState(false);
   const [target, setTarget] = useState<Target | null>(null);
   const [rev, setRev] = useState(0);
@@ -55,15 +56,24 @@ export function HorizonPage({ horizon, view = "strategies" }: { horizon: H; view
             ? <section className="panel hz-pad"><EmptyState icon={<Layers size={32} />} title={`暂无通过回测的${hz}策略`} reason="候选思路在最近12个月或历史分段回测中不达标，未上线；淘汰原因见下方。" /></section>
             : (<>
                 <section className="panel hz-pad"><RankSortBar sort={sort} onChange={setSort} /></section>
-                <div className="hz-grid">{rankedList.map((s) => <StrategyCard key={s.id} s={s} />)}</div>
+                <div className="hz-grid">{rankedList.map((s) => <StrategyCard key={s.id} s={s} rz={rz} />)}</div>
               </>)}
           <Rejected items={rejected} />
         </>
       )}
       {view === "today" && picksBlock((b) => <TodayView batches={b} list={list} onPick={setTarget} />)}
-      {view === "review" && <ReviewView key={horizon + rev} horizon={horizon} list={list} onPick={setTarget} />}
+      {view === "review" && <ReviewView key={horizon + rev} horizon={horizon} list={list} rz={rz} onPick={setTarget} />}
     </div>
   );
+}
+
+/** 各策略已结算每笔收益（/api/horizons/{h}/metrics，只读）：真实前瞻 0 笔时全部是历史回放，标注「回放」。 */
+type Realized = { liveN: number | null; of: (id: string) => RealizedStats | null; kind: "前瞻" | "回放" };
+function useHorizonRealized(horizon: H): Realized {
+  const mt = useApi<HorizonMetricsResponse>(() => api.horizonMetrics(horizon, "all"), [horizon]);
+  const by = new Map((mt.data?.by_strategy ?? []).map((x) => [x.strategy_id, x]));
+  const liveN = mt.data?.by_origin?.live?.n ?? null;
+  return { liveN, kind: liveN === 0 ? "回放" : "前瞻", of: (id) => { const x = by.get(id); return x ? { n: x.n, avg: x.avg_ret, median: x.median_ret } : null; } };
 }
 
 /* ---------- 公共 ---------- */
@@ -133,7 +143,7 @@ const Kpi = ({ label, value, tone, cls, title }: { label: string; value: string;
 );
 
 /* ---------- 策略卡 ---------- */
-function StrategyCard({ s }: { s: HorizonStrategy }) {
+function StrategyCard({ s, rz }: { s: HorizonStrategy; rz: Realized }) {
   const [open, setOpen] = useState(false);
   const m = s.metrics.recent_12m ?? {};
   const ex = m as HorizonMetrics & { excess?: number; bench?: number };
@@ -158,6 +168,7 @@ function StrategyCard({ s }: { s: HorizonStrategy }) {
           <span className="hz-tag">持有 {s.hold_days} 交易日</span>
         </div>
       </header>
+      <QualityStrip quality={s.metrics.quality} realized={rz.of(s.id)} realizedKind={rz.kind} />
       <p className="hz-summary">{s.summary}</p>
       <div className="hz-card__sec">最近 12 个月{s.metrics.window ? <span className="hz-muted"> · {s.metrics.window}</span> : null}</div>
       <div className="hz-metrics">
@@ -252,7 +263,7 @@ function TodayView({ batches, list, onPick }: { batches: HorizonBatch[]; list: H
 
 /* ---------- 复盘（服务端分页） ---------- */
 const PAGE_SIZE = 20;
-function ReviewView({ horizon, list, onPick }: { horizon: H; list: HorizonStrategy[]; onPick: (t: Target) => void }) {
+function ReviewView({ horizon, list, rz, onPick }: { horizon: H; list: HorizonStrategy[]; rz: Realized; onPick: (t: Target) => void }) {
   const [sid, setSid] = useState<string>("all");
   const [page, setPage] = useState(1);
   const [st, setSt] = useState<string>("all");
@@ -278,7 +289,6 @@ function ReviewView({ horizon, list, onPick }: { horizon: H; list: HorizonStrate
     },
   };
   const curvePicks = useMemo(() => (allQ.data?.batches ?? []).flatMap((b) => b.picks), [allQ.data]);
-  const mt = useApi<HorizonMetricsResponse>(() => api.horizonMetrics(horizon, "all"), [horizon]);
   const kw = q.trim();
   const batches = res.data?.batches ?? [];
   const shown = batches
@@ -294,23 +304,8 @@ function ReviewView({ horizon, list, onPick }: { horizon: H; list: HorizonStrate
   const winPick = closedPicks.length ? (closedPicks.filter((p) => (p.ret ?? 0) > 0).length / closedPicks.length) * 100 : null;
   const total = res.data?.total ?? 0, pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const filtered = st !== "all" || !!kw;
-  const liveN = mt.data?.by_origin?.live?.n ?? null;
-  const stats = new Map((mt.data?.by_strategy ?? []).map((x) => [x.strategy_id, x]));
-  const qrows: QualityRow[] = list.map((s) => {
-    const x = stats.get(s.id);
-    return { id: s.id, name: s.name, quality: s.metrics.quality, realized: x ? { n: x.n, avg: x.avg_ret, median: x.median_ret } : null };
-  });
-  const steadyNegMedian = qrows.filter((r) => r.quality?.label?.startsWith("稳健") && (r.realized?.n ?? 0) >= MIN_SAMPLE && (r.realized?.median ?? 0) < 0);
-  const notes: React.ReactNode[] = [];
-  if (liveN === 0) notes.push(<>真实前瞻已平仓 0 笔，表中「回放已平仓」全部是历史回放（用当前规则回放历史行情），不代表实盘前瞻表现。</>);
-  if (steadyNegMedian.length) notes.push(<><b>注意：</b>{steadyNegMedian.map((r) => `${r.name}（回放中位数 ${r.realized!.median!.toFixed(2)}%）`).join("、")} 的标签是「稳健型」（依据回测），但回放已平仓的中位数为负，回测标签与近期回放表现不一致，请留意。</>);
-  notes.push(<>回放笔数不足 {MIN_SAMPLE} 笔显示「样本不足」；无回测画像的策略标签显示「—」。收益含 0.3% 成本，标签规则见鼠标悬停。</>);
   return (
     <>
-      {mt.error
-        ? <section className="qt"><span className="hz-muted">各策略每笔收益加载失败：{mt.error}</span></section>
-        : mt.loading ? null
-        : <QualityTable title="各策略每笔收益" rows={qrows} realizedTitle={liveN === 0 ? "回放已平仓（历史回放）" : "已平仓（前瞻+回放）"} notes={notes} />}
       <section className="panel hz-pad">
         <div className="hz-sechead">
           <b>前瞻批次复盘</b>
@@ -330,6 +325,8 @@ function ReviewView({ horizon, list, onPick }: { horizon: H; list: HorizonStrate
             </select>
           </div>
         </div>
+        {sid !== "all" && <QualityStrip quality={list.find((x) => x.id === sid)?.metrics.quality} realized={rz.of(sid)} realizedKind={rz.kind} style={{ marginTop: 0 }} />}
+        <div className="qs__hint">{rz.liveN === 0 ? "真实前瞻已平仓 0 笔，已平仓数据均为历史回放（批次标「回放」）。" : ""}每个批次展开后可看该策略的彩票型/稳健型标签与每笔收益。</div>
         <div className="hz-muted" style={{ marginBottom: 8 }}>以下统计仅针对本页{filtered ? "筛选后" : ""}的 {shown.length} 个批次；已平仓收益含 0.3% 成本。</div>
         <div className="hz-metrics">
           <Kpi label="已平仓批次" value={String(closed.length)} />
@@ -344,7 +341,7 @@ function ReviewView({ horizon, list, onPick }: { horizon: H; list: HorizonStrate
       )}
       {res.loading ? <PageSkeleton title="加载批次" /> : res.error ? <ErrorPage title="批次加载失败" message={res.error} onRetry={res.refetch} /> : <>
         {shown.length === 0 && <section className="panel hz-pad"><EmptyState title="没有符合条件的批次" reason="换个策略/状态、清空搜索或翻页。" /></section>}
-        {shown.map((b, i) => <BatchCard key={b.signal_date + b.strategy_id} b={b} defaultOpen={i === 0 || !!kw} list={list} highlight={kw} onPick={onPick} />)}
+        {shown.map((b, i) => <BatchCard key={b.signal_date + b.strategy_id} b={b} defaultOpen={i === 0 || !!kw} list={list} highlight={kw} rz={rz} onPick={onPick} />)}
       </>}
       <div className="hz-pager">
         <button className="hz-btn hz-btn--ghost" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</button>
@@ -359,7 +356,7 @@ const isCancelled = (p: HorizonPick) => p.cancel_code === "limit_up_open" || p.s
 
 /* ---------- 批次 ---------- */
 const better = (b?: string | null) => (b === "lower" ? "越低越优先" : b === "higher" ? "越高越优先" : "");
-function BatchCard({ b, defaultOpen, list, highlight, onPick }: { b: HorizonBatch; defaultOpen?: boolean; list: HorizonStrategy[]; highlight?: string; onPick: (t: Target) => void }) {
+function BatchCard({ b, defaultOpen, list, highlight, rz, onPick }: { b: HorizonBatch; defaultOpen?: boolean; list: HorizonStrategy[]; highlight?: string; rz?: Realized; onPick: (t: Target) => void }) {
   const [open, setOpen] = useState(!!defaultOpen);
   const hold = list.find((s) => s.id === b.strategy_id)?.hold_days;
   const cancelN = b.picks.filter(isCancelled).length;
@@ -384,7 +381,8 @@ function BatchCard({ b, defaultOpen, list, highlight, onPick }: { b: HorizonBatc
         <span className="hz-muted">{b.picks.length} 只{cancelN ? `（${cancelN} 只开盘涨停取消）` : ""}{hold ? ` · 持 ${hold} 日` : ""}</span>
         <span className={`hz-batch__ret hz-num ${pnl(b.avg_ret)}`}>{b.avg_ret == null ? "—" : `${b.status === "closed" ? "平均" : "浮动平均"} ${pct(b.avg_ret)}`}</span>
       </button>
-      {open && (
+      {open && (<>
+        {rz && <div style={{ padding: "0 14px" }}><QualityStrip quality={list.find((x) => x.id === b.strategy_id)?.metrics.quality} realized={rz.of(b.strategy_id)} realizedKind={rz.kind} /></div>}
         <div className="hz-tablewrap">
           <table className="hz-table">
             <thead><tr><th className="r">排名</th><th>代码</th><th>名称</th><th className="r">{first ? `${first.rule_score_label}（${better(first.rule_score_better)}）` : "规则分"}</th><th>状态</th><th>买入</th><th>卖出 / 估值</th><th className="r">天数</th><th className="r">{retHead}</th><th>入选原因</th></tr></thead>
@@ -406,7 +404,7 @@ function BatchCard({ b, defaultOpen, list, highlight, onPick }: { b: HorizonBatc
             </tbody>
           </table>
         </div>
-      )}
+      </>)}
     </section>
   );
 }

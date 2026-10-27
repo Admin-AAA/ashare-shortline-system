@@ -5,7 +5,7 @@ import { api } from "../api/client";
 import type { RecommendationHistoryResponse } from "../types";
 import { exitReasonLabel, formatApiDateTime, isOutcomeSettled, setupLabel } from "../utils/display";
 import { SHORT_STRATEGIES, strategyShortName } from "../ui/strategyRules";
-import { QualityChip, QualityTable, type QualityRow } from "../components/StrategyQuality";
+import { QualityChip, ShortStrip } from "../components/StrategyQuality";
 import { EmptyState, ErrorPage, PageSkeleton } from "../components/StateViews";
 import { EquityCurve } from "../components/EquityCurve";
 
@@ -57,13 +57,6 @@ export function BatchReviewPage() {
     },
   });
 
-  const qs = useQuery({ queryKey: ["strategy-quality"], queryFn: () => api.strategies() });
-  const st = useQuery({ queryKey: ["by-strategy-review"], queryFn: () => api.metricsByStrategy(undefined, "live_forward") });
-  const qrows: QualityRow[] = SHORT_STRATEGIES.map((m) => {
-    const q = qs.data?.find((x) => x.skill_id === m.id);
-    const r = st.data?.find((x) => x.strategy_id === m.id);
-    return { id: m.id, name: `${m.short}${m.status === "观察" ? "（观察）" : ""}`, quality: q?.quality, realized: r ? { n: r.trade_count, avg: r.average_net_return, median: r.median_net_return } : null };
-  });
   // 实盘与回放一起展示，回放批次在批次头打「回放」标签。曲线跟随 代码/策略，不跟随「结果」筛选（否则只算盈利笔，幸存者偏差）
   const scoped = useMemo(() => q.data?.items ?? [], [q.data]);
 
@@ -116,8 +109,6 @@ export function BatchReviewPage() {
         <div className="card stat"><div className="l">取消后第 5 日假设收益</div><div className="v">{pct(co?.average_5d_return)}</div><div className="d">已观察 {co?.observed_5d_count ?? 0} 笔</div></div>
         <div className="card stat"><div className="l">避免亏损率</div><div className="v">{co?.avoided_loss_rate_5d == null ? "—" : `${co.avoided_loss_rate_5d.toFixed(0)}%`}</div><div className="d">取消后第 5 日假设收益 ≤ 0 的比例</div></div>
       </div>
-      {!qs.isLoading && <QualityTable title="各策略每笔收益" rows={qrows} realizedTitle="前瞻已结算（仅实盘）"
-        notes={[<>已结算笔数不足 30 笔显示「样本不足」（前瞻样本目前都很少）；无回测画像的策略标签显示「—」。</>, <>回测列为 21 次选股抽样平均，已扣成本；标签规则见鼠标悬停。</>]} />}
       <EquityCurve items={scoped} />
       <div className="card toolbar">
         <input className="inp" placeholder="6 位代码" value={code} onChange={(e) => { setCode(e.target.value.trim()); setPage(1); }} style={{ width: 120 }} />
@@ -131,6 +122,7 @@ export function BatchReviewPage() {
         <button className="btn btn--ghost" onClick={() => setOpen(new Set(batches.map((b) => b.run)))}>全部展开</button>
         <button className="btn btn--ghost" onClick={() => setOpen(new Set())}>全部收起</button>
       </div>
+      {strategy && <div className="card" style={{ padding: "6px 14px", marginBottom: 12 }}><b className="small">{strategyShortName(strategy)}</b><ShortStrip id={strategy} style={{ marginTop: 6 }} /></div>}
       {!view.length && <EmptyState title="没有匹配的批次" reason="调整筛选条件试试" />}
       {view.map((b) => {
         const isOpen = filtered || openSet.has(b.run);
@@ -219,6 +211,7 @@ function StockHits({ id }: { id: string }) {
       {sb.length >= 2 && <span className="tag tag--warn">×{sb.length} 策略</span>}
       {d.data.entry_rule && <span className="small" style={{ marginLeft: 12 }}><span className="muted">入场规则：</span>{d.data.entry_rule}</span>}
       {d.data.risk_tags?.length ? <span className="small" style={{ marginLeft: 12 }}><span className="muted">风险提示（仅供参考，不影响出票）：</span>{d.data.risk_tags.join("、")}</span> : null}
+      {sb.length > 0 && <div style={{ flexBasis: "100%" }}>{sb.map((s, i) => <div key={s.strategy_id + i} style={{ marginTop: 4 }}><span className="small muted">{strategyShortName(s.strategy_id, s.strategy_name)} · 回测与已结算每笔收益</span><ShortStrip id={s.strategy_id} style={{ marginTop: 4 }} /></div>)}</div>}
     </div>
   );
 }
