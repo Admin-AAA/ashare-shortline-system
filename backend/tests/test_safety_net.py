@@ -16,6 +16,20 @@ from app.services.scheduler_service import check_formal_recommendation_gap
 
 
 @pytest.fixture(autouse=True)
+def _no_cached_skill_registry(monkeypatch):
+    """隔离进程级 Skill 同步缓存（registry.skills 有 TTL 缓存）。
+
+    别的测试文件（如 test_e2e_recommendation_flow）先跑过真实 sync_skills 后，缓存里留着 4 个现役短线策略；
+    本文件用假 db 的用例会直接命中缓存，`_missing_standalone_strategies` 不再 fail-open，导致只在合跑时失败。
+    """
+    import app.services.registry.skills as skills_registry
+
+    monkeypatch.setattr(skills_registry, "_cached_skill_list", None)
+    monkeypatch.setattr(skills_registry, "_cached_skill_cache_key", None)
+    monkeypatch.setattr(skills_registry, "_last_skill_sync_time", 0.0)
+
+
+@pytest.fixture(autouse=True)
 def _single_standalone_strategy(monkeypatch):
     """单策略独立运行后，盘后/安全网对每个策略各派发一个 run；这里固定为 1 个策略，
     保持原有「派发 → 等待」时序断言。"""
