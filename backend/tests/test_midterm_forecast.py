@@ -62,7 +62,13 @@ def test_first_forecast_conditions_and_order(monkeypatch, tmp_path):
     monkeypatch.setattr(ms, "_liq_ok", lambda db, as_of, dates, codes: {c: {"total_mv": 1.0, "amt20": 1e8} for c in codes})
     res = mf.forecast_beat_candidates(_FakeDB(_dates()), "2026-10-16", store=False)
     assert [r["code"] for r in res] == ["300001", "300002", "000001", "600000"]
-    assert res[1]["score"] == 300.0 and res[1]["forecast_type"] == "扭亏"
+    # 900 与 300 排序分都封顶 300，平手按代码：300001 在 300002 前；展示用真实增幅
+    assert [r["score"] for r in res] == [300.0, 300.0, 120.0, 20.0]
+    assert res[1]["score"] == 300.0 and res[1]["p_change_min"] == 900.0 and res[1]["forecast_type"] == "扭亏"
+    shown = [ms.annotate_pick("mid-forecast-beat", dict(r), i) for i, r in enumerate(res, 1)]
+    assert [p["rule_score"] for p in shown] == [300.0, 900.0, 120.0, 20.0]
+    assert shown[1]["rule_score"] != shown[1]["score"]
+    assert [p["selection_rank"] for p in shown] == [1, 2, 3, 4]
 
 
 def test_fetch_failure_returns_none(monkeypatch):
