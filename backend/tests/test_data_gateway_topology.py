@@ -51,9 +51,6 @@ def test_switch_survives_registry_orphan_cleanup(db_session):
 
 
 def test_topology_reflects_switch_and_breakers(db_session, monkeypatch):
-    # ASHARE_DATASOURCE_CUTOVER 固定为空，不读本机 .env（本机开了 quote.realtime.tencent 时腾讯会在链上，断言随环境变）
-    orig_flag_set = gw._flag_set
-    monkeypatch.setattr(gw, "_flag_set", lambda attr: set() if attr == "datasource_cutover" else orig_flag_set(attr))
     now = time.time()
     monkeypatch.setattr(topology, "_breaker_rows", lambda: [
         ("tushare:promax:rt_k", now + 600, "rate_limit"),  # 路由熔断 → 实时行情 rt_k 显示熔断
