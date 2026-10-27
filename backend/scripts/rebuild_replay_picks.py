@@ -122,7 +122,8 @@ MID_RETRY_WAITS = (120, 300, 600, 900)  # 同一天 no_data/error 的策略按�
 
 
 def replay_midlong(db, start: str, end: str, strategies: list[str] | None, staging: Path,
-                   stop_at: dt.time | None = None) -> dict:
+                   stop_at: dt.time | None = None, *, apply_daily_cap: bool = False,
+                   retry_waits: tuple[int, ...] | None = None) -> dict:
     """在 staging 目录里逐交易日顺序跑生产 generate_picks；返回统计。不碰生产 OUT_DIR。
 
     可续跑：staging 旁的 progress.json 记录已完成到哪一天，同一 staging 再跑从下一天接着做
@@ -153,9 +154,9 @@ def replay_midlong(db, start: str, end: str, strategies: list[str] | None, stagi
             if stop_at and dt.datetime.now().time() >= stop_at and dt.datetime.now().time() < dt.time(16, 0):
                 stats["stopped"] = True
                 break
-            pending, waits = strategies, list(MID_RETRY_WAITS)
+            pending, waits = strategies, list(MID_RETRY_WAITS if retry_waits is None else retry_waits)
             while True:
-                res = ms.generate_picks(db, d, strategy_ids=pending)
+                res = ms.generate_picks(db, d, strategy_ids=pending, apply_daily_cap=apply_daily_cap)
                 bad = [sid for sid, raw in res.items()
                        if raw == "no_data" or (isinstance(raw, dict) and "error" in raw)]
                 if not bad or not waits:

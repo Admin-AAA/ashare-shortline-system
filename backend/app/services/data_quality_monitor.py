@@ -691,6 +691,25 @@ def check_scheduled_tasks(db, open_days: list[str], now: datetime | None = None)
     return out
 
 
+def check_daily_output(db, open_days: list[str], now: datetime | None = None) -> dict[str, Any]:
+    """盘后出票是否成功（短线实盘 run + 中长线运行记录），过了当天 18:35 仍没出来 = 红项。
+
+    任务状态（job:post_sync_formal_recommendation）只说明 17:35 那一次跑没跑成；这里看结果：
+    事后用正式流程补跑成功也算出票成功，带历史日期参数的补跑（记为回放）不算。"""
+    from app.services.daily_output_check import daily_output_status, output_target_date
+
+    now = now or _now()
+    target = output_target_date(open_days, now.replace(tzinfo=None))
+    if not target:
+        return _item("formal:daily_output", "盘后出票", "盘后出票", GREEN, kind="job", detail="没有可核对的交易日")
+    st = daily_output_status(db, target, now=now.astimezone(_CST).replace(tzinfo=None))
+    sev = GREEN if st["ok"] else RED  # 待数据、未到点（大宗交易 21:00 发布）不算失败
+    detail = (f"{target} 短线 {st['short_done']}/{st['short_expected']} 个策略按时实盘出票（共 {st['short_recommended']} 只）"
+              + ("" if st["status"] == "ok" else f"；{st['reason']}"))
+    return _item("formal:daily_output", "盘后出票", "盘后出票", sev, kind="job", latest=target, detail=detail,
+                 impact="当天没有实盘推荐，次日无票可买；实盘统计也会缺这一天", output=st)
+
+
 def _tail_text(path: Path, max_bytes: int = 6_000_000) -> str:
     with path.open("rb") as f:
         f.seek(0, os.SEEK_END)
@@ -788,6 +807,39 @@ def check_datasource_all_failed(now: datetime | None = None) -> dict[str, Any]:
                  impact="对应接口的补数/实时行情当时没拿到数据")
 
 
+def check_confirmation_coverage(db, open_days: list[str], now: datetime | None = None) -> dict[str, Any]:
+    """盘中买入确认覆盖率：今天入场窗口内 09:45 后仍没被检查 → 红；近 5 个交易日有入场日没检查就过期 → 黄。"""
+    from app.services.execution_confirmation_coverage import (
+        COVERAGE_GRACE, _eligible_run_ids, entry_day_unchecked, recent_expired_without_check,
+        sweep_coverage_alerts,
+    )
+
+    now = now or _now()
+    now_cst = now.astimezone(_CST)
+    today = now_cst.date().isoformat()
+    try:  # 告警自动解除/每日重发：轮询停了（非交易日、无待确认推荐）也要靠数据健康巡检清理
+        sweep_coverage_alerts(db, today)
+    except Exception:  # noqa: BLE001
+        logger.exception("买入确认告警清理失败")
+    key, label = "job:execution_confirmation_coverage", "盘中买入确认覆盖"
+    unchecked: list[dict[str, Any]] = []
+    if today in set(open_days) and now_cst.time() >= COVERAGE_GRACE:
+        unchecked = entry_day_unchecked(db, today, run_ids=_eligible_run_ids(db))
+    gaps = recent_expired_without_check(db, today)
+    if unchecked:
+        sev = RED
+        detail = f"今天 {len(unchecked)} 只待确认推荐入场日盘中尚未被检查：" + "、".join(
+            f"{u['code']}({u['signal_date'][5:]})" for u in unchecked[:8])
+    elif gaps:
+        sev = YELLOW
+        detail = f"近 5 个交易日 {len(gaps)} 只推荐入场日盘中没被检查就过期：" + "、".join(
+            f"{g['code']}({g['entry_day'][5:]})" for g in gaps[:8])
+    else:
+        sev, detail = GREEN, "入场窗口内的待确认推荐都已在盘中被检查"
+    return _item(key, label, "调度任务", sev, kind="job", detail=detail,
+                 impact="漏查的推荐收盘后会被判过期，实盘少了本该确认的买入")
+
+
 # --------------------------------------------------------------------------- 汇总
 def _rollback(db) -> None:
     try:
@@ -813,6 +865,9 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     _rollback(db)
     items += _safe("交易日历", "db:trade_calendar", "数据库表", "db", lambda: [check_calendar_horizon(open_days, now)])
     _rollback(db)
+    items += _safe("盘中买入确认覆盖", "job:execution_confirmation_coverage", "调度任务", "job",
+                   lambda: [check_confirmation_coverage(db, open_days, now)])
+    _rollback(db)
     if include_files:
         for spec in FILE_DATASETS:
             items += _safe(spec["label"], spec["key"], "文件数据集", "file",
@@ -833,6 +888,8 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
         _rollback(db)
     items += _safe("gateway", "gateway:providers", "数据网关", "gateway", lambda: [check_provider_gateway(now)])
     items += _safe("scheduled", "job:*", "调度任务", "job", lambda: check_scheduled_tasks(db, open_days, now))
+    _rollback(db)
+    items += _safe("daily_output", "formal:daily_output", "盘后出票", "job", lambda: [check_daily_output(db, open_days, now)])
     _rollback(db)
     items += _safe("log", "log:*", "静默失败", "log", lambda: check_log_signals(now))
     items += _safe("stale_alerts", "alerts:stale_active", "静默失败", "log", lambda: [check_stale_alerts(now)])

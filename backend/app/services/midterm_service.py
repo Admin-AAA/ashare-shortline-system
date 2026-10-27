@@ -126,16 +126,6 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §98 防御型异象（scripts/midterm/lt_research16.py LTV_h60，预注册 3 版中唯一达标，未调参）
-    "long-lowturn-lowvol": {
-        "name": "低换手+低波动月度组合（持60日）",
-        "horizon": "long",
-        "summary": "每月最后一个交易日收盘后，在全A（剔除北交所）总市值排名第200–1500的股票里，剔除ST、上市不足250个交易日、股价<3元；按近60日平均换手率排名 + 近60日日收益波动率排名（都越低越好）相加，取得分最低的10只，次日开盘等权买入、各持有60个交易日。仍在持有期内的不重复买、也不顺延补位（与回测一致）。",
-        "kind": "lowturn_lowvol",
-        "top_n": 10,
-        "hold_days": 60,
-        "schedule": "month_end",
-    },
     # §102 红利低波（scripts/midterm/lt_research19.py DVLV_h60，预注册 3 版中唯一达标，未调参）
     "long-dividend-lowvol": {
         "name": "红利低波月度组合（股息率+低波动，持60日）",
@@ -170,7 +160,18 @@ STRATEGIES: dict[str, dict[str, Any]] = {
 # §278（2026-10-25）st_hist.parquet 重建后复核：以下 /long 策略在新 ST 口径下不再满足各自上线标准，按「不设观察档」下线——
 # §282（新达标标准）重评后，其中 long-net-cash-switch 达标已移回 STRATEGIES；以下 4 个仍不达标，维持下线。
 # 不再出票、不再在 /long 展示；仅保留定义（候选函数/历史 picks 文件/测试）以便复现与追溯，原因见 app/api/midterm.py LONG_REJECTED 与 docs/strategy-research.md §278。
+# §338（2026-10-27）long-lowturn-lowvol：现行生产代码近12个月满期卖出每笔为负（40 笔 −1.13%、中位数 −2.54%），owner 决定下线，同样方式移入此处。
 RETIRED_STRATEGIES: dict[str, dict[str, Any]] = {
+    # §98 防御型异象（scripts/midterm/lt_research16.py LTV_h60）；§338 下线
+    "long-lowturn-lowvol": {
+        "name": "低换手+低波动月度组合（持60日）",
+        "horizon": "long",
+        "summary": "每月最后一个交易日收盘后，在全A（剔除北交所）总市值排名第200–1500的股票里，剔除ST、上市不足250个交易日、股价<3元；按近60日平均换手率排名 + 近60日日收益波动率排名（都越低越好）相加，取得分最低的10只，次日开盘等权买入、各持有60个交易日。仍在持有期内的不重复买、也不顺延补位（与回测一致）。",
+        "kind": "lowturn_lowvol",
+        "top_n": 10,
+        "hold_days": 60,
+        "schedule": "month_end",
+    },
     "long-repurchase-big": {
         "name": "大额回购预案（持60日）",
         "horizon": "long",
@@ -941,8 +942,23 @@ def _save_picks(sid: str, as_of: str, picks: list[dict[str, Any]], apply_daily_c
 
     apply_daily_cap=True（仅实盘出票路径）：picks 已是该策略自身排序（各 *_candidates 的排序键）并剔除已持有，
     这里只切前 N 只，与第 N 名同分的顺延（settings.max_daily_picks_per_strategy，默认 5，0=不限），被截断的数量与代码写入文件 daily_cap 审计字段。
-    不是持仓上限：20 仓位（回测口径）、持有 20/60 日与此无关。"""
-    doc: dict[str, Any] = {"strategy_id": sid, "signal_date": as_of}
+    不是持仓上限：20 仓位（回测口径）、持有 20/60 日与此无关。
+
+    封签（midterm_live_seal）：每个批次写入 generated_at / entry_deadline（D+1 09:15）。实盘路径（apply_daily_cap=True）
+    过了 D+1 09:15 后不再覆盖已落盘的批次——开盘后重跑不能改写已生效的实盘记录；没有旧文件时照常落盘，但
+    generated_at 晚于 entry_deadline，统计时记为「补跑」（late），不算实盘。"""
+    from app.services import midterm_live_seal as seal
+
+    path = OUT_DIR / f"{as_of}_{sid}.json"
+    if apply_daily_cap and path.exists() and seal.past_deadline(as_of):
+        try:
+            kept = len(json.loads(path.read_text()).get("picks") or [])
+        except Exception:  # noqa: BLE001 - 读不出旧文件也不覆盖，宁可少一批也不改写实盘记录
+            kept = 0
+        logger.warning("%s %s 已过 %s，实盘批次已生效，不覆盖（保留 %d 只）",
+                       as_of, sid, seal.entry_deadline(as_of).isoformat(timespec="minutes"), kept)
+        return kept
+    doc: dict[str, Any] = {"strategy_id": sid, "signal_date": as_of, **seal.stamp(as_of)}
     if apply_daily_cap:
         from app.services.daily_pick_cap import cap_ordered_picks
 
@@ -953,7 +969,7 @@ def _save_picks(sid: str, as_of: str, picks: list[dict[str, Any]], apply_daily_c
                         as_of, sid, audit["kept_count"], audit["candidates_before_cap"], audit["truncated_codes"])
     doc["picks"] = picks
     OUT_DIR.mkdir(parents=True, exist_ok=True)
-    (OUT_DIR / f"{as_of}_{sid}.json").write_text(json.dumps(doc, ensure_ascii=False, indent=1))
+    path.write_text(json.dumps(doc, ensure_ascii=False, indent=1))
     return len(picks)
 
 

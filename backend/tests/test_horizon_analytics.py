@@ -20,14 +20,14 @@ def _setup(tmp_path, monkeypatch, realized):
            "picks": [{"code": "C", "total_mv": 1e5}]})
     _write(picks, "2026-10-16_mid-repurchase-plan.json", {"strategy_id": "mid-repurchase-plan", "signal_date": "2026-10-16",
            "picks": [{"code": "D", "ratio": 0.01}, {"code": "E", "ratio": 0.01}]})
-    _write(picks, "2026-10-16_long-lowturn-lowvol.json", {"strategy_id": "long-lowturn-lowvol", "signal_date": "2026-10-16",
+    _write(picks, "2026-10-16_long-dividend-lowvol.json", {"strategy_id": "long-dividend-lowvol", "signal_date": "2026-10-16",
            "picks": [{"code": "F", "ratio": 0.02}]})
     status = tmp_path / "status"
     status.mkdir()
     _write(status, "2026-10-16.json", {
         "mid-repurchase-plan": {"status": "ok", "raw": 2, "recorded_at": "2026-10-16T10:00:00Z"},
         "mid-forecast-beat": {"status": "slots_full", "raw": {"skipped": "slots_full", "held": 25}},
-        "long-lowturn-lowvol": {"status": "ok", "raw": 1},
+        "long-dividend-lowvol": {"status": "ok", "raw": 1},
     })
     monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: dict(realized[c]))
 
@@ -89,5 +89,5 @@ def test_runs(tmp_path, monkeypatch):
     assert len(days) == 1 and days[0]["date"] == "2026-10-16"
     items = {i["strategy_id"]: i for i in days[0]["items"]}
     assert items["mid-repurchase-plan"]["picks"] == 2 and items["mid-forecast-beat"]["detail"] == "slots_full"
-    assert "long-lowturn-lowvol" not in items
-    assert [i["strategy_id"] for i in ha.runs("long")[0]["items"]] == ["long-lowturn-lowvol"]
+    assert "long-dividend-lowvol" not in items
+    assert [i["strategy_id"] for i in ha.runs("long")[0]["items"]] == ["long-dividend-lowvol"]

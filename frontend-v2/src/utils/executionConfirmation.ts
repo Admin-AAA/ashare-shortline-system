@@ -106,9 +106,11 @@ export function holdingDecisionPresentation(
   if (!decision) return null;
   const label = String(decision.label || "持仓判断待确认").trim();
   const reason = String(decision.reason || "").trim();
+  // 后端用推荐止损 / 硬风控判的退出带 backtest_rule=false；老数据 label 没有后缀时这里补上
+  const nonBacktest = decision.backtest_rule === false && !label.includes("非回测规则");
   return {
     code: String(decision.code || "observe"),
-    text: `如果已持有：${label}`,
+    text: `如果已持有：${label}${nonBacktest ? "（非回测规则）" : ""}`,
     reason,
     title: reason ? `${label} · ${reason}` : label,
   };

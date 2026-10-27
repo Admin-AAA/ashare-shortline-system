@@ -321,6 +321,15 @@ def _bj_offset(value):
     return value
 
 
+@router.get("/rolling-r12")
+def rolling_r12():
+    """现役策略近12个月扣成本后每笔（每月第一个交易日 22:30 滚动重算；cutoff=截止日）。还没算过返回 available=false。"""
+    from app.services.rolling_r12 import load_latest
+
+    doc = load_latest()
+    return doc or {"available": False, "message": "还没有滚动重算结果（每月第一个交易日 22:30 自动跑）"}
+
+
 @router.get("/standalone-metrics")
 def standalone_metrics(db: Session = Depends(get_db)):
     """每日独立运行策略的单策略口径指标（scripts/compute_standalone_metrics.py 落盘）。

@@ -176,8 +176,10 @@ function ReplayAnalysisPanel({ runId }: { runId: string }) {
   if (!data || data.rows.length === 0) return null;
 
   const { summary, rows } = data;
-  const avgRet = summary.average_net_return;
-  const retTone = avgRet >= 0 ? "var(--market-up)" : "var(--market-down)";
+  // 只算已成交并卖出的每笔净收益；没成交的只计入成交率，不当 0% 摊进均值。
+  const avgRet = summary.average_executed_net_return ?? null;
+  const retTone = avgRet == null ? "var(--text-muted)" : avgRet >= 0 ? "var(--market-up)" : "var(--market-down)";
+  const execN = summary.executed_settled_count ?? 0;
 
   return (
     <Panel
@@ -185,7 +187,8 @@ function ReplayAnalysisPanel({ runId }: { runId: string }) {
       title="推荐兑现情况"
       actions={
         <span style={{ display: "inline-flex", gap: "var(--space-3)", fontSize: "var(--text-xs)", color: "var(--text-muted)" }}>
-          <span>平均净收益 <b style={{ color: retTone, fontFamily: "var(--font-mono)" }}>{avgRet >= 0 ? "+" : ""}{avgRet.toFixed(2)}%</b></span>
+          <span title="只算已成交并卖出的票，已扣往返成本">每笔净收益（已成交） <b style={{ color: retTone, fontFamily: "var(--font-mono)" }}>{avgRet == null ? "—" : `${avgRet >= 0 ? "+" : ""}${avgRet.toFixed(2)}%`}</b></span>
+          <span>成交率 <b style={{ fontFamily: "var(--font-mono)" }}>{execN}/{summary.total_count}</b></span>
           <span>误报率 <b style={{ fontFamily: "var(--font-mono)" }}>{(summary.false_positive_rate * 100).toFixed(0)}%</b></span>
         </span>
       }

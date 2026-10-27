@@ -182,7 +182,7 @@ def poll_execution_confirmation(scheduled_at: str) -> dict:
     此前确认只由前端持仓/复盘页按钮触发：没人打开页面的交易日一次都不确认，
     推荐到盘后统一被判过期 missed（2026-10-14 批次全军覆没）。
     """
-    from datetime import datetime, timezone
+    from datetime import datetime, timedelta, timezone
 
     from app.db.session import SessionLocal
     from app.services.batch_execution_confirmation import (
@@ -206,6 +206,14 @@ def poll_execution_confirmation(scheduled_at: str) -> dict:
             if not ids:
                 # 没有未结算（待确认）的正式推荐：不进入确认批次，不拉全市场行情/逐股K线，省上游额度（2026-10-26 额度耗尽根因）
                 logger.info("盘中买入确认轮询：没有未结算推荐，跳过")
+                # 没有待确认推荐也要清理跨日告警（漏查日 / 逐只过期 / 第 1 日缺 K），否则旧告警永远不消
+                from app.services.execution_confirmation_coverage import sweep_coverage_alerts
+
+                try:
+                    sweep_coverage_alerts(db, datetime.now(timezone.utc).astimezone(
+                        timezone(timedelta(hours=8))).date().isoformat())
+                except Exception:  # noqa: BLE001
+                    logger.exception("买入确认告警清理失败")
                 return {"skipped": True, "reason": "no_unsettled_recommendations", "pending": 0}
             summaries = []
             for start in range(0, len(ids), MAX_BATCH_IDS):
@@ -213,7 +221,12 @@ def poll_execution_confirmation(scheduled_at: str) -> dict:
                 summaries.append(result.get("summary") or {})
                 if result.get("error"):
                     logger.warning("盘中买入确认轮询批次失败: %s", result["error"])
-            return {"pending": len(ids), "batches": summaries}
+            # 覆盖率：入场日 09:45 后仍没被检查到的待确认推荐 → 告警（全覆盖则解除）
+            from app.services.execution_confirmation_coverage import report_coverage
+
+            coverage = report_coverage(db)
+            return {"pending": len(ids), "batches": summaries,
+                    "unchecked": len(coverage.get("unchecked") or [])}
         finally:
             db.close()
     except Exception:

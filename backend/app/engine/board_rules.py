@@ -124,6 +124,12 @@ def limit_pct_for_stock(stock: dict[str, Any], trade_date: Any = None) -> float:
     return board_pct
 
 
+def limit_pct_on(code: str, trade_date: Any = None, *, is_st: bool = False) -> float:
+    """按代码 + 交易日 + 是否 ST 取涨跌停幅度（百分数）：非 ST 等同 limit_pct_for_code；
+    主板 ST 走 st_main_board_pct_on（2026-07-06 前 5%，之后 10%）。"""
+    return limit_pct_for_stock({"code": code, "is_st": bool(is_st)}, trade_date)
+
+
 _CANONICAL_LIMIT_PCTS = (5.0, 10.0, 20.0, 30.0)
 
 
@@ -190,11 +196,11 @@ def is_one_word_limit_up_card(card: dict[str, Any]) -> bool:
     )
 
 
-def is_one_word_limit_up_bar(code: str, bar: Any) -> bool:
+def is_one_word_limit_up_bar(code: str, bar: Any, *, is_st: bool = False) -> bool:
     """日 K bar 口径的一字涨停判定（推荐成交约束口径）。
 
-    前收由 `close/(1+pct_chg/100)` 反推，板位幅度按代码前缀（10/20/30%）判定，要求
-    open / low / high / close 四点全部贴合涨停价。
+    前收由 `close/(1+pct_chg/100)` 反推，板位幅度按代码前缀（10/20/30%）判定；ST 股按 bar 的
+    交易日取 ST 幅度（limit_pct_on），要求 open / low / high / close 四点全部贴合涨停价。
     """
     prev_close = previous_close_from_price(getattr(bar, "close", 0), getattr(bar, "pct_chg", 0))
     return is_one_word_limit_up_values(
@@ -204,6 +210,7 @@ def is_one_word_limit_up_bar(code: str, bar: Any) -> bool:
         high=getattr(bar, "high", 0),
         low=getattr(bar, "low", 0),
         close=getattr(bar, "close", 0),
+        limit_pct=limit_pct_on(code, getattr(bar, "trade_date", None), is_st=True) if is_st else None,
     )
 
 
@@ -228,11 +235,15 @@ def is_one_word_limit_up_values(
     high: Any,
     low: Any,
     close: Any,
+    limit_pct: float | None = None,
 ) -> bool:
-    """一字涨停核心判定：四点（open/low/high/close）均 >= 涨停价 * 0.995。"""
+    """一字涨停核心判定：四点（open/low/high/close）均 >= 涨停价 * 0.995。
+
+    limit_pct 不传时按代码前缀取板位幅度；ST 股由调用方用 limit_pct_on(code, 交易日, is_st=True) 传入。
+    """
     if prev_close <= 0:
         return False
-    up_limit = limit_price(prev_close, limit_pct_for_code(code), up=True)
+    up_limit = limit_price(prev_close, limit_pct if limit_pct else limit_pct_for_code(code), up=True)
     return (
         _as_float(open_price) >= up_limit * (1 - _LIMIT_TOLERANCE)
         and _as_float(low) >= up_limit * (1 - _LIMIT_TOLERANCE)

@@ -28,6 +28,12 @@ class _FakeDB:
     def expire_all(self) -> None:
         self.expired += 1
 
+    def flush(self) -> None:
+        pass
+
+    def scalar(self, _statement):
+        return None  # 没有推荐行：最后一条推荐写入时刻为空
+
 
 def _run(**overrides) -> SimpleNamespace:
     values = {
@@ -50,7 +56,7 @@ def _run(**overrides) -> SimpleNamespace:
 def test_unmarked_historical_replay_skips_reconstruction_finalizer(monkeypatch) -> None:
     db = _FakeDB(_run())
     finalized: list[str] = []
-    monkeypatch.setattr(pipeline, "apply_formal_run_provenance", lambda run: None)
+    monkeypatch.setattr(pipeline, "apply_formal_run_provenance", lambda run, **_kw: None)
     monkeypatch.setattr(
         "app.services.evidence.reconstruction_batch.finalize_reconstruction_run",
         lambda _db, run_id: finalized.append(run_id),
@@ -68,7 +74,7 @@ def test_marked_reconstruction_finalizes_after_completed_status(monkeypatch) -> 
         )
     )
     observed: list[tuple[str, str, str]] = []
-    monkeypatch.setattr(pipeline, "apply_formal_run_provenance", lambda run: None)
+    monkeypatch.setattr(pipeline, "apply_formal_run_provenance", lambda run, **_kw: None)
     monkeypatch.setattr(
         "app.services.evidence.reconstruction_batch.finalize_reconstruction_run",
         lambda _db, run_id: observed.append(

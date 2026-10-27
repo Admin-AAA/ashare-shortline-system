@@ -48,6 +48,7 @@ from app.services.evidence.validation import (
 )
 from app.services.execution_outcome_policy import apply_execution_outcome_policy
 from app.services.entry_policy import execution_policy_fingerprint_for_entry_policy
+from app.services.resettle_confirmation import RESETTLE_LABEL_SOURCE, derived_execution_state
 from app.services.official_sample_scope import (
     HISTORICAL_REPLAY_SCOPE,
     LIVE_FORWARD_SCOPE,
@@ -79,6 +80,10 @@ from app.services.quality_outcome import (  # noqa: F401
 # module; execution semantics are owned exclusively by outcome_simulation and
 # app.engine.execution_core.
 from app.services.outcome_simulation import (  # noqa: F401
+    SETTLEMENT_RULESET_CURRENT,
+    SETTLEMENT_RULESET_R20261019,
+    SETTLEMENT_RULESET_R20261019_PRE_ENTRY_LOW,
+    SUPPORTED_SETTLEMENT_RULESETS,
     DEFAULT_STOP_LOSS_PCT,
     DEFAULT_TAKE_PROFIT_PCT,
     ENTRY_LOOKAHEAD_DAYS,
@@ -465,7 +470,29 @@ def _current_projection(outcome: RecommendationOutcome | None) -> CurrentProject
 # has been written by the post-close daily update (17:35 CST = 09:35 UTC). Bars written earlier
 # (intraday/realtime pre-fill) can be revised later, so such outcomes stay provisional and are
 # re-settled by label_pending_outcomes on the next run.
-OUTCOME_RULE_VERSION = f"{OUTCOME_CALCULATION_VERSION}+r20261019"
+# 2026-10-27（PR #15）：结算规则升到 r20261027（板块龙头回测开盘窗口入场、一字涨停按日期取 ST、
+# 止损按买入成交价 −5.5%）。新规则只用于此后首次结算的记录；已按旧版本结算的记录，K 线改写触发的
+# 自动重算仍按记录自己的 rule_version 算（见 settlement_ruleset_for），算不了就跳过并告警，绝不悄悄改历史。
+# 把旧记录换成新规则只能走显式脚本 scripts/resettle_single_since_20261014.py（默认预览、写前备份）。
+OUTCOME_RULE_VERSION = f"{OUTCOME_CALCULATION_VERSION}+{SETTLEMENT_RULESET_CURRENT}"  # …+r20261027
+RULE_VERSION_UNREPRODUCIBLE_ALERT = "outcome_rule_version_unreproducible"
+
+
+# §185「破买入日最低价出场」上线时刻（4fc1b685，2026-10-25 03:32:58 CST）；r20261019 下早于它结算的记录不含这条
+ENTRY_LOW_EXIT_LIVE_AT_UTC = datetime(2026, 10, 24, 19, 32, 58)
+
+
+def settlement_ruleset_for(rule_version: str | None, labeled_at: datetime | None = None) -> str | None:
+    """记录的 rule_version（+结算时间）→ 能复现它的结算规则集；代码复现不了（更老的版本、缺失、别的计算版本）返回 None。"""
+    text_value = str(rule_version or "")
+    prefix, sep, suffix = text_value.partition("+")
+    if not sep or prefix != OUTCOME_CALCULATION_VERSION:
+        return None
+    if suffix == SETTLEMENT_RULESET_R20261019 and isinstance(labeled_at, datetime):
+        stamp = labeled_at.astimezone(timezone.utc).replace(tzinfo=None) if labeled_at.tzinfo else labeled_at
+        if stamp < ENTRY_LOW_EXIT_LIVE_AT_UTC:
+            return SETTLEMENT_RULESET_R20261019_PRE_ENTRY_LOW
+    return suffix if suffix in SUPPORTED_SETTLEMENT_RULESETS else None
 DAILY_BAR_FINAL_UTC_OFFSET = timedelta(hours=9, minutes=30)
 SETTLEMENT_GATE_REASON = "exit_bar_not_final"
 
@@ -510,13 +537,16 @@ def _apply_settlement_gate(simulation: dict[str, Any], bars: list[DailyKbar] | N
 _SETTLED_LABELS = EXECUTED_OUTCOME_LABELS | {OUTCOME_MISSED}
 
 
-def _preserve_original_settlement(outcome: RecommendationOutcome | None) -> None:
+def _preserve_original_settlement(
+    outcome: RecommendationOutcome | None,
+    target_rule_version: str = OUTCOME_RULE_VERSION,
+) -> None:
     """First re-projection under a new rule keeps the original settlement (write-once)."""
     if outcome is None or getattr(outcome, "original_outcome_label", None) is not None:
         return
     if str(outcome.outcome_label or "") not in _SETTLED_LABELS:
         return
-    if getattr(outcome, "rule_version", None) == OUTCOME_RULE_VERSION:
+    if getattr(outcome, "rule_version", None) == target_rule_version:
         return
     outcome.original_outcome_label = outcome.outcome_label
     outcome.original_exit_date = outcome.exit_date
@@ -572,8 +602,12 @@ def _apply_outcome_simulation(
     label_source: str = "auto",
     execution_state: RecommendationExecutionState | None = None,
     market_bars: list[DailyKbar] | None = None,
+    rule_version: str = OUTCOME_RULE_VERSION,
 ) -> bool:
-    """Append immutable calculation evidence and update the display projection."""
+    """Append immutable calculation evidence and update the display projection.
+
+    rule_version：这次结算用的规则版本（调用方保证 simulation 就是按它算的）；按旧版本重算时传记录自己的版本。
+    """
     savepoint = db.begin_nested()
     try:
         db.scalar(
@@ -591,7 +625,7 @@ def _apply_outcome_simulation(
             .where(RecommendationOutcome.recommendation_id == rec.recommendation_id)
             .with_for_update()
         )
-        _preserve_original_settlement(outcome)
+        _preserve_original_settlement(outcome, rule_version)
         run = db.get(RecommendationRun, rec.run_id)
         if _complete_outcome_provenance(run, rec):
             if market_bars is None:
@@ -648,7 +682,7 @@ def _apply_outcome_simulation(
             outcome.current_calculation_fingerprint = None
             outcome.projection_revision = None
             outcome.projected_at = None
-        outcome.rule_version = OUTCOME_RULE_VERSION
+        outcome.rule_version = rule_version
         outcome.bars_verified_at = utcnow_naive()
         savepoint.commit()
         return True
@@ -715,13 +749,19 @@ def label_pending_outcomes(
             )
             if simulation is None:
                 continue
+            state = execution_states.get(str(rec.recommendation_id))
+            pending_label_source = "auto"
+            existing = db.get(RecommendationOutcome, rec.recommendation_id)
+            if existing is not None and existing.label_source == RESETTLE_LABEL_SOURCE:
+                state = derived_execution_state(db, rec, state)
+                pending_label_source = RESETTLE_LABEL_SOURCE
             if _apply_outcome_simulation(
                 db,
                 rec,
                 simulation,
                 horizon_days,
-                label_source="auto",
-                execution_state=execution_states.get(str(rec.recommendation_id)),
+                label_source=pending_label_source,
+                execution_state=state,
                 market_bars=bounded_bars,
             ):
                 labeled += 1
@@ -742,8 +782,10 @@ def label_pending_outcomes(
 
 
 def find_outcomes_needing_reprojection(db: Session, horizon_days: int = DEFAULT_OUTCOME_HORIZON_DAYS) -> list[str]:
-    """Settled outcomes whose rule_version is stale, never bar-verified, or whose window bars
-    (signal day .. bounded horizon) were rewritten after the last verification (e.g. backfill)."""
+    """Settled outcomes never bar-verified, or whose window bars (signal day .. bounded horizon)
+    were rewritten after the last verification (e.g. backfill).
+
+    规则版本落后不再是重算理由（2026-10-27）：旧版本记录只在 K 线改写时按自己的版本重算。"""
     recs = db.scalars(
         select(Recommendation)
         .join(RecommendationOutcome, RecommendationOutcome.recommendation_id == Recommendation.recommendation_id)
@@ -766,7 +808,7 @@ def find_outcomes_needing_reprojection(db: Session, horizon_days: int = DEFAULT_
         if outcome is None:
             continue
         verified = outcome.bars_verified_at
-        if outcome.rule_version != OUTCOME_RULE_VERSION or verified is None:
+        if verified is None:
             selected.append(str(rec.recommendation_id))
             continue
         window = bounded_outcome_bars(
@@ -784,7 +826,7 @@ def find_outcomes_needing_reprojection(db: Session, horizon_days: int = DEFAULT_
 def reproject_revised_outcomes(db: Session, horizon_days: int = DEFAULT_OUTCOME_HORIZON_DAYS) -> dict[str, Any]:
     ids = find_outcomes_needing_reprojection(db, horizon_days)
     if not ids:
-        return {"candidates": 0, "recomputed": 0, "errors": 0, "flipped": {}}
+        return {"candidates": 0, "recomputed": 0, "errors": 0, "flipped": {}, "skipped_unreproducible": 0}
     result = recompute_stale_outcomes(
         db, horizon_days=horizon_days, recommendation_ids=ids, label_source="reproject"
     )
@@ -840,8 +882,16 @@ def recompute_stale_outcomes(
     batch_size: int = 50,
     recommendation_ids: list[str] | None = None,
     label_source: str = "recompute",
+    upgrade_rule_version: bool = False,
+    execution_state_overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """重算所有已标注 outcome（simulation 逻辑变更后的数据一致性维护）。
+
+    版本口径（2026-10-27 用户定）：已结算（success/failed/missed）记录默认按它自己的 rule_version 重算，
+    结果仍记为该版本；该版本代码复现不了就跳过并告警（outcome_rule_version_unreproducible），不覆盖。
+    未最终结算（provisional）的按当前版本算——那是它的首次结算。
+    upgrade_rule_version=True 只给用户批准过的显式脚本用：按当前版本重算并升版本。
+    execution_state_overrides：{recommendation_id: 执行状态}，显式脚本按新确认规则重放时用，不写执行状态表。
 
     与 label_pending_outcomes 的区别：前者只处理 pending，本函数重算所有已标注的
     success/failed/missed outcome。用于 _resolve_exit / _simulate_outcome 逻辑变更后
@@ -885,11 +935,37 @@ def recompute_stale_outcomes(
     flipped: dict[str, int] = {}
     batch = max(1, int(batch_size))
     pending_in_batch = 0
+    skipped_unreproducible: list[str] = []
     for rec in recs:
         before_label = None
         existing = db.get(RecommendationOutcome, rec.recommendation_id)
         if existing is not None:
             before_label = str(existing.outcome_label)
+        target_rule_version = OUTCOME_RULE_VERSION
+        if (
+            existing is not None
+            and not upgrade_rule_version
+            and str(existing.outcome_label or "") in _SETTLED_LABELS
+        ):
+            target_rule_version = str(existing.rule_version or "")
+        ruleset = settlement_ruleset_for(
+            target_rule_version,
+            existing.labeled_at if existing is not None and target_rule_version != OUTCOME_RULE_VERSION else None,
+        )
+        if ruleset is not None and target_rule_version != OUTCOME_RULE_VERSION:
+            # 版本号写准：r20261019 下早于 §185 上线结算的记录记为 …+r20261019.pre_el（结果不变，只是标签更准）
+            target_rule_version = f"{OUTCOME_CALCULATION_VERSION}+{ruleset}"
+        if ruleset is None:
+            skipped_unreproducible.append(str(rec.recommendation_id))
+            from app.core.alerts import emit_alert
+
+            emit_alert(
+                RULE_VERSION_UNREPRODUCIBLE_ALERT, str(rec.recommendation_id),
+                f"{rec.code} {rec.trade_date} 已按 {target_rule_version or '未知版本'} 结算，代码复现不了该版本，"
+                "跳过重算、不覆盖（需人工处理）",
+                cooldown=20 * 3600,
+            )
+            continue
         # 重投影沿用该 outcome 自身的 horizon（不同入口用 5/20 日结算），避免被调用方 horizon 改写
         rec_horizon = int(existing.horizon_days) if existing is not None and existing.horizon_days else horizon_days
         bounded_bars = bounded_outcome_bars(
@@ -905,17 +981,27 @@ def recompute_stale_outcomes(
             bounded_dates,
             horizon_days=rec_horizon,
             ma_context_bars=bars_by_code.get(str(rec.code), []),
+            ruleset=ruleset,
         )
         if simulation is None:
             continue
+        state = (execution_state_overrides or {}).get(
+            str(rec.recommendation_id), execution_states.get(str(rec.recommendation_id))
+        )
+        rec_label_source = label_source
+        if existing is not None and existing.label_source == RESETTLE_LABEL_SOURCE:
+            # 用户批准显式重算过的记录：执行资格按新确认规则从日 K 推出，标记保持，避免被投影回旧确认结论
+            state = derived_execution_state(db, rec, state)
+            rec_label_source = RESETTLE_LABEL_SOURCE
         if _apply_outcome_simulation(
             db,
             rec,
             simulation,
             rec_horizon,
-            label_source=label_source,
-            execution_state=execution_states.get(str(rec.recommendation_id)),
+            label_source=rec_label_source,
+            execution_state=state,
             market_bars=bounded_bars,
+            rule_version=target_rule_version,
         ):
             refreshed = db.get(RecommendationOutcome, rec.recommendation_id)
             after_label = str(refreshed.outcome_label) if refreshed is not None else str(simulation["outcome_label"])
@@ -934,7 +1020,8 @@ def recompute_stale_outcomes(
     db.commit()
     if recomputed:
         invalidate_outcome_metrics_cache()
-    return {"recomputed": recomputed, "errors": errors, "flipped": flipped}
+    return {"recomputed": recomputed, "errors": errors, "flipped": flipped,
+            "skipped_unreproducible": len(skipped_unreproducible)}
 
 
 def audit_trading_cost_boundary_labels(db: Session) -> dict[str, Any]:
@@ -2684,6 +2771,15 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
     records: dict[str, dict[int, dict[str, Any]]] = {}
     import bisect
     from app.services.outcome_simulation import _resolve_entry as _resolve_entry_fn
+    # 多周期拆解也按每条记录自己的结算规则集算（旧版本记录不悄悄换成新规则口径）
+    row_ids = [str(getattr(row, "recommendation_id", "") or "") for row in labeled_rows]
+    rule_versions = {
+        str(rid): (rv, labeled) for rid, rv, labeled in db.execute(
+            select(RecommendationOutcome.recommendation_id, RecommendationOutcome.rule_version,
+                   RecommendationOutcome.labeled_at)
+            .where(RecommendationOutcome.recommendation_id.in_(row_ids))
+        ).all()
+    } if row_ids else {}
     max_horizon = max(BREAKDOWN_HORIZON_DAYS)
     for row in labeled_rows:
         rec_id = str(getattr(row, "recommendation_id", "") or "")
@@ -2703,7 +2799,12 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
         future_start = sig_idx + 1 if sig_present else sig_idx
         future_bars = row_bars[future_start:]
         signal_bar = row_bars[sig_idx] if sig_present else None
-        pre_entry = _resolve_entry_fn(row, row_snapshot, future_bars, max_horizon, signal_bar=signal_bar) if future_bars else None
+        rv, labeled = rule_versions.get(rec_id, (None, None))
+        row_ruleset = settlement_ruleset_for(rv, labeled) or SETTLEMENT_RULESET_CURRENT
+        pre_entry = (
+            _resolve_entry_fn(row, row_snapshot, future_bars, max_horizon, signal_bar=signal_bar)
+            if future_bars and row_ruleset == SETTLEMENT_RULESET_CURRENT else None
+        )
         for horizon_days in BREAKDOWN_HORIZON_DAYS:
             simulation = _simulate_outcome(
                 row,
@@ -2712,6 +2813,7 @@ def _compute_horizon_metric_records(db: Session, rows: list[Any]) -> dict[str, d
                 horizon_days=horizon_days,
                 feature_snapshot=row_snapshot,
                 pre_resolved_entry=pre_entry,
+                ruleset=row_ruleset,
             )
             if simulation is None:
                 continue
