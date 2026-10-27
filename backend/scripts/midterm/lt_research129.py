@@ -1,9 +1,9 @@
-"""[中线] §337「业绩预告预喜 + 公告后首个交易日收跌」F_any_dn_h20 — 预注册（docs/strategy-research.md §337，结果出来前写定，不调参）。
+"""[中线] §339「业绩预告预喜 + 公告后首个交易日收跌」F_any_dn_h20 — 预注册（docs/strategy-research.md §339，结果出来前写定，不调参）。
   原策略 F_any_h20（现役 mid 预告预喜，lt_research20 口径）：sd 日 liq & F_any 事件，按 min(p_change_min,300) 降序，次日开盘买、持 20 日；K=20、max_new=5。
   F_any_dn_h20：同上，只保留 sd 当日 pct_chg <0 的候选（同日其余合格候选按原排序补位）。
   F_any_up_h20：反向对照，只保留 sd 当日 pct_chg ≥0（= §334 F_any_nd_h20）。
   每笔写 complete = days ≥20（满期卖出）；数据末端被截断的笔 complete=False，评估时单列。
-用法：LT_START=.. LT_END=.. PYTHONPATH=../..:. python lt_research128.py "<phase>" out.json"""
+用法：LT_START=.. LT_END=.. PYTHONPATH=../..:. python lt_research129.py "<phase>" out.json"""
 import sys, json, os
 import polars as pl
 from lt_research import fixed
