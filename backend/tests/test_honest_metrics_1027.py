@@ -24,9 +24,9 @@ def _weekday_calendar(monkeypatch):
     monkeypatch.setattr(seal, "_local_next_open", _next_weekday)
 
 
-def test_entry_deadline_is_next_weekday_0925():
-    assert seal.entry_deadline("2026-10-23").isoformat() == "2026-10-26T09:25:00+08:00"  # 周五 -> 周一
-    assert seal.entry_deadline("2026-10-26").isoformat() == "2026-10-27T09:25:00+08:00"
+def test_entry_deadline_is_next_weekday_0915():
+    assert seal.entry_deadline("2026-10-23").isoformat() == "2026-10-26T09:15:00+08:00"  # 周五 -> 周一
+    assert seal.entry_deadline("2026-10-26").isoformat() == "2026-10-27T09:15:00+08:00"
 
 
 def test_is_late_and_legacy():
@@ -62,7 +62,7 @@ def test_live_batch_not_overwritten_after_entry(monkeypatch, tmp_path):
     evening = dt.datetime(2026, 10, 26, 18, 0, tzinfo=CN)
     assert _save(ms, monkeypatch, tmp_path, evening, [{"code": "000001"}]) == 1
     doc = json.loads((tmp_path / "2026-10-26_mid-x.json").read_text())
-    assert doc["generated_at"].startswith("2026-10-26T18:00") and doc["entry_deadline"] == "2026-10-27T09:25:00+08:00"
+    assert doc["generated_at"].startswith("2026-10-26T18:00") and doc["entry_deadline"] == "2026-10-27T09:15:00+08:00"
     # 同一晚重跑（开盘前）允许覆盖
     assert _save(ms, monkeypatch, tmp_path, evening.replace(hour=21), [{"code": "000002"}, {"code": "000003"}]) == 2
     # 开盘后重跑：实盘路径不覆盖，返回已生效只数

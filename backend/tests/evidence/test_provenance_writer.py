@@ -118,10 +118,17 @@ def test_same_day_formal_run_classifies_live_forward_and_persists_all_columns():
     assert run.reconstruction_batch_id is None
 
 
+def test_next_morning_before_open_is_live_after_open_is_unverified():
+    """2026-10-27：信号日收盘后到入场日 09:15 前生成（凌晨/安全网补跑）算实盘；开盘后才生成不算。"""
+    # 2026-08-05 01:00 UTC == 09:00 Beijing，入场日开盘前
+    early = _completed_formal_run(started_at=datetime(2026, 8, 5, 1, 0))
+    assert apply_formal_run_provenance(early, code_revision=_CODE_REVISION).evidence_class is EvidenceClass.LIVE_FORWARD
+
+
 def test_next_day_generation_classifies_unverified_with_full_identity():
     """**Validates: Requirements 2.2, 2.5**"""
-    # 2026-08-05 01:00 UTC == 2026-08-05 09:00 Beijing, one day after signal.
-    run = _completed_formal_run(started_at=datetime(2026, 8, 5, 1, 0))
+    # 2026-08-05 01:30 UTC == 2026-08-05 09:30 Beijing：入场日已开盘
+    run = _completed_formal_run(started_at=datetime(2026, 8, 5, 1, 30))
 
     identity = apply_formal_run_provenance(run, code_revision=_CODE_REVISION)
 
@@ -253,10 +260,10 @@ def test_run_name_and_scope_metadata_never_influence_classification(run_name: st
     assert identity is not None
     assert identity.evidence_class is EvidenceClass.LIVE_FORWARD
 
-    # A display name claiming "live" cannot rescue next-day generation.
+    # A display name claiming "live" cannot rescue generation after the entry session opened.
     late_run = _completed_formal_run(
         run_name=run_name,
-        started_at=datetime(2026, 8, 5, 1, 0),
+        started_at=datetime(2026, 8, 5, 1, 30),
     )
     late_identity = apply_formal_run_provenance(late_run, code_revision=_CODE_REVISION)
     assert late_identity is not None

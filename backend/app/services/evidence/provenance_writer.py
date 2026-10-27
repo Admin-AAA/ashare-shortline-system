@@ -147,8 +147,16 @@ def _build_identity(
         return None
     strategy_policy, execution_policy = policies
     try:
+        from app.services.midterm_live_seal import calendar_next_open
+
+        next_open = calendar_next_open(signal_date)
+    except Exception:  # noqa: BLE001 - 日历不可用：按下一个工作日（偏严）判定
+        logger.debug("calendar lookup failed for %s", signal_date, exc_info=True)
+        next_open = None
+    try:
         return build_recommendation_evidence_identity(
             run_source=RunSource.FORMAL,
+            next_open_date=next_open,
             actual_generated_at=generated_at,
             signal_date=signal_date,
             snapshot=EvidenceSnapshotIdentity(

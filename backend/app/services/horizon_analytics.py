@@ -39,8 +39,8 @@ def _live_runs() -> set[tuple[str, str]]:
 
 
 def origin_of(batch: dict[str, Any], live_runs: set[tuple[str, str]]) -> str:
-    """replay=历史回放重建；live=盘后流程真实出票，且在次日 09:25 前生成；
-    late=有运行记录但生成时间晚于次日 09:25（开盘后补跑），不算实盘；
+    """replay=历史回放重建；live=盘后流程真实出票，且在入场日 09:15 前生成；
+    late=有运行记录但生成时间晚于入场日 09:15（开盘后补跑），不算实盘；
     legacy=无来源标记、也没有运行记录的旧文件（不当实盘算）。
     没有生成时间封签的旧文件（2026-10-27 之前）沿用旧规则，不改判。"""
     from app.services.midterm_live_seal import is_late

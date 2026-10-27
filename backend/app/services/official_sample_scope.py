@@ -10,6 +10,8 @@ callers keep working without a second copy of the expression.
 """
 from __future__ import annotations
 
+from datetime import datetime
+
 from sqlalchemy import and_, false, or_
 
 from app.models.tables import Recommendation, RecommendationRun
@@ -30,14 +32,30 @@ def evaluation_scope_for_run(
     run_mode: str,
     trade_date_override: str | None,
     matrix_run: bool = False,
+    generated_at: datetime | None = None,
 ) -> str:
-    """Classify a newly requested run without inferring from its display name."""
+    """Classify a newly requested run without inferring from its display name.
+
+    带 trade_date_override 的 formal run（安全网补跑等）：在该信号日入场日开盘（09:15）前生成的，
+    与正常日更同口径算实盘（live_forward），之后生成的才是回放。判定统一走
+    midterm_live_seal.generated_before_entry_open（2026-10-27）。矩阵批跑始终是回放。
+    """
     normalized_mode = str(run_mode or "formal").lower()
     if normalized_mode == "experiment":
         return "experiment"
     if normalized_mode == "backtest":
         return "backtest"
-    if trade_date_override or matrix_run:
+    if matrix_run:
+        return "historical_replay"
+    if trade_date_override:
+        if normalized_mode == "formal" and generated_at is not None:
+            from app.services.midterm_live_seal import generated_before_entry_open
+
+            try:
+                if generated_before_entry_open(str(trade_date_override), generated_at):
+                    return LIVE_FORWARD_SCOPE
+            except Exception:  # noqa: BLE001 - 判定不了时保守记为回放
+                pass
         return "historical_replay"
     return LIVE_FORWARD_SCOPE
 

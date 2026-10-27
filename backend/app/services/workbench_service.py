@@ -1532,6 +1532,7 @@ def _persist_run_start(
         run_mode=request.run_mode.value,
         trade_date_override=request.trade_date_override,
         matrix_run=request.matrix_run,
+        generated_at=run.started_at or now,
     )
     run.trade_date = run.trade_date or _latest_trade_date(db)
     run.finished_at = None

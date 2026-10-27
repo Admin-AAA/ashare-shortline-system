@@ -162,6 +162,8 @@ def catchup_formal_run_ids(
 
     from datetime import date as _date, timedelta, timezone
 
+    from app.services.midterm_live_seal import generated_before_entry_open
+
     statement = select(RecommendationRun).where(
         RecommendationRun.run_mode == "formal",
         RecommendationRun.status == "completed",
@@ -185,7 +187,8 @@ def catchup_formal_run_ids(
             signal = _date.fromisoformat(str(run.trade_date))
         except ValueError:
             continue
-        if signal < local.date() <= signal + timedelta(days=4) and (local.hour, local.minute) < (9, 25):
+        # 与实盘判定同一函数（入场日 09:15 前）；signal < 生成日：信号日当天生成的已是 LIVE，不在这里重复
+        if local.date() > signal and generated_before_entry_open(str(run.trade_date), generated):
             matched.append(str(run.run_id))
     return tuple(matched)
 

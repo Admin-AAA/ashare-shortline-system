@@ -1,11 +1,13 @@
-"""[中长线] 实盘批次的生成时间封签。
+"""实盘判定（中长线批次封签 + 短线 run 共用）：生成时间 vs 入场日开盘。
 
-信号日 D 收盘后选股、D+1 开盘买。只有在 D+1 集合竞价撮合（09:25）之前生成的批次，才是"事前"的实盘推荐；
+信号日 D 收盘后选股、D+1 开盘买。只有在 D+1 集合竞价开始（09:15，见 evidence.live_window.ENTRY_CUTOFF）之前生成的批次，
+才是"事前"的实盘推荐；
 之后才落盘的批次（手动补跑过去日期、开盘后重跑）已经能看到开盘价甚至更多信息，不能算实盘。
 
-- stamp(signal_date)：写入 generated_at（生成时刻）、entry_deadline（D+1 09:25，+08:00）和 deadline_source。
+- stamp(signal_date)：写入 generated_at（生成时刻）、entry_deadline（D+1 09:15，+08:00）和 deadline_source。
+- generated_before_entry_open(signal_date, generated_at)：短线 run 的实盘判定入口（正常日更、安全网补跑共用），按交易日历。
 - is_late(batch)：generated_at 晚于 entry_deadline -> True；没有封签、或截止时间是按工作日兜底猜的 -> None（不改判）。
-- past_deadline(signal_date)：现在是否已过 D+1 09:25。只有截止时间来自交易日历时才可能为 True——
+- past_deadline(signal_date)：现在是否已过 D+1 09:15。只有截止时间来自交易日历时才可能为 True——
   按工作日兜底猜的截止时间可能落在节假日上，不能据此锁住批次。
 
 下一个交易日只查本地 trade_calendar 表（不打上游）。查不到时不缓存（日历补上后立即生效），按工作日规则顺延并告警。
@@ -20,8 +22,9 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
+from app.services.evidence.live_window import ENTRY_CUTOFF, entry_open_deadline, is_before_entry_open  # noqa: E402
+
 CN_TZ = ZoneInfo("Asia/Shanghai")
-ENTRY_CUTOFF = _dt.time(9, 25)  # D+1 集合竞价撮合时刻；晚于此刻生成的批次不算实盘
 SOURCE_CALENDAR = "calendar"
 SOURCE_FALLBACK = "weekday_fallback"
 
@@ -111,7 +114,20 @@ def next_open_date(signal_date: str) -> _dt.date:
 
 def deadline_info(signal_date: str) -> tuple[_dt.datetime, str]:
     d, source = next_open_info(signal_date)
-    return _dt.datetime.combine(d, ENTRY_CUTOFF, tzinfo=CN_TZ), source
+    return entry_open_deadline(d), source
+
+
+def calendar_next_open(signal_date: str) -> _dt.date | None:
+    """交易日历查得到时返回下一个开市日；查不到返回 None（调用方按下一个工作日偏严判定）。"""
+    d, source = next_open_info(signal_date)
+    return d if source == SOURCE_CALENDAR else None
+
+
+def generated_before_entry_open(signal_date: str, generated_at: _dt.datetime) -> bool:
+    """实盘判定的唯一入口（短线正常日更 / 凌晨补跑 / 安全网补跑、中长线批次共用）：
+    生成时刻在信号日当天到入场日 09:15 之间。naive 时间按 UTC。日历查不到时按下一个工作日（偏严）。"""
+    return is_before_entry_open(_dt.date.fromisoformat(str(signal_date)[:10]), generated_at,
+                                calendar_next_open(str(signal_date)[:10]))
 
 
 def entry_deadline(signal_date: str) -> _dt.datetime:
@@ -129,7 +145,7 @@ def stamp(signal_date: str, now: _dt.datetime | None = None) -> dict[str, str]:
 
 
 def past_deadline(signal_date: str, now: _dt.datetime | None = None) -> bool:
-    """已过 D+1 09:25 且截止时间来自交易日历才为 True；兜底猜的截止时间不锁批次。"""
+    """已过 D+1 09:15 且截止时间来自交易日历才为 True；兜底猜的截止时间不锁批次。"""
     ddl, source = deadline_info(signal_date)
     if source != SOURCE_CALENDAR:
         return False
@@ -147,7 +163,9 @@ def _parse(ts: Any) -> _dt.datetime | None:
 
 
 def is_late(batch: dict[str, Any]) -> bool | None:
-    """True=开盘后才生成（不算实盘）；False=开盘前生成；None=旧文件没有封签，或截止时间是兜底猜的（不改判）。"""
+    """True=开盘后才生成（不算实盘）；False=开盘前生成；None=旧文件没有封签，或截止时间是兜底猜的（不改判）。
+
+    比较用封签时写下的 entry_deadline（旧文件按 09:25 封签的保持原判定，不回头改历史）。"""
     gen = _parse(batch.get("generated_at"))
     if gen is None or batch.get("deadline_source") == SOURCE_FALLBACK:
         return None
