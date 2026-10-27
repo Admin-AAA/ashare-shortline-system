@@ -29,7 +29,11 @@ def ann_events():
 
 def prep():
     df = build().sort("code", "trade_date")
-    ix = pl.read_parquet(L.D / "index_daily.parquet").filter(c("ts_code") == "000300.SH").sort("trade_date")
+    # 数据修复（2026-10-27 21:01，跑数后发现、规则不变）：本地 index_daily 的 000300 只从 2023-05-29 起 → 2019–2023-05 无信号。
+    # 经 tushare_client.fetch_index_daily 一次性取 2018-01~2023-06 的沪深300 收盘存 research_hs300_2018_2023.parquet（重叠 14 天误差 <0.005 点），拼接使用。
+    ix0 = pl.read_parquet(L.D / "index_daily.parquet").filter(c("ts_code") == "000300.SH").select("trade_date", "close")
+    ixh = pl.read_parquet(L.D / "research_hs300_2018_2023.parquet").select("trade_date", "close")
+    ix = pl.concat([ixh.filter(c("trade_date") < ix0["trade_date"].min()), ix0]).sort("trade_date")
     ix = ix.with_columns((100 * (c("close") / c("close").shift(1) - 1)).alias("ix_pct")).select("trade_date", "ix_pct")
     df = df.join(ix, on="trade_date", how="left").sort("code", "trade_date")
     df = df.with_columns((c("pct_chg") - c("ix_pct")).alias("ex1"))
