@@ -940,7 +940,7 @@ def _save_picks(sid: str, as_of: str, picks: list[dict[str, Any]], apply_daily_c
     """落盘一个策略当日新选股文件，返回实际入选只数。
 
     apply_daily_cap=True（仅实盘出票路径）：picks 已是该策略自身排序（各 *_candidates 的排序键）并剔除已持有，
-    这里只切前 N 个分数（同分顺延；settings.max_daily_picks_per_strategy，默认 5，0=不限），被截断的数量与代码写入文件 daily_cap 审计字段。
+    这里只切前 N 只，与第 N 名同分的顺延（settings.max_daily_picks_per_strategy，默认 5，0=不限），被截断的数量与代码写入文件 daily_cap 审计字段。
     不是持仓上限：20 仓位（回测口径）、持有 20/60 日与此无关。"""
     doc: dict[str, Any] = {"strategy_id": sid, "signal_date": as_of}
     if apply_daily_cap:

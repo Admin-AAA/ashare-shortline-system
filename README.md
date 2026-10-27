@@ -23,8 +23,8 @@
 
 ### 每策略每日推荐上限
 
-- 每个策略每天最多取 **前 5 个分数**（`ASHARE_MAX_DAILY_PICKS_PER_STRATEGY`，默认 5，0 = 不限）。
-- 同分顺延：10 只同为满分就 10 只都出；分数各不相同就是前 5 只。
+- 每个策略每天最多取 **前 5 只**（`ASHARE_MAX_DAILY_PICKS_PER_STRATEGY`，默认 5，0 = 不限）。
+- 同分顺延：和第 5 名同分的一起出。例：100,100,90,90,90,80 → 5 只；10 只全满分 → 10 只。
 - 只作用于新生成的实盘推荐，回放、回测、历史数据不受影响。
 - 短线还有一道更早的出票上限：每个策略每次 run 最多 3 张（`DEFAULT_OUTPUT_COUNT`，高潮日减半）。
 - 详见 `docs/ops/daily-pick-cap-20261026.md`，实现在 `backend/app/services/daily_pick_cap.py`。
@@ -201,7 +201,7 @@ cd backend && .venv/bin/python -m pytest -q tests/<某个测试文件>.py
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `ASHARE_DATABASE_URL` | 本机 MySQL `ashare_workbench` | 数据库 |
-| `ASHARE_MAX_DAILY_PICKS_PER_STRATEGY` | `5` | 每策略每日前几个分数，0 = 不限 |
+| `ASHARE_MAX_DAILY_PICKS_PER_STRATEGY` | `5` | 每策略每日前几只（第 N 名同分顺延），0 = 不限 |
 | `ASHARE_TUSHARE_TEAJOIN_TOKEN` | 空 | teajoin Key |
 | `ASHARE_TUSHARE_TEAJOIN_RATE_LIMIT_PER_MINUTE` | `420` | teajoin 限速 |
 | `ASHARE_TUSHARE_TEAJOIN_LEAD` | `true` | teajoin 做主源；关掉则只做末位兜底 |
