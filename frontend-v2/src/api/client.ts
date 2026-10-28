@@ -254,6 +254,14 @@ export type HorizonRunItem = { strategy_id: string; strategy_name: string; statu
 export type HorizonRunsResponse = { horizon: string; days: { date: string; items: HorizonRunItem[] }[] };
 export type HorizonPickDetail = { horizon: string; strategy_id: string; strategy_name: string; strategy_summary?: string; hold_days?: number; signal_date: string; code: string; name: string;
   batch_size?: number; batch_status?: string; pick: HorizonPick; bars: HorizonBar[]; other_signals?: { signal_date: string; strategy_id: string; strategy_name: string; horizon?: string }[] };
+export type TextEventLabelItem = {
+  source: string; event_id: string; publish_date: string; available_at?: string | null;
+  label: string; category: string; score: number; confidence?: number | null; rationale?: string | null;
+  model?: string | null; label_origin?: string | null; keyword_label?: string | null;
+};
+export type TextEventLabelResponse = {
+  disclaimer: string; participates_in_selection: boolean; code: string; items: TextEventLabelItem[];
+};
 export type HorizonRunSkip = { skipped: string };
 export type HorizonRunResponse = { horizon: string; as_of: string; force: boolean; result: Record<string, number | "no_data" | HorizonRunSkip>; files?: string[] };
 
@@ -425,6 +433,8 @@ export const api = {
     request<HorizonPicksResponse>(`/api/horizons/${horizon}/picks?page=${page}&page_size=${pageSize}${strategyId ? `&strategy_id=${encodeURIComponent(strategyId)}` : ""}`),
   horizonPickDetail: (horizon: "mid" | "long", strategyId: string, signalDate: string, code: string) =>
     request<HorizonPickDetail>(`/api/horizons/${horizon}/picks/${encodeURIComponent(strategyId)}/${signalDate}/${code}`),
+  textEventLabels: (code: string, limit = 5) =>
+    request<TextEventLabelResponse>(`/api/text-events/labels?code=${encodeURIComponent(code)}&limit=${limit}`),
   horizonRun: (horizon: "mid" | "long", payload: { as_of: string; strategy_ids?: string[]; force?: boolean }) =>
     requestWithTimeout<HorizonRunResponse>(`/api/horizons/${horizon}/run`, 900_000, json("POST", payload)),
   horizonTrades: (horizon: "mid" | "long") =>

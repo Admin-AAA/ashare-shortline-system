@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pymysql
 import requests
+from app.services.text_events.keywords import legacy_is_risk
 from app.services.tushare_client import get_pro, clear_pro_cache
 
 DB = {
@@ -202,10 +203,7 @@ for i, code in enumerate(codes):
         ann_rows = ann_data.get("data", {}).get("list") or []
         for row in ann_rows:
             title = str(row.get("title_ch", ""))
-            is_risk = any(
-                kw in title
-                for kw in ["风险", "警示", "退市", "ST", "处罚", "监管", "立案", "亏损", "减持", "问询", "通报"]
-            )
+            is_risk = legacy_is_risk(title)
             cur.execute(
                 """INSERT IGNORE INTO news_announcement
                 (source, article_id, code, announce_date, title, summary, category, sentiment, is_risk_warning, created_at)

@@ -15,6 +15,7 @@ import httpx
 import tenacity
 
 from app.services.market_auxiliary import _eastmoney_article_id
+from app.services.text_events.keywords import legacy_is_risk
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +31,6 @@ HEADERS = {
     ),
     "Referer": "https://quote.eastmoney.com/",
 }
-RISK_KEYWORDS = ("风险", "警示", "退市", "ST", "处罚", "监管", "立案", "亏损", "减持", "问询", "通报")
-
 # 全进程共享：日更补数与一次性回填共用同一限速，避免并发打爆。
 _MIN_INTERVAL_SECONDS = 0.6
 _last_request_at = 0.0
@@ -77,7 +76,7 @@ def parse_announcement_row(row: dict[str, Any], code: str) -> dict[str, Any] | N
     announce_date = str(row.get("notice_date") or "")[:10]
     if len(announce_date) < 10:
         return None
-    is_risk = any(kw in title for kw in RISK_KEYWORDS)
+    is_risk = legacy_is_risk(title)
     return {
         "source": "eastmoney",
         "article_id": article_id[:80],

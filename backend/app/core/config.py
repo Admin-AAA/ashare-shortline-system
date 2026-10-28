@@ -183,6 +183,15 @@ class Settings(BaseSettings):
     enable_capital_flow_fetch: bool = True
     enable_dragon_tiger_fetch: bool = True
     enable_news_fetch: bool = True
+    # 文本事件 LLM 打标。默认关闭，不进入选股；打开后由脚本或手工触发。
+    text_event_llm_enabled: bool = False
+    text_event_llm_qpm: int = 20
+    text_event_llm_concurrency: int = 2
+    text_event_llm_max_retries: int = 2
+    text_event_llm_timeout_seconds: float = 60.0
+    # 0 表示不估算金额，抽样报告只给 token。
+    text_event_llm_price_per_million_prompt: float = 0.0
+    text_event_llm_price_per_million_completion: float = 0.0
     log_level: str = "INFO"
     log_dir_override: str = Field(default="", alias="log_dir")
     log_max_bytes: int = 10 * 1024 * 1024

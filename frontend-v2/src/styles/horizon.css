@@ -35,6 +35,8 @@
 .hz-bar__n { color: var(--muted); }
 .hz-link { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; color: var(--accent); font-size: 13px; margin-top: var(--space-2); }
 .hz-note { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.6; background: var(--surface-soft); border-radius: 8px; padding: 10px 12px; }
+.hz-events { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.hz-event { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 .hz-sechead { display: flex; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); flex-wrap: wrap; }
 .hz-select { margin-left: auto; background: var(--surface-soft); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; font-size: 13px; }
 .hz-rej { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: var(--space-2); }

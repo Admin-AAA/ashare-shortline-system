@@ -18,9 +18,8 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert
 
 from app.db.session import SessionLocal
 from app.models.tables import NewsAnnouncement
+from app.services.text_events.keywords import legacy_is_risk
 from app.services.xiaoshi_client import XiaoshiError, get_xiaoshi_client
-
-RISK_KW = ("风险", "警示", "退市", "ST", "处罚", "监管", "立案", "亏损", "减持", "问询", "通报")
 
 
 def rows_from_frame(df: pd.DataFrame) -> list[dict]:
@@ -32,7 +31,7 @@ def rows_from_frame(df: pd.DataFrame) -> list[dict]:
         day = str(p.get("event_time") or p.get("available_at") or "")[:10]
         if not title or not eid or len(day) < 10:
             continue
-        risk = any(k in title for k in RISK_KW) or p.get("direction") == "利空"
+        risk = legacy_is_risk(title) or p.get("direction") == "利空"
         for st in p.get("stocks") or []:
             code = str(st.get("code") if isinstance(st, dict) else st)[:6]
             if len(code) != 6 or not code.isdigit():

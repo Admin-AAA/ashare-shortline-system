@@ -65,6 +65,8 @@ from app.models.market import (  # noqa: F401,E402
     Repurchase,
     MarketSnapshot,
     StockMatrixHistory,
+    TextEvent,
+    TextEventLabel,
 )
 from app.models.datasource import (  # noqa: F401,E402
     DataSourceHealth,
