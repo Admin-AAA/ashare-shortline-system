@@ -1,8 +1,9 @@
 """抽样跑文本标签，并打印分布、延迟、失败率、token 和与旧关键词的分歧。
 
-默认不调用模型。要打 LLM 标签：
+默认不调用模型。在 backend 目录下打 LLM 标签：
 
-    ASHARE_TEXT_EVENT_LLM_ENABLED=true PYTHONPATH=. ../.venv/bin/python scripts/text_events/label_sample.py --limit 500
+    cd backend
+    ASHARE_TEXT_EVENT_LLM_ENABLED=true .venv/bin/python scripts/text_events/label_sample.py --limit 500
 
 未打开开关时，程序性公告会写成规则中性，其余记为 skipped，方便先看规则覆盖。
 同一 input_hash 再次运行不会重复打模型。

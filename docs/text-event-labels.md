@@ -156,23 +156,23 @@ text_event_label            标签、分数、依据、旧关键词对照、inpu
 
 ```bash
 cd backend
-alembic upgrade head
+.venv/bin/alembic upgrade head
 
 # 拉一个交易日的原文。不调用模型。
-PYTHONPATH=. ../.venv/bin/python scripts/text_events/ingest_text_events.py --date 2026-10-23
+.venv/bin/python scripts/text_events/ingest_text_events.py --date 2026-10-23
 
 # 把已有公告标题/摘要镜像进来（可选）
-PYTHONPATH=. ../.venv/bin/python scripts/text_events/ingest_text_events.py --mirror-announcements --start 2026-10-01 --end 2026-10-23
+.venv/bin/python scripts/text_events/ingest_text_events.py --mirror-announcements --start 2026-10-01 --end 2026-10-23
 
 # 先看规则预筛，确认不会打模型（开关默认关）
-PYTHONPATH=. ../.venv/bin/python scripts/text_events/label_sample.py --limit 500
+.venv/bin/python scripts/text_events/label_sample.py --limit 500
 
 # 真正打 500 条
 ASHARE_TEXT_EVENT_LLM_ENABLED=true \
-  PYTHONPATH=. ../.venv/bin/python scripts/text_events/label_sample.py --limit 500 --out /tmp/text-event-sample.json
+  .venv/bin/python scripts/text_events/label_sample.py --limit 500 --out /tmp/text-event-sample.json
 
 # 研究用超额收益。样本的 entry_trade_date 要落在 --start/--end 里，日历要覆盖到之后约 25 个交易日
-PYTHONPATH=. ../.venv/bin/python scripts/text_events/excess_return_study.py \
+.venv/bin/python scripts/text_events/excess_return_study.py \
   --start 2024-01-01 --end 2026-10-23 --out /tmp/text-event-excess.json
 ```
 

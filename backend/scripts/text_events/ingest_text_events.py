@@ -3,10 +3,10 @@
 用法（在仓库根或 backend 下，密钥只从现有环境变量读取）：
 
     cd backend
-    PYTHONPATH=. ../.venv/bin/python scripts/text_events/ingest_text_events.py --date 2026-10-23
-    PYTHONPATH=. ../.venv/bin/python scripts/text_events/ingest_text_events.py --start 2026-10-01 --end 2026-10-23 --sources report_rc,stk_surv,forecast
-    PYTHONPATH=. ../.venv/bin/python scripts/text_events/ingest_text_events.py --sources forecast_vip,namechange --ts-code 000001.SZ
-    PYTHONPATH=. ../.venv/bin/python scripts/text_events/ingest_text_events.py --mirror-announcements --start 2026-10-01 --end 2026-10-23
+    .venv/bin/python scripts/text_events/ingest_text_events.py --date 2026-10-23
+    .venv/bin/python scripts/text_events/ingest_text_events.py --start 2026-10-01 --end 2026-10-23 --sources report_rc,stk_surv,forecast
+    .venv/bin/python scripts/text_events/ingest_text_events.py --sources forecast_vip,namechange --ts-code 000001.SZ
+    .venv/bin/python scripts/text_events/ingest_text_events.py --mirror-announcements --start 2026-10-01 --end 2026-10-23
 
 超时、容量忙由网关降级到该接口的下一家上游。单日失败会记在 JSON 里，重跑同一天是幂等的。
 """

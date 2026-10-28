@@ -7,7 +7,7 @@
 云端没有库时不要跑这个脚本。在本机：
 
     cd backend
-    PYTHONPATH=. ../.venv/bin/python scripts/text_events/excess_return_study.py --start 2024-01-01 --end 2026-10-23 --out /tmp/text-event-excess.json
+    .venv/bin/python scripts/text_events/excess_return_study.py --start 2024-01-01 --end 2026-10-23 --out /tmp/text-event-excess.json
 
 没有市值的日子不会冒充五分位结果，那些事件会计入 skipped。
 """

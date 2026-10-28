@@ -6,7 +6,7 @@ import pytest
 from app.db.alembic_runtime import get_alembic_health, upgrade_database
 
 
-HEAD_REVISION = "0028_row_updated_at"
+HEAD_REVISION = "0029_text_event_labels"
 
 
 def test_upgrade_database_creates_schema_and_is_idempotent() -> None:
