@@ -96,6 +96,8 @@ def check_entry_bar(
     session_closed: bool,
     is_st: bool = False,
     trade_date: Any = None,
+    strategy_id: Any = None,
+    signal_bar: Any = None,
 ) -> EntryDayCheck:
     """按回测买入规则检查入场日这一根 K（盘中为开盘至今的实时 K）。
 
@@ -126,6 +128,14 @@ def check_entry_bar(
         return EntryDayCheck(True, RULE_ONE_WORD, "开盘封涨停尚未开板，回测口径一字板买不进；开板前不确认", inconclusive=True, observed=observed)
     if gap_pct is not None and MAX_ENTRY_GAP_PCT > 0 and gap_pct > MAX_ENTRY_GAP_PCT:
         return EntryDayCheck(True, RULE_GAP_UP, f"开盘价高于推荐价 {gap_pct:.2f}%（> {MAX_ENTRY_GAP_PCT:.0f}%），回测口径当日不买", observed=observed)
+    if strategy_id is not None and signal_bar is not None and open_price > 0:
+        from app.services.entry_body_veto import RULE_BODY_VETO, body_veto_blocked, body_veto_enabled_for
+
+        if body_veto_enabled_for(str(strategy_id)):
+            blocked, mid = body_veto_blocked(signal_bar, open_price)
+            if blocked:
+                observed["signal_body_mid"] = round(mid, 4)
+                return EntryDayCheck(True, RULE_BODY_VETO, f"开盘价 {open_price:.2f} 低于信号日实体中点 {mid:.2f}，§354 口径当日不买", observed=observed)
     gap_text = f"{gap_pct:+.2f}%" if gap_pct is not None else "—"
     return EntryDayCheck(False, RULE_PASS, f"入场日检查通过：非一字涨停、可成交、开盘相对推荐价 {gap_text}（≤{MAX_ENTRY_GAP_PCT:.0f}%）", observed=observed)
 

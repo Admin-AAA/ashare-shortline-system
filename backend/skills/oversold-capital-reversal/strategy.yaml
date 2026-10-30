@@ -64,6 +64,11 @@ exit_overrides:
 entry_low_exit:
   mode: close
 
+# 开盘低于信号日实体中点不买（§354 OS_INV_BODY_K，2026-10-31 预注册通过，边际）：T+1 开盘 < (信号日开+收)/2 → 不买。
+# R12 39笔+3.44%→37笔+3.45% PF2.90→3.11；N3 51笔+3.36%→47笔+3.56% PF3.33→3.64，MDD −9.3 不变（app/services/entry_body_veto.py）。
+entry_body_veto:
+  mode: signal_body_mid
+
 phases:
   # 涨停反包不做（Sprint3 §72，2026-10-17）：信号日已涨停的反包次日溢价被吃掉。
   # 面板（前3/线72）：12m +3.03→+3.18 PF2.58→2.88 MDD−12.9→−11.3；EXT +0.44→+0.79；W0/W00 不变。
