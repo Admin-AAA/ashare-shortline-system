@@ -16,7 +16,7 @@
 - 中长线（`midterm_service._save_picks`）：`generate_picks(..., apply_daily_cap=True)`、`generate_block_trade_picks(..., apply_daily_cap=True)`
   仅由 17:35 定时任务、晚间大宗任务、手动补跑 API 传 True；默认 False，`scripts/rebuild_replay_picks.py`（历史重建）与测试不受影响。
   先剔除已持有再取前 N；排序即各策略 candidates 函数返回顺序（小市值/低价小市值=市值升序；小盘高股息=股息率降序；
-  小盘低市销率=PS 升序；小盘反转=20 日跌幅最大优先；回购预案/大宗=金额占比降序；业绩加速/预告/fina 事件=score 降序；
+  小盘低市销率=PS 升序；小盘反转=20 日跌幅最大优先；回购预案/大宗=金额占比降序；业绩加速=EA_combo score 降序（当日候选内信号日涨跌幅百分位+小市值百分位，平手按代码）；预告/fina 事件=score 降序；
   股权激励=公告前 20 日涨幅升序；低换手低波/红利低波=综合排名分升序）。
   审计：picks 文件 `daily_cap` 字段（cap / 候选数 / 截断数 / 截断代码）。
 - 与持仓名额无关：中长线 20 仓位（回测口径 k_slots=20）、持有 20/60 日不受影响；这里限制的只是「当天新推荐数」。

@@ -93,7 +93,7 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-earnings-accel": {
         "name": "财报业绩加速（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（年报/季报，同一报告期只取第一次公告）：扣非净利同比≥50%、营收同比≥20%、扣非净利为正、且扣非同比高于上一期报告（加速）。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按扣非同比（封顶300%）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（每个策略每日最多 5 只，系统配置可调），当天信号超出时按上述排序取前几只买入。",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（年报/季报，同一报告期只取第一次公告）：扣非净利同比≥50%、营收同比≥20%、扣非净利为正、且扣非同比高于上一期报告（加速）。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万。排序分（§RV-C EA_combo）= 当日这批候选里「信号日涨跌幅」平均秩百分位 + 「总市值从小到大」平均秩百分位，两者等权、高者优先，平手按代码；次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（每个策略每日最多 5 只，系统配置可调），当天信号超出时按上述排序取前几只买入。",
         "kind": "earnings_accel",
         "hold_days": 20,
         "schedule": "daily",
@@ -679,11 +679,11 @@ def _fetch_fina_period(period: str):
 def _liq_ok(db, as_of: str, dates: list[str], codes: list[str]) -> dict[str, dict[str, Any]]:
     """lt_research liq 口径：非ST、上市>250交易日、20日均成交额>5000万、当日有成交。"""
     q = text("""
-        SELECT b.code, b.total_mv, a.amt20 FROM daily_basic b
+        SELECT b.code, b.total_mv, a.amt20, t.pct_chg FROM daily_basic b
         JOIN (SELECT code, AVG(amount) amt20 FROM daily_kbars
               WHERE trade_date>:d20x AND trade_date<=:d AND code IN :codes GROUP BY code) a ON a.code=b.code
         JOIN (SELECT code FROM daily_kbars WHERE trade_date=:d250 AND code IN :codes) old ON old.code=b.code
-        JOIN (SELECT code FROM daily_kbars WHERE trade_date=:d AND close>0 AND code IN :codes) t ON t.code=b.code
+        JOIN (SELECT code, pct_chg FROM daily_kbars WHERE trade_date=:d AND close>0 AND code IN :codes) t ON t.code=b.code
         WHERE b.trade_date=(SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d) AND b.code IN :codes
     """).bindparams(bindparam("codes", expanding=True))
     rows = db.execute(q, {"d20x": dates[20], "d": as_of, "d250": dates[250], "codes": codes}).mappings().all()
@@ -693,8 +693,54 @@ def _liq_ok(db, as_of: str, dates: list[str], codes: list[str]) -> dict[str, dic
     return {r["code"]: dict(r) for r in rows if r["code"] not in st and r["amt20"] and float(r["amt20"]) > 5e7}
 
 
+def _finite(x: Any) -> float | None:
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    if v != v or v in (float("inf"), float("-inf")):
+        return None
+    return v
+
+
+def ea_combo_rank(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """§RV-C EA_combo：在传入的当日候选池内写排序分，并按分数降序、代码升序返回。
+
+    与 backend/scripts/midterm/rv1030_cand.py 的 sc_cbG 同口径（polars 默认平均秩）：
+    百分位 = rank(method=average) / n，n 为池内只数（含该项为空的票）；秩从 1 起，最小值秩为 1。
+    score = 信号日涨跌幅（ann_pct_chg，越大越好）百分位 + 总市值（total_mv，越小越好）百分位。
+    某项为空时该项百分位记 0（研究脚本 fill_null(0)）。平手不把代码微扰写进 score，
+    由二级键 code 升序打破，与研究里 score − code×1e-10 的先后一致。
+    """
+    import pandas as pd
+
+    n = len(rows)
+    if n == 0:
+        return []
+    pct = pd.Series([_finite(r.get("ann_pct_chg")) for r in rows], dtype="float64")
+    mv = pd.Series([_finite(r.get("total_mv")) for r in rows], dtype="float64")
+    ann_rank = pct.rank(method="average") / n
+    mv_rank = (-mv).rank(method="average") / n
+    out: list[dict[str, Any]] = []
+    for i, r in enumerate(rows):
+        p1 = 0.0 if pd.isna(ann_rank.iloc[i]) else round(float(ann_rank.iloc[i]), 6)
+        p2 = 0.0 if pd.isna(mv_rank.iloc[i]) else round(float(mv_rank.iloc[i]), 6)
+        item = dict(r)
+        item["ann_pct"] = p1
+        item["mv_pct"] = p2
+        item["score"] = round(p1 + p2, 6)
+        out.append(item)
+    out.sort(key=lambda x: (-x["score"], str(x.get("code") or "")))
+    return out
+
+
 def earnings_accel_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """as_of 收盘后可见的首次定期报告公告（公告日在 (上一交易日, as_of]），条件同 lt_research14 G。数据失败返回 None。"""
+    """as_of 收盘后可见的首次定期报告公告（公告日在 (上一交易日, as_of]），入选条件同 lt_research14 G。
+
+    排序为 §RV-C EA_combo（见 ea_combo_rank）：百分位在通过事件条件且通过流动性过滤的当日候选池内计算。
+    信号日涨跌幅 = as_of 当日 daily_kbars.pct_chg（研究里 sd 的 pct_chg；周末公告落在下一个交易日）。
+    数据失败返回 None。
+    """
     import pandas as pd
     dates = [r[0] for r in db.execute(text(
         "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
@@ -731,14 +777,15 @@ def earnings_accel_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
                 continue
             if dtp >= 50 and orv >= 20 and pdd > 0 and dtp > prev_dtp:
                 out[code] = {"code": code, "ann_date": str(r["ann_date"]), "end_date": cur, "dt_netprofit_yoy": float(dtp),
-                             "or_yoy": float(orv), "prev_dt_netprofit_yoy": float(prev_dtp), "score": min(float(dtp), 300.0)}
+                             "or_yoy": float(orv), "prev_dt_netprofit_yoy": float(prev_dtp)}
     if not out:
         return []
     ok = _liq_ok(db, as_of, dates, sorted(out))
     names = dict(db.execute(text("SELECT code,name FROM stocks WHERE code IN :codes").bindparams(
         bindparam("codes", expanding=True)), {"codes": sorted(ok) or ["-"]}).all())
-    res = [{**out[c], "name": names.get(c, ""), "total_mv": float(ok[c]["total_mv"] or 0), "amt20": float(ok[c]["amt20"])} for c in ok]
-    return sorted(res, key=lambda x: (-x["score"], x["code"]))
+    res = [{**out[c], "name": names.get(c, ""), "total_mv": _finite(ok[c].get("total_mv")),
+            "ann_pct_chg": _finite(ok[c].get("pct_chg")), "amt20": float(ok[c]["amt20"])} for c in ok]
+    return ea_combo_rank(res)
 
 
 def _is_month_end(db, as_of: str) -> bool:
@@ -1369,9 +1416,10 @@ def _realize_rows(rows: list[Any], hold: int) -> dict[str, Any]:
 
 
 # 统一 rule_score：各策略自己的排序指标（原单位，见 label / better），selection_reason 为中文入选依据。
-# 业绩加速 / 预告预喜例外：列表展示真实同比（或预告增幅下限）；排序分仍是落盘的 score=min(原值, 300)，
-# 批内名次按该分再按代码，这里不重排、也不改选股。
+# 业绩预告：列表展示真实增幅下限；排序分仍是落盘的 score=min(原值, 300)，批内名次按该分再按代码，这里不重排。
+# 业绩加速：新批次 score 是 §RV-C EA_combo（ann_pct + mv_pct）。没有这两项的旧批次仍按封顶同比展示，避免把 300 分说成百分位。
 _RANK_CAP_NOTE = "排序时≥300%同等优先，平手按代码"
+_EA_COMBO_NOTE = "当日候选池内等权相加，平手按代码"
 
 
 def _f(x: Any, nd: int = 2) -> str:
@@ -1418,10 +1466,18 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
             reason = f"{p.get('ann_date', '')} 回购预案，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，占总市值 {_f(score)}%"
         elif kind == "earnings_accel":
-            score, label, better = _shown_pct(p.get("dt_netprofit_yoy"), p["score"]), "扣非净利同比(%)", "higher"
-            note = _RANK_CAP_NOTE
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%")
+            if "ann_pct" in p and "mv_pct" in p:
+                score, label, better = round(float(p["score"]), 4), "公告日涨幅百分位+小市值百分位", "higher"
+                note = _EA_COMBO_NOTE
+                mv_yi = _finite(p.get("total_mv"))
+                mv_yi = None if mv_yi is None else mv_yi / 1e4
+                reason += (f"；信号日涨跌幅 {_f(p.get('ann_pct_chg'), 2)}%，总市值 {_f(mv_yi)} 亿"
+                           f"（涨幅百分位 {_f(float(p['ann_pct']) * 100, 1)}%，小市值百分位 {_f(float(p['mv_pct']) * 100, 1)}%）")
+            else:
+                score, label, better = _shown_pct(p.get("dt_netprofit_yoy"), p["score"]), "扣非净利同比(%)", "higher"
+                note = _RANK_CAP_NOTE
         elif kind == "forecast_beat":
             score, label, better = _shown_pct(p.get("p_change_min"), p["score"]), "预告净利增幅下限(%)", "higher"
             note = _RANK_CAP_NOTE
