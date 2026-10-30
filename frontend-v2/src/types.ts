@@ -2730,6 +2730,30 @@ export type MetricsOverview = {
   accuracy_policy: AccuracyPolicyAudit;
   historical_reconstruction_cohort?: HistoricalReconstructionCohort | null;
   date_range?: DateRangeMeta;
+  /** 实盘时代（只在实盘口径返回）：single=现行单策略，默认只看这一段 */
+  era?: "single" | "combo" | "all";
+  era_label?: string;
+  /** 本时代成交分两栏：盘中确认买入 / 按开盘价模拟成交（取自 /api/metrics/live-breakdown） */
+  fill_split?: LiveFillSplit | null;
+  /** 已删除的旧组合方案，单列一行只作历史参考 */
+  combo_reference?: (LiveFillSplit & { label: string }) | null;
+  /** 非旧组合的手动多策略 / 无策略 run：算在现行总览里，两栏单列（生产库目前没有） */
+  other_reference?: (LiveFillSplit & { label: string }) | null;
+};
+
+export type LiveFillStats = {
+  n: number;
+  avg_net_return: number | null;
+  median_net_return: number | null;
+  win_rate: number | null;
+};
+
+export type LiveFillSplit = {
+  settled_count: number;
+  confirmed: LiveFillStats;
+  open_simulated: LiveFillStats;
+  confirmed_not_filled_count: number;
+  not_filled_count: number;
 };
 
 // ── 单股票矩阵分析 ──

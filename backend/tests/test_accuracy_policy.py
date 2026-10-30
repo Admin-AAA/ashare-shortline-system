@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -11,6 +12,7 @@ from app.services.outcome_service import (
     _metrics_by_strategy,
     _overview_metrics,
     _precision_at_k,
+    _scoped_recommendation_rows,
     is_accurate_recommendation,
 )
 
@@ -138,15 +140,24 @@ def test_overview_and_d_net_use_identical_official_winrate_scope(monkeypatch):
     assert overview["hit_rate"] == 0.333
     assert d_net["net"]["net_win_rate"] == 33.3
     assert overview["executed_trade_count"] == d_net["sample_count"] == 3
-    assert all(
-        call == {
-            "run_mode": "formal",
-            "live_only": True,
-            "sample_scope": None,
-            "historical_run_ids": None,
-        }
-        for call in calls
-    )
+    # 实盘时代过滤的默认值在 _scoped_recommendation_rows。overview 会把 live_era 显式传下去，
+    # d-net 沿用这个默认。省略和显式 "single" 必须是同一官方口径，两边不能各算各的。
+    live_era_default = inspect.signature(_scoped_recommendation_rows).parameters["live_era"].default
+    assert live_era_default == "single"
+
+    def resolved_scope(call: dict) -> dict:
+        scope = dict(call)
+        scope.setdefault("live_era", live_era_default)
+        return scope
+
+    official_scope = {
+        "run_mode": "formal",
+        "live_only": True,
+        "sample_scope": None,
+        "historical_run_ids": None,
+        "live_era": "single",
+    }
+    assert calls and all(resolved_scope(call) == official_scope for call in calls)
 
 
 def test_precision_at_k_uses_strict_accuracy_policy():

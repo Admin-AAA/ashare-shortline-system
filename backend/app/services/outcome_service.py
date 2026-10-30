@@ -1159,7 +1159,10 @@ def overview_metrics(
     run_mode: str | tuple[str, ...] | list[str] | None = OFFICIAL_RUN_MODE,
     live_only: bool = True,
     sample_scope: str | None = None,
+    era: str = "single",
 ) -> dict[str, Any]:
+    """era（仅实盘口径生效）：single=现行单策略（默认）；combo=已删除的旧组合方案；all=不分时代（旧口径）。
+    实盘口径另附 fill_split（确认买入 / 开盘模拟两栏）与 combo_reference（旧组合方案单列），都取自 live_trade_breakdown。"""
     start, end = _resolve_window(window_days, start_date, end_date)
     cohort = _historical_cohort_for_metrics(
         db,
@@ -1168,10 +1171,10 @@ def overview_metrics(
         end_date=end,
     )
     population_token = _metrics_population_token(sample_scope, cohort)
-    key = f"overview:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}:{population_token}"
-    return _cached(
-        key,
-        lambda: _overview_metrics(
+    key = f"overview:{start or ''}:{end or ''}:{run_mode or 'all'}:{int(live_only)}:{population_token}:{era}"
+
+    def build() -> dict[str, Any]:
+        out = _overview_metrics(
             db,
             start,
             end,
@@ -1184,8 +1187,15 @@ def overview_metrics(
                 cohort,
             ),
             historical_cohort=cohort,
-        ),
-    )
+            live_era=None if era == "all" else era,
+        )
+        if sample_scope == LIVE_FORWARD_SCOPE and era != "all":
+            from app.services.live_trade_breakdown import era_split_for_overview
+
+            out = {**out, **era_split_for_overview(db, start_date=start, end_date=end, era=era)}
+        return out
+
+    return _cached(key, build)
 
 
 def _overview_metrics(
@@ -1198,6 +1208,7 @@ def _overview_metrics(
     sample_scope: str | None = None,
     historical_run_ids: tuple[str, ...] | None = None,
     historical_cohort: ReconstructionCohortView | None = None,
+    live_era: str | None = "single",
 ) -> dict[str, Any]:
     rows = _scoped_recommendation_rows(
         db,
@@ -1207,6 +1218,7 @@ def _overview_metrics(
         live_only=live_only,
         sample_scope=sample_scope,
         historical_run_ids=historical_run_ids,
+        live_era=live_era,
     )
     total_recs = len(rows)
 
@@ -2914,7 +2926,10 @@ def _scoped_recommendation_rows(
     live_only: bool = True,
     sample_scope: str | None = None,
     historical_run_ids: tuple[str, ...] | None = None,
+    live_era: str | None = "single",
 ) -> list[Any]:
+    """live_era：实盘口径（sample_scope=live_forward）只取某个时代的 run（live_trade_breakdown.classify_era）。
+    默认 single（现行单策略）；已删除的全策略组合（combo）不再混进实盘统计，需要时显式传 combo / all。"""
     if sample_scope not in (None, LIVE_FORWARD_SCOPE, HISTORICAL_REPLAY_SCOPE):
         raise ValueError(f"unsupported metrics sample_scope: {sample_scope}")
     # 两步查询：先 SQL 去重拿 (trade_date, code) 分组下 final_score 最高的 recommendation_id（235 个），
@@ -2957,6 +2972,9 @@ def _scoped_recommendation_rows(
             date_from=start_date,
             date_to=end_date,
         )
+        from app.services.live_trade_breakdown import run_ids_for_era
+
+        canonical_run_ids = run_ids_for_era(db, canonical_run_ids, live_era)
         if not canonical_run_ids:
             return []
         dedup_ids_stmt = dedup_ids_stmt.where(
