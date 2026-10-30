@@ -3821,8 +3821,9 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - **补数（CST）**：`manual_data_health_remediation` → daily_kbars 5569、index_daily 6、limit_up_board 160；`backfill_daily_basic` → 5571；`_backfill_stk_limit_window` → stk_limits 5654；`refresh_quote_pool` → stock_quotes 5590。健康闸门 blockers=[]。
 - **出票**：轻量路径 midterm `generate_picks` + `enqueue_workbench_run`×4（全量 post_sync 曾卡在 anns_d/Prefect 临时服）。短线 formal completed：养家 0 / 陈小群 0 / 超跌资金反包 **1**（603112）/ 主线相对强度 0。/mid：回购 5、业绩加速 19、预告预喜/期权激励/大宗 no_signal；5 个小盘周度 **small_cap_below_ma20**（index 0.85 < ma20 0.95）。/long 批次亦写出（研究仍暂停）：红利低波 3、双增长 12、净现金 5。
 - **§348**：两版否决，commit **aef9801b**，MID_REJECTED 150。
-- **§349**：TS/DIV 对 FA/BT/SDY/NCS 共 8 版均否决（见上）；§349-C 陈小群 TOP5 **否决**（R12/N3 每笔低于 TOP3 参照；W00 更深）。commit 见后续。
-- 后端：§348 否决列表需刷新时再 safe_restart；本晚若已重启会记一笔。
+- **§349**：TS/DIV 对 FA/BT/SDY/NCS 共 8 版均否决；§349-C 陈小群 TOP5 **否决**。commits **52448278**（§349 预注册+TS/DIV 结果）/ **6395ca87**（§349-C 结果）。
+- **§350/§351**：预注册已写（BT_disc_h20 / LDF_h5），跑数见后续。
+- 后端：safe_backend_restart 已执行（MID_REJECTED 150 刷新）；health 8765/5174 200。
 
 ### §349 / §349-C 结果（2026-10-30 21:19 CST 跑完；预注册写于跑数前，规则未改；**10 个改版全部不建议上线，线上不变**）
 - 原版复现（同进程）与线上登记一致：F_any_h20 R12 138 笔 +3.70% / N3 334 笔 +2.88%；BT_prem_h20 R12 100 笔 +1.27% PF1.31；SDY_W_h20 N3 247 笔 +3.36%；NCS_h60 R12 中位数 −4.32%；陈小群 TOP3（base 排序一次）R12 233 笔 +0.91%（§282 21 次抽样均值 236 笔 +0.88%）。
@@ -3843,3 +3844,16 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
   - TOP5：R12 307/+0.77/PF1.50/−30.9；N3 444/+0.60/PF1.40/−48.2；W00 −1.78（更差）；R12/N3 每笔都低于 TOP3 → B✗；A✗（N3 回撤深于 −35%，原版本来也不过）；N3 仍彩票。
 - 结论（白话）：这 5 个彩票型策略的利润本来就是靠少数大涨票撑起来的。「拿一半还没涨就卖」会把后面才大涨的票提前卖掉；「多买几只」要么买进排名靠后、更差的票（预告预喜、净现金、陈小群），要么根本没有更多信号可买、只是每只仓位减半（大宗、小盘高股息：回撤减半，总收益也减半，等于降杠杆）。两条路都摘不掉彩票帽，也不提高总收益。
 - 处置：10 个改版全部不建议上线，线上 5 个策略规则不变；只记日志。脚本 `backend/scripts/midterm/lt_research135.py` / `run_s349.sh` / `s349_eval.py`，`backend/scripts/research_s349_chen_topn.py`；输出 `backend/output/research/s349/{FA,BT,SDY,NCS,CHEN}/`。
+
+## §350 [中线] 「大宗折价成交后漂移」BT_disc_h20 — 预注册（2026-10-30 21:27:13 CST 写于跑任何收益之前，规则不再改）
+- 白话：现役 mid「大宗溢价」买的是机构愿出溢价接货；本题反过来——大宗成交价相对当日收盘折价 ≥2%、且成交额占流通市值 ≥0.5% 时，次日开盘买、持 20 日。折价大宗常被解读为甩货，但也可能是流动性折价后的价值买入；只测这一预设，不网格。
+- 去重：§114 / 现役 BT_prem_h20 只测溢价≥0（及溢价≥2% 变体）；日志/MID_REJECTED grep「折价大宗 / BT_disc」0 条。数据与 §114 同一 block_trade 缓存（2019-01 起）。
+- 规则：T 日汇总大宗 vwp=Σamount/Σvol，premium=vwp/close_T−1 ≤ −2%；bt_ratio=amt/fmv_T ≥ 0.5%（fmv 口径同 lt_research25）；T 日 liq；同日按 bt_ratio 降序前 5。realistic：T+1 开盘买、持 20、0.3% 成本；K=20、max_new=5（仅回测）。
+- 判定：用户 10-25 标准（N3/R12 每笔>0，PF≥1.3，中线 MDD≤25，8 段≥6 段为正且熊市段≥−5%，笔数≥30）+ 收益来源标签。失败 → MID_REJECTED；通过 → 接 midterm_service + replay 近 3 个月。
+- 脚本：backend/scripts/midterm/lt_research136.py；run_s350.sh；评估 s286_287_eval.py；输出 backend/output/research/s350/。
+
+## §351 [短线] 「单日跌停后次日未封死、收盘翻红 → 再次日开盘买、持 5 日」LDF_h5 — 预注册（2026-10-30 21:27:13 CST 写于跑任何收益之前，规则不再改）
+- 白话：前一日收盘封死跌停；次日开盘未再封跌停、收盘翻红且未涨停 → 再次日开盘买、持 5 日。赌「一日利空出清后的修复」，比连续跌停开板（§328）更常见、比同日撬板（§318）更干净。
+- 去重：§318 DTR=同日盘中触跌停收红；§328 LDO=连续≥2 日收盘跌停后首次开板；§342 WTS=首板次日弱转强；§336 减持急跌反转。本题要求恰好一日跌停收盘 + 次日翻红。
+- 规则：T−1 收盘 ≤ 跌停价+0.005；T 开盘 > 跌停价+0.005；T 涨跌幅>0 且收盘未封涨停；T 日 liq；同日按 T 涨幅降序前 5。realistic：T+1 开盘买、持 5、0.3% 成本；K=20、max_new=5。
+- 判定：短线 MDD≤35；失败只记日志。脚本：backend/scripts/shortline_research/ldf_s351.py；run_s351.sh（等 §350 结束）；输出 backend/output/research/s351/。
