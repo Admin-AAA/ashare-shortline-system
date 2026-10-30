@@ -77,6 +77,33 @@ export const UNAUTHORIZED_EVENT = "ashare:unauthorized";
 
 export type MetricsSampleScope = "live_forward" | "historical_replay";
 
+export type Hs300AlignedPoint = {
+  date: string;
+  normalized_date?: string | null;
+  index_date: string | null;
+  close: number | null;
+  nav: number | null;
+  cum_pct: number | null;
+  filled: boolean;
+  stale: boolean;
+  gap_days: number | null;
+};
+
+export type Hs300AlignedCurve = {
+  ts_code: string;
+  name: string;
+  status: "ok" | "partial" | "unavailable" | "empty";
+  method: string;
+  rebase: string;
+  fill: string;
+  base_date: string | null;
+  base_close: number | null;
+  message: string | null;
+  aligned_count: number;
+  stale_count: number;
+  points: Hs300AlignedPoint[];
+};
+
 type RequestOptions = {
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -306,6 +333,9 @@ export const api = {
       300_000,
       json("POST", { include_agent: true }),
     ),
+  /** 收益曲线日期上的沪深300买入持有累计收益（首个可对齐日归 0%）。 */
+  hs300Aligned: (dates: string[]) =>
+    request<Hs300AlignedCurve>("/api/benchmarks/hs300/aligned", json("POST", { dates })),
   recommendationHistory: (query?: {
     code?: string;
     label?: string;

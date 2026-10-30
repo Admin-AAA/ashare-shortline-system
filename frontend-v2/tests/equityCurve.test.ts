@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { buildEquityCurve, classify, classifyHorizon } from "../src/utils/equityCurve.ts";
+import { alignBenchmarkPoints, buildEquityCurve, classify, classifyHorizon, lineSegments } from "../src/utils/equityCurve.ts";
 
 const closed = (exit_date: string, executed_return: number) => ({ outcome: { entry_triggered: true, outcome_label: "success", exit_date, executed_return } });
 
@@ -54,4 +54,26 @@ test("horizon picks: only closed with exit date enter; pending and limit-up canc
   assert.ok(Math.abs(c.points[0].cum - 1) < 1e-9);
   assert.equal(c.holding, 1);
   assert.equal(c.excluded, 2);
+});
+
+test("benchmark points match by date and a missing day does not drop the strategy date", () => {
+  const aligned = alignBenchmarkPoints(
+    ["2026-01-05", "2026-01-06", "2026-01-07"],
+    [
+      { date: "2026-01-07", cum_pct: 3 },
+      { date: "2026-01-05", cum_pct: 0 },
+      { date: "2026-01-05", cum_pct: 99 },
+    ],
+  );
+  assert.deepEqual(aligned.map((point) => point?.cum_pct ?? null), [0, null, 3]);
+});
+
+test("benchmark line breaks around a null instead of interpolating across it", () => {
+  const segments = lineSegments([
+    { x: 0, y: 0 },
+    { x: 10, y: null },
+    { x: 20, y: 5 },
+    { x: 30, y: 6 },
+  ]);
+  assert.deepEqual(segments, ["M0.0,0.0", "M20.0,5.0L30.0,6.0"]);
 });

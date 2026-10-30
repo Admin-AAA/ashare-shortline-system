@@ -29,7 +29,8 @@ def test_every_operation_has_unique_id_and_typed_success_response() -> None:
     # 137 之后补上的入口：POST /api/admin/data-gateway/item-switch，
     # GET /api/strategies/rolling-r12 与 standalone-metrics，
     # POST /api/stock-matrix/analysis 与 /backtest，
-    # GET /api/text-events/labels。
-    assert len(operation_ids) == 143
+    # GET /api/text-events/labels，
+    # GET /api/benchmarks/hs300 与 POST /api/benchmarks/hs300/aligned。
+    assert len(operation_ids) == 145
     assert len(operation_ids) == len(set(operation_ids))
     assert missing == []

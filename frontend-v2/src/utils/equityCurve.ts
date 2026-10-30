@@ -50,6 +50,32 @@ export function buildEquityCurve<T = CurveItem>(items: T[], cls: (it: T) => Clas
   return { points, trades, maxDrawdown, holding, excluded };
 }
 
+/** 把后端按日期返回的沪深300点贴回策略曲线。按日期匹配，不按数组下标；
+ * 后端没给的日期留空，调用方跳过基准点，策略点一个都不删。 */
+export function alignBenchmarkPoints<T extends { date: string }>(dates: string[], points: T[]): Array<T | null> {
+  const byDate = new Map<string, T>();
+  for (const point of points) {
+    if (!byDate.has(point.date)) byDate.set(point.date, point);
+  }
+  return dates.map((date) => byDate.get(date) ?? null);
+}
+
+/** 折线分段。y 为 null 的点断开，不把两侧连成一条假斜线。 */
+export function lineSegments(coords: Array<{ x: number; y: number | null }>): string[] {
+  const segments: string[] = [];
+  let commands: string[] = [];
+  for (const point of coords) {
+    if (point.y == null || !Number.isFinite(point.y)) {
+      if (commands.length) segments.push(commands.join(""));
+      commands = [];
+      continue;
+    }
+    commands.push(`${commands.length ? "L" : "M"}${point.x.toFixed(1)},${point.y.toFixed(1)}`);
+  }
+  if (commands.length) segments.push(commands.join(""));
+  return segments;
+}
+
 /** 中线 / 长线（/api/horizons/{h}/picks）：closed 且有收益与卖出日才入曲线；pending（还没买）与 skipped（开盘涨停取消）不入 */
 export type HorizonCurvePick = { status: string; ret?: number | null; exit_date?: string | null; cancel_code?: string | null };
 export function classifyHorizon(p: HorizonCurvePick): Classified {
