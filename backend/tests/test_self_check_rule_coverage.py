@@ -173,7 +173,7 @@ def test_soft_floor_ban_only_oscillation_not_weak():
 def _oversold_ctx(pct: float) -> dict:
     """oversold-capital-reversal universe 全过、无 hard_veto/排除 phase 的 context。
 
-    pct < 3 → 生产 prefilter.market.include(no_reversal_candle) 拦截；但 run_strategy 的
+    pct < 5 → 生产 prefilter.market.include(no_reversal_candle) 拦截；但 run_strategy 的
     _passes_universe 只查 universe + prefilter.market.exclude，漏 prefilter.market.include
     → 反事实若不复刻生产 prefilter 会把这笔判为「未覆盖」（漏判）。
     （原用 chip-single-peak-breakout（L-177）、low-max-steady-trend（L-184），两者均已删除。）
@@ -196,11 +196,12 @@ def test_prefilter_include_coverage_counted():
 
     复刻生产管线（evaluate_skill_prefilter 查 prefilter.market.include/include_any），
     不能只靠 run_strategy._passes_universe（漏 prefilter.market.include/include_any）。
-    pct=2 < 3 → no_reversal_candle 拦截（生产 prefilter），反事实须判 blocked。
+    pct=2 < 5 → no_reversal_candle 拦截（生产 prefilter），反事实须判 blocked。
+    成功笔取 pct=6，明确满足 §352 硬门槛 pct≥5。
     """
     rows = [
         _row("rec_os_001", "failed", -3.0, _oversold_ctx(2.0), "oversold-capital-reversal"),
-        _row("rec_os_002", "success", 5.0, _oversold_ctx(4.0), "oversold-capital-reversal"),
+        _row("rec_os_002", "success", 5.0, _oversold_ctx(6.0), "oversold-capital-reversal"),
     ]
     blocked, new_total, wins, total = self_check._classify_failed_coverage(rows, _skills())
     assert total == 2

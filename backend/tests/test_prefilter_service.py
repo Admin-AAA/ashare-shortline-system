@@ -56,7 +56,8 @@ def _tradeable_stock(**overrides):
 def _positive_stock_for_skill(skill_id: str):
     """每个 skill 的正向 stock（满足其 universe.include 的最小字段集）。"""
     if skill_id == "oversold-capital-reversal":
-        return _tradeable_stock(chg20=-15.0, pct=4.0, vol5_20=1.3, main_net_inflow_yi=0.5)
+        # §352 OS_PCT5：反包阳线硬门槛 pct≥5。取 6，明确过线且低于 9.5 未封板冲高排除。
+        return _tradeable_stock(chg20=-15.0, pct=6.0, vol5_20=1.3, main_net_inflow_yi=0.5)
     if skill_id == "high-range-breakout-momentum":
         return _tradeable_stock(pos120=82.0, off_high60_pct=-1.0, vol5_20=1.25, breakout60=True)
     if skill_id == "sector-relative-strength-leader":
