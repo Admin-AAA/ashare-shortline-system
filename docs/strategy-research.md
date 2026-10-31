@@ -3978,3 +3978,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 上线：`mid-sales-exp-drop`（kind=`sexp_yoy`，实盘不设仓位上限；metrics 注明回测 K20/max_new5）；从 MID_REJECTED 移除对应「销售费用率同比下降（持20日）」条目；`rebuild_replay_picks.py --onboard` 回补近 3 个月 origin=replay（先无 cap 写出后已按 `apply_daily_cap=True` 重刷：34 批 137 只，与生产每日上限一致）。
 - 产物：`lt_research139.py` / `run_s357.sh` / `s357_onboard_metrics.py` / `output/research/s357/`；接入 `midterm_fina_events.sexp_candidates` + `midterm_service`。
 
+## §358 [短线] 「强业绩、弱反应」正式财报后漂移 UEA_h5 — 预注册（2026-10-31 20:50 CST 写于跑任何收益之前，规则不再改）
+- 白话：正式财报刚披露，扣非净利同比 ≥30%、营收同比 ≥10%、扣非为正（业绩够强），但公告后**第一个交易日**股价几乎没动（涨跌在 −1%~+2%、且没封涨停）——市场对好消息反应不足。次日开盘买，拿 5 天。
+- 想法 / 来源：Bernard–Thomas 财报后漂移（PEAD）的「反应不足」通道；与「大涨才追」相反。
+- 去重：§341 EAR_h20 看的是公告两日**超额 ≥+5%**（强反应，已否）；§343 GDD_h20 是高增长 + 离一年高点跌 ≥30%（被错杀，已否）；§333 FDV / §339 是**预告**好消息却跌；现役业绩加速按增速排序、不看公告日涨跌。日志 grep「弱反应 / underreact / UEA / 涨跌∈[−1,+2]」0 条。非彩票过滤变体、非时间止损/分散、非 OS_RANK。
+- 规则（写定，不调参）：
+  - 数据：`data/midterm/fina/*.parquet`；每个 (code, end_date) 只取最早 ann_date。
+  - 事件：dt_netprofit_yoy ≥ 30 且 or_yoy ≥ 10 且 profit_dedt > 0。
+  - 信号日 S = 第一个 **> ann_date** 的交易日（公告后首个可交易日）。
+  - S 日：liq；pct_chg ∈ [−1, +2]；未封涨停（close < 涨停价 −0.005；缺涨停价按前收×(1+9.8%/19.8%)）。
+  - 同股 60 自然日内只认第一次事件。同日按 dt_netprofit_yoy 降序取前 5。
+  - T+1=S+1 开盘买（开盘涨停买不进），持 5 个交易日开盘卖，跌停锁死顺延，往返成本 0.3%。回测 K=20、max_new=5（仅回测；实盘不设仓位上限）。
+- 脚本：`backend/scripts/shortline_research/uea_s358.py`；运行 `backend/scripts/midterm/run_s358.sh`；评估 `s286_287_eval.py`（短线回撤上限 35）；输出 `backend/output/research/s358/`（gitignore）。只用本地 parquet。
+- 阶段：P19 / P20 / P21 / W0 / W00 / W1 / W2 / R12 + N3（同 §351 日历）。
+- **采纳标准（§282 短线，全部满足才采纳）**：1) R12 与 N3 扣成本后每笔 >0；2) PF ≥1.3（两窗）；3) MDD 不深于 −35%（两窗）；4) 8 段 ≥6 段每笔为正，且 W0、W00 每笔 ≥ −5%；5) R12 与 N3 各 ≥30 笔。同市值超额只参考。收益来源按 §285。
+- 采纳后：接入短线每日选股管线（实盘不设仓位上限），回补近 3 个月 replay（origin=replay，不混 live_forward）；否决则只记日志。
+- 已知局限（出结果前写定）：公告后首日涨跌带受大盘拖累；−1~+2 是常见「几乎没动」口径而非优化值；财报季信号扎堆。
+
+## §359 [中线] 财务费用率同比下降 FINA_h20 — 按 §282 绝对收益标准正式复判（若达标则上线）— 预注册（2026-10-31 20:50 CST 写于跑本轮评估/接入之前；选股规则与 §203/lt_research70 完全相同，不调参）
+- 白话：正式财报里财务费用/营收 比去年同报告期下降 ≥0.5 个百分点（融资成本负担减轻）。镜像刚上线的 §357 销售费用率下降，但是**不同费用科目**。
+- 背景：§203/§279 因「同市值超额」旧标准否决并写入 MID_REJECTED；§282 扫描曾提示 FINA_h20 在**新绝对收益标准**下可能达标（当时未单独预注册上线）。本轮正式复判，规则一字不改。
+- 去重：选股 = §203 FINA（lt_research70）：本期 finaexp_of_gr∈[−2,15]、去年∈[−2,25]，降幅=去年−本期 ≥0.5，按降幅（封顶 8）降序；liq；次日开盘买持 20 日。与现役 mid-sales-exp-drop（saleexp_to_gr）字段独立。不做 FINA_h60 / FINAp（本轮只复判持 20 日中线版）。
+- 脚本：`backend/scripts/midterm/lt_research140.py`（仅 FINA_h20）；运行 `backend/scripts/midterm/run_s359.sh`；评估 `s286_287_eval.py`（中线回撤上限 25）；输出 `backend/output/research/s359/`。
+- **采纳标准（§282 中线）**：同 §357。达标 → 上线 `/mid` id=`mid-fina-exp-drop`，kind=`fina_yoy`，从 MID_REJECTED 移除对应「财务费用率同比下降（持20日）」条目并注明 §359 复判采纳；`rebuild_replay_picks.py --onboard` 回补近 3 个月 origin=replay；实盘不设仓位上限。失败则保持否决、只记日志。
+- 已知局限：财务费用可为负（利息收入>支出）；与去杠杆/利率环境相关，熊市段可能偏弱。
+
