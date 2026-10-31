@@ -47,7 +47,7 @@ CG_MIN_YOY, CG_STREAK, CG_STREAK_CAP, CG_NPY_CAP = 5.0, 4, 12, 100.0
 DINC_INC_TH = 0.30
 
 FINA_FIELDS = ("ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt,"
-               "or_yoy,dt_netprofit_yoy,saleexp_to_gr")
+               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr")
 _FINA_TTL = 1800.0
 _fina_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _div_local: dict[str, Any] = {}
@@ -103,7 +103,7 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     for k in ("ts_code", "ann_date", "end_date"):
         f[k] = f[k].astype(str).str.strip()
     for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt",
-              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr"):
+              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr"):
         if k in f.columns:
             f[k] = pd.to_numeric(f[k], errors="coerce")
     f = f[(f["ann_date"].str.len() == 8) & (f["end_date"].str.len() == 8)]
@@ -194,6 +194,21 @@ def sexp_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         ok = (SEXP_CUR_LO <= cur <= SEXP_CUR_HI and SEXP_PREV_LO <= prev <= SEXP_PREV_HI and delta >= SEXP_DELTA_MIN)
         return ok, min(delta, SEXP_DELTA_CAP), {"delta": delta}
     return _fina_events(db, as_of, "saleexp_to_gr", passes)
+
+
+# §359 FINA_h20（财务费用率同比下降；规则同 §203 / lt_research70，未调参）
+FINA_CUR_LO, FINA_CUR_HI = -2.0, 15.0
+FINA_PREV_LO, FINA_PREV_HI = -2.0, 25.0
+FINA_DELTA_MIN, FINA_DELTA_CAP = 0.5, 8.0
+
+
+def fina_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """FINA_h20：财务费用/营业总收入 同比下降 ≥0.5 百分点。"""
+    def passes(cur: float, prev: float):
+        delta = prev - cur
+        ok = (FINA_CUR_LO <= cur <= FINA_CUR_HI and FINA_PREV_LO <= prev <= FINA_PREV_HI and delta >= FINA_DELTA_MIN)
+        return ok, min(delta, FINA_DELTA_CAP), {"delta": delta}
+    return _fina_events(db, as_of, "finaexp_of_gr", passes)
 
 
 def ncs_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
