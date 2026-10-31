@@ -3968,3 +3968,13 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 判定：§282 中线五条全过 → **上线** `/mid`（id=`mid-sales-exp-drop`，kind=`sexp_yoy`，实盘不设仓位上限；从 MID_REJECTED 移除对应「销售费用率同比下降（持20日）」条目并注明 §357 复判采纳）；失败则保持否决、只记日志。上线后 `rebuild_replay_picks.py --onboard ... --execute` 回补近 3 个月 `origin=replay`。
 - 脚本：`backend/scripts/midterm/lt_research139.py` + `run_s357.sh`；输出 `backend/output/research/s357/`。
 
+### §356 结果（2026-10-31 08:53 CST 跑完；预注册 15ae1d6c 于跑数前已推送；规则未改）
+- BASE（pct≥5）：R12 39笔 +3.44% PF2.90 MDD−9.3；N3 51笔 +3.36% PF3.33 MDD−9.3；EXT +3.11 / W0 +0.35 / W00 +0.92。
+- **OS_RANK_PCT72 — 否决**：R12 仅 **17** 笔 +6.68% PF4.48；N3 **21** 笔 +5.96% PF4.53 MDD−8.6；W00 −0.32。相对 BASE 每笔更高（B 过），但 **R12/N3 笔数 <30**（第5条不过）→ A 不过。解读：在 ≥72 分卡里再按 pct 重排后信号过稀，近一年几乎凑不够样本；均值抬高不可作为上线依据。线上超跌规则不变。
+- 产物：`research_s356_os_rank72.py` / `s356_eval.py` / `output/research/s356/`。
+
+### §357 结果（2026-10-31 08:51 CST 跑完；预注册 15ae1d6c 于跑数前已推送；规则未改）
+- **SEXP_h20 — 达标/采纳 → 已上线 /mid**：8 段每笔 P19 +0.84 / P20 +0.32 / P21 +3.22 / W0 −3.39 / W00 −2.25 / W1 +3.50 / W2 +2.52 / R12 +3.83 → **6/8**（熊市段均≥−5）；超额(参考) 5/8。R12 94笔 +3.83%/笔 **PF2.11** MDD−8.6；N3 265笔 +3.33% PF1.85 MDD−16.8；两头各去5% R12/N3 +2.31/+2.17，中位数 +1.00/+0.55 → **稳健型**。§282 五条全过。
+- 上线：`mid-sales-exp-drop`（kind=`sexp_yoy`，实盘不设仓位上限；metrics 注明回测 K20/max_new5）；从 MID_REJECTED 移除对应「销售费用率同比下降（持20日）」条目；`rebuild_replay_picks.py --onboard` 回补近 3 个月 origin=replay（先无 cap 写出后已按 `apply_daily_cap=True` 重刷：34 批 137 只，与生产每日上限一致）。
+- 产物：`lt_research139.py` / `run_s357.sh` / `s357_onboard_metrics.py` / `output/research/s357/`；接入 `midterm_fina_events.sexp_candidates` + `midterm_service`。
+

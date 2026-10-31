@@ -126,6 +126,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §357 销售费用率同比下降（scripts/midterm/lt_research139.py SEXP_h20 = §198 规则；§282 绝对收益标准复判达标；2026-10-31 上线）
+    "mid-sales-exp-drop": {
+        "name": "销售费用率同比下降（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告：销售费用率（saleexp_to_gr，销售费用/营业总收入）本期∈[0.2,40]、去年同报告期∈[0.2,60]，且同比下降≥1.0个百分点。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按降幅（封顶10个百分点）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：费用纪律改善事件；原按同市值超额标准于§198/§279否决，§357按用户10-25批准的§282绝对收益标准复判达标后上线。",
+        "kind": "sexp_yoy",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §102 红利低波（scripts/midterm/lt_research19.py DVLV_h60，预注册 3 版中唯一达标，未调参）
     "long-dividend-lowvol": {
         "name": "红利低波月度组合（股息率+低波动，持60日）",
@@ -1116,10 +1125,10 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
-        if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy", "ncs_switch", "cg_streak"):
+        if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy", "ncs_switch", "cg_streak", "sexp_yoy"):
             from app.services import midterm_fina_events as fe
             cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates,
-                       "ncs_switch": fe.ncs_candidates, "cg_streak": fe.cg_candidates}[meta["kind"]]
+                       "ncs_switch": fe.ncs_candidates, "cg_streak": fe.cg_candidates, "sexp_yoy": fe.sexp_candidates}[meta["kind"]]
             # 实盘推荐不设持仓只数上限；每日新推荐数量由 _save_picks(apply_daily_cap) 统一限制（默认 5，按排序取前 N），已持有的不重复买；回测指标按 20 仓位口径
             held = _held_codes(db, sid, as_of)
             cands = cand_fn(db, as_of)
@@ -1496,6 +1505,10 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
         elif kind == "cld_yoy":
             score, label, better = round(float(p["score"]), 2), "流动负债占比降幅(百分点，封顶40)", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：流动负债/负债合计 {_f(p.get('prev'), 1)}% → "
+                      f"{_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点")
+        elif kind == "sexp_yoy":
+            score, label, better = round(float(p["score"]), 2), "销售费用率降幅(百分点，封顶10)", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：销售费用率 {_f(p.get('prev'), 1)}% → "
                       f"{_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点")
         elif kind == "dinc_yoy":
             score, label, better = round(float(p["inc"]) * 100, 1), "每股派现同比增幅(%)", "higher"

@@ -47,7 +47,7 @@ CG_MIN_YOY, CG_STREAK, CG_STREAK_CAP, CG_NPY_CAP = 5.0, 4, 12, 100.0
 DINC_INC_TH = 0.30
 
 FINA_FIELDS = ("ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt,"
-               "or_yoy,dt_netprofit_yoy")
+               "or_yoy,dt_netprofit_yoy,saleexp_to_gr")
 _FINA_TTL = 1800.0
 _fina_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _div_local: dict[str, Any] = {}
@@ -103,7 +103,7 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     for k in ("ts_code", "ann_date", "end_date"):
         f[k] = f[k].astype(str).str.strip()
     for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt",
-              "or_yoy", "dt_netprofit_yoy"):
+              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr"):
         if k in f.columns:
             f[k] = pd.to_numeric(f[k], errors="coerce")
     f = f[(f["ann_date"].str.len() == 8) & (f["end_date"].str.len() == 8)]
@@ -179,6 +179,21 @@ def udp_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         g = cur / prev - 1.0
         return (g >= UDP_G and cur >= UDP_FLOOR), min(g, UDP_CAP), {"growth": g}
     return _fina_events(db, as_of, "undist_profit_ps", passes)
+
+
+# §357 SEXP_h20（销售费用率同比下降；规则同 §198 / lt_research68，未调参）
+SEXP_CUR_LO, SEXP_CUR_HI = 0.2, 40.0
+SEXP_PREV_LO, SEXP_PREV_HI = 0.2, 60.0
+SEXP_DELTA_MIN, SEXP_DELTA_CAP = 1.0, 10.0
+
+
+def sexp_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """SEXP_h20：销售费用/营业总收入 同比下降 ≥1.0 百分点。"""
+    def passes(cur: float, prev: float):
+        delta = prev - cur
+        ok = (SEXP_CUR_LO <= cur <= SEXP_CUR_HI and SEXP_PREV_LO <= prev <= SEXP_PREV_HI and delta >= SEXP_DELTA_MIN)
+        return ok, min(delta, SEXP_DELTA_CAP), {"delta": delta}
+    return _fina_events(db, as_of, "saleexp_to_gr", passes)
 
 
 def ncs_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
