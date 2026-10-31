@@ -3953,3 +3953,18 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 | BT_inst_h20 | +2.45/+2.60/−2.11/−0.73/−3.23/+0.39/+2.86/+4.57，5/8 | 19笔 +4.57 PF2.08（n<30） | 74笔 +1.72 PF1.40 MDD−5.1 | ✓✓✓✗✗，B ✗ → **否决** |
 
 机构买方过滤压缩样本约 80%，R12 高均值靠 19 笔小样本，N3 单笔反而低于 base，P21/W00 显著转负：不采纳，不开 PR。
+
+## §356 [短线·现役改进] 超跌资金反包：保留分数线≥72 下按反包力度重排（OS_RANK_PCT72）— 预注册（2026-10-31 08:48 CST 写于跑任何候选收益之前）
+- 背景：§352 OS_RANK_PCT 把当日全部卡重写为 `final_score=100−i`，等于绕过 72 分线（笔数 58→95），否决。§352 收尾「未做：OS_RANK_PCT 在保留 72 分线下的纯重排」。本节只补这一项。基线 = 线上现役超跌（已含 pct≥5，§352/PR#29）。
+- 去重：§352 OS_RANK_PCT（绕过分线，否）；§354 OS_INV_BODY_K（实体中部否决，边际通过未合并）。本题不改池、不改出场，只在 **已过 LIVE_DAY/CARD 且原 final_score≥72** 的卡里按 `(pct 降序, chg20 升序)` 重写分数后再走原 `evaluate_selection_policy(score_line=72, top3)`。
+- 规则（写定）：框架同 §354（v27、EL_C、真实成交、0.3% 成本；窗 EXT/12m/W0/W00，N3=12m+EXT；base 一次）。`BASE`＝现役 pct≥5。`OS_RANK_PCT72`＝先滤 `final_score≥72`（缺分剔除），再按 pct/chg20 重排赋分，再取前 3。
+- 判定（全部满足 → 建议上线）：A) §282 短线五条；B) 相对 BASE：R12 与 N3 每笔均 ≥ BASE **+0.3 个百分点**，且 N3 回撤不更深。收益来源标签只展示。
+- 脚本：`backend/scripts/research_s356_os_rank72.py` + `scripts/midterm/s356_eval.py`；输出 `backend/output/research/s356/`。只读本地面板 + MySQL 日K；不改线上。
+
+## §357 [中线] 销售费用率同比下降 SEXP_h20 — 按 §282 绝对收益标准正式复判（若达标则上线）— 预注册（2026-10-31 08:48 CST 写于跑本轮评估/接入之前；选股规则与 §198/§279 完全相同，不调参）
+- 背景：§198/§279 在「同市值超额」旧标准下否决并写入 MID_REJECTED。用户 10-25 批准的 §282 标准**不再要求**同市值超额段数；§316 盘点已注明 SEXP_h20 / FINA_h20 在新标准下可通过、需「单独预注册去重与接入」。本节只对 **SEXP_h20** 做正式复判（FINA 另节，避免一次上两个费用因子）。长线暂停，不做 h60。
+- 去重：规则与 §198 SEXP_h20 一字不改（saleexp_to_gr 本期∈[0.2,40]、去年∈[0.2,60]，降幅≥1.0，按降幅封顶10 降序；liq；次日开盘买持20；K20/max_new5 仅回测）。不是新选股，是标准切换后的采纳决定。
+- 数据与脚本：复用 `lt_research68.py` 口径（ST=`stock_metadata_history`，与 §279 一致）；本轮用 `lt_research139.py` 只跑 SEXP_h20、写出各窗 trades CSV；评估 `s286_287_eval.py`（中线 MDD≤25）+ §285 质量标签。
+- 判定：§282 中线五条全过 → **上线** `/mid`（id=`mid-sales-exp-drop`，kind=`sexp_yoy`，实盘不设仓位上限；从 MID_REJECTED 移除对应「销售费用率同比下降（持20日）」条目并注明 §357 复判采纳）；失败则保持否决、只记日志。上线后 `rebuild_replay_picks.py --onboard ... --execute` 回补近 3 个月 `origin=replay`。
+- 脚本：`backend/scripts/midterm/lt_research139.py` + `run_s357.sh`；输出 `backend/output/research/s357/`。
+
