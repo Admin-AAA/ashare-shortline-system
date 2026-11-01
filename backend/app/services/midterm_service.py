@@ -154,6 +154,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §421 分红上调持20（scripts/midterm/lt_research48.py DINC_h20 = §158 规则；§282 绝对收益复判达标；2026-11-01 上线）
+    "mid-dividend-increase": {
+        "name": "现金分红同比增加（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次公布的分红「预案」（同一报告期只取第一次预案）：每股税前派现>0，且较去年同一报告期（优先取实施记录，否则取最早预案）提高 ≥30%（去年同期>0）；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按增幅从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：分红上调信号（Michaely–Thaler–Womack）；§158 旧超额标准否决后，§421 按§282绝对收益复判达标上线。与 /long 同事件持60日版并存。",
+        "kind": "dinc_yoy",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §102 红利低波（scripts/midterm/lt_research19.py DVLV_h60，预注册 3 版中唯一达标，未调参）
     "long-dividend-lowvol": {
         "name": "红利低波月度组合（股息率+低波动，持60日）",
