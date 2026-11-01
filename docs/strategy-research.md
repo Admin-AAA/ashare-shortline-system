@@ -5991,3 +5991,35 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：DINC ∩ (amount≥1.5·amt20)；sc_inc；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`dincvol_s535.py` / `run_s535.sh`。
+
+## §534 / §535 判定（2026-11-01 19:00 CST）
+
+### §534 DINC_i25_h20 — REJECT
+- 每笔 P19 −1.47 / P20 +0.07 / P21 +1.38 / W0 −3.62 / W00 −3.22 / W1 +0.82 / W2 +1.49 / R12 +2.00（**正段 5/8**）
+- R12 92笔 +2.00% PF1.56 MDD−11.4；N3 210笔 +1.55 PF1.40 MDD−16.8；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**（正段不足）。同进程 DINC_base：R12 +2.82 / N3 +4.11 → 每笔降 → B 亦否。
+- → **REJECTED**；线上 mid-dividend-increase 仍增幅≥30%。
+
+### §535 DINCVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +3.88 / P20 +1.64 / P21 +2.39 / W0 +0.39 / W00 −2.79 / W1 +6.68 / W2 +5.64 / R12 +2.27（**正段 7/8**）
+- R12 163笔 +2.27% PF1.36 MDD−18.2；N3 391笔 +4.53 PF1.98 MDD−12.2；稳健型
+- 判定 ✓✓✓✓✓ → **ADOPT**。新策略无 B。
+- 上线（2026-11-01 19:00 CST）：`mid-dividend-increase-vol`（kind=`dinc_vol`）；`s535_onboard_metrics.py`。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-dividend-increase-vol --execute` → 2026-07-29~10-30 **17批/45只**（origin=replay，errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid 现役含 mid-dividend-increase-vol。
+
+## §536 [中线·现役改进] 销售费用∩放量降幅软扩≥0.4（SEXPVOL_d04_h20）— 预注册（2026-11-01 19:00 CST 写于跑任何收益之前）
+- 白话：现役 mid-sales-exp-vol（降幅≥0.5 ∩ amount≥1.5×amt20）把 **降幅门槛** 软扩到 **≥0.4**；放量不变；排序仍降幅封顶10。同进程 SEXPVOL_base(≥0.5)。
+- 想法：量能/占比/SUE/分红增幅软扩皆否；对 SEXPVOL 做 **费用降幅轴软扩**（非 −pct）。B 门对照 base。
+- 去重：SEXPVOL；SEXP_d06；ADMINVOL。非仓位。
+- 规则：SEXP≥0.4∩vol1.5 vs ≥0.5∩vol1.5；sc；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`sexpvol_d04_s536.py` / `run_s536.sh`。
+
+## §537 [中线·文献] 未分配利润高增∩放量≥1.5×amt20（UDPVOL_h20）— 预注册（2026-11-01 19:00 CST 写于跑任何收益之前）
+- 白话：每股未分配利润同比高增事件（UDP，增速≥30%；线上为持60）在中线持20上 **再** 要求信号日成交额≥1.5×前20日均额；排序增速封顶2。
+- 想法 / 文献：分红∩放量刚 ADOPT；留存收益高增事件接同款量能确认（硬合取，非 −pct）。
+- 去重：UDP_h60；DINCVOL；SEXPVOL；FINAVOL；CLDVOL。非仓位。不碰数据网关。
+- 规则：UDP ∩ (amount≥1.5·amt20)；sc_udp；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`udpvol_s537.py` / `run_s537.sh`。

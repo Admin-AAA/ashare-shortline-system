@@ -320,6 +320,16 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+
+    # §535 分红增加∩放量（scripts/midterm/dincvol_s535.py DINCVOL_h20；§282 达标；2026-11-01 上线）
+    "mid-dividend-increase-vol": {
+        "name": "现金分红同比增加∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在「现金分红同比增加≥30%」事件池上再要求信号日成交额≥1.5×前20日均额。按增幅从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：分红上调 × 量能确认（§535）。",
+        "kind": "dinc_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §102 红利低波（scripts/midterm/lt_research19.py DVLV_h60，预注册 3 版中唯一达标，未调参）
     "long-dividend-lowvol": {
         "name": "红利低波月度组合（股息率+低波动，持60日）",
@@ -1548,6 +1558,21 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
 
+
+        if meta.get("kind") == "dinc_vol":
+            from app.services.midterm_fina_events import dincvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = dincvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
         if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy", "ncs_switch", "cg_streak", "sexp_yoy", "fina_yoy"):
             from app.services import midterm_fina_events as fe
             cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates,
@@ -2042,6 +2067,11 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["inc"]) * 100, 1), "每股派现同比增幅(%)", "higher"
             reason = (f"{p.get('ann_date', '')} 首次公布 {p.get('end_date', '')} 分红预案：每股税前派现 {_f(p.get('cash_div_tax'), 3)} 元，"
                       f"去年同期 {_f(p.get('prev_dps'), 3)} 元，同比 +{_f(score, 1)}%")
+        elif kind == "dinc_vol":
+            score, label, better = round(float(p["inc"]) * 100, 1), "每股派现同比增幅(%)", "higher"
+            reason = (f"{p.get('ann_date', '')} 首次公布 {p.get('end_date', '')} 分红预案放量：每股税前派现 {_f(p.get('cash_div_tax'), 3)} 元，"
+                      f"去年同期 {_f(p.get('prev_dps'), 3)} 元，同比 +{_f(score, 1)}%；"
+                      f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "udp_yoy":
             score, label, better = round(float(p["score"]) * 100, 1), "每股未分配利润同比增速(%)，封顶200", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：每股未分配利润 {_f(p.get('prev'), 2)} → "
