@@ -1,4 +1,4 @@
-"""Dataset ``quote.realtime``: promax rt_k -> sina realtime_quote -> tencent (flag) -> akshare snapshot -> quantdata rt_min -> xiaoshi snapshot.
+"""Dataset ``quote.realtime``: promax rt_k -> sina realtime_quote -> tdx hq (pytdx) -> tencent (flag) -> akshare snapshot -> quantdata rt_min -> xiaoshi snapshot.
 
 Fill mode: each provider is asked only for codes still missing.  Every adapter
 returns ``{code6: row}`` normalized to ``SCHEMAS["quote.realtime"]``.
@@ -142,6 +142,12 @@ def _sina():
     return SinaProvider()
 
 
+def _tdx():
+    from app.services.datasource.tdx_quote import TdxQuoteProvider
+
+    return TdxQuoteProvider()  # 公开 HQ，无密钥；ASHARE_TDX_QUOTE_ENABLED=false 关闭
+
+
 def _tencent():
     from app.services.datasource.web_backups import TencentQuoteProvider
 
@@ -160,7 +166,9 @@ _GATEWAY: DatasetGateway | None = None
 def gateway() -> DatasetGateway:
     global _GATEWAY
     if _GATEWAY is None:
-        _GATEWAY = DatasetGateway([RtkProvider(), _sina(), _tencent(), _akshare(), RtMinProvider(), XiaoshiSnapshotProvider()])
+        _GATEWAY = DatasetGateway([
+            RtkProvider(), _sina(), _tdx(), _tencent(), _akshare(), RtMinProvider(), XiaoshiSnapshotProvider(),
+        ])
     return _GATEWAY
 
 

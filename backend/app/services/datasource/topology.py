@@ -18,7 +18,7 @@ from typing import Any
 from app.core.shared_breaker import LIVE_NAMESPACE
 
 LABELS: dict[str, str] = {
-    "tushare_rt_k": "Promax rt_k", "sina_realtime": "新浪", "tencent_qt": "腾讯",
+    "tushare_rt_k": "Promax rt_k", "sina_realtime": "新浪", "tdx_quote": "通达信", "tencent_qt": "腾讯",
     "tushare_rt_min": "QuantData rt_min", "xiaoshi_snapshot": "小石快照",
     "xiaoshi_min1": "小石 1 分钟", "baostock": "Baostock", "tushare_stk_mins": "Tushare stk_mins",
     "sina_kline": "新浪分钟", "tencent_mkline": "腾讯分钟", "akshare": "AKShare",

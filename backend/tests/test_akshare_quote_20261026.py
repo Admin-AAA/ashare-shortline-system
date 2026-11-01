@@ -199,5 +199,5 @@ def test_chain_position_is_after_tencent_before_rt_min():
 
     qr._GATEWAY = None
     names = [p.name for p in qr.gateway()._providers]
-    assert names == ["tushare_rt_k", "sina_realtime", "tencent_qt", "akshare_snapshot", "tushare_rt_min", "xiaoshi_snapshot"]
+    assert names == ["tushare_rt_k", "sina_realtime", "tdx_quote", "tencent_qt", "akshare_snapshot", "tushare_rt_min", "xiaoshi_snapshot"]
     qr._GATEWAY = None

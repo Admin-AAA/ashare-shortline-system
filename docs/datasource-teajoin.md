@@ -136,7 +136,12 @@ promax 额度**专留 rt_k / rt_min**；其余接口 teajoin 做主源，promax 
 接入：`stk_mins` 已纳入 `TEAJOIN_APIS`，teajoin 做主源；teajoin 的 stk_mins 与 promax 共用同一道“分钟线合同闸门”（整分钟、仅连续竞价时段、无重复分钟，否则拒收并降级）；`NOT_ROUTED` 不再含 stk_mins。
 
 ## 9. rt_k（实时行情）在 promax 耗尽后的兜底
-teajoin 不提供 rt_k，promax 是唯一 rt_k 主源，已降为少额度用户。现网 rt_k 链路（`quote_realtime.py`，缺哪几只就只向下一级要哪几只）：promax rt_k（1.5s 硬超时、熔断）→ 新浪 realtime_quote（tushare 爬虫，50 只/批）→ 腾讯 qt.gtimg（`.env` 里 `ASHARE_DATASOURCE_CUTOVER` 已含 quote.realtime.tencent，当前启用）→ AKShare 全市场快照（见下）→ quantdata rt_min（逐只、最多 60 只，只有现价）→ 小石快照。
+teajoin 不提供 rt_k，promax 是唯一 rt_k 主源，已降为少额度用户。现网 rt_k 链路（`quote_realtime.py`，缺哪几只就只向下一级要哪几只）：promax rt_k（1.5s 硬超时、熔断）→ 新浪 realtime_quote（tushare 爬虫，50 只/批）→ 通达信公开 HQ（pytdx TCP/7709，无密钥，1s 硬超时；见下）→ 腾讯 qt.gtimg（`.env` 里 `ASHARE_DATASOURCE_CUTOVER` 已含 quote.realtime.tencent，当前启用）→ AKShare 全市场快照（见下）→ quantdata rt_min（逐只、最多 60 只，只有现价）→ 小石快照。
+
+### 9.0 通达信公开 HQ（实时行情，新浪之后）
+代码 `backend/app/services/datasource/tdx_quote.py`。客户端是 pytdx（`get_security_quotes`，80 只/包），进程内直连公开行情服务器，不需要 API key，也不起 sidecar。mootdx 没有采用：它底下仍是 pytdx，默认还会探测最优 IP 并维持心跳，和这条链路的快失败冲突。
+
+排在新浪后面、腾讯前面：公开 HQ 地址会轮换，连不上很常见，单次成功率低于新浪 HTTP。rt_k 或新浪已经拿到的代码不会再打到这里。新浪也缺的代码先走免费 TCP，再落到腾讯 / AKShare 全市场翻页 / 付费 rt_min / 小石。`ASHARE_TDX_QUOTE_ENABLED=false` 关闭；`ASHARE_TDX_QUOTE_HOSTS=ip:port,ip:port` 可换主机。管理页源开关是 `(tdx, quote)`，拓扑标签「通达信」。连接和读都有亚秒超时，整次调用 1 秒封顶，失败记熔断，打开后网关直接跳过。
 
 ### 9.1 AKShare 全市场快照（实时行情第二备份，2026-10-26 21:30 接入）
 代码 `backend/app/services/datasource/akshare_quote.py`，挂在 腾讯 之后、rt_min 之前。只有前面几级没拿到的代码才会请求它。

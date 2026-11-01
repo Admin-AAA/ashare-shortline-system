@@ -19,6 +19,9 @@ pytest==9.0.3
 # tests/**/test_property_*.py 在收集期 import hypothesis；CI 回归任务安装本文件。
 hypothesis==6.170.12
 baostock==0.9.1
+# 通达信公开 HQ（quote.realtime 的 tdx_quote）。纯 Python TCP 客户端，无密钥。
+# 不用 mootdx：它依赖 pytdx，且默认 best-IP 探测 + 心跳，和快失败冲突。
+pytdx==1.72
 agno==2.6.5
 openai==2.36.0
 tickflow==0.1.21

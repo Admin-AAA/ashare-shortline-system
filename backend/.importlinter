@@ -21,6 +21,7 @@ forbidden_modules =
     tushare
     baostock
     akshare
+    pytdx
     httpx
     requests
 ignore_imports =
