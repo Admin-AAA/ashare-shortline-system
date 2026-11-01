@@ -8327,3 +8327,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：EASEXPVOL；FINATDVOL；EAVOL；FINAVOL。非仓位。不碰数据网关。
 - 规则：G∩FINA∩vol；sc_g；K20/max_new5。新策略无 B。
 - 脚本：`eafinavol_s709.py` / `run_s709.sh`。
+
+### §708 EATDVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 +0.46 / P20 −0.15 / P21 +3.77 / W0 +0.55 / W00 +2.42 / W1 +5.91 / W2 +1.32 / R12 +3.68（**正段 7/8**）
+- R12 65笔 +3.68% PF1.81 MDD−7.6；N3 174笔 +3.92 PF2.03 MDD−11.2；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 EATDVOL_base(dtp≥50)：R12 +3.30 / N3 +3.43 / MDD−12.4 → **B 过**（R12/N3 每笔抬、回撤收窄）。
+- → **ADOPT**。上线（2026-11-02 05:52 CST）：`mid-ea-td-vol` dtp **≥50→≥55**（TD≥25、TD排序不变）；`s708_onboard_metrics.py`；replay 强制覆盖 22批/43只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：加速∩周期上抬 dtp 腿成立——与单腿 EAVOL_d55 否决不对称。
+
+### §709 EAFINAVOL_h20 — REJECT（A 否）
+- 每笔 P19 −3.63 / P20 +0.82 / P21 +5.07 / W0 −2.47 / W00 −1.08 / W1 +5.78 / W2 +2.05 / R12 −1.45（**正段 4/8**）
+- R12 56笔 **−1.45%** PF0.76 MDD−10.5；N3 149笔 +1.88 PF1.41 MDD−10.2；彩票型
+- 判定 **✗✗**✓**✗**✓ → **否决**。解读：加速∩财务费用同销售费用——近一年为负、正段不足；确认 **加速∩费用纪律双合取∩放量暂缓**。
+
+## §710 [中线·现役改进] 业绩加速∩营业周期∩放量 orv硬抬≥25（EATDVOL_o25_h20）— 预注册（2026-11-02 05:52 CST 写于跑任何收益之前）
+- 白话：现役 mid-ea-td-vol（dtp≥55∩orv≥20∩TD≥25∩放量，TD排序）把 **营收同比硬抬** 到 **≥25**；其余不变。同进程 EATDVOL_base(orv≥20)。
+- 想法：dtp 硬抬刚 ADOPT——对称试 orv 腿（硬门槛，非 −pct）。对照 EAVOL_o15 软扩已否。B 门对照 base。
+- 去重：EATDVOL_d55；EAVOL_o15；EAVOL_sc_orv。非仓位。不碰数据网关。
+- 规则：G&orv≥25∩dtp≥55∩TD≥25∩vol vs base；sc_td；K20/max_new5。B 门对照 base。
+- 脚本：`eatdvol_o25_s710.py` / `run_s710.sh`。
+
+## §711 [中线·文献] 业绩加速∩分红增加∩放量（EADINCVOL_h20）— 预注册（2026-11-02 05:52 CST 写于跑任何收益之前）
+- 白话：G ∩ DINC（分红上调）∩ 放量≥1.5×amt20；按 sc_g 排序；持20。
+- 想法 / 文献：加速∩费用刚暂缓；SUEG∩DINC 曾样本崩——改试 **无 SUE 门槛的加速∩分红** 双合取∩放量（硬合取，非 −pct）。对照 EAVOL/DINCVOL/SUEGDINCVOL。
+- 去重：SUEGDINCVOL；DINCFATVOL；EATDVOL；EAVOL；DINCVOL。非仓位。不碰数据网关。
+- 规则：G∩DINC∩vol；sc_g；K20/max_new5。新策略无 B。
+- 脚本：`eadincvol_s711.py` / `run_s711.sh`。
