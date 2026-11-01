@@ -8227,3 +8227,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：EATDVOL；SUEGFATVOL；EAVOL；FATVOL；FZGFATVOL。非仓位。不碰数据网关。
 - 规则：G∩FAT∩vol；sc_g；K20/max_new5。新策略无 B。
 - 脚本：`eafatvol_s701.py` / `run_s701.sh`。
+
+### §700 EATDVOL_sc_td_h20 — ADOPT → 已上线（改按TD缩短排序）
+- 每笔 P19 +1.25 / P20 −0.08 / P21 +3.90 / W0 −1.66 / W00 +0.98 / W1 +4.57 / W2 +0.52 / R12 +3.19（**正段 6/8**）
+- R12 65笔 +3.19% PF1.66 MDD−7.0；N3 180笔 +3.04 PF1.76 MDD−12.4；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 EATDVOL_base(sc_g)：R12 +3.05 / N3 +2.73 / MDD−13.0 → **B 过**（R12/N3 每笔抬、回撤收窄）。
+- → **ADOPT**。上线（2026-11-02 05:14 CST）：`mid-ea-td-vol` 排序 **sc_g→TD缩短封顶200**；`s700_onboard_metrics.py`；replay 强制覆盖 22批/52只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：加速∩周期上 TD 排序抬近一年/三年——与 SUEGTD/FATTD 的 TD 排序否决不对称。
+
+### §701 EAFATVOL_h20 — REJECT（A 否·PF）
+- 每笔 P19 +0.64 / P20 −0.77 / P21 +4.14 / W0 −3.45 / W00 +0.09 / W1 +1.89 / W2 +2.70 / R12 +0.35（**正段 6/8**）
+- R12 69笔 +0.35% **PF1.07** MDD−9.8；N3 191笔 +1.55 PF1.40 MDD−14.5；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**（R12 PF<1.3）。解读：加速∩周转不镜像加速∩周期/盈余∩周转——近一年 PF 崩；**加速∩资产周转效率双合取∩放量暂缓**。
+
+## §702 [中线·现役改进] 业绩加速∩营业周期∩放量 TD缩短硬抬≥25（EATDVOL_td025_h20）— 预注册（2026-11-02 05:14 CST 写于跑任何收益之前）
+- 白话：现役 mid-ea-td-vol（G∩TD缩短≥20∩放量，§700 按TD排序）把 **TD 缩短硬抬** 到 **≥25日**；G/放量/排序不变。同进程 EATDVOL_base(≥20)。
+- 想法：刚 ADOPT TD 排序——试贴门槛硬抬（硬门槛，非 −pct）。对照 SUEGTDVOL/FATTDVOL TD硬抬已否。B 门对照 base。
+- 去重：EATDVOL_sc_td；SUEGTDVOL TD硬抬；TDVOL。非仓位。不碰数据网关。
+- 规则：G∩improve≥25∩vol vs ≥20；sc_td；K20/max_new5。B 门对照 base。
+- 脚本：`eatdvol_td025_s702.py` / `run_s702.sh`。
+
+## §703 [中线·文献] 业绩加速∩有形资产/负债∩放量（EATADVOL_h20）— 预注册（2026-11-02 05:14 CST 写于跑任何收益之前）
+- 白话：G ∩ TAD升幅≥0.25 ∩ 放量≥1.5×amt20；按 sc_g 排序；持20。
+- 想法 / 文献：加速∩FAT 刚否——改试 **加速∩有形资产杠杆** 双合取∩放量（硬合取，非 −pct；TADVOL/EATD 已上线；≠SUEGTAD 已否的盈余门槛）。对照 EATDVOL/TADVOL/SUEGTADVOL。
+- 去重：EAFATVOL；EATDVOL；SUEGTADVOL；TADVOL；TADETDVOL。非仓位。不碰数据网关。
+- 规则：G∩TAD∩vol；sc_g；K20/max_new5。新策略无 B。
+- 脚本：`eatadvol_s703.py` / `run_s703.sh`。

@@ -432,11 +432,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §699 业绩加速∩营业周期∩放量（scripts/midterm/eatdvol_s699.py EATDVOL_h20；§282 达标；2026-11-02 上线）
+    # §699/§700 业绩加速∩营业周期∩放量（§700 改按TD缩短排序；scripts/midterm/eatdvol_sc_td_s700.py）
     "mid-ea-td-vol": {
         "name": "业绩加速∩营业周期∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足业绩加速（G：扣非净利同比≥50%且加速、营收同比≥20%、扣非净利>0），与营业周期（turn_days）同比缩短≥20日，且信号日成交额≥1.5×前20日均额；按扣非净利同比（封顶300%）从高到低排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：业绩加速 × 周期效率 × 量能确认（§699）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足业绩加速（G：扣非净利同比≥50%且加速、营收同比≥20%、扣非净利>0），与营业周期（turn_days）同比缩短≥20日，且信号日成交额≥1.5×前20日均额；按营业周期缩短天数（封顶200，§700）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：业绩加速 × 周期效率 × 量能确认（§699）+ TD排序（§700）。",
         "kind": "ea_td_vol",
         "hold_days": 20,
         "schedule": "daily",
@@ -2409,11 +2409,12 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
                       f"业绩加速（扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%，上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，"
                       f"营收同比 {_f(p.get('or_yoy'), 1)}%）；成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "ea_td_vol":
-            score, label, better = round(float(p["score"]), 2), "业绩加速(扣非同比封顶300%)×TD合取", "higher"
+            score, label, better = round(float(p["score"]), 1), "营业周期缩短天数(封顶200)×EA合取", "higher"
             note = _RANK_CAP_NOTE
-            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
-                      f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%）、营收同比 {_f(p.get('or_yoy'), 1)}%"
-                      f" ∩ 营业周期缩短 {_f(p.get('td_improve'), 1)} 日；成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：营业周期缩短 {_f(p.get('td_improve'), 1)} 日"
+                      f"（§700 排序）∩ 扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
+                      f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%）、营收同比 {_f(p.get('or_yoy'), 1)}%；"
+                      f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "cas_vol":
             score, label, better = round(float(p["score"]), 2), "流动资产占比升幅(pp,封顶25)", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告流动资产占比上升放量："

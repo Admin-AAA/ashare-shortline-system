@@ -103,7 +103,7 @@ def eavol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return res
 
 def eatdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§699：G ∩ TD缩短 ∩ 放量≥1.5×amt20；排序 min(dtp,300)（同 EAVOL）。"""
+    """§699/§700：G ∩ TD缩短 ∩ 放量≥1.5×amt20；排序 TD缩短天数封顶200（§700 改序；事件不变）。"""
     from app.services.midterm_fina_events import td_candidates
 
     ea = eavol_candidates(db, as_of)
@@ -120,6 +120,12 @@ def eatdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         q["td_improve"] = e.get("improve")
         q["td_cur"] = e.get("cur")
         q["td_prev"] = e.get("prev")
+        # §700：排序改按 TD 缩短（封顶200）；保留 dtp 供展示
+        try:
+            imp = float(e.get("improve") if e.get("improve") is not None else e.get("score") or 0)
+        except (TypeError, ValueError):
+            imp = 0.0
+        q["score"] = round(min(imp, 200.0), 4)
         out.append(q)
     out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
     return out
