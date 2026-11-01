@@ -688,6 +688,28 @@ def etdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return sorted(out, key=lambda x: (-x["score"], x["code"]))
 
 
+
+# §656 TADETDVOL_h20（TAD≥0.25 ∩ ETD≥0.20 ∩ 放量；排序 TAD 升幅）
+def tadetdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§656：有形资产/负债改善(≥0.25) ∩ 股东权益/负债改善(≥0.20) ∩ 放量≥1.5×amt20；排序 TAD 升幅。"""
+    tad = tadvol_candidates(db, as_of)
+    etd = etd_candidates(db, as_of)
+    if tad is None or etd is None:
+        return None
+    etd_by = {p["code"]: p for p in etd}
+    out = []
+    for p0 in tad:
+        e = etd_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["etd_delta"] = e.get("delta")
+        q["etd_cur"] = e.get("cur")
+        q["etd_prev"] = e.get("prev")
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
+
 # §623 CASVOL_h20（流动资产占比上升∩放量；规则同 §242 / lt_research89，未调参）
 CAS_CUR_LO, CAS_CUR_HI, CAS_PREV_LO, CAS_PREV_HI = 20.0, 95.0, 10.0, 100.0
 CAS_DELTA_MIN, CAS_DELTA_CAP = 3.0, 25.0

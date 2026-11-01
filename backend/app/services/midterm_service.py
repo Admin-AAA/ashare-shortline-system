@@ -387,6 +387,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §656 TAD∩ETD∩放量（scripts/midterm/tadetdvol_s656.py TADETDVOL_h20；§282 达标；2026-11-02 上线）
+    "mid-tad-etd-vol": {
+        "name": "有形资产/负债∩股东权益/负债∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足有形资产/负债（tangibleasset_to_debt）升幅≥0.25 与股东权益/负债（eqt_to_debt）升幅≥0.20，且信号日成交额≥1.5×前20日均额；按有形资产/负债升幅（封顶2.0）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：资产负债表双改善 × 量能确认（§656）。",
+        "kind": "tad_etd_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §102 红利低波（scripts/midterm/lt_research19.py DVLV_h60，预注册 3 版中唯一达标，未调参）
     "long-dividend-lowvol": {
         "name": "红利低波月度组合（股息率+低波动，持60日）",
@@ -1698,6 +1707,21 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
 
+
+        if meta.get("kind") == "tad_etd_vol":
+            from app.services.midterm_fina_events import tadetdvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = tadetdvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
         if meta.get("kind") == "cas_vol":
             from app.services.midterm_fina_events import casvol_candidates
             held = _held_codes(db, sid, as_of)
@@ -2236,6 +2260,12 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["score"]), 3), "股东权益/负债升幅(封顶2.0)", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告股东权益/负债改善放量："
                       f"{_f(p.get('prev'), 3)} → {_f(p.get('cur'), 3)}，升幅 {_f(p.get('delta'), 3)}；"
+                      f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "tad_etd_vol":
+            score, label, better = round(float(p["score"]), 3), "有形资产/负债升幅(封顶2.0)×ETD合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告 TAD∩ETD 放量："
+                      f"有形资产/负债 {_f(p.get('prev'), 3)} → {_f(p.get('cur'), 3)} 升幅 {_f(p.get('delta'), 3)}；"
+                      f"股东权益/负债升幅 {_f(p.get('etd_delta'), 3)}；"
                       f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "cas_vol":
             score, label, better = round(float(p["score"]), 2), "流动资产占比升幅(pp,封顶25)", "higher"

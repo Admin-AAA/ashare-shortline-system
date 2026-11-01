@@ -7691,3 +7691,31 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 标准：§282；否则否决。
 - 脚本：`intdvol_s657.py` / `run_s657.sh`。
 
+### §656 TADETDVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +0.91 / P20 +1.65 / P21 +1.57 / W0 −3.52 / W00 −1.18 / W1 +4.85 / W2 +3.51 / R12 +2.02（**正段 6/8**）
+- R12 84笔 +2.02% PF1.63 MDD−11.3；N3 235笔 +3.48 PF2.04 MDD−8.8；彩票型（§285 标签，不挡 §282）
+- 判定 ✓✓✓✓✓ → **达标/采纳**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 01:25 CST）：`mid-tad-etd-vol`（kind=`tad_etd_vol`）；`s656_onboard_metrics.py`；replay 23批/200只（2026-07-29~10-30）；`safe_backend_restart` health 200。
+- 解读：TAD∩ETD 双合取∩放量过线——TAD∩CAS 刚否后同族另一腿成立；**BS 双合取不全否，保留 TAD∩ETD**。
+
+### §657 INTDVOL_h20 — REJECT
+- 每笔 P19 +0.80 / P20 +1.30 / P21 +3.00 / W0 −1.99 / W00 −0.25 / W1 +4.00 / W2 +3.32 / R12 +0.71（**正段 6/8**）
+- R12 89笔 +0.71% **PF1.19** MDD−8.9；N3 251笔 +2.64 PF1.75 MDD−9.7；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**。解读：有息负债余额大降∩放量近一年 PF 不足；**有息负债余额∩放量暂缓**。
+
+## §658 [中线·文献] 股东权益/负债∩流动资产占比∩放量（ETDCASVOL_h20）— 预注册（2026-11-02 01:26 CST 写于跑任何收益之前）
+- 白话：同日满足 ETD（升幅≥0.20）**与** CAS（升幅≥3.0pp）**且** amount≥1.5×amt20；排序按 ETD 升幅封顶2.0。持20。
+- 想法 / 文献：TAD∩ETD 刚 ADOPT、TAD∩CAS 刚否——试 **ETD∩CAS** 另一 BS 双合取∩放量（硬合取，非 −pct）。对照 TADETDVOL/TADCASVOL/CASVOL。
+- 去重：TADETDVOL；TADCASVOL；ETDVOL；CASVOL。非仓位。不碰数据网关。
+- 规则：ETD≥0.20 ∩ CAS≥3.0 ∩ vol；sc_etd；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`etdcasvol_s658.py` / `run_s658.sh`。
+
+## §659 [中线·文献] 扣非净利同比水平∩放量≥1.5×amt20（DTNPVOL_h20）— 预注册（2026-11-02 01:26 CST 写于跑任何收益之前）
+- 白话：DTNP（dt_netprofit_yoy≥20，水平事件）**再**要求信号日成交额≥1.5×前20日均额；排序 dt_netprofit_yoy 封顶100。持20。
+- 想法 / 文献：有息负债∩放量暂缓；每股收益同比∩放量暂停——接到 **扣非净利同比水平**∩放量（硬合取，非 −pct；≠EAVOL 加速、≠dt_eps）。对照 DTNP/EAVOL/EPSVOL/DTEPSVOL。
+- 去重：EAVOL；EPSVOL；DTEPSVOL；SUEVOL。非仓位。不碰数据网关。
+- 规则：DTNP ∩ (amount≥1.5·amt20)；sc_dtnp；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`dtnpvol_s659.py` / `run_s659.sh`。
+
