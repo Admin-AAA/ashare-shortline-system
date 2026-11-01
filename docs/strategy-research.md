@@ -8502,3 +8502,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：IOVOL；SEXPTDVOL；SUEGTDVOL；TDVOL；IOUVOL。非仓位。不碰数据网关。
 - 规则：IO∩TD∩vol；sc=−pct；K20/max_new5。新策略无 B。
 - 脚本：`iotdvol_s723.py` / `run_s723.sh`。
+
+### §722 IOVOL_v18_h20 — ADOPT → 已上线（放量 1.5×→1.8×）
+- 每笔 P19 +4.38 / P20 +2.72 / P21 +0.98 / W0 −1.06 / W00 −0.72 / W1 +7.27 / W2 +11.63 / R12 +6.96（**正段 6/8**）
+- R12 37笔 +6.96% PF2.65 MDD−4.3；N3 79笔 +8.34 PF3.61 MDD−4.4；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 IOVOL_base(1.5×)：R12 +5.06 / N3 +7.80 / MDD−4.6 → **B 过**（R12/N3 每笔抬、回撤收窄）。
+- → **ADOPT**。上线（2026-11-02 06:56 CST）：`mid-incentive-vol` 放量 **≥1.5×→≥1.8×**；`s722_onboard_metrics.py`；replay 强制覆盖 11批/12只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：激励∩放量上量能硬抬成立——镜像 SEXPVOL_v18，与 FATTD/EATD/FINA/FZGU 的 v18 否决不对称。
+
+### §723 IOTDVOL_h20 — REJECT（笔数不足）
+- 每笔 P19 — / P20 −9.50 / P21 −4.83 / W0 −7.24 / W00 +3.71 / W1 +6.47 / W2 +5.00 / R12 +10.98（**正段 4/8**）
+- R12 **4笔**；N3 10笔。判定否决（正段/笔数）。
+- → **REJECTED**。解读：激励∩周期合取过稀——**记候补，勿硬抬/软扩凑笔数**；**激励∩周期效率双合取∩放量暂缓**。
+
+## §724 [中线·现役改进] 激励期权∩放量 放量硬抬≥2.0×（IOVOL_v20_h20）— 预注册（2026-11-02 06:56 CST 写于跑任何收益之前）
+- 白话：现役 mid-incentive-vol（IO∩放量1.8×，−pct排序）把 **放量再硬抬** 到 **≥2.0×amt20**；事件/排序不变。同进程 IOVOL_base(1.8×)。
+- 想法：§722 v18 刚 ADOPT——续试贴档（硬门槛，非 −pct）。对照 SEXPVOL_v20 刚否。B 门对照 base。
+- 去重：IOVOL_v18；SEXPVOL_v18/v20；FZGUVOL_v18。非仓位。不碰数据网关。
+- 规则：(IO∩vol2.0) vs (IO∩vol1.8)；sc=−pct；K20/max_new5。B 门对照 base。
+- 脚本：`iovol_v20_s724.py` / `run_s724.sh`。
+
+## §725 [中线·文献] 激励期权∩资产周转效率∩放量（IOFATVOL_h20）— 预注册（2026-11-02 06:56 CST 写于跑任何收益之前）
+- 白话：首次含期权激励草案 ∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20；按 −pct 排序；持20。
+- 想法 / 文献：激励∩周期候补勿凑样——改试 **激励∩周转**（硬合取，非 −pct；IOVOL/FATVOL/SUEGFAT 已上线）。对照 IOTDVOL/SUEGFATVOL/IOVOL/FATVOL。
+- 去重：IOTDVOL；SUEGFATVOL；IOVOL；FATVOL；SEXPFATVOL。非仓位。不碰数据网关。
+- 规则：IO∩FAT∩vol；sc=−pct；K20/max_new5。新策略无 B。
+- 脚本：`iofatvol_s725.py` / `run_s725.sh`。

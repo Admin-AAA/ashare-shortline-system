@@ -221,7 +221,7 @@ def incentive_underreact_candidates(db, as_of: str) -> list[dict[str, Any]] | No
 
 
 def incentive_vol_candidates(db, as_of: str, store: bool = True) -> list[dict[str, Any]] | None:
-    """§523 IOVOL_h20：激励期权事件 ∩ 信号日成交额≥1.5×amt20；排序 −pct（与 §402 / 研究 iovol_s523 一致）。"""
+    """§523/§722 IOVOL：激励期权事件 ∩ 信号日成交额≥1.8×amt20（§722 硬抬；原≥1.5×）；排序 −pct（与 §402 / 研究一致）。"""
     from sqlalchemy import text, bindparam
     base = incentive_candidates(db, as_of, store=store)
     if base is None:
@@ -241,7 +241,7 @@ def incentive_vol_candidates(db, as_of: str, store: bool = True) -> list[dict[st
             amt20_f = float(amt20) if amt20 is not None else None
         except (TypeError, ValueError):
             amt20_f = None
-        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.5 * amt20_f:
+        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.8 * amt20_f:
             continue
         q = dict(p0)
         q["amount"] = amount
