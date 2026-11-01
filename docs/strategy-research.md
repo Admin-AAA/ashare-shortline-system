@@ -4332,3 +4332,23 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：type∈{预增,扭亏,略增,续盈} & net_profit_min>0 & (p_change_min>0 | type=续盈)；续盈排序分 = clip(p_change_min,300)，缺增幅记 0；同进程 F_any base；K20/max_new5。
 - 判定：A §282 中线；B 相对 base：R12/N3 每笔≥base、N3 回撤不更深（扩样本允许 n 上升）。A+B → 上线改类型集；否则否决。
 - 脚本 `lt_research156.py`；`run_s389.sh`；输出 `s389/`。
+
+### §388 / §389 结果（2026-11-01 11:09–11:14 CST 跑完；预注册 86cfe858 于跑数前已推送；规则未改）
+- **§388 BT_sc_prem_h20（大宗改按溢价排序）— ADOPT → 已上线**：每笔 P19 +2.99 / P20 +0.55 / P21 +2.39 / W0 −0.79 / W00 −0.33 / W1 +2.01 / W2 +3.95 / R12 +1.27（**正段 6/8**）；R12 100笔 +1.27% PF1.31 MDD−10.9；N3 379笔 +2.28 PF1.52 MDD−21.0；彩票型。A ✓✓✓✓✓。同进程 BT_base（按 ratio）：R12 +1.27 持平、N3 **+2.28 vs +2.21**、MDD 同 −21.0 → **B 过**。样本几乎不变（381→379）。→ **ADOPT**。上线：`mid-block-trade-premium` 事件门槛不变，排序键 ratio→**premium**；`s388_onboard_metrics.py` 刷新 metrics（R12 +1.27 / N3 +2.28）；`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-block-trade-premium --execute` → 20批/30只（2026-07-29~10-30）；`safe_backend_restart` 后 /api/health 200，summary 已含溢价率排序。
+- **§389 F_xy_h20（预告纳入续盈）— 否决（B）**：每笔 P19 +2.04 / P20 +0.12 / P21 +1.54 / W0 +0.69 / W00 −4.89 / W1 −0.13 / W2 +6.31 / R12 +3.69（**正段 6/8**）；R12 138笔 +3.69% PF1.84 MDD−10.4；N3 335笔 +2.90 PF1.61 **MDD−19.1**；A ✓。同进程 F_any_base：R12 +3.70 / N3 +2.88 / MDD**−18.8** → R12 略低且 **N3 回撤更深** → **B 否**。→ **REJECTED**；线上 mid-forecast-beat 类型集不变。解读：续盈扩样本几乎不增近一年成交，还略伤回撤。
+
+## §390 [中线·现役改进] 业绩加速同样本改按营收同比排序（EA_sc_orv_h20）— 预注册（2026-11-01 11:15 CST 写于跑任何收益之前）
+- 白话：现役 mid-earnings-accel（G：扣非同比≥50、营收同比≥20、扣非>0、同比加速）**事件一字不改**，只把同日排序从 sc_g=dtp 换成 **or_yoy（营收同比）降序**；持 20。样本与 base 同日候选相同。
+- 想法：经济逻辑从「利润增速」换成「收入增速」强度；镜像 §388 同样本换排序，不砍票。
+- 去重：EAU 弱反应、EA5 短持有、EA_combo 已否。本题只改排序键。非仓位。
+- 规则：lt_research20 G；EA_base 用 sc_g；EA_sc_orv 用 sc=orv clip；K20/max_new5。
+- 判定：A §282 中线；B 相对 base：R12/N3 每笔≥base、N3 回撤不更深。A+B → 上线改排序；否则否决。
+- 脚本 `lt_research157.py`；`run_s390.sh`；输出 `s390/`。
+
+## §391 [中线·现役改进/扩样本] 激励草案扩到全部首次（非仅期权）（INC_all_h20）— 预注册（2026-11-01 11:15 CST 写于跑任何收益之前）
+- 白话：现役 mid-incentive-option 只留含**股票期权**的首次草案；本题扩到 **全部首次激励草案**（含纯限制性股票等），排序仍 −r20；持 20。**扩样本**。
+- 想法 / 文献：激励公告后漂移不限于期权工具；§109 INC_h20 曾测但未按现行 §282 上线。现役只上了 INC_opt。
+- 去重：ICU/IO5 短线已否；现役 INC_opt。本题扩事件集、非收紧。
+- 规则：lt_research23 IA（全部首次）vs IO（opt）；同进程 IO_base；K20/max_new5。
+- 判定：A §282；B 相对 IO_base：R12/N3 每笔≥base、N3 回撤不更深（允许 n 上升）。A+B → 上线改事件集；否则否决。
+- 脚本 `lt_research158.py`；`run_s391.sh`；输出 `s391/`。

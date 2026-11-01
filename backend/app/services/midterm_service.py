@@ -126,12 +126,12 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §114 大宗交易溢价成交后漂移（scripts/midterm/lt_research25.py BT_prem_h20，预注册 3 版中采纳的一版，未调参；实盘候选 app/services/midterm_block_trade.py）
+    # §114 大宗交易溢价成交后漂移（原 BT_prem_h20 按 ratio 排序；§388 改为按 premium 排序，事件门槛不变；实盘候选 app/services/midterm_block_trade.py）
     # Tushare 大宗交易约 21:00 发布：17:35 盘后流水线通常 no_data，需 21:00 后 / 次日开盘前调用 generate_block_trade_picks(db, T) 出票
     "mid-block-trade-premium": {
         "name": "大宗交易溢价成交（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日晚间（交易所/Tushare 约21:00 发布当日大宗交易后），汇总每只股票当天全部大宗成交：成交量加权的大宗成交价不低于当日收盘价（溢价或平价成交），且大宗成交总额≥流通市值0.5%。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按大宗成交额占流通市值比例从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（每个策略每日最多 5 只，系统配置可调），当天信号超出时按上述排序取前几只买入。",
+        "summary": "每个交易日晚间（交易所/Tushare 约21:00 发布当日大宗交易后），汇总每只股票当天全部大宗成交：成交量加权的大宗成交价不低于当日收盘价（溢价或平价成交），且大宗成交总额≥流通市值0.5%。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按大宗成交溢价率（量加权价相对收盘）从高到低，次日开盘买入，各持有20个交易日（§388：事件门槛不变，只改排序键）。不限同时持有数量；每天新推荐数量有上限（每个策略每日最多 5 只，系统配置可调），当天信号超出时按上述排序取前几只买入。",
         "kind": "block_trade_premium",
         "hold_days": 20,
         "schedule": "daily",
@@ -1566,9 +1566,9 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["r20"]) * 100, 2), "公告前20日涨幅(%)", "lower"
             reason = f"{p.get('ann_date', '')} 首次披露含股票期权的激励草案：{p.get('title', '')}；公告前20日涨幅 {_f(score)}%"
         elif kind == "block_trade_premium":
-            score, label, better = round(float(p["ratio"]) * 100, 3), "大宗成交额/流通市值(%)", "higher"
-            reason = (f"大宗成交 {p.get('n_trades', '')} 笔，量加权价相对收盘溢价 {_f(float(p.get('premium') or 0) * 100)}%，"
-                      f"成交额占流通市值 {_f(score)}%")
+            score, label, better = round(float(p.get("premium") or p["score"]) * 100, 3), "大宗溢价率(%)", "higher"
+            reason = (f"大宗成交 {p.get('n_trades', '')} 笔，量加权价相对收盘溢价 {_f(score)}%，"
+                      f"成交额占流通市值 {_f(float(p.get('ratio') or 0) * 100, 3)}%")
         elif kind == "lowturn_lowvol":
             score, label, better = float(p["score"]), "60日换手排名+60日波动排名(越低越好)", "lower"
             reason = f"市值第 {p.get('mv_rank', '')} 名；60日均换手 {_f(p.get('turn60'))}%、60日日波动 {_f(p.get('vol60'))}%，合计排名最低的10只之一"

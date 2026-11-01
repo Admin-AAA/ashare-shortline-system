@@ -5,7 +5,7 @@
 口径：同一股票 T 日全部大宗成交汇总：amt = Σamount（万元），vwp = Σamount/Σvol（元/股，成交量加权大宗价）；
 premium = vwp / close_T − 1（daily_kbars 不复权收盘）；流通市值 fmv = 最近一期 daily_basic.circ_mv（万元，≤T）
 × close_T / 该快照日收盘；ratio = amt / fmv。入选：premium ≥ 0 且 ratio ≥ 0.5%，非北交所、非ST、上市>250交易日、
-20日均成交额>5000万（midterm_service._liq_ok）。排序 = ratio 降序，平手按代码升序。T 收盘后出信号、T+1 开盘买、持 20 日。
+20日均成交额>5000万（midterm_service._liq_ok）。排序 = premium（溢价率）降序，平手按代码升序（§388 改排序；事件门槛不变）。T 收盘后出信号、T+1 开盘买、持 20 日。
 时点：Tushare 大宗交易约 T 日 21:00 才发布 → 17:35 盘后流水线通常拿不到当日数据（返回 None = no_data，不落盘）；
 需要在 21:00 之后、T+1 开盘前调用 midterm_service.generate_block_trade_picks(db, T) 出票。"""
 from __future__ import annotations
@@ -132,6 +132,6 @@ def block_trade_candidates(db, as_of: str, rows: list[dict[str, Any]] | None = N
         return []
     names = dict(db.execute(text("SELECT code,name FROM stocks WHERE code IN :codes").bindparams(
         bindparam("codes", expanding=True)), {"codes": sorted(ok)}).all())
-    res = [{"code": c, "name": names.get(c, ""), **ev[c], "score": ev[c]["ratio"],
+    res = [{"code": c, "name": names.get(c, ""), **ev[c], "score": ev[c]["premium"],
             "total_mv": float(ok[c]["total_mv"] or 0), "amt20": float(ok[c]["amt20"])} for c in ok]
-    return sorted(res, key=lambda x: (-x["ratio"], x["code"]))
+    return sorted(res, key=lambda x: (-x["premium"], x["code"]))
