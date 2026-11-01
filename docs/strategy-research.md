@@ -6199,3 +6199,35 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：FZG ∩ muted ∩ (amount≥1.5·amt20)；sc；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`fzguvol_s549.py` / `run_s549.sh`。
+
+## §548 / §549 判定（2026-11-01 19:46 CST）
+
+### §548 EAVOL_d40_h20 — REJECT
+- 每笔 P19 +1.24 / P20 +0.10 / P21 +2.90 / W0 −3.62 / W00 −1.93 / W1 +3.41 / W2 +1.23 / R12 +1.03（**正段 6/8**）
+- R12 73笔 +1.03% **PF1.18** MDD−10.6；N3 204笔 +1.95 PF1.46 MDD−14.9；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**（近一年 PF）。同进程 EAVOL_base：R12 +1.56 / N3 +2.19 / MDD−13.4 → R12/N3 均降、MDD 更深 → **B 亦否**。
+- → **REJECTED**；线上 mid-earnings-accel-vol 仍 dtp≥50。解读：dtp 软到 40 伤近一年质量——与 orv 软扩同向停手。
+
+### §549 FZGUVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +1.05 / P20 +1.56 / P21 +1.10 / W0 +3.19 / W00 −2.94 / W1 +0.01 / W2 +5.65 / R12 +5.90（**正段 7/8**）
+- R12 62笔 +5.90% PF3.31 MDD−6.7；N3 175笔 +3.67 PF2.27 MDD−17.6；稳健型
+- 判定 ✓✓✓✓✓ → **达标/采纳**。新策略无 B。
+- → **ADOPT**。上线（2026-11-01 19:47 CST）：`mid-forecast-preincrease-underreact-vol`；`s549_onboard_metrics.py` 刷新（R12 +5.90 / N3 +3.67）。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-forecast-preincrease-underreact-vol --execute` → 2026-07-29~10-30 **6批/6只**（origin=replay，errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid 现役含 mid-forecast-preincrease-underreact-vol。顺带修复 `forecast_preincrease_underreact` generate 缺 save/continue。
+
+## §550 [中线·现役改进] 销售费用∩放量降幅软扩≥0.35（SEXPVOL_d035_h20）— 预注册（2026-11-01 19:47 CST 写于跑任何收益之前）
+- 白话：现役 mid-sales-exp-vol（降幅≥0.4 ∩ amount≥1.5×amt20，§536）把 **降幅门槛** 再软扩到 **≥0.35**；放量不变；排序仍降幅封顶10。同进程 SEXPVOL_base(≥0.4∩vol)。
+- 想法：§536 软到 0.4 ADOPT；FINA 同款 0.4 否；本题在 SEXP 轴再贴一步软扩（非 −pct）。B 门对照 base。
+- 去重：SEXPVOL_d04；SEXPVOL；FINAVOL_d04。非仓位。
+- 规则：(SEXP≥0.35∩vol1.5) vs (≥0.4∩vol1.5)；sc 封顶10；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`sexpvol_d035_s550.py` / `run_s550.sh`。
+
+## §551 [中线·文献] 略增∩弱反应∩放量≥1.5×amt20（FLZUVOL_h20）— 预注册（2026-11-01 19:47 CST 写于跑任何收益之前）
+- 白话：首次业绩预告略增 **且** 信号日涨跌∈[−1%,+2%]未涨停 **且** 成交额≥1.5×前20日均额；排序净利下限（与 FLZ/FLZU 一致）。持20。
+- 想法 / 文献：FZGUVOL（预增∩弱反应∩放量）刚 ADOPT；镜像略增子集接同款三重合取（硬合取，非 −pct）。对照 FLZVOL/FLZU/FZGUVOL。
+- 去重：FLZVOL；FLZU；FLZ；FZGUVOL。非仓位。不碰数据网关。
+- 规则：FLZ ∩ muted ∩ (amount≥1.5·amt20)；sc_np；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`flzuvol_s551.py` / `run_s551.sh`。
