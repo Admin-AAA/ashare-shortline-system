@@ -117,11 +117,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §429 业绩预告扭亏（scripts/midterm/ftz_s429.py FTZ_h20；§282 达标；2026-11-01 上线）
+    # §429/§436 业绩预告扭亏（ftz_s429 / lt_research181；§436 改按增幅排序；2026-11-01 上线）
     "mid-forecast-turnaround": {
         "name": "业绩预告扭亏（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的业绩预告，同一报告期只认公司第一次预告：类型为扭亏、预告净利润下限>0。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按预告净利下限从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：扭亏 PEAD；与现役 mid-forecast-beat（预增/扭亏/略增按增幅排序）事件子集不同、排序键不同。",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的业绩预告，同一报告期只认公司第一次预告：类型为扭亏、预告净利润下限>0。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按预告增幅下限从高到低（§436：缺增幅时回退净利下限；事件门槛不变），次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：扭亏 PEAD；与现役 mid-forecast-beat / preincrease / slight 事件子集或排序不同。",
         "kind": "forecast_turnaround",
         "hold_days": 20,
         "schedule": "daily",
@@ -1641,9 +1641,13 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             reason = (f"{p.get('ann_date', '')} 首次业绩预告（{p.get('forecast_type', '')}，{p.get('end_date', '')}）："
                       f"增幅下限 {_f(p.get('p_change_min'), 1)}%，净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e4)} 亿元")
         elif kind == "forecast_turnaround":
-            score, label, better = round(float(p.get("net_profit_min") or p["score"]) / 1e8, 3), "预告净利下限(亿元)", "higher"
+            if p.get("p_change_min") is not None:
+                score, label, better = _shown_pct(p.get("p_change_min"), p["score"]), "预告净利增幅下限(%)", "higher"
+                note = _RANK_CAP_NOTE
+            else:
+                score, label, better = round(float(p.get("net_profit_min") or p["score"]) / 1e8, 3), "预告净利下限(亿元)", "higher"
             reason = (f"{p.get('ann_date', '')} 首次业绩预告扭亏（{p.get('end_date', '')}）："
-                      f"净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e8, 3)} 亿元")
+                      f"增幅下限 {_f(p.get('p_change_min'), 1)}%，净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e8, 3)} 亿元")
         elif kind == "forecast_preincrease":
             score, label, better = _shown_pct(p.get("p_change_min"), p["score"]), "预告净利增幅下限(%)", "higher"
             note = _RANK_CAP_NOTE

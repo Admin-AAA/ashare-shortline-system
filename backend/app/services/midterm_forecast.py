@@ -141,7 +141,7 @@ def forecast_beat_candidates(db, as_of: str, store: bool = True) -> list[dict[st
 
 
 def forecast_turnaround_candidates(db, as_of: str, store: bool = True) -> list[dict[str, Any]] | None:
-    """§429 FTZ_h20：首次业绩预告 type=扭亏 且 net_profit_min>0；按净利下限降序（与研究 ftz_s429 一致）。"""
+    """§429/§436 FTZ_h20：首次业绩预告 type=扭亏 且 net_profit_min>0；按增幅降序（缺增幅回退净利/1e6；§436）。"""
     import pandas as pd
     from app.services.midterm_service import _liq_ok
     dates = [r[0] for r in db.execute(text(
@@ -187,9 +187,10 @@ def forecast_turnaround_candidates(db, as_of: str, store: bool = True) -> list[d
         npmin = pd.to_numeric(r["net_profit_min"], errors="coerce")
         if pd.isna(npmin) or not (npmin > 0):
             continue
-        score = float(npmin)
+        # §436：排序改按增幅（有则用 p_change_min；缺则回退净利下限/1e6，与 lt_research181 一致）
+        pmin = pd.to_numeric(r.get("p_change_min"), errors="coerce")
+        score = float(pmin) if not pd.isna(pmin) else float(npmin) / 1e6
         if code not in out or score > out[code]["score"]:
-            pmin = pd.to_numeric(r.get("p_change_min"), errors="coerce")
             out[code] = {"code": code, "ann_date": r["ann_date"], "end_date": r["end_date"], "forecast_type": "扭亏",
                          "p_change_min": None if pd.isna(pmin) else float(pmin),
                          "net_profit_min": float(npmin), "score": score}
