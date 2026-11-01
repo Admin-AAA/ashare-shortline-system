@@ -47,7 +47,7 @@ CG_MIN_YOY, CG_STREAK, CG_STREAK_CAP, CG_NPY_CAP = 5.0, 4, 12, 100.0
 DINC_INC_TH = 0.30
 
 FINA_FIELDS = ("ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt,"
-               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr,turn_days,fa_turn,tangibleasset_to_debt,eqt_to_debt")
+               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr,turn_days,fa_turn,tangibleasset_to_debt,eqt_to_debt,ca_to_assets")
 _FINA_TTL = 1800.0
 _fina_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _div_local: dict[str, Any] = {}
@@ -103,7 +103,7 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     for k in ("ts_code", "ann_date", "end_date"):
         f[k] = f[k].astype(str).str.strip()
     for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt",
-              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr", "turn_days", "fa_turn", "tangibleasset_to_debt", "eqt_to_debt"):
+              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr", "turn_days", "fa_turn", "tangibleasset_to_debt", "eqt_to_debt", "ca_to_assets"):
         if k in f.columns:
             f[k] = pd.to_numeric(f[k], errors="coerce")
     f = f[(f["ann_date"].str.len() == 8) & (f["end_date"].str.len() == 8)]
@@ -686,6 +686,51 @@ def etdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         q["vol_ratio"] = round(amount / amt20_f, 4)
         out.append(q)
     return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
+
+# §623 CASVOL_h20（流动资产占比上升∩放量；规则同 §242 / lt_research89，未调参）
+CAS_CUR_LO, CAS_CUR_HI, CAS_PREV_LO, CAS_PREV_HI = 20.0, 95.0, 10.0, 100.0
+CAS_DELTA_MIN, CAS_DELTA_CAP = 3.0, 25.0
+
+
+def cas_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """CAS_h20：ca_to_assets 本期∈[20,95]、去年∈[10,100]、升幅≥3.0pp；排序升幅封顶25。"""
+    def passes(cur: float, prev: float):
+        delta = cur - prev
+        ok = (CAS_CUR_LO <= cur <= CAS_CUR_HI and CAS_PREV_LO <= prev <= CAS_PREV_HI and delta >= CAS_DELTA_MIN)
+        return ok, min(delta, CAS_DELTA_CAP), {"delta": delta}
+    return _fina_events(db, as_of, "ca_to_assets", passes)
+
+
+def casvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§623 CASVOL_h20：流动资产占比上升 ∩ 信号日成交额≥1.5×amt20；排序升幅封顶25。"""
+    from sqlalchemy import text, bindparam
+    base = cas_candidates(db, as_of)
+    if base is None:
+        return None
+    if not base:
+        return []
+    codes = [p["code"] for p in base]
+    rows = db.execute(text(
+        "SELECT code, amount FROM daily_kbars WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    amt_by = {r["code"]: float(r["amount"]) for r in rows if r["amount"] is not None}
+    out = []
+    for p0 in base:
+        amount = amt_by.get(p0["code"])
+        amt20 = p0.get("amt20")
+        try:
+            amt20_f = float(amt20) if amt20 is not None else None
+        except (TypeError, ValueError):
+            amt20_f = None
+        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.5 * amt20_f:
+            continue
+        q = dict(p0)
+        q["amount"] = amount
+        q["vol_ratio"] = round(amount / amt20_f, 4)
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
 
 
 
