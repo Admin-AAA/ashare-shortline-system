@@ -137,6 +137,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §515 SUEG∩放量（scripts/midterm/suegvol_s515.py SUEGVOL_h20；§282 达标；2026-11-01 上线）
+    "mid-sue-accel-vol": {
+        "name": "标准化意外∩加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在「标准化意外∩业绩加速」事件池上再要求信号日成交额≥1.5×前20日均额。按 min(SUE,20) 从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：Bernard–Thomas SUE × PEAD 加速 × 量能确认（§515）。",
+        "kind": "sue_accel_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §103 业绩预告正向漂移（scripts/midterm/lt_research20.py F_any_h20，预注册 3 版中采纳的一版，未调参；实盘候选 app/services/midterm_forecast.py）
     "mid-forecast-beat": {
         "name": "业绩预告首次预喜（持20日）",
@@ -224,12 +233,12 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §114 大宗交易溢价成交后漂移（原 BT_prem_h20 按 ratio 排序；§388 改为按 premium 排序；§474 ratio 0.5%→0.45%；§490 prem≥0.5%；§498 prem≥1%；§512 prem≥1.2%；实盘候选 app/services/midterm_block_trade.py）
+    # §114 大宗交易溢价成交后漂移（原 BT_prem_h20 按 ratio 排序；§388 改为按 premium 排序；§474 ratio 0.5%→0.45%；§490 prem≥0.5%；§498 prem≥1%；§512 prem≥1.2%；§514 prem≥1.35%；实盘候选 app/services/midterm_block_trade.py）
     # Tushare 大宗交易约 21:00 发布：17:35 盘后流水线通常 no_data，需 21:00 后 / 次日开盘前调用 generate_block_trade_picks(db, T) 出票
     "mid-block-trade-premium": {
         "name": "大宗交易溢价成交（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日晚间（交易所/Tushare 约21:00 发布当日大宗交易后），汇总每只股票当天全部大宗成交：成交量加权的大宗成交价相对收盘溢价≥1.2%，且大宗成交总额≥流通市值0.45%。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按大宗成交溢价率（量加权价相对收盘）从高到低，次日开盘买入，各持有20个交易日（§388 排序=溢价；§474：ratio≥0.45%；§498：prem≥1%；§512：prem≥1.2%）。不限同时持有数量；每天新推荐数量有上限（每个策略每日最多 5 只，系统配置可调），当天信号超出时按上述排序取前几只买入。",
+        "summary": "每个交易日晚间（交易所/Tushare 约21:00 发布当日大宗交易后），汇总每只股票当天全部大宗成交：成交量加权的大宗成交价相对收盘溢价≥1.35%，且大宗成交总额≥流通市值0.45%。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按大宗成交溢价率（量加权价相对收盘）从高到低，次日开盘买入，各持有20个交易日（§388 排序=溢价；§474：ratio≥0.45%；§498：prem≥1%；§512：prem≥1.2%；§514：prem≥1.35%）。不限同时持有数量；每天新推荐数量有上限（每个策略每日最多 5 只，系统配置可调），当天信号超出时按上述排序取前几只买入。",
         "kind": "block_trade_premium",
         "hold_days": 20,
         "schedule": "daily",
@@ -1286,6 +1295,19 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+        if meta.get("kind") == "sue_accel_vol":
+            from app.services.midterm_suegvol import suegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            sg = suegvol_candidates(db, as_of)
+            if sg is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in sg if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
         if meta.get("kind") == "forecast_beat":
             from app.services.midterm_forecast import forecast_beat_candidates
             held = _held_codes(db, sid, as_of)
@@ -1800,6 +1822,13 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告放量确认：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%；"
                       f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "sue_accel_vol":
+            score, label, better = round(float(p["score"]), 4), "SUE(封顶20)", "higher"
+            note = _RANK_CAP_NOTE
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：SUE {_f(p.get('sue'), 2)}，"
+                      f"单季扣非 {_f(float(p.get('q_sq') or 0) / 1e8, 2)} 亿；"
+                      f"业绩加速（扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%，上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，"
+                      f"营收同比 {_f(p.get('or_yoy'), 1)}%）；成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "forecast_beat":
             score, label, better = _shown_pct(p.get("p_change_min"), p["score"]), "预告净利增幅下限(%)", "higher"
             note = _RANK_CAP_NOTE

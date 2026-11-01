@@ -5681,3 +5681,37 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：SUE∩G∩(amount≥1.5·amt20)；sc_sue；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`suegvol_s515.py` / `run_s515.sh`。
+
+## §514 / §515 判定（2026-11-01 17:45 CST）
+
+### §514 BT_p0135_h20 — ADOPT → 已上线
+- 每笔 P19 +0.84 / P20 +2.36 / P21 +1.19 / W0 −2.16 / W00 +0.00 / W1 +3.67 / W2 +4.24 / R12 +3.29（**正段 6/8**）
+- R12 31笔 +3.29% PF1.76 MDD−6.5；N3 132笔 +3.75 PF1.96 MDD−9.4；彩票型
+- 判定 ✓✓✓✓✓ → **ADOPT**。同进程 BT_base(prem≥1.2%)：R12 +3.01 / N3 +3.60 / MDD−9.4 → 每笔均抬、回撤不深 → **B 过**。样本 32→31。
+- 上线（2026-11-01 17:57 CST）：`mid-block-trade-premium` prem 1.2%→**≥1.35%**（ratio 仍≥0.45%）；`s514_onboard_metrics.py` 刷新（R12 +3.29 / N3 +3.75）。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-block-trade-premium --execute` → 2026-07-29~10-30 **6批/10只**。
+- `safe_backend_restart` 后 health 8765 **200**；summary 已改≥1.35%。
+
+### §515 SUEGVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +1.96 / P20 +0.80 / P21 +6.19 / W0 −1.84 / W00 +1.12 / W1 +3.16 / W2 +2.47 / R12 +2.80（**正段 7/8**）
+- R12 71笔 +2.80% PF1.62 MDD−10.4；N3 169笔 +2.82 PF1.78 MDD−10.4；彩票型
+- 判定 ✓✓✓✓✓ → **ADOPT**。新策略无 B。
+- 上线（2026-11-01 17:57 CST）：`mid-sue-accel-vol`（kind=`sue_accel_vol`，`midterm_suegvol.suegvol_candidates`：SUEG∩amount≥1.5×amt20；排序 min(SUE,20)）；`s515_onboard_metrics.py`。
+- replay：→ 2026-07-29~10-30 **22批/79只**（errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid 现役含 mid-sue-accel-vol。
+
+## §516 [中线·现役改进] 大宗溢价硬门槛≥1.4%（BT_p014_h20）— 预注册（2026-11-01 17:58 CST 写于跑任何收益之前）
+- 白话：现役 mid-block-trade-premium（§514 prem≥1.35%、ratio≥0.45%）把 **溢价** 再抬到 **≥1.4%**；ratio 仍≥0.45%；排序仍 premium。同进程 BT_base(prem≥1.35%,ratio≥0.45%)。
+- 想法：溢价轴连续 ADOPT 至 1.35%；1.5% 曾差 R12 笔数。本题取 **1.4%**（硬门槛，非 −pct）。
+- 去重：BT_p0135/p012/p015/p01；BT_r06；BTU。非仓位。
+- 规则：prem≥1.4% & ratio≥0.45% vs prem≥1.35% & ratio≥0.45%；sc_prem；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`lt_research221.py` / `run_s516.sh`。
+
+## §517 [中线·文献] 预增∩放量≥1.5×amt20（FZGVOL_h20）— 预注册（2026-11-01 17:58 CST 写于跑任何收益之前）
+- 白话：现役预增事件（type=预增、增幅>0、净利下限>0）**再**要求信号日成交额≥1.5×前20日均额；按增幅封顶300降序；持20。
+- 想法 / 文献：EAVOL/SUEGVOL 量能确认刚 ADOPT；预增 PEAD（FZG 已上线）接同款放量硬合取（硬合取，非 −pct）。对照 FZG_p50 硬抬伤 B、FZGU 弱反应已上线。
+- 去重：FZG；FZGU；FZG_p50；EAVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：FZG ∩ (amount≥1.5·amt20)；sc_a；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`fzgvol_s517.py` / `run_s517.sh`。
