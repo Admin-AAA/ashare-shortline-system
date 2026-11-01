@@ -6231,3 +6231,34 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：FLZ ∩ muted ∩ (amount≥1.5·amt20)；sc_np；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`flzuvol_s551.py` / `run_s551.sh`。
+
+## §550 / §551 判定（2026-11-01 19:53 CST）
+
+### §550 SEXPVOL_d035_h20 — ADOPT → 已上线
+- 每笔 P19 +0.43 / P20 +1.40 / P21 +2.81 / W0 −2.66 / W00 −2.40 / W1 +2.00 / W2 +2.01 / R12 +4.62（**正段 6/8**）
+- R12 86笔 +4.62% PF2.31 MDD−5.9；N3 254笔 +2.89 PF1.77 MDD−12.4；稳健型
+- 判定 ✓✓✓✓✓ → A 过。同进程 SEXPVOL_base(≥0.4)：R12 +3.32 / N3 +2.38 / MDD−12.9 → R12/N3 均抬、MDD 不深 → **B 过**。
+- → **ADOPT**。上线（2026-11-01 19:53 CST）：`mid-sales-exp-vol` 降幅 0.4→**≥0.35**；`s550_onboard_metrics.py` 刷新（R12 +4.62 / N3 +2.89）。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-sales-exp-vol --execute` → 2026-07-29~10-30 **32批/573只**（origin=replay，errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid mid-sales-exp-vol 已改≥0.35。
+
+### §551 FLZUVOL_h20 — REJECT
+- 每笔 P19 −5.33 / P20 +6.70 / P21 +2.33 / W0 +2.66 / W00 −2.80 / W1 +0.19 / W2 +1.83 / R12 +5.64（**正段 6/8**）
+- R12 **7**笔 +5.64% PF90.4 MDD−0.6；N3 36笔 +1.62 PF1.53 MDD−4.9；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 笔数不足）。解读：略增三重合取过稀——预增合取（FZGUVOL）可过，略增镜像站不住。
+
+## §552 [中线·现役改进] 财务费用∩放量降幅软扩≥0.45（FINAVOL_d045_h20）— 预注册（2026-11-01 19:54 CST 写于跑任何收益之前）
+- 白话：现役 mid-fina-exp-vol（降幅≥0.5 ∩ amount≥1.5×amt20）把 **降幅门槛** 软扩到 **≥0.45**；放量不变；排序仍去封顶。同进程 FINAVOL_base(≥0.5)。
+- 想法：FINAVOL_d04（≥0.4）B 否；SEXP 软扩连续 ADOPT；本题取 **0.45 更贴门槛**（非 −pct）。B 门对照 base。
+- 去重：FINAVOL_d04；FINAVOL；SEXPVOL_d035。非仓位。
+- 规则：(FINA≥0.45∩vol1.5) vs (≥0.5∩vol1.5)；sc 去封顶；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`finavol_d045_s552.py` / `run_s552.sh`。
+
+## §553 [中线·文献] 预告合集∩弱反应∩放量≥1.5×amt20（FAUVOL_h20）— 预注册（2026-11-01 19:54 CST 写于跑任何收益之前）
+- 白话：业绩预告合集（预增/扭亏/略增）**且** 信号日涨跌∈[−1%,+2%]未涨停 **且** 成交额≥1.5×前20日均额；排序增幅封顶300。持20。
+- 想法 / 文献：FZGUVOL（预增三重合取）刚 ADOPT；FAVOL（合集∩放量无弱反应）否；本题合集+弱反应+放量硬合取（非 −pct）。对照 FZGUVOL/FAVOL/FAU。
+- 去重：FAVOL；FAU；FZGUVOL；FA。非仓位。不碰数据网关。
+- 规则：FA ∩ muted ∩ (amount≥1.5·amt20)；sc_a；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`fauvol_s553.py` / `run_s553.sh`。
