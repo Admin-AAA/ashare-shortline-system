@@ -47,7 +47,7 @@ CG_MIN_YOY, CG_STREAK, CG_STREAK_CAP, CG_NPY_CAP = 5.0, 4, 12, 100.0
 DINC_INC_TH = 0.30
 
 FINA_FIELDS = ("ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt,"
-               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr,turn_days,fa_turn")
+               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr,turn_days,fa_turn,tangibleasset_to_debt")
 _FINA_TTL = 1800.0
 _fina_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _div_local: dict[str, Any] = {}
@@ -103,7 +103,7 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     for k in ("ts_code", "ann_date", "end_date"):
         f[k] = f[k].astype(str).str.strip()
     for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt",
-              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr", "turn_days", "fa_turn"):
+              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr", "turn_days", "fa_turn", "tangibleasset_to_debt"):
         if k in f.columns:
             f[k] = pd.to_numeric(f[k], errors="coerce")
     f = f[(f["ann_date"].str.len() == 8) & (f["end_date"].str.len() == 8)]
@@ -598,6 +598,51 @@ def tdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         q["vol_ratio"] = round(amount / amt20_f, 4)
         out.append(q)
     return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
+
+# §619 TADVOL_h20（有形资产/负债改善∩放量；规则同 §234 / lt_research85，未调参）
+TAD_CUR_LO, TAD_CUR_HI, TAD_PREV_LO, TAD_PREV_HI = 0.3, 5.0, 0.2, 8.0
+TAD_DELTA_MIN, TAD_DELTA_CAP = 0.20, 2.0
+
+
+def tad_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """TAD_h20：tangibleasset_to_debt 本期∈[0.3,5]、去年∈[0.2,8]、升幅≥0.20；排序升幅封顶2.0。"""
+    def passes(cur: float, prev: float):
+        delta = cur - prev
+        ok = (TAD_CUR_LO <= cur <= TAD_CUR_HI and TAD_PREV_LO <= prev <= TAD_PREV_HI and delta >= TAD_DELTA_MIN)
+        return ok, min(delta, TAD_DELTA_CAP), {"delta": delta}
+    return _fina_events(db, as_of, "tangibleasset_to_debt", passes)
+
+
+def tadvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§619 TADVOL_h20：有形资产/负债改善 ∩ 信号日成交额≥1.5×amt20；排序升幅封顶2.0。"""
+    from sqlalchemy import text, bindparam
+    base = tad_candidates(db, as_of)
+    if base is None:
+        return None
+    if not base:
+        return []
+    codes = [p["code"] for p in base]
+    rows = db.execute(text(
+        "SELECT code, amount FROM daily_kbars WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    amt_by = {r["code"]: float(r["amount"]) for r in rows if r["amount"] is not None}
+    out = []
+    for p0 in base:
+        amount = amt_by.get(p0["code"])
+        amt20 = p0.get("amt20")
+        try:
+            amt20_f = float(amt20) if amt20 is not None else None
+        except (TypeError, ValueError):
+            amt20_f = None
+        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.5 * amt20_f:
+            continue
+        q = dict(p0)
+        q["amount"] = amount
+        q["vol_ratio"] = round(amount / amt20_f, 4)
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
 
 
 def dincvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
