@@ -360,12 +360,21 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §619 有形资产/负债改善∩放量（scripts/midterm/tadvol_s619.py TADVOL_h20；§282 达标；2026-11-01 上线）
+    # §619/§620 有形资产/负债改善∩放量（升幅≥0.25；§620 硬抬 ADOPT；2026-11-01 上线）
     "mid-tad-vol": {
         "name": "有形资产/负债改善∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：有形资产/负债（tangibleasset_to_debt）本期∈[0.3,5]、去年同报告期∈[0.2,8]且同比升幅≥0.20，且信号日成交额≥1.5×前20日均额；按升幅（封顶2.0）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：有形资产覆盖负债改善 × 量能确认（§619 / §234）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：有形资产/负债（tangibleasset_to_debt）本期∈[0.3,5]、去年同报告期∈[0.2,8]且同比升幅≥0.25，且信号日成交额≥1.5×前20日均额；按升幅（封顶2.0）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：有形资产覆盖负债改善 × 量能确认（§619/§620 / §234）。",
         "kind": "tad_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
+    # §621 股东权益/负债改善∩放量（scripts/midterm/etdvol_s621.py ETDVOL_h20；§282 达标；2026-11-01 上线）
+    "mid-etd-vol": {
+        "name": "股东权益/负债改善∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：股东权益/负债（eqt_to_debt）本期∈[0.3,5]、去年同报告期∈[0.2,8]且同比升幅≥0.20，且信号日成交额≥1.5×前20日均额；按升幅（封顶2.0）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：股东权益覆盖负债改善 × 量能确认（§621 / §236）。",
+        "kind": "etd_vol",
         "hold_days": 20,
         "schedule": "daily",
     },
@@ -1666,6 +1675,20 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
 
+        if meta.get("kind") == "etd_vol":
+            from app.services.midterm_fina_events import etdvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = etdvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
         if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy", "ncs_switch", "cg_streak", "sexp_yoy", "fina_yoy"):
             from app.services import midterm_fina_events as fe
             cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates,
@@ -2184,6 +2207,11 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
         elif kind == "tad_vol":
             score, label, better = round(float(p["score"]), 3), "有形资产/负债升幅(封顶2.0)", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告有形资产/负债改善放量："
+                      f"{_f(p.get('prev'), 3)} → {_f(p.get('cur'), 3)}，升幅 {_f(p.get('delta'), 3)}；"
+                      f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "etd_vol":
+            score, label, better = round(float(p["score"]), 3), "股东权益/负债升幅(封顶2.0)", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告股东权益/负债改善放量："
                       f"{_f(p.get('prev'), 3)} → {_f(p.get('cur'), 3)}，升幅 {_f(p.get('delta'), 3)}；"
                       f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "udp_yoy":
