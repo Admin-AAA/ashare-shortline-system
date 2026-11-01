@@ -4095,3 +4095,10 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - **§364 RPU_h5（回购预案弱反应，持5日）— 达标 → 上线**：每笔 P19 +3.11 / P20 +0.49 / P21 +0.58 / W0 +1.02 / W00 +0.08 / W1 +3.01 / W2 +1.08 / R12 +1.20（**正段 8/8**，熊市段 ≥−5）；R12 127笔 胜52.8% +1.20%/笔 PF1.56 MDD−3.7；N3 345笔 +1.82% PF1.96 MDD−8.7；两头各去5% R12 +0.86 / N3 +1.53，中位数 +0.36/+0.60 → **稳健型**。判定 ✓✓✓✓✓。→ **ADOPT**。上线 id=`mid-repurchase-underreact`（kind=`repurchase_underreact`，持 5 日；事件=现役 RP_r05，另加信号日 pct∈[-1,+2] 且未涨停；按金额/市值降序；实盘不设仓位上限）。接入 `/mid` 日推 + `rebuild_replay_picks.py --onboard` 近 3 月。
 - **§365 RP_mv_combo（回购金额/市值百分位+小市值百分位）— 否决**：自身 A 条 R12 PF1.12 <1.3（第2条不过）；相对 RP_base：R12 +0.53 vs +1.35、N3 +2.26 vs +2.55 均下降 → B 否。→ **REJECTED**；线上 mid-repurchase-plan 不变。解读：给回购再叠「小市值」维会伤近一年每笔，与 FA_combo/RP_combo 同类——事件强度排序不宜再被市值/涨跌幅组合稀释。
 - 产物：`rpu_s364.py` / `run_s364.sh` / `output/research/s364/`；`lt_research143.py` / `run_s365.sh` / `output/research/s365/`。
+
+## 2026-11-01 10:06 CST · §364 上线收尾
+- 预注册 `06b614dd`；结果+接入 `bdfff73c`；`up_limit` 列修复 `d0da2bb4`（HEAD）。
+- `/mid` 现役 **12→13**：新增 `mid-repurchase-underreact`（持 5 日）；API `/api/horizons/mid/strategies` 可见。
+- replay 近3月（2026-07-29~10-30）：**27 批 37 只**，origin=replay；单日最多 3 只（未触每日 5 上限）。
+- safe_backend_restart 后 health 8765/5174 **200**；migration 0029 ok。
+- §362/§363/§365 均否决，只记日志；未碰数据网关/TickDB/TDX；未动无关脏文件。
