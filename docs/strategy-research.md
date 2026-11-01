@@ -5447,3 +5447,33 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：IO ∩ SUE≥2；sc_sue；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`iosue_s499.py` / `run_s499.sh`。
+
+## §498 / §499 判定（2026-11-01）
+
+### §498 BT_p01_h20 — ADOPT → 已上线
+- 每笔 P19 +0.42 / P20 +2.77 / P21 +1.23 / W0 −1.45 / W00 −0.37 / W1 +3.80 / W2 +3.73 / R12 +2.39（**正段 6/8**）
+- R12 33笔 +2.39% PF1.53 MDD−6.8；N3 144笔 +3.45 PF1.89 MDD−9.4；彩票型
+- 判定 ✓✓✓✓✓ → A 过。同进程 BT_base（prem≥0.5%）：R12 **+2.20** / N3 **+3.27** / MDD**−10.8** → 每笔均抬、回撤改善 → **B 过**。样本 43→33 / 172→144。
+- → **ADOPT**。上线（2026-11-01 16:53 CST）：`mid-block-trade-premium` prem 0.5%→**≥1%**（ratio 仍≥0.45%）；`s498_onboard_metrics.py` 刷新 metrics。
+- replay：2026-07-29~10-30 **6批/12只**（origin=replay，errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；summary 已改 prem≥1%。
+
+### §499 IOSUE_h20 — REJECT
+- 回测脚本缺 `lim_up_open`（prep 未带齐全行情列）各段崩溃；且年信号仅 0–5 只，合取过稀（类 FZGSUE）。
+- → **否决**（不可用 / 样本不可交易）。不改 mid-incentive-option。
+
+## §500 [中线·现役改进] 回购预案硬门槛 ratio≥0.6%（RP_r06_h20）— 预注册（2026-11-01 16:55 CST 写于跑任何收益之前）
+- 白话：现役 mid-repurchase-plan（ratio≥0.5%）把占比门槛抬到 **≥0.6%**；排序仍 ratio。同进程 RP_base(≥0.5%)。
+- 想法：RP 软扩 0.45 已否；BT 溢价硬抬连续 ADOPT；本题对回购做对称 **硬抬**（硬门槛，非 −pct）。
+- 去重：RP_r045/r04；RPU；RPU20。非仓位。
+- 规则：ratio≥0.6% vs ≥0.5%；sc_r；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`lt_research213.py` / `run_s500.sh`。
+
+## §501 [中线·文献] 回购预案∩标准化意外合取（RPSUE_h20）— 预注册（2026-11-01 16:55 CST 写于跑任何收益之前）
+- 白话：回购预案金额≥市值 0.5%，**同时** SUE≥2 且单季扣非>0；按 min(SUE,20) 降序；持 20。
+- 想法 / 文献：回购治理信号 × Bernard–Thomas SUE（硬合取，非 −pct）。对照 IOSUE/FZGSUE 过稀或崩脚本；R23 全行情列 + SUE 左连接。
+- 去重：RP；RPU；SUE；SUEG；IOSUE；FZGSUE。非仓位。不碰数据网关。
+- 规则：RP_r05 ∩ SUE≥2；sc_sue；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`rpsue_s501.py` / `run_s501.sh`。
