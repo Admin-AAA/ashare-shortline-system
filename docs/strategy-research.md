@@ -7822,3 +7822,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 想法 / 文献：TAD∩FAT 刚否、ETD∩FAT/FAT∩TD 已上线——试另一 **跨族** ETD∩TD∩放量（BS∩周期效率，硬合取，非 −pct）。对照 ETDFATVOL/FATTDVOL/ETDVOL/TDVOL。
 - 去重：ETDFATVOL；FATTDVOL；TADFATVOL；ETDVOL；TDVOL。非仓位。不碰数据网关。
 - 门槛：§282 绝对收益（新策略无 B）。
+
+### §666 FATTDVOL_i25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +0.23 / P20 +0.80 / P21 +1.70 / W0 −4.60 / W00 +0.35 / W1 +0.16 / W2 +3.54 / R12 +1.60（**正段 7/8**）
+- R12 77笔 +1.60% PF1.38 MDD−9.2；N3 218笔 +1.57 PF1.37 MDD−16.2；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 FATTDVOL_base：R12 +1.93 / N3 +1.66 / MDD−18.1 → **B 否**（R12/N3 每笔均降；MDD 虽收窄不计）。
+- → **REJECTED**；线上 mid-fa-td-vol 仍 TD缩短≥20。解读：双合取上 TD 缩短硬抬不镜像 FAT 硬抬——**停 FATTDVOL TD缩短硬抬轴**。
+
+### §667 ETDTDVOL_h20 — REJECT
+- 每笔 P19 −0.83 / P20 +3.56 / P21 +4.35 / W0 −3.55 / W00 −1.32 / W1 +7.37 / W2 +1.20 / R12 +1.72（**正段 5/8**）
+- R12 63笔 +1.72% PF1.39 MDD−7.2；N3 171笔 +3.73 PF2.01 MDD−11.1；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**（正段不足）。解读：ETD∩TD 不镜像 ETD∩FAT/FAT∩TD——**跨族 ETD∩周期效率双合取∩放量暂缓**。
+
+## §668 [中线·现役改进] ETD∩FAT∩放量 ETD升幅硬抬≥0.25（ETDFATVOL_d025_h20）— 预注册（2026-11-02 02:22 CST 写于跑任何收益之前）
+- 白话：现役 mid-etd-fa-vol（ETD≥0.20∩FAT≥0.10∩放量）把 **ETD 升幅硬抬** 到 **≥0.25**；FAT/放量/排序(ETD升幅)不变。同进程 ETDFATVOL_base(≥0.20)。
+- 想法：§664 FAT 硬抬刚否；ETD 单独硬抬曾否——在 **跨族双合取** 上改抬另一腿（硬门槛，非 −pct）。B 门对照 base。
+- 去重：ETDFATVOL；ETDFATVOL_r012；ETDVOL_d025。非仓位。
+- 门槛：A=§282；B=相对 base R12&N3 每笔不降、N3 MDD 不加深。
+
+## §669 [中线·文献] 盈余加速∩营业周期∩放量（SUEGTDVOL_h20）— 预注册（2026-11-02 02:22 CST 写于跑任何收益之前）
+- 白话：SUE≥2.2 ∩ G ∩ TD缩短≥20 ∩ 信号日成交额≥1.5×amt20；排序 min(SUE,20)；持20。
+- 想法 / 文献：ETD∩TD 刚否——改试 **盈余∩周期效率** 双合取∩放量（硬合取，非 −pct；SUE 用线上 2.2）。对照 SUEGVOL/TDVOL/FATTDVOL。
+- 去重：SUEGVOL；TDVOL；ETDTDVOL；FATTDVOL。非仓位。不碰数据网关。
+- 门槛：§282 绝对收益（新策略无 B）。
