@@ -8577,3 +8577,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：RPUTDVOL；RPUVOL；IOFATVOL；FATTDVOL。非仓位。不碰数据网关。
 - 规则：RPU∩FAT∩vol；sc=−pct；K20/max_new5。新策略无 B。
 - 脚本：`rpufatvol_s729.py` / `run_s729.sh`。
+
+### §728 FLZVOL_v18_h20 — REJECT（笔数不足）
+- 每笔 P19 +1.56 / P20 +4.07 / P21 +3.37 / W0 +3.04 / W00 −2.56 / W1 +0.34 / W2 +7.03 / R12 +3.51（**正段 7/8**）
+- R12 **24笔** +3.51% PF2.67 MDD−3.8；N3 124笔 +2.90 PF2.08 MDD−12.7；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 n=24<30）。同进程 base：R12 +2.30 / N3 +2.49 / MDD−13.9（指标抬但笔数门不过；勿凑样）。
+- → **REJECTED**；线上 mid-forecast-slight-vol 仍放量≥1.5×。解读：**记候补，勿硬抬/软扩凑笔数**；**停 FLZVOL 放量硬抬轴**。
+
+### §729 RPUFATVOL_h20 — REJECT（样本崩）
+- 每笔 P19 +5.14 / P20 — / P21 +0.11 / W0 +0.25 / W00 −2.86 / W1 −10.88 / W2 — / R12 +1.03（**正段 4/8**）
+- R12 **2笔**；彩票型。判定否决。
+- → **REJECTED**。解读：回购弱反应∩周转同∩周期——过稀；**回购弱反应∩效率双合取∩放量暂缓**（FAT/TD 双否）。
+
+## §730 [中线·现役改进] 预增∩放量 放量硬抬≥1.8×（FZGVOL_v18_h20）— 预注册（2026-11-02 07:15 CST 写于跑任何收益之前）
+- 白话：现役 mid-forecast-preincrease-vol（预增∩放量1.5×，按增幅封顶300排序）把 **放量硬抬** 到 **≥1.8×amt20**；事件/排序不变。同进程 FZGVOL_base(1.5×)。
+- 想法：FLZ/DINC/FATTD 量能硬抬否或候补——改试预增∩放量现役（硬门槛，非 −pct）。对照 FZGUVOL_v18/FZGVOL_v13 已否。B 门对照 base。
+- 去重：FZGUVOL_v18；FZGVOL_v13；FLZVOL_v18；DINCVOL_v18。非仓位。不碰数据网关。
+- 规则：(预增∩vol1.8) vs (…∩vol1.5)；sc=增幅封顶300；K20/max_new5。B 门对照 base。
+- 脚本：`fzgvol_v18_s730.py` / `run_s730.sh`。
+
+## §731 [中线·文献] 回购预案∩资产周转效率∩放量（RPFATVOL_h20）— 预注册（2026-11-02 07:15 CST 写于跑任何收益之前）
+- 白话：回购预案金额≥市值0.5% ∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20（**无**弱反应过滤）；按 −pct 排序；持20。
+- 想法 / 文献：回购弱反应∩效率刚暂缓；RPVOL（回购∩放量无效率）已否——改试 **回购全量∩周转**（硬合取，非 −pct；对照 FATTD）。对照 RPUFATVOL/RPVOL/FATTDVOL。
+- 去重：RPUFATVOL；RPVOL；RPUTDVOL；FATTDVOL。非仓位。不碰数据网关。
+- 规则：RP_r05∩FAT∩vol；sc=−pct；K20/max_new5。新策略无 B。
+- 脚本：`rpfatvol_s731.py` / `run_s731.sh`。
