@@ -6709,6 +6709,34 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 标准：§282；否则否决。
 - 脚本：`roicvol_s585.py` / `run_s585.sh`。
 
+### §584 FINAVOL_sc_amtr_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +1.22 / P20 +0.21 / P21 +4.01 / W0 −3.99 / W00 −3.31 / W1 +4.15 / W2 +4.17 / R12 +2.59（**正段 6/8**）
+- R12 82笔 +2.59% PF1.62 MDD−10.0；N3 238笔 +3.62 PF1.92 MDD−12.2；彩票型
+- 判定 ✓✓✓✓✓ → A 过。同进程 FINAVOL_base(dq)：R12 +2.33 / N3 +2.76 / MDD**−11.0** → 每笔抬但 **N3 MDD 更深（−12.2）→ B 否**。
+- → **REJECTED**；线上 mid-fina-exp-vol 仍按降幅排序。解读：放量倍数排序抬均值但加深回撤——与 SEXP 同向「别换 amtr 键」。
+
+### §585 ROICVOL_h20 — REJECT
+- 每笔 P19 +1.91 / P20 −1.74 / P21 −0.01 / W0 −3.41 / W00 −2.11 / W1 +3.24 / W2 +2.12 / R12 +2.06（**正段 4/8**）
+- R12 85笔 +2.06% PF1.58 MDD−7.3；N3 234笔 +2.49 PF1.67 MDD−12.3；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**。解读：ROIC∩放量同 ROIC/ROEVOL——正段不足。
+
+## §586 [中线·现役改进] 业绩加速∩放量同样本改按放量倍数排序（EAVOL_sc_amtr_h20）— 预注册（2026-11-01 21:30 CST 写于跑任何收益之前）
+- 白话：现役 mid-earnings-accel-vol（G ∩ amount≥1.5×amt20）**事件一字不改**，只把同日排序从 dtp 换成 **amount/amt20 降序**。同进程 EAVOL_base(按 dtp)。
+- 想法：SEXP/FINA 的 amtr 排序刚否；本题接到 **业绩加速∩放量**（增量排序键，非 −pct）。B 门对照 base。EAVOL dtp 硬抬已停。
+- 去重：EAVOL；EAVOL_d55；SEXPVOL_sc_amtr；FINAVOL_sc_amtr。非仓位。
+- 规则：同样本 EAVOL；sc_amtr vs sc_g；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`eavol_sc_amtr_s586.py` / `run_s586.sh`。
+
+## §587 [中线·文献] 净利率同比扩张∩放量≥1.5×amt20（NPMVOL_h20）— 预注册（2026-11-01 21:30 CST 写于跑任何收益之前）
+- 白话：NPM（Δnetprofit_margin≥2pct 且本期≥3，§174）**再**要求信号日成交额≥1.5×前20日均额；排序 ΔNPM 封顶20。持20。
+- 想法 / 文献：NPM/ROE/ROIC 单测不足；事件∩放量续挖销售净利率扩张（硬合取，非 −pct）。对照 NPM/PTGVOL/ROEVOL/EBITVOL。
+- 去重：NPM；PTGVOL；ROEVOL；EBITVOL。非仓位。不碰数据网关。
+- 规则：NPM ∩ (amount≥1.5·amt20)；sc_npm；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`npmvol_s587.py` / `run_s587.sh`。
+
+
 
 
 
