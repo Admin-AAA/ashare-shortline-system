@@ -8452,3 +8452,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：FTTDVOL；FZGTDVOL；FLZVOL；TDVOL；EATDVOL。非仓位。不碰数据网关。
 - 规则：略增∩TD∩vol；sc=net_profit_min；K20/max_new5。新策略无 B。
 - 脚本：`flztdvol_s719.py` / `run_s719.sh`。
+
+### §718 SEXPVOL_v18_h20 — ADOPT → 已上线（放量 1.5×→1.8×）
+- 每笔 P19 +1.09 / P20 +1.19 / P21 +2.89 / W0 −3.68 / W00 −2.89 / W1 +1.67 / W2 +1.55 / R12 +6.52（**正段 6/8**）
+- R12 85笔 +6.52% PF2.96 MDD−7.2；N3 248笔 +3.30 PF1.86 MDD−12.4；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 SEXPVOL_base(1.5×)：R12 +4.62 / N3 +2.89 / MDD−12.4 → **B 过**（R12/N3 每笔抬、三年回撤不加深）。
+- → **ADOPT**。上线（2026-11-02 06:38 CST）：`mid-sales-exp-vol` 放量 **≥1.5×→≥1.8×**；`s718_onboard_metrics.py`；replay 强制覆盖 21批/201只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：费用∩放量上量能硬抬成立——与 FATTD/EATD/FINA 的 v18 否决不对称。
+
+### §719 FLZTDVOL_h20 — REJECT（样本崩）
+- 每笔 P19 −6.53 / P20 — / P21 −5.86 / W0 −3.45 / W00 +2.05 / W1 +3.28 / W2 — / R12 —（**正段 2/8**）
+- R12 **0笔**。判定否决。
+- → **REJECTED**。解读：略增∩周期合取空窗——**略增∩周期效率双合取∩放量暂缓**（接扭亏/预增∩周期）。
+
+## §720 [中线·现役改进] 销售费用∩放量 放量硬抬≥2.0×（SEXPVOL_v20_h20）— 预注册（2026-11-02 06:38 CST 写于跑任何收益之前）
+- 白话：现役 mid-sales-exp-vol（降幅≥0.35∩放量1.8×，排序原始降幅）把 **放量再硬抬** 到 **≥2.0×amt20**；降幅/排序不变。同进程 SEXPVOL_base(1.8×)。
+- 想法：§718 v18 刚 ADOPT——续试贴档（硬门槛，非 −pct）。B 门对照 base。
+- 去重：SEXPVOL_v18；FINAVOL_v18；EATDVOL_v18；FATTDVOL_v18。非仓位。不碰数据网关。
+- 规则：(SEXP≥0.35∩vol2.0) vs (…∩vol1.8)；sc_raw；K20/max_new5。B 门对照 base。
+- 脚本：`sexpvol_v20_s720.py` / `run_s720.sh`。
+
+## §721 [中线·文献] 略增∩资产周转效率∩放量（FLZFATVOL_h20）— 预注册（2026-11-02 06:38 CST 写于跑任何收益之前）
+- 白话：首次预告略增（增幅下限>0∩净利下限>0）∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20；按净利下限排序；持20。
+- 想法 / 文献：略增∩周期刚崩；扭亏∩FAT 曾崩——改试 **略增∩周转**（硬合取，非 −pct；略增∩放量已上线）。对照 FLZTDVOL/FTFATVOL/FLZVOL/FATVOL。
+- 去重：FLZTDVOL；FTFATVOL；FZGFATVOL；FLZVOL；FATVOL。非仓位。不碰数据网关。
+- 规则：略增∩FAT∩vol；sc=net_profit_min；K20/max_new5。新策略无 B。
+- 脚本：`flzfatvol_s721.py` / `run_s721.sh`。

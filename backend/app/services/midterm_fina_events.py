@@ -197,7 +197,7 @@ def sexp_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 
 def sexpvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§525/§536/§550/§694 SEXPVOL：销售费用率下降≥0.35 ∩ 放量≥1.5×amt20；排序原始降幅去封顶（§694；门槛仍 §550≥0.35）。"""
+    """§525/§536/§550/§694/§718 SEXPVOL：销售费用率下降≥0.35 ∩ 放量≥1.8×amt20（§718 硬抬；原≥1.5×）；排序原始降幅去封顶（§694；门槛仍 §550≥0.35）。"""
     from sqlalchemy import text, bindparam
     # §550：仅 vol 变体软扩降幅门槛；mid-sales-exp-drop 仍走 sexp_candidates(≥0.5)
     # §694：仅 vol 变体排序去封顶；mid-sales-exp-drop 仍封顶10
@@ -223,7 +223,7 @@ def sexpvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
             amt20_f = float(amt20) if amt20 is not None else None
         except (TypeError, ValueError):
             amt20_f = None
-        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.5 * amt20_f:
+        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.8 * amt20_f:
             continue
         q = dict(p0)
         q["amount"] = amount
