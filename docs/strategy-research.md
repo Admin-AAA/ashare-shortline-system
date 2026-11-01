@@ -8103,3 +8103,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 想法 / 文献：§689 DINCFAT 贴线否（n=29）——改试 **分红∩周期效率** 双合取∩放量（硬合取，非 −pct；对照 SUEG∩TD 已上线）。对照 DINCFATVOL/SUEGTDVOL/DINCVOL/TDVOL。
 - 去重：DINCFATVOL；SUEGDINCVOL；SUEGTDVOL；DINCVOL；TDVOL。非仓位。不碰数据网关。
 - 门槛：§282 绝对收益（新策略无 B）。
+
+### §690 ETDFATVOL_sc_fat_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +2.08 / P20 +0.60 / P21 +2.25 / W0 −2.91 / W00 −2.03 / W1 +3.04 / W2 +1.78 / R12 +1.65（**正段 6/8**）
+- R12 74笔 +1.65% PF1.45 MDD−7.2；N3 195笔 +2.20 PF1.61 MDD−10.4；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 ETDFATVOL_base：R12 +1.28 / N3 +2.46 / MDD−10.2 → **B 否**（N3 每笔降、MDD 略加深；R12 虽抬不计）。
+- → **REJECTED**；线上 mid-etd-fa-vol 仍按 ETD 升幅排序。解读：改按 FAT 排序伤近三年——**停 ETDFATVOL FAT排序轴**。
+
+### §691 DINCTDVOL_h20 — REJECT（笔数不足）
+- 每笔 P19 −6.59 / P20 −1.22 / P21 +6.78 / W0 +4.35 / W00 +1.74 / W1 +3.47 / W2 +6.78 / R12 +11.07（**正段 6/8**）
+- R12 19笔 +11.07% PF4.24 MDD−5.8；N3 43笔 +7.44 PF3.22 MDD−5.5；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 n=19<30）。解读：同 DINCFAT——指标强但样本稀；**记候补，勿硬抬/软扩凑笔数**；**分红∩效率双合取∩放量暂缓**（FAT/TD 双否于笔数门）。
+
+## §692 [中线·现役改进] TAD∩ETD∩放量同样本改按ETD升幅排序（TADETDVOL_sc_etd_h20）— 预注册（2026-11-02 04:24 CST 写于跑任何收益之前）
+- 白话：现役 mid-tad-etd-vol（TAD≥0.25∩ETD≥0.20∩放量）**事件一字不改**，只把同日排序从 TAD 升幅换成 **ETD 升幅**（封顶2.0）。同进程 TADETDVOL_base(按TAD)。
+- 想法：跨族/盈余双合取上改效率键排序均 B 否——改在 **同族 BS 双合取** 上试另一腿排序（增量排序，非 −pct）。B 门对照 base。
+- 去重：TADETDVOL；ETDFATVOL_sc_fat；SUEGTDVOL_sc_td。非仓位。
+- 门槛：A=§282；B=相对 base R12&N3 每笔不降、N3 MDD 不加深。
+
+## §693 [中线·文献] 销售费用率下降∩营业周期∩放量（SEXPTDVOL_h20）— 预注册（2026-11-02 04:24 CST 写于跑任何收益之前）
+- 白话：销售费用率降幅≥0.35pp ∩ TD缩短≥20 ∩ 信号日成交额≥1.5×amt20；排序费用率降幅封顶10；持20。
+- 想法 / 文献：变异∩效率暂缓（候补勿凑样）——改试 **费用改善∩周期效率** 双合取∩放量（硬合取，非 −pct；SEXPVOL/TDVOL 均已上线）。对照 SEXPVOL/SUEGTDVOL/FATTDVOL。
+- 去重：SEXPVOL；TDVOL；SUEGTDVOL；DINCTDVOL；FZGTDVOL。非仓位。不碰数据网关。
+- 门槛：§282 绝对收益（新策略无 B）。
