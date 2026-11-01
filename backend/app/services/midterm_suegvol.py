@@ -74,7 +74,7 @@ def suegtdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 
 def suegfatvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§671：SUE≥2.2 ∩ G ∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20；排序 min(SUE,20)。"""
+    """§671/§672：SUE≥2.2 ∩ G ∩ FAT升幅≥0.12 ∩ 放量≥1.5×amt20；排序 min(SUE,20)（§672 硬抬）。"""
     from app.services.midterm_fina_events import fat_candidates
 
     sg = suegvol_candidates(db, as_of)
@@ -86,6 +86,13 @@ def suegfatvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     for p0 in sg:
         e = fat_by.get(p0["code"])
         if e is None:
+            continue
+        dq = e.get("dq", e.get("score"))
+        try:
+            dq_f = float(dq) if dq is not None else None
+        except (TypeError, ValueError):
+            dq_f = None
+        if dq_f is None or dq_f < 0.12:
             continue
         q = dict(p0)
         q["fat_dq"] = e.get("dq")
