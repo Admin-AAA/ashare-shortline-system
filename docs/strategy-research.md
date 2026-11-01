@@ -8057,3 +8057,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 想法 / 文献：预增∩效率刚暂缓；SUEG∩TD/FAT 已上线——试 **盈余∩分红** 双合取∩放量（硬合取，非 −pct）。对照 SUEGVOL/DINCVOL/SUEGTDVOL。
 - 去重：SUEGVOL；DINCVOL；SUEGTDVOL；SUEGFATVOL。非仓位。不碰数据网关。
 - 门槛：§282 绝对收益（新策略无 B）。
+
+### §686 SUEGFATVOL_sc_fat_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +0.20 / P20 +0.56 / P21 +4.94 / W0 −1.83 / W00 +1.69 / W1 +1.87 / W2 +3.02 / R12 +4.20（**正段 7/8**）
+- R12 65笔 +4.20% PF1.93 MDD−7.5；N3 151笔 +3.21 PF1.80 MDD−8.4；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 SUEGFATVOL_base：R12 +4.81 / N3 +3.60 → **B 否**（R12/N3 每笔均降）。
+- → **REJECTED**；线上 mid-sue-fa-vol 仍按 SUE 排序。解读：改按 FAT 排序不抬每笔——**停 SUEGFATVOL FAT排序轴**。
+
+### §687 SUEGDINCVOL_h20 — REJECT
+- 每笔 P19 n=0 / P20 +0.47 / P21 +6.91 / W0 −12.41 / W00 +2.87 / W1 n=0 / W2 +4.53 / R12 +12.16（**正段 5/8**）
+- R12 6笔 +12.16%；N3 8笔 +10.25；稳健型（样本过稀）
+- 判定 ✓✓✓**✗✗** → **否决**。解读：盈余∩分红合取样本崩——**盈余∩分红双合取∩放量暂缓**。
+
+## §688 [中线·现役改进] SUEG∩TD∩放量同样本改按TD缩短排序（SUEGTDVOL_sc_td_h20）— 预注册（2026-11-02 04:04 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-td-vol（SUE≥2.2∩G∩TD缩短≥20∩放量）**事件一字不改**，只把同日排序从 min(SUE,20) 换成 **TD 缩短天数**（封顶200）。同进程 SUEGTDVOL_base(按SUE)。
+- 想法：§684 FATTD 改按 TD 排序抬近一年但 MDD 否；§686 改按 FAT 排序 B 否——在 **盈余∩TD** 上再验 TD 键排序（增量排序，非 −pct）。B 门对照 base。
+- 去重：SUEGTDVOL；FATTDVOL_sc_td；SUEGFATVOL_sc_fat。非仓位。
+- 门槛：A=§282；B=相对 base R12&N3 每笔不降、N3 MDD 不加深。
+
+## §689 [中线·文献] 分红增加∩固定资产周转∩放量（DINCFATVOL_h20）— 预注册（2026-11-02 04:04 CST 写于跑任何收益之前）
+- 白话：分红增幅≥30% ∩ FAT升幅≥0.10且本期≥0.5 ∩ 信号日成交额≥1.5×amt20；排序分红增幅；持20。
+- 想法 / 文献：盈余∩分红刚否——改试 **分红∩资产周转效率** 双合取∩放量（硬合取，非 −pct；对照 SUEG∩FAT 已上线）。对照 DINCVOL/SUEGFATVOL/FATVOL。
+- 去重：SUEGDINCVOL；DINCVOL；SUEGFATVOL；FZGFATVOL；FATVOL。非仓位。不碰数据网关。
+- 门槛：§282 绝对收益（新策略无 B）。
