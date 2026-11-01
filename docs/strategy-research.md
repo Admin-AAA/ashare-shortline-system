@@ -5655,7 +5655,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - R12 32笔 +3.01% PF1.68 MDD−6.8；N3 135笔 +3.60 PF1.92 MDD−9.4；彩票型
 - 判定 ✓✓✓✓✓ → **ADOPT**。同进程 BT_base：R12 +2.39 / N3 +3.45 / MDD−9.4 → 每笔均抬、回撤不深 → **B 过**。样本 33→32。
 - 上线（2026-11-01 17:40 CST）：`mid-block-trade-premium` prem 1%→**≥1.2%**（ratio 仍≥0.45%）；`s512_onboard_metrics.py` 刷新 metrics（R12 +3.01 / N3 +3.60）。
-- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-block-trade-premium --execute` → 2026-07-29~10-30 **6批**（origin=replay；门槛抬高后更稀）。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-block-trade-premium --execute` → 2026-07-29~10-30 **6批/11只**（origin=replay；门槛抬高后更稀）。
 - `safe_backend_restart` 后 health 8765 **200**；summary 已改≥1.2%。
 
 ### §513 EAVOL_h20 — ADOPT → 已上线
