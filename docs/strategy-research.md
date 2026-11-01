@@ -5840,3 +5840,35 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：SEXP ∩ (amount≥1.5·amt20)；sc=降幅封顶10；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`sexpvol_s525.py` / `run_s525.sh`。
+
+## §524 / §525 判定（2026-11-01 18:36 CST）
+
+### §524 FLZVOL_v13_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +3.54 / P20 +3.24 / P21 +4.51 / W0 +2.09 / W00 −2.56 / W1 +1.10 / W2 +5.30 / R12 +4.05（**正段 7/8**）
+- R12 49笔 +4.05% PF2.54 MDD−5.3；N3 189笔 +3.16 PF2.08 MDD−16.3；稳健型
+- 判定 ✓✓✓✓✓ → A 过。同进程 FLZVOL_base(≥1.5×)：R12 +2.30 / N3 +2.49 / MDD−13.9 → 每笔抬，但 N3 MDD −16.3 更深 → **B 否**。
+- → **REJECTED**；线上 mid-forecast-slight-vol 仍 ≥1.5×。解读：略增软扩抬近一年但加深三年回撤——量能轴不宜再动。
+
+### §525 SEXPVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +0.71 / P20 +1.76 / P21 +2.63 / W0 −3.36 / W00 −3.18 / W1 +1.68 / W2 +0.97 / R12 +3.11（**正段 6/8**）
+- R12 85笔 +3.11% PF1.82 MDD−6.0；N3 251笔 +1.96 PF1.49 MDD−13.2；彩票型
+- 判定 ✓✓✓✓✓ → **ADOPT**。新策略无 B。
+- 上线（2026-11-01 18:36 CST）：`mid-sales-exp-vol`（kind=`sexp_vol`）；`s525_onboard_metrics.py`。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-sales-exp-vol --execute` → 2026-07-29~10-30 **30批/467只**（origin=replay，errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid 现役含 mid-sales-exp-vol。
+
+## §526 [中线·现役改进] SUEG 放量软扩≥1.3×amt20（SUEGVOL_v13_h20）— 预注册（2026-11-01 18:36 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-accel-vol（§515 amount≥1.5×amt20）把放量门槛软扩到 **≥1.3×**；SUE≥2 ∩ G 不变；排序仍 min(SUE,20)。同进程 SUEGVOL_base(≥1.5×)。
+- 想法：FZG/FLZ 软扩均否；SUEG 子集再验量能软扩是否同向（硬门槛轴软扩，非 −pct）。B 门对照 base。
+- 去重：SUEGVOL；SUEGVOL_v20；EAVOL_v20；FZGVOL_v13；FLZVOL_v13。非仓位。
+- 规则：SUEG ∩ (amount≥1.3·amt20) vs ≥1.5×；sc_sue；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`suegvol_v13_s526.py` / `run_s526.sh`。
+
+## §527 [中线·文献] 财务费用率下降∩放量≥1.5×amt20（FINAVOL_h20）— 预注册（2026-11-01 18:36 CST 写于跑任何收益之前）
+- 白话：现役财务费用率同比下降事件（mid-fina-exp-drop）**再**要求信号日成交额≥1.5×前20日均额；排序仍去封顶（§396）。持20。
+- 想法 / 文献：SEXP∩放量刚 ADOPT；同费用纪律轴 FINA 接同款量能确认（硬合取，非 −pct）。
+- 去重：FINA；SEXPVOL；EAVOL/SUEGVOL/FZGVOL/FLZVOL/IOVOL。非仓位。不碰数据网关。
+- 规则：FINA ∩ (amount≥1.5·amt20)；sc=降幅去封顶；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`finavol_s527.py` / `run_s527.sh`。

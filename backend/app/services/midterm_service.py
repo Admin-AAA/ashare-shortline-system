@@ -282,6 +282,16 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+
+    # §525 销售费用率下降∩放量（scripts/midterm/sexpvol_s525.py SEXPVOL_h20；§282 达标；2026-11-01 上线）
+    "mid-sales-exp-vol": {
+        "name": "销售费用率下降∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在「销售费用率同比下降≥0.5个百分点」事件池上再要求信号日成交额≥1.5×前20日均额。按降幅（封顶10个百分点）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：费用纪律事件 × 量能确认（§525）。",
+        "kind": "sexp_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §359 财务费用率同比下降（scripts/midterm/lt_research140.py FINA_h20 = §203 规则；§282 绝对收益标准复判达标；2026-10-31 晚间上线）
     "mid-fina-exp-drop": {
         "name": "财务费用率同比下降（持20日）",
@@ -1499,6 +1509,21 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+
+        if meta.get("kind") == "sexp_vol":
+            from app.services.midterm_fina_events import sexpvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = sexpvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
         if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy", "ncs_switch", "cg_streak", "sexp_yoy", "fina_yoy"):
             from app.services import midterm_fina_events as fe
             cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates,
@@ -1975,6 +2000,11 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["score"]), 2), "销售费用率降幅(百分点，封顶10)", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：销售费用率 {_f(p.get('prev'), 1)}% → "
                       f"{_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点")
+        elif kind == "sexp_vol":
+            score, label, better = round(float(p["score"]), 2), "销售费用率降幅(百分点，封顶10)", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告销售费用率下降放量："
+                      f"{_f(p.get('prev'), 1)}% → {_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点；"
+                      f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "fina_yoy":
             score, label, better = round(float(p["score"]), 2), "财务费用率降幅(百分点)", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：财务费用率 {_f(p.get('prev'), 1)}% → "
