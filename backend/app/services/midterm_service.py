@@ -93,7 +93,7 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-repurchase-underreact": {
         "name": "回购预案弱反应（金额≥市值0.5%，持5日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，在「回购预案金额≥市值0.5%」事件池上，只保留信号日（公告后首个交易日）涨跌落在−1%~+2%、且收盘未封涨停的票；按回购金额上限/总市值从高到低，次日开盘买入，各持有5个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：公司大额回购是硬信号，首日几乎没定价时短线反应不足；§364 按§282短线标准达标后上线。",
+        "summary": "每个交易日盘后，在「回购预案金额≥市值0.5%」事件池上，只保留信号日（公告后首个交易日）涨跌落在−1%~+2%、且收盘未封涨停的票；按信号日涨跌从低到高（越弱反应优先，§398），次日开盘买入，各持有5个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：公司大额回购是硬信号，首日几乎没定价时短线反应不足；§364 上线后 §398 改排序键。",
         "kind": "repurchase_underreact",
         "min_ratio": 0.005,
         "hold_days": 5,
@@ -611,7 +611,7 @@ def _scaled_total_mv(
 
 
 def _filter_repurchase_underreact(db, as_of: str, pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """§364：信号日 pct∈[-1,+2] 且未封涨停；保留原 ratio 降序。
+    """§364：信号日 pct∈[-1,+2] 且未封涨停；§398 起按 signal_pct 升序（越弱反应优先），不再按 ratio。
     daily_kbars 无 up_limit 列，涨停价用前收 ×(1+9.8%/19.8%) 近似（与研究脚本一致）。"""
     if not pool:
         return []
@@ -638,8 +638,9 @@ def _filter_repurchase_underreact(db, as_of: str, pool: list[dict[str, Any]]) ->
             continue
         q = dict(p)
         q["signal_pct"] = round(pct, 3)
+        q["score"] = round(-pct, 6)  # §398：与研究 sc_pct=−pct 一致
         out.append(q)
-    return out
+    return sorted(out, key=lambda x: (x["signal_pct"], x["code"]))
 
 
 def repurchase_plan_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
@@ -1541,9 +1542,9 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
             reason = f"{p.get('ann_date', '')} 回购预案，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，占总市值 {_f(score)}%"
         elif kind == "repurchase_underreact":
-            score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
+            score, label, better = round(float(p.get("signal_pct") if p.get("signal_pct") is not None else -float(p.get("score") or 0)), 3), "信号日涨跌(%)", "lower"
             reason = (f"{p.get('ann_date', '')} 回购预案弱反应，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，"
-                      f"占总市值 {_f(score)}%，信号日涨跌 {_f(p.get('signal_pct'))}%")
+                      f"占总市值 {_f(float(p.get('ratio') or 0) * 100, 3)}%，信号日涨跌 {_f(score)}%")
         elif kind == "earnings_accel":
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%")
