@@ -7745,3 +7745,32 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 标准：§282；否则否决。
 - 脚本：`fattdvol_s661.py` / `run_s661.sh`。
 
+### §660 TADETDVOL_d030_h20 — REJECT（A 否·PF；B 亦否）
+- 每笔 P19 +0.59 / P20 +1.18 / P21 +2.31 / W0 −3.45 / W00 −0.69 / W1 +5.23 / W2 +2.25 / R12 +0.85（**正段 6/8**）
+- R12 84笔 +0.85% **PF1.22** MDD−11.2；N3 228笔 +2.82 PF1.81 MDD−8.9；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**。同进程 TADETDVOL_base：R12 +2.02 / N3 +3.48 → 每笔降。
+- → **REJECTED**；线上 mid-tad-etd-vol 仍 TAD≥0.25。解读：双合取上再硬抬 TAD 0.30 稀释近一年——**停 TADETDVOL 升幅硬抬轴**。
+
+### §661 FATTDVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +1.67 / P20 +0.68 / P21 +1.36 / W0 −3.63 / W00 −0.15 / W1 +0.24 / W2 +3.14 / R12 +1.89（**正段 6/8**）
+- R12 83笔 +1.89% PF1.48 MDD−10.6；N3 233笔 +1.61 PF1.38 MDD−18.1；彩票型（§285 标签，不挡 §282）
+- 判定 ✓✓✓✓✓ → **达标/采纳**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 01:46 CST）：`mid-fa-td-vol`（kind=`fat_td_vol`）；`s661_onboard_metrics.py`；replay 28批/200只（2026-07-29~10-30）；`safe_backend_restart` health 200。
+- 解读：效率双合取 FAT∩TD∩放量过线——与 TAD∩ETD 同属双事件∩放量轴。
+
+## §662 [中线·现役改进] FAT∩TD∩放量 升幅硬抬≥0.12（FATTDVOL_r012_h20）— 预注册（2026-11-02 01:48 CST 写于跑任何收益之前）
+- 白话：现役 mid-fa-td-vol（FAT升幅≥0.10∩TD缩短≥20∩放量）把 **FAT 升幅硬抬** 到 **≥0.12**；TD/放量/排序不变。同进程 FATTDVOL_base(≥0.10)。
+- 想法：§661 刚 ADOPT；FAT 单独升幅硬抬曾否——在 **效率双合取** 上再验（硬门槛，非 −pct）。B 门对照 base。
+- 去重：FATTDVOL；FATVOL_r012；TADETDVOL_d030。非仓位。
+- 规则：(FAT≥0.12∩TD∩vol) vs (FAT≥0.10∩TD∩vol)；sc_fat；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`fattdvol_r012_s662.py` / `run_s662.sh`。
+
+## §663 [中线·文献] 股东权益/负债∩固定资产周转∩放量（ETDFATVOL_h20）— 预注册（2026-11-02 01:48 CST 写于跑任何收益之前）
+- 白话：同日满足 ETD（升幅≥0.20）**与** FAT（升幅≥0.10且本期≥0.5）**且** amount≥1.5×amt20；排序按 ETD 升幅封顶2.0。持20。
+- 想法 / 文献：TADETD/FATTD 双合取已上线——试 **跨族** ETD∩FAT∩放量（BS∩效率，硬合取，非 −pct）。对照 ETDFAT/TADETDVOL/FATTDVOL。
+- 去重：TADETDVOL；FATTDVOL；ETDVOL；FATVOL。非仓位。不碰数据网关。
+- 规则：ETD ∩ FAT ∩ vol；sc_etd；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`etdfatvol_s663.py` / `run_s663.sh`。
+

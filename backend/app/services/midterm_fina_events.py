@@ -600,6 +600,28 @@ def tdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return sorted(out, key=lambda x: (-x["score"], x["code"]))
 
 
+
+# §661 FATTDVOL_h20（FAT ∩ TD ∩ 放量；排序 FAT 升幅）
+def fattdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§661：固定资产周转扩张 ∩ 营业周期缩短 ∩ 放量≥1.5×amt20；排序 FAT 升幅。"""
+    fat = fatvol_candidates(db, as_of)
+    td = td_candidates(db, as_of)
+    if fat is None or td is None:
+        return None
+    td_by = {p["code"]: p for p in td}
+    out = []
+    for p0 in fat:
+        e = td_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["td_improve"] = e.get("improve")
+        q["td_cur"] = e.get("cur")
+        q["td_prev"] = e.get("prev")
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
+
 # §619 TADVOL_h20（有形资产/负债改善∩放量；规则同 §234 / lt_research85，未调参）
 TAD_CUR_LO, TAD_CUR_HI, TAD_PREV_LO, TAD_PREV_HI = 0.3, 5.0, 0.2, 8.0
 TAD_DELTA_MIN, TAD_DELTA_CAP = 0.25, 2.0
