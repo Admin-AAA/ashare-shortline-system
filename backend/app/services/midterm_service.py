@@ -253,6 +253,16 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+
+    # §523 激励期权∩放量（scripts/midterm/iovol_s523.py IOVOL_h20；§282 达标；2026-11-01 上线）
+    "mid-incentive-vol": {
+        "name": "股权激励期权∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在「首次含股票期权的激励草案」事件池上再要求信号日成交额≥1.5×前20日均额。按信号日涨跌从低到高（§402：越弱反应优先），次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：激励治理信号 × 量能确认（§523）。",
+        "kind": "incentive_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §114 大宗交易溢价成交后漂移（原 BT_prem_h20 按 ratio 排序；§388 改为按 premium 排序；§474 ratio 0.5%→0.45%；§490 prem≥0.5%；§498 prem≥1%；§512 prem≥1.2%；§514 prem≥1.35%；实盘候选 app/services/midterm_block_trade.py）
     # Tushare 大宗交易约 21:00 发布：17:35 盘后流水线通常 no_data，需 21:00 后 / 次日开盘前调用 generate_block_trade_picks(db, T) 出票
     "mid-block-trade-premium": {
@@ -1475,6 +1485,20 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+
+        if meta.get("kind") == "incentive_vol":
+            from app.services.midterm_incentive import incentive_vol_candidates
+            held = _held_codes(db, sid, as_of)
+            ic = incentive_vol_candidates(db, as_of)
+            if ic is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in ic if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
         if meta.get("kind") in ("cld_yoy", "dinc_yoy", "udp_yoy", "ncs_switch", "cg_streak", "sexp_yoy", "fina_yoy"):
             from app.services import midterm_fina_events as fe
             cand_fn = {"cld_yoy": fe.cld_candidates, "dinc_yoy": fe.dinc_candidates, "udp_yoy": fe.udp_candidates,
@@ -1932,6 +1956,10 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p.get("signal_pct") if p.get("signal_pct") is not None else -float(p["score"])), 2), "信号日涨跌(%)", "lower"
             reason = (f"{p.get('ann_date', '')} 首次披露含股票期权的激励草案弱反应：{p.get('title', '')}；"
                       f"信号日涨跌 {_f(p.get('signal_pct'), 2)}%")
+        elif kind == "incentive_vol":
+            score, label, better = round(float(p.get("signal_pct") if p.get("signal_pct") is not None else -float(p["score"])), 2), "信号日涨跌(%)", "lower"
+            reason = (f"{p.get('ann_date', '')} 首次披露含股票期权的激励草案放量：{p.get('title', '')}；"
+                      f"信号日涨跌 {_f(p.get('signal_pct'), 2)}%；成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "block_trade_premium":
             score, label, better = round(float(p.get("premium") or p["score"]) * 100, 3), "大宗溢价率(%)", "higher"
             reason = (f"大宗成交 {p.get('n_trades', '')} 笔，量加权价相对收盘溢价 {_f(score)}%，"

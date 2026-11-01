@@ -5808,3 +5808,35 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：IO ∩ (amount≥1.5·amt20)；sc_pct=−pct；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`iovol_s523.py` / `run_s523.sh`。
+
+## §522 / §523 判定（2026-11-01 18:25 CST）
+
+### §522 FZGVOL_v13_h20 — REJECT
+- 每笔 P19 +1.42 / P20 +1.39 / P21 +2.68 / W0 +2.34 / W00 −4.11 / W1 +1.32 / W2 +8.07 / R12 +0.30（**正段 7/8**）
+- R12 107笔 +0.30% **PF1.06** MDD−10.6；N3 267笔 +2.55 PF1.60 MDD−18.3；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**（近一年 PF）。同进程 FZGVOL_base(≥1.5×)：R12 +1.63 / N3 +3.29 / MDD−16.6 → 每笔降、回撤更深 → **B 否**。
+- → **REJECTED**；线上 mid-forecast-preincrease-vol 仍 ≥1.5×。解读：放量软扩到 1.3× 稀释近一年——与硬抬 2.0× 同属量能轴不宜再动。
+
+### §523 IOVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +3.84 / P20 +5.10 / P21 +0.49 / W0 −0.58 / W00 −1.25 / W1 +8.91 / W2 +11.40 / R12 +5.06（**正段 6/8**）
+- R12 54笔 +5.06% PF2.05 MDD−5.1；N3 118笔 +7.80 PF3.23 MDD−4.6；稳健型
+- 判定 ✓✓✓✓✓ → **ADOPT**。新策略无 B。
+- 上线（2026-11-01 18:25 CST）：`mid-incentive-vol`（kind=`incentive_vol`）；`s523_onboard_metrics.py`。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-incentive-vol --execute` → 2026-07-29~10-30 **16批/18只**（origin=replay，errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid 现役含 mid-incentive-vol。
+
+## §524 [中线·现役改进] 略增放量软扩≥1.3×amt20（FLZVOL_v13_h20）— 预注册（2026-11-01 18:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-forecast-slight-vol（§519 amount≥1.5×amt20）把放量门槛软扩到 **≥1.3×**；略增事件不变；排序仍净利下限。同进程 FLZVOL_base(≥1.5×)。
+- 想法：FZGVOL 软扩刚否；略增子集再验一次软扩是否同向失败（硬门槛轴软扩，非 −pct）。B 门对照 base。
+- 去重：FLZVOL；FZGVOL_v13；EAVOL_v20。非仓位。
+- 规则：FLZ ∩ (amount≥1.3·amt20) vs ≥1.5×；sc=净利下限；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`flzvol_v13_s524.py` / `run_s524.sh`。
+
+## §525 [中线·文献] 销售费用率下降∩放量≥1.5×amt20（SEXPVOL_h20）— 预注册（2026-11-01 18:25 CST 写于跑任何收益之前）
+- 白话：现役销售费用率同比下降事件（mid-sales-exp-drop）**再**要求信号日成交额≥1.5×前20日均额；排序仍降幅封顶10。持20。
+- 想法 / 文献：事件∩放量轴已在预增/略增/激励 ADOPT；费用纪律事件接同款量能确认（硬合取，非 −pct）。对照 SEXPU 若有。
+- 去重：SEXP；EAVOL/SUEGVOL/FZGVOL/FLZVOL/IOVOL。非仓位。不碰数据网关。
+- 规则：SEXP ∩ (amount≥1.5·amt20)；sc=降幅封顶10；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`sexpvol_s525.py` / `run_s525.sh`。
