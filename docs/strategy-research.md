@@ -8477,3 +8477,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：FLZTDVOL；FTFATVOL；FZGFATVOL；FLZVOL；FATVOL。非仓位。不碰数据网关。
 - 规则：略增∩FAT∩vol；sc=net_profit_min；K20/max_new5。新策略无 B。
 - 脚本：`flzfatvol_s721.py` / `run_s721.sh`。
+
+### §720 SEXPVOL_v20_h20 — REJECT（A 否·正段；B 亦否）
+- 每笔 P19 +1.24 / P20 −0.84 / P21 +3.74 / W0 −4.49 / W00 −2.08 / W1 +1.87 / W2 +1.57 / R12 +2.44（**正段 5/8**）
+- R12 84笔 +2.44% PF1.51 MDD−7.4；N3 237笔 +1.99 PF1.43 MDD−12.2；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**。同进程 base(1.8×)：R12 +6.52 / N3 +3.30 / MDD−12.4 → **B 亦否**（近一年/三年每笔腰斩）。
+- → **REJECTED**；线上 mid-sales-exp-vol 仍放量≥1.8×。解读：再抬到 2.0× 伤正段并稀释近一年——**停 SEXPVOL 放量硬抬轴**（≥1.8 为终点）。
+
+### §721 FLZFATVOL_h20 — REJECT（样本崩）
+- 每笔 P19 −2.89 / P20 −5.53 / P21 −3.98 / W0 −4.52 / W00 −2.28 / W1 +1.17 / W2 +42.37 / R12 —（**正段 2/8**）
+- R12 **0笔**。判定否决。
+- → **REJECTED**。解读：略增∩周转同略增∩周期——近一年空窗；**略增∩效率双合取∩放量暂缓**（FAT/TD 双否）。
+
+## §722 [中线·现役改进] 激励期权∩放量 放量硬抬≥1.8×（IOVOL_v18_h20）— 预注册（2026-11-02 06:46 CST 写于跑任何收益之前）
+- 白话：现役 mid-incentive-vol（首次含期权激励草案 ∩ 放量1.5×，按 −pct 排序）把 **放量硬抬** 到 **≥1.8×amt20**；事件/排序不变。同进程 IOVOL_base(1.5×)。
+- 想法：SEXPVOL 量能硬抬终点；FATTD/EATD/FINA v18 已否——对称试激励∩放量现役（硬门槛，非 −pct）。对照 FZGUVOL_v18 已否。B 门对照 base。
+- 去重：SEXPVOL_v18/v20；FZGUVOL_v18；EATDVOL_v18；IOVOL。非仓位。不碰数据网关。
+- 规则：(IO∩vol1.8) vs (IO∩vol1.5)；sc=−pct；K20/max_new5。B 门对照 base。
+- 脚本：`iovol_v18_s722.py` / `run_s722.sh`。
+
+## §723 [中线·文献] 激励期权∩营业周期∩放量（IOTDVOL_h20）— 预注册（2026-11-02 06:46 CST 写于跑任何收益之前）
+- 白话：首次含期权激励草案 ∩ TD缩短≥20 ∩ 放量≥1.5×amt20；按 −pct 排序；持20。
+- 想法 / 文献：略增∩效率刚暂缓；费用∩周期已否——改试 **激励∩周期**（硬合取，非 −pct；IOVOL/TDVOL 已上线）。对照 IOVOL/SUEGTDVOL/FATTDVOL。
+- 去重：IOVOL；SEXPTDVOL；SUEGTDVOL；TDVOL；IOUVOL。非仓位。不碰数据网关。
+- 规则：IO∩TD∩vol；sc=−pct；K20/max_new5。新策略无 B。
+- 脚本：`iotdvol_s723.py` / `run_s723.sh`。
