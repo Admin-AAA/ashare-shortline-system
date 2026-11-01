@@ -8602,3 +8602,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：RPUFATVOL；RPVOL；RPUTDVOL；FATTDVOL。非仓位。不碰数据网关。
 - 规则：RP_r05∩FAT∩vol；sc=−pct；K20/max_new5。新策略无 B。
 - 脚本：`rpfatvol_s731.py` / `run_s731.sh`。
+
+### §730 FZGVOL_v18_h20 — REJECT（A 否·PF）
+- 每笔 P19 +2.44 / P20 +1.41 / P21 +1.78 / W0 +1.58 / W00 −3.67 / W1 +1.29 / W2 +7.60 / R12 +0.75（**正段 7/8**）
+- R12 99笔 +0.75% **PF1.17** MDD−8.5；N3 255笔 +2.61 PF1.68 MDD−17.2；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**（R12 PF<1.3）。同进程 base：R12 +1.63 / N3 +3.29 → B 亦否。
+- → **REJECTED**；线上 mid-forecast-preincrease-vol 仍放量≥1.5×。解读：量能硬抬稀释近一年 PF——**停 FZGVOL 放量硬抬轴**。
+
+### §731 RPFATVOL_h20 — REJECT（A 否）
+- 每笔 P19 −1.91 / P20 +3.04 / P21 +2.95 / W0 +2.00 / W00 +2.86 / W1 −2.46 / W2 +3.69 / R12 −3.55（**正段 5/8**）
+- R12 9笔 −3.55% PF0.15；N3 21笔 −1.46。判定否决。
+- → **REJECTED**。解读：回购全量∩周转近一年为负——确认 **回购∩效率双合取∩放量暂缓**（弱反应/全量双否）。
+
+## §732 [中线·现役改进] 固定资产周转∩放量 放量硬抬≥1.8×（FATVOL_v18_h20）— 预注册（2026-11-02 07:22 CST 写于跑任何收益之前）
+- 白话：现役 mid-fa-turn-vol（FAT升幅≥0.10∩放量1.5×，按升幅排序）把 **放量硬抬** 到 **≥1.8×amt20**；FAT/排序不变。同进程 FATVOL_base(1.5×)。
+- 想法：预增/略增/分红量能硬抬刚否——改试效率单腿∩放量现役（硬门槛，非 −pct）。对照 FATTDVOL_v18 已否。B 门对照 base。
+- 去重：FATTDVOL_v18；FZGVOL_v18；FATVOL_r012；FATVOL。非仓位。不碰数据网关。
+- 规则：(FAT∩vol1.8) vs (FAT∩vol1.5)；sc_fat；K20/max_new5。B 门对照 base。
+- 脚本：`fatvol_v18_s732.py` / `run_s732.sh`。
+
+## §733 [中线·文献] 大宗溢价∩资产周转效率∩放量（BTFATVOL_h20）— 预注册（2026-11-02 07:22 CST 写于跑任何收益之前）
+- 白话：大宗 ratio≥0.45%∩prem≥1.35% ∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20；按溢价排序；持20。
+- 想法 / 文献：回购∩效率刚暂缓；BTVOL（大宗∩放量）已否——改试 **大宗∩周转**（硬合取，非 −pct；BT/FATVOL 已上线）。对照 BTVOL/RPFATVOL/FATTDVOL。
+- 去重：BTVOL；RPFATVOL；FATTDVOL；BT。非仓位。不碰数据网关。
+- 规则：BT∩FAT∩vol；sc=prem；K20/max_new5。新策略无 B。
+- 脚本：`btfatvol_s733.py` / `run_s733.sh`。
