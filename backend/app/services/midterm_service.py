@@ -441,6 +441,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §735 净负债转净现金∩营业周期∩放量（scripts/midterm/ncstdvol_s735.py NCSTDVOL_h20；§282 达标；2026-11-02 上线）
+    "mid-ncs-td-vol": {
+        "name": "净负债转净现金∩营业周期∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足净负债转为净现金（去年净负债>0且有息负债>0、本期净负债≤0、扣非净利>0），与营业周期（turn_days）同比缩短≥20日，且信号日成交额≥1.5×前20日均额；按「净负债减少额÷去年有息负债」（封顶3.0）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：资产负债表修复 × 周期效率 × 量能确认（§735）。",
+        "kind": "ncs_td_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §102 红利低波（scripts/midterm/lt_research19.py DVLV_h60，预注册 3 版中唯一达标，未调参）
     "long-dividend-lowvol": {
         "name": "红利低波月度组合（股息率+低波动，持60日）",
@@ -1769,6 +1778,21 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
 
+
+        if meta.get("kind") == "ncs_td_vol":
+            from app.services.midterm_fina_events import ncstdvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = ncstdvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
         if meta.get("kind") == "fat_td_vol":
             from app.services.midterm_fina_events import fattdvol_candidates
             held = _held_codes(db, sid, as_of)
@@ -2383,6 +2407,12 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告 ETD∩FAT 放量："
                       f"eqt_to_debt {_f(p.get('prev'), 3)} → {_f(p.get('cur'), 3)} 升幅 {_f(p.get('delta'), 3)}；"
                       f"fa_turn 升幅 {_f(p.get('fat_dq'), 3)}；"
+                      f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "ncs_td_vol":
+            score, label, better = round(float(p["score"]), 3), "净现金转换强度(封顶3.0)×TD合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告 NCS∩TD 放量："
+                      f"净负债 {_f(p.get('netdebt_prev'), 2)} → {_f(p.get('netdebt'), 2)}；"
+                      f"营业周期缩短 {_f(p.get('td_improve'), 1)} 日；"
                       f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "fat_td_vol":
             score, label, better = round(float(p["score"]), 3), "固定资产周转升幅(封顶2.0)×TD合取", "higher"

@@ -838,3 +838,41 @@ def dincvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         out.append(q)
     return sorted(out, key=lambda x: (-x["score"], x["code"]))
 
+
+# §735 NCSTDVOL_h20（NCS ∩ TD ∩ 放量；排序 NCS score）
+def ncstdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§735：净负债→净现金 ∩ TD缩短≥20 ∩ 放量≥1.5×amt20；排序 NCS score（封顶3.0）。"""
+    from sqlalchemy import text, bindparam
+    base = ncs_candidates(db, as_of)
+    td = td_candidates(db, as_of)
+    if base is None or td is None:
+        return None
+    if not base:
+        return []
+    codes = [p["code"] for p in base]
+    rows = db.execute(text(
+        "SELECT code, amount FROM daily_kbars WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    amt_by = {r["code"]: float(r["amount"]) for r in rows if r["amount"] is not None}
+    td_by = {p["code"]: p for p in td}
+    out = []
+    for p0 in base:
+        amount = amt_by.get(p0["code"])
+        amt20 = p0.get("amt20")
+        try:
+            amt20_f = float(amt20) if amt20 is not None else None
+        except (TypeError, ValueError):
+            amt20_f = None
+        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.5 * amt20_f:
+            continue
+        e = td_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["amount"] = amount
+        q["vol_ratio"] = round(amount / amt20_f, 4)
+        q["td_improve"] = e.get("improve")
+        q["td_cur"] = e.get("cur")
+        q["td_prev"] = e.get("prev")
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))

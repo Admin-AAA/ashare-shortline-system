@@ -8651,3 +8651,29 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：NCSVOL；DINCTDVOL；DINCFATVOL；TDVOL。非仓位。不碰数据网关。
 - 规则：NCS∩TD∩vol；sc_ncs；K20/max_new5。新策略无 B。
 - 脚本：`ncstdvol_s735.py` / `run_s735.sh`。
+
+### §734 TDVOL_v18_h20 — REJECT（A 否·正段；B 亦否）
+- 每笔 P19 −1.61 / P20 +1.47 / P21 +3.91 / W0 −4.90 / W00 +0.04 / W1 −0.58 / W2 +3.37 / R12 +2.32（**正段 5/8**）
+- R12 83笔 +2.32% PF1.49 MDD−10.0；N3 232笔 +1.53 PF1.35 MDD−17.9；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**。同进程 base：R12 +4.62 / N3 +2.96 → **B 亦否**（每笔腰斩）。
+- → **REJECTED**；线上 mid-turn-days-vol 仍放量≥1.5×。解读：量能硬抬伤正段并稀释近一年——**停 TDVOL 放量硬抬轴**。
+
+### §735 NCSTDVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 −5.74 / P20 +0.85 / P21 +4.65 / W0 +0.69 / W00 +0.64 / W1 +6.36 / W2 +0.92 / R12 +1.89（**正段 7/8**）
+- R12 31笔 +1.89% PF1.42 MDD−6.1；N3 90笔 +3.49 PF1.95 MDD−6.0；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 07:41 CST）：`mid-ncs-td-vol`（kind=`ncs_td_vol`）；`s735_onboard_metrics.py`；replay 6批/6只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：净现金∩周期效率合取成立——NCSVOL 单腿已否，双合取抬近三年并收窄回撤。
+
+## §736 [中线·现役改进] 流动资产占比∩放量 放量硬抬≥1.8×（CASVOL_v18_h20）— 预注册（2026-11-02 07:41 CST 写于跑任何收益之前）
+- 白话：现役 mid-cas-vol（CAS升幅≥3.0pp∩放量1.5×，按升幅排序）把 **放量硬抬** 到 **≥1.8×amt20**；CAS/排序不变。同进程 CASVOL_base(1.5×)。
+- 想法：TD/FAT 量能硬抬刚否——改试流动资产结构∩放量现役（硬门槛，非 −pct）。对照 CAS 升幅硬抬已停。B 门对照 base。
+- 去重：TDVOL_v18；FATVOL_v18；CASVOL；CASVOL 升幅硬抬。非仓位。不碰数据网关。
+- 规则：(CAS∩vol1.8) vs (CAS∩vol1.5)；sc_cas；K20/max_new5。B 门对照 base。
+- 脚本：`casvol_v18_s736.py` / `run_s736.sh`。
+
+## §737 [中线·文献] 净负债转净现金∩资产周转效率∩放量（NCSFATVOL_h20）— 预注册（2026-11-02 07:41 CST 写于跑任何收益之前）
+- 白话：净负债→净现金 ∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20；按 sc_ncs 排序；持20。
+- 想法 / 文献：§735 NCS∩TD 刚 ADOPT——镜像试 **净现金∩周转**（硬合取，非 −pct）。对照 NCSTDVOL/NCSVOL/FATTDVOL/DINCFATVOL。
+- 去重：NCSTDVOL；NCSVOL；DINCFATVOL；FATTDVOL。非仓位。不碰数据网关。
+- 规则：NCS∩FAT∩vol；sc_ncs；K20/max_new5。新策略无 B。
+- 脚本：`ncsfatvol_s737.py` / `run_s737.sh`。
