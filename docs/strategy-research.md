@@ -8427,3 +8427,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：FTTDVOL；FZGFATVOL；FTVOL；FATVOL；EAFATVOL。非仓位。不碰数据网关。
 - 规则：扭亏∩FAT∩vol；sc=net_profit_min；K20/max_new5。新策略无 B。
 - 脚本：`ftfatvol_s717.py` / `run_s717.sh`。
+
+### §716 FATTDVOL_v18_h20 — REJECT（A 否·正段）
+- 每笔 P19 −1.72 / P20 +1.81 / P21 +4.73 / W0 −4.28 / W00 −0.01 / W1 −1.34 / W2 +5.45 / R12 +1.95（**正段 4/8**）
+- R12 76笔 +1.95% PF1.47 MDD−6.8；N3 211笔 +1.65 PF1.38 MDD−16.6；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**。同进程 base：R12 +1.93 / N3 +1.66 / MDD−18.1（B 贴线亦不救 A）。
+- → **REJECTED**；线上 mid-fa-td-vol 仍放量≥1.5×。解读：量能硬抬伤正段——**停 FATTDVOL 放量硬抬轴**（接 EATDVOL_v18）。
+
+### §717 FTFATVOL_h20 — REJECT（样本崩）
+- 每笔 P19 −5.88 / P20 +1.79 / P21 +11.92 / 近段多空 / R12 +13.99（**正段 3/8**）
+- R12 **1笔**；彩票型。判定否决。
+- → **REJECTED**。解读：扭亏∩周转同扭亏∩周期——近乎空窗；**扭亏∩效率双合取∩放量暂缓**（FAT/TD 双否）。
+
+## §718 [中线·现役改进] 销售费用∩放量 放量硬抬≥1.8×（SEXPVOL_v18_h20）— 预注册（2026-11-02 06:27 CST 写于跑任何收益之前）
+- 白话：现役 mid-sales-exp-vol（降幅≥0.35∩放量1.5×，排序原始降幅）把 **放量硬抬** 到 **≥1.8×amt20**；降幅/排序不变。同进程 SEXPVOL_base(1.5×)。
+- 想法：FATTD/EATD 量能硬抬刚否——对称试费用∩放量现役（硬门槛，非 −pct）。对照 FINAVOL_v18 已否。B 门对照 base。
+- 去重：FINAVOL_v18；EATDVOL_v18；FATTDVOL_v18；SEXPVOL_sc_raw。非仓位。不碰数据网关。
+- 规则：(SEXP≥0.35∩vol1.8) vs (…∩vol1.5)；sc_raw；K20/max_new5。B 门对照 base。
+- 脚本：`sexpvol_v18_s718.py` / `run_s718.sh`。
+
+## §719 [中线·文献] 略增∩营业周期∩放量（FLZTDVOL_h20）— 预注册（2026-11-02 06:27 CST 写于跑任何收益之前）
+- 白话：首次预告略增（增幅下限>0∩净利下限>0）∩ TD缩短≥20 ∩ 放量≥1.5×amt20；按净利下限排序；持20。
+- 想法 / 文献：扭亏∩效率刚暂缓；预增∩周期曾崩——改试 **略增∩周期**（硬合取，非 −pct；略增∩放量已上线）。对照 FTTDVOL/FZGTDVOL/FLZVOL/TDVOL。
+- 去重：FTTDVOL；FZGTDVOL；FLZVOL；TDVOL；EATDVOL。非仓位。不碰数据网关。
+- 规则：略增∩TD∩vol；sc=net_profit_min；K20/max_new5。新策略无 B。
+- 脚本：`flztdvol_s719.py` / `run_s719.sh`。
