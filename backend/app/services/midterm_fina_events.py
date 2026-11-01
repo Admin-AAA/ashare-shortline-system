@@ -47,7 +47,7 @@ CG_MIN_YOY, CG_STREAK, CG_STREAK_CAP, CG_NPY_CAP = 5.0, 4, 12, 100.0
 DINC_INC_TH = 0.30
 
 FINA_FIELDS = ("ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt,"
-               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr,turn_days")
+               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr,turn_days,fa_turn")
 _FINA_TTL = 1800.0
 _fina_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _div_local: dict[str, Any] = {}
@@ -103,7 +103,7 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     for k in ("ts_code", "ann_date", "end_date"):
         f[k] = f[k].astype(str).str.strip()
     for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt",
-              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr", "turn_days"):
+              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr", "turn_days", "fa_turn"):
         if k in f.columns:
             f[k] = pd.to_numeric(f[k], errors="coerce")
     f = f[(f["ann_date"].str.len() == 8) & (f["end_date"].str.len() == 8)]
@@ -515,6 +515,50 @@ def dinc_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 # §599 TDVOL_h20（营业周期缩短∩放量；规则同 §184 / lt_research61，未调参）
 TD_IMPROVE, TD_LO, TD_HI, TD_PREV_HI, TD_CAP = 20.0, 30.0, 400.0, 800.0, 200.0
+
+
+
+# §615 FATVOL_h20（固定资产周转扩张∩放量；规则同 §205 / lt_research71，未调参）
+FAT_RISE_MIN, FAT_FLOOR, FAT_CAP = 0.10, 0.5, 2.0
+
+
+def fat_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """FAT_h20：fa_turn 同比升幅≥0.10 且本期≥0.5；排序升幅封顶2.0。"""
+    def passes(cur: float, prev: float):
+        dq = cur - prev
+        ok = (cur >= FAT_FLOOR and dq >= FAT_RISE_MIN)
+        return ok, min(dq, FAT_CAP), {"dq": dq}
+    return _fina_events(db, as_of, "fa_turn", passes)
+
+
+def fatvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§615 FATVOL_h20：固定资产周转扩张 ∩ 信号日成交额≥1.5×amt20；排序升幅封顶2.0。"""
+    from sqlalchemy import text, bindparam
+    base = fat_candidates(db, as_of)
+    if base is None:
+        return None
+    if not base:
+        return []
+    codes = [p["code"] for p in base]
+    rows = db.execute(text(
+        "SELECT code, amount FROM daily_kbars WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    amt_by = {r["code"]: float(r["amount"]) for r in rows if r["amount"] is not None}
+    out = []
+    for p0 in base:
+        amount = amt_by.get(p0["code"])
+        amt20 = p0.get("amt20")
+        try:
+            amt20_f = float(amt20) if amt20 is not None else None
+        except (TypeError, ValueError):
+            amt20_f = None
+        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.5 * amt20_f:
+            continue
+        q = dict(p0)
+        q["amount"] = amount
+        q["vol_ratio"] = round(amount / amt20_f, 4)
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))
 
 
 def td_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
