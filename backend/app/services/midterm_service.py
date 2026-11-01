@@ -136,11 +136,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "schedule": "daily",
     },
 
-    # §435 业绩预告略增单拆（scripts/midterm/flz_s435.py FLZ_h20；§282 达标；2026-11-01 上线）
+    # §435/§438 业绩预告略增（flz_s435 / lt_research182；§438 改按净利下限排序；2026-11-01 上线）
     "mid-forecast-slight": {
         "name": "业绩预告略增（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的业绩预告，同一报告期只认公司第一次预告：类型为略增、预告净利同比增幅下限>0、预告净利润下限>0。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按预告增幅下限（封顶300%）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：略增 PEAD；与 mid-forecast-beat / preincrease / turnaround 事件子集不同。",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的业绩预告，同一报告期只认公司第一次预告：类型为略增、预告净利同比增幅下限>0、预告净利润下限>0。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按预告净利下限从高到低（§438：事件门槛不变，排序由增幅改为净利下限），次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：略增 PEAD；与 mid-forecast-beat / preincrease / turnaround 事件子集或排序不同。",
         "kind": "forecast_slight",
         "hold_days": 20,
         "schedule": "daily",
@@ -1654,10 +1654,9 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             reason = (f"{p.get('ann_date', '')} 首次业绩预告预增（{p.get('end_date', '')}）："
                       f"增幅下限 {_f(p.get('p_change_min'), 1)}%，净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e4)} 亿元")
         elif kind == "forecast_slight":
-            score, label, better = _shown_pct(p.get("p_change_min"), p["score"]), "预告净利增幅下限(%)", "higher"
-            note = _RANK_CAP_NOTE
+            score, label, better = round(float(p.get("net_profit_min") or p["score"]) / 1e8, 3), "预告净利下限(亿元)", "higher"
             reason = (f"{p.get('ann_date', '')} 首次业绩预告略增（{p.get('end_date', '')}）："
-                      f"增幅下限 {_f(p.get('p_change_min'), 1)}%，净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e4)} 亿元")
+                      f"净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e8, 3)} 亿元，增幅下限 {_f(p.get('p_change_min'), 1)}%")
         elif kind == "incentive_option":
             score, label, better = round(float(p["r20"]) * 100, 2), "公告前20日涨幅(%)", "lower"
             reason = f"{p.get('ann_date', '')} 首次披露含股票期权的激励草案：{p.get('title', '')}；公告前20日涨幅 {_f(score)}%"

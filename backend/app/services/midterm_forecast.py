@@ -267,7 +267,7 @@ def forecast_preincrease_candidates(db, as_of: str, store: bool = True) -> list[
 
 
 def forecast_slight_candidates(db, as_of: str, store: bool = True) -> list[dict[str, Any]] | None:
-    """§435 FLZ_h20：首次业绩预告 type=略增 且 p_change_min>0、net_profit_min>0；按增幅封顶300降序（与研究 flz_s435 一致）。"""
+    """§435/§438 FLZ_h20：首次业绩预告 type=略增 且 p_change_min>0、net_profit_min>0；按净利下限降序（§438）。"""
     import pandas as pd
     from app.services.midterm_service import _liq_ok
     dates = [r[0] for r in db.execute(text(
@@ -314,7 +314,8 @@ def forecast_slight_candidates(db, as_of: str, store: bool = True) -> list[dict[
         npmin = pd.to_numeric(r["net_profit_min"], errors="coerce")
         if pd.isna(pmin) or pd.isna(npmin) or not (pmin > 0 and npmin > 0):
             continue
-        score = min(float(pmin), 300.0)
+        # §438：排序改按净利下限（与 lt_research182 一致）；事件门槛不变
+        score = float(npmin)
         if code not in out or score > out[code]["score"]:
             out[code] = {"code": code, "ann_date": r["ann_date"], "end_date": r["end_date"], "forecast_type": "略增",
                          "p_change_min": float(pmin), "net_profit_min": float(npmin), "score": score}
