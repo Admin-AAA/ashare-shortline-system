@@ -5316,3 +5316,19 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 上线（2026-11-01 16:21 CST）：`mid-sue-accel`（kind=`sue_accel`，`midterm_sueg.sueg_candidates`：G 同现役 EA 网关 3 期；SUE 用本地 fina parquet + 当期 profit_dedt；排序 min(SUE,20)）；`s489_onboard_metrics.py` 写入 metrics；实盘不设仓位上限。
 - replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-sue-accel --execute` → 2026-07-29~10-30 **30批/269只**（origin=replay，errors/no_data 0）。
 - `safe_backend_restart` 后 health 8765 **200**；/mid 现役含 mid-sue-accel。
+
+## §490 [中线·现役改进] 大宗溢价硬门槛≥0.5%（BT_p005_h20）— 预注册（2026-11-01 16:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-block-trade-premium（§474 ratio≥0.45%、prem≥0）把 **溢价** 门槛从 0 抬到 **≥0.5%**；ratio 仍 ≥0.45%；排序仍 premium。同进程 BT_base(prem≥0)。
+- 想法：软扩 ratio 已 ADOPT；本题反向 **硬抬溢价** 过滤廉价溢价噪声（硬门槛，非 −pct）。
+- 去重：BT_r045/r04；BT_sc_*；BTU。非仓位。
+- 规则：prem≥0.5% & ratio≥0.45% vs base prem≥0；sc_prem；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`lt_research208.py` / `run_s490.sh`。
+
+## §491 [中线·现役改进] SUEG 硬抬 SUE≥2.5（SUEG25_h20）— 预注册（2026-11-01 16:25 CST 写于跑任何收益之前）
+- 白话：刚上线 mid-sue-accel（SUE≥2 ∩ G）把 SUE 门槛抬到 **≥2.5**；G 不变；排序仍 min(SUE,20)。同进程 SUEG_base(≥2)。
+- 想法：合取已 ADOPT；贴边 **硬抬 SUE** 再滤弱意外（硬门槛，非 −pct、非腰斩）。
+- 去重：SUEG；SUE；SUEU。非仓位。不碰数据网关。
+- 规则：SUE≥2.5 ∩ G vs SUE≥2 ∩ G；sc_sue；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`sueg25_s491.py` / `run_s491.sh`。
