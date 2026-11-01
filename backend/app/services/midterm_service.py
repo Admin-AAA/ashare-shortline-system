@@ -141,7 +141,7 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-sue-accel-vol": {
         "name": "标准化意外∩加速∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，在「标准化意外∩业绩加速」事件池上再要求信号日成交额≥1.5×前20日均额。按 min(SUE,20) 从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：Bernard–Thomas SUE × PEAD 加速 × 量能确认（§515）。",
+        "summary": "每个交易日盘后，在「SUE≥2.2 ∩ 业绩加速」事件池上再要求信号日成交额≥1.5×前20日均额。按 min(SUE,20) 从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：Bernard–Thomas SUE × PEAD 加速 × 量能确认（§515→§604 硬抬 SUE≥2.2）。",
         "kind": "sue_accel_vol",
         "hold_days": 20,
         "schedule": "daily",
