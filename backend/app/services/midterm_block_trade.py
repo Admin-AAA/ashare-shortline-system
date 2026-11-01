@@ -4,8 +4,8 @@
 数据：Tushare block_trade（经统一数据网关 app.services.tushare_client.get_pro，只读，按 trade_date）。
 口径：同一股票 T 日全部大宗成交汇总：amt = Σamount（万元），vwp = Σamount/Σvol（元/股，成交量加权大宗价）；
 premium = vwp / close_T − 1（daily_kbars 不复权收盘）；流通市值 fmv = 最近一期 daily_basic.circ_mv（万元，≤T）
-× close_T / 该快照日收盘；ratio = amt / fmv。入选：premium ≥ 0 且 ratio ≥ 0.5%，非北交所、非ST、上市>250交易日、
-20日均成交额>5000万（midterm_service._liq_ok）。排序 = premium（溢价率）降序，平手按代码升序（§388 改排序；事件门槛不变）。T 收盘后出信号、T+1 开盘买、持 20 日。
+× close_T / 该快照日收盘；ratio = amt / fmv。入选：premium ≥ 0 且 ratio ≥ 0.45%，非北交所、非ST、上市>250交易日、
+20日均成交额>5000万（midterm_service._liq_ok）。排序 = premium（溢价率）降序，平手按代码升序（§388 改排序；§474：ratio 门槛 0.5%→0.45%）。T 收盘后出信号、T+1 开盘买、持 20 日。
 时点：Tushare 大宗交易约 T 日 21:00 才发布 → 17:35 盘后流水线通常拿不到当日数据（返回 None = no_data，不落盘）；
 需要在 21:00 之后、T+1 开盘前调用 midterm_service.generate_block_trade_picks(db, T) 出票。"""
 from __future__ import annotations
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 FIELDS = "ts_code,trade_date,price,vol,amount,buyer,seller"
 PAGE = 1000
 MIN_PREMIUM = 0.0
-MIN_RATIO = 0.005
+MIN_RATIO = 0.0045
 
 
 def fetch_block_trades(trade_date: str) -> list[dict[str, Any]] | None:
@@ -94,7 +94,7 @@ def _close_and_fmv(db, as_of: str, codes: list[str]) -> dict[str, tuple[float, f
 
 
 def events(agg: dict[str, dict[str, float]], px: dict[str, tuple[float, float]]) -> dict[str, dict[str, Any]]:
-    """汇总 + 收盘/流通市值 -> 达标事件 {code: {...}}（premium ≥ 0 且 ratio ≥ 0.5%）。"""
+    """汇总 + 收盘/流通市值 -> 达标事件 {code: {...}}（premium ≥ 0 且 ratio ≥ 0.45%）。"""
     out = {}
     for code, a in agg.items():
         if code not in px:
