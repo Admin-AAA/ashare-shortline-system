@@ -8352,3 +8352,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：SUEGDINCVOL；DINCFATVOL；EATDVOL；EAVOL；DINCVOL。非仓位。不碰数据网关。
 - 规则：G∩DINC∩vol；sc_g；K20/max_new5。新策略无 B。
 - 脚本：`eadincvol_s711.py` / `run_s711.sh`。
+
+### §710 EATDVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +1.47 / P20 +0.02 / P21 +2.36 / W0 +0.55 / W00 +2.95 / W1 +4.09 / W2 +2.10 / R12 +2.09（**正段 8/8**）
+- R12 64笔 +2.09% PF1.40 MDD−7.1；N3 166笔 +2.80 PF1.70 MDD−10.9；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 EATDVOL_base(orv≥20)：R12 +3.68 / N3 +3.92 / MDD−11.2 → **B 否**（R12/N3 每笔均降）。
+- → **REJECTED**；线上 mid-ea-td-vol 仍 orv≥20。解读：抬营收腿伤每笔——**停 EATDVOL orv硬抬轴**。
+
+### §711 EADINCVOL_h20 — REJECT（笔数不足）
+- 每笔 P19 +10.27 / P20 −1.17 / P21 +9.01 / W0 −3.41 / W00 +7.25 / W1 +0.16 / W2 +7.14 / R12 +14.31（**正段 6/8**）
+- R12 **18笔** +14.31% PF7.15 MDD−5.1；N3 28笔 +10.50 PF5.26 MDD−5.0；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 n=18<30）。解读：指标极强但样本稀——**记候补，勿硬抬/软扩凑笔数**；接 DINCFAT/DINCTD。
+
+## §712 [中线·现役改进] 业绩加速∩营业周期∩放量 dtp硬抬≥60（EATDVOL_d60_h20）— 预注册（2026-11-02 06:00 CST 写于跑任何收益之前）
+- 白话：现役 mid-ea-td-vol（dtp≥55∩orv≥20∩TD≥25∩放量，TD排序）把 **dtp 再硬抬** 到 **≥60**；其余不变。同进程 EATDVOL_base(≥55)。
+- 想法：§708 d55 刚 ADOPT、orv 硬抬刚否——试再贴一档 dtp（硬门槛，非 −pct）。B 门对照 base。
+- 去重：EATDVOL_d55；EATDVOL_o25；EAVOL_d55。非仓位。不碰数据网关。
+- 规则：G&dtp≥60∩TD≥25∩vol vs ≥55；sc_td；K20/max_new5。B 门对照 base。
+- 脚本：`eatdvol_d60_s712.py` / `run_s712.sh`。
+
+## §713 [中线·文献] 业绩加速∩预增∩放量（EAFZGVOL_h20）— 预注册（2026-11-02 06:00 CST 写于跑任何收益之前）
+- 白话：G ∩ 首次预增（p_change_min>0）∩ 放量≥1.5×amt20；按 sc_g 排序；持20。
+- 想法 / 文献：加速∩分红候补勿凑样；预增∩效率曾样本崩——改试 **加速∩预增** 跨族双合取∩放量（硬合取，非 −pct；EAVOL/FZGVOL 已上线）。对照 EAVOL/FZGVOL/SUEGTDVOL/FZGTDVOL。
+- 去重：FZGTDVOL；FZGFATVOL；EADINCVOL；EATDVOL；FZGVOL。非仓位。不碰数据网关。
+- 规则：G∩FZG∩vol；sc_g；K20/max_new5。新策略无 B。
+- 脚本：`eafzgvol_s713.py` / `run_s713.sh`。
