@@ -6,7 +6,7 @@ category_gqjl_szsh（股权激励）+ searchkey「草案」，全市场。经统
 口径：标题含「激励计划」且含「草案」、不含 修订/更正/调整/终止/撤销/取消/延期；日期 = announcementTime 的北京时间日期
 （巨潮多把晚间公告标为次日 00:00）；按 (股票, 日期) 聚合，首次 = 该股前 180 自然日内无同类公告；
 当日任一标题含「股票期权」才入选（INC_opt）。公告日在 (上一交易日, as_of]，as_of 收盘出信号、次日开盘买、持 20 日。
-排序分 = 信号日前 20 日复权涨幅 r20 升序（优先尚未提前大涨的），平手按代码升序。流动性：midterm_service._liq_ok。
+排序分 = 信号日涨跌幅 pct_chg 升序（§402：越弱反应优先；原 −r20），平手按代码升序。流动性：midterm_service._liq_ok。
 "首次"判断：历史 output/research/sprint4/incentive/*.parquet（研究缓存 2018-01~2026-10-16）
 + 实盘追加库 data/midterm/events/incentive_live_<year>.parquet（本模块追加）。"""
 from __future__ import annotations
@@ -158,10 +158,16 @@ def incentive_candidates(db, as_of: str, store: bool = True, opt_only: bool = Tr
     ok = _liq_ok(db, as_of, dates, sorted(ev))
     if not ok:
         return []
+    # §402：排序键 −pct（信号日涨跌升序）；仍附带 r20 供对照，不参与排序
     r20 = _r20(db, as_of, dates, sorted(ok))
+    pct_rows = db.execute(text(
+        "SELECT code, pct_chg FROM daily_kbars WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": sorted(ok)}).all()
+    pct = {c: float(pc) if pc is not None else 0.0 for c, pc in pct_rows}
     names = dict(db.execute(text("SELECT code,name FROM stocks WHERE code IN :codes").bindparams(
         bindparam("codes", expanding=True)), {"codes": sorted(ok)}).all())
     res = [{"code": c, "name": names.get(c, ""), "ann_date": ev[c]["ann_date"], "opt": ev[c]["opt"],
-            "title": ev[c]["titles"][0][:120], "r20": round(r20.get(c, 0.0), 4), "score": round(-r20.get(c, 0.0), 6),
+            "title": ev[c]["titles"][0][:120], "r20": round(r20.get(c, 0.0), 4),
+            "signal_pct": round(pct.get(c, 0.0), 3), "score": round(-pct.get(c, 0.0), 6),
             "total_mv": float(ok[c]["total_mv"] or 0), "amt20": float(ok[c]["amt20"])} for c in ok]
-    return sorted(res, key=lambda x: (x["r20"], x["code"]))
+    return sorted(res, key=lambda x: (x["signal_pct"], x["code"]))
