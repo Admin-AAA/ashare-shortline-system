@@ -171,3 +171,51 @@ def incentive_candidates(db, as_of: str, store: bool = True, opt_only: bool = Tr
             "signal_pct": round(pct.get(c, 0.0), 3), "score": round(-pct.get(c, 0.0), 6),
             "total_mv": float(ok[c]["total_mv"] or 0), "amt20": float(ok[c]["amt20"])} for c in ok]
     return sorted(res, key=lambda x: (x["signal_pct"], x["code"]))
+
+
+def incentive_underreact_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§459 IOU_h20：激励期权事件 ∩ 信号日 pct∈[-1,+2] 且未封涨停；排序仍 −pct（与 §402 / 研究 iou_s459 一致）。"""
+    base = incentive_candidates(db, as_of)
+    if base is None:
+        return None
+    if not base:
+        return []
+    out = []
+    for p0 in base:
+        pct = p0.get("signal_pct")
+        if pct is None:
+            continue
+        pct = float(pct)
+        if pct < -1.0 or pct > 2.0:
+            continue
+        # 涨停过滤：用 close 再查一次更稳；此处用 pct 近似 + 需 close
+        code = p0["code"]
+        band = 0.198 if code.startswith(("3", "688")) else 0.098
+        # signal_pct 已在 base；补 close
+        out.append(dict(p0))
+    if not out:
+        return []
+    codes = [x["code"] for x in out]
+    rows = db.execute(text(
+        "SELECT code, pct_chg, close FROM daily_kbars WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    by = {r["code"]: r for r in rows}
+    kept = []
+    for p0 in out:
+        r = by.get(p0["code"])
+        if not r or r["close"] is None or r["pct_chg"] is None:
+            continue
+        pct = float(r["pct_chg"])
+        close = float(r["close"])
+        code = p0["code"]
+        band = 0.198 if code.startswith(("3", "688")) else 0.098
+        pre = close / (1 + pct / 100.0) if pct > -99.999 else close
+        ul = pre * (1 + band)
+        if close >= ul - 0.005:
+            continue
+        q = dict(p0)
+        q["signal_pct"] = round(pct, 3)
+        q["score"] = round(-pct, 6)
+        kept.append(q)
+    return sorted(kept, key=lambda x: (x["signal_pct"], x["code"]))
+
