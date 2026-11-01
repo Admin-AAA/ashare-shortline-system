@@ -4,7 +4,8 @@ CD="$ROOT/scripts/midterm"; PY="$ROOT/.venv/bin/python"
 OUTD="$ROOT/output/research/s430"; OUT="$OUTD/res.json"; LOG="$OUTD/run.log"
 mkdir -p "$OUTD"; echo "START_S430 $(date)" | tee "$LOG"; rm -f "$OUT" "$OUTD"/trades_*.csv
 cd "$CD"
-busy() { pgrep -fl 'lt_research178|ftz5_s431|lt_research177|ftz_s429' | grep -v "$$" >/dev/null; }
+# only Python workers (avoid matching this bash / diagnostic shells)
+busy() { pgrep -f '/\.venv/bin/python .*(lt_research178|ftz5_s431)\.py' >/dev/null; }
 run_ph() {
   local name="$1" s="$2" lend="$3"
   while busy; do echo "wait other $(date +%H:%M:%S)" >>"$LOG"; sleep 15; done
