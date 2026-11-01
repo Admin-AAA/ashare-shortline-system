@@ -391,8 +391,17 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-fa-td-vol": {
         "name": "固定资产周转∩营业周期∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足固定资产周转率（fa_turn）升幅≥0.10且本期≥0.5，与营业周期（turn_days）同比缩短≥20日，且信号日成交额≥1.5×前20日均额；按固定资产周转升幅（封顶2.0）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：效率双改善 × 量能确认（§661）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足固定资产周转率（fa_turn）升幅≥0.12且本期≥0.5，与营业周期（turn_days）同比缩短≥20日，且信号日成交额≥1.5×前20日均额；按固定资产周转升幅（封顶2.0）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：效率双改善 × 量能确认（§661）。",
         "kind": "fat_td_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
+    # §663 ETD∩FAT∩放量（scripts/midterm/etdfatvol_s663.py ETDFATVOL_h20；§282 达标；2026-11-02 上线）
+    "mid-etd-fa-vol": {
+        "name": "股东权益/负债∩固定资产周转∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足股东权益/负债（eqt_to_debt）升幅≥0.20，与固定资产周转率（fa_turn）升幅≥0.10且本期≥0.5，且信号日成交额≥1.5×前20日均额；按股东权益/负债升幅（封顶2.0）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：BS∩效率双改善 × 量能确认（§663）。",
+        "kind": "etd_fat_vol",
         "hold_days": 20,
         "schedule": "daily",
     },
@@ -1718,6 +1727,21 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
 
 
 
+
+        if meta.get("kind") == "etd_fat_vol":
+            from app.services.midterm_fina_events import etdfatvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = etdfatvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
         if meta.get("kind") == "fat_td_vol":
             from app.services.midterm_fina_events import fattdvol_candidates
             held = _held_codes(db, sid, as_of)
@@ -2284,6 +2308,12 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["score"]), 3), "股东权益/负债升幅(封顶2.0)", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告股东权益/负债改善放量："
                       f"{_f(p.get('prev'), 3)} → {_f(p.get('cur'), 3)}，升幅 {_f(p.get('delta'), 3)}；"
+                      f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "etd_fat_vol":
+            score, label, better = round(float(p["score"]), 3), "股东权益/负债升幅(封顶2.0)×FAT合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告 ETD∩FAT 放量："
+                      f"eqt_to_debt {_f(p.get('prev'), 3)} → {_f(p.get('cur'), 3)} 升幅 {_f(p.get('delta'), 3)}；"
+                      f"fa_turn 升幅 {_f(p.get('fat_dq'), 3)}；"
                       f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "fat_td_vol":
             score, label, better = round(float(p["score"]), 3), "固定资产周转升幅(封顶2.0)×TD合取", "higher"

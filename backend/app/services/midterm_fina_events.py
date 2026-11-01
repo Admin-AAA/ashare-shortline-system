@@ -603,7 +603,7 @@ def tdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 # §661 FATTDVOL_h20（FAT ∩ TD ∩ 放量；排序 FAT 升幅）
 def fattdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§661：固定资产周转扩张 ∩ 营业周期缩短 ∩ 放量≥1.5×amt20；排序 FAT 升幅。"""
+    """§661/§662：FAT升幅≥0.12 ∩ TD缩短 ∩ 放量≥1.5×amt20；排序 FAT 升幅（§662 硬抬）。"""
     fat = fatvol_candidates(db, as_of)
     td = td_candidates(db, as_of)
     if fat is None or td is None:
@@ -611,6 +611,13 @@ def fattdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     td_by = {p["code"]: p for p in td}
     out = []
     for p0 in fat:
+        dq = p0.get("dq", p0.get("score"))
+        try:
+            dq_f = float(dq) if dq is not None else None
+        except (TypeError, ValueError):
+            dq_f = None
+        if dq_f is None or dq_f < 0.12:
+            continue
         e = td_by.get(p0["code"])
         if e is None:
             continue
@@ -618,6 +625,28 @@ def fattdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         q["td_improve"] = e.get("improve")
         q["td_cur"] = e.get("cur")
         q["td_prev"] = e.get("prev")
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
+
+
+# §663 ETDFATVOL_h20（ETD ∩ FAT ∩ 放量；排序 ETD 升幅）
+def etdfatvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§663：股东权益/负债改善 ∩ 固定资产周转扩张 ∩ 放量≥1.5×amt20；排序 ETD 升幅。"""
+    etd = etdvol_candidates(db, as_of)
+    fat = fat_candidates(db, as_of)
+    if etd is None or fat is None:
+        return None
+    fat_by = {p["code"]: p for p in fat}
+    out = []
+    for p0 in etd:
+        e = fat_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["fat_dq"] = e.get("dq")
+        q["fat_cur"] = e.get("cur")
+        q["fat_prev"] = e.get("prev")
         out.append(q)
     return sorted(out, key=lambda x: (-x["score"], x["code"]))
 
