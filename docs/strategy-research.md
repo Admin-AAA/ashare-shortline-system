@@ -8277,3 +8277,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：EATADVOL；SUEGETDVOL；ETDFATVOL；EATDVOL；ETDVOL。非仓位。不碰数据网关。
 - 规则：G∩ETD∩vol；sc_g；K20/max_new5。新策略无 B。
 - 脚本：`eaetdvol_s705.py` / `run_s705.sh`。
+
+### §704 EATDVOL_td030_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +0.22 / P20 +0.02 / P21 +3.47 / W0 +0.69 / W00 +1.13 / W1 +4.71 / W2 +1.27 / R12 +3.57（**正段 8/8**）
+- R12 64笔 +3.57% PF1.76 MDD−6.8；N3 175笔 +3.39 PF1.85 MDD−12.4；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 EATDVOL_base(≥25)：R12 +3.30 / N3 +3.43 / MDD−12.4 → **B 否**（N3 每笔 3.39<3.43）。
+- → **REJECTED**；线上 mid-ea-td-vol 仍 TD缩短≥25。解读：再抬到 30 抬近一年却伤三年——**停 EATDVOL TD缩短硬抬轴**（≥25 为终点）。
+
+### §705 EAETDVOL_h20 — REJECT（A 否·R12/PF）
+- 每笔 P19 +8.82 / P20 +1.51 / P21 +5.84 / W0 +0.45 / W00 −3.96 / W1 +6.41 / W2 +3.45 / R12 −2.18（**正段 6/8**）
+- R12 41笔 **−2.18%** PF0.68 MDD−11.0；N3 98笔 +2.03 PF1.48 MDD−9.7；彩票型
+- 判定 **✗✗**✓✓✓ → **否决**。解读：加速∩ETD 同加速∩TAD——近一年为负；确认 **加速∩BS杠杆双合取∩放量暂缓**。
+
+## §706 [中线·现役改进] 业绩加速∩营业周期∩放量硬抬≥1.8×amt20（EATDVOL_v18_h20）— 预注册（2026-11-02 05:34 CST 写于跑任何收益之前）
+- 白话：现役 mid-ea-td-vol（G∩TD≥25∩放量1.5×，TD排序）把 **放量硬抬** 到 **≥1.8×amt20**；事件/排序不变。同进程 EATDVOL_base(1.5×)。
+- 想法：TD 硬抬已终点——改试量能硬抬（硬门槛，非 −pct）。对照 FINAVOL/EAVOL v18 多否。B 门对照 base。
+- 去重：EATDVOL_td030；FINAVOL_v18；EAVOL_v20。非仓位。不碰数据网关。
+- 规则：G∩TD≥25∩vol1.8 vs vol1.5；sc_td；K20/max_new5。B 门对照 base。
+- 脚本：`eatdvol_v18_s706.py` / `run_s706.sh`。
+
+## §707 [中线·文献] 业绩加速∩销售费用率下降∩放量（EASEXPVOL_h20）— 预注册（2026-11-02 05:34 CST 写于跑任何收益之前）
+- 白话：G ∩ SEXP降幅≥0.35 ∩ 放量≥1.5×amt20；按 sc_g 排序；持20。
+- 想法 / 文献：加速∩BS/周转暂缓；费用∩周期已否——试 **加速∩费用纪律** 跨族双合取∩放量（硬合取，非 −pct；EAVOL/SEXPVOL 已上线）。对照 EAVOL/SEXPVOL/EATDVOL/SEXPTDVOL。
+- 去重：EATDVOL；SEXPTDVOL；SEXPFATVOL；EAVOL；SEXPVOL。非仓位。不碰数据网关。
+- 规则：G∩SEXP∩vol；sc_g；K20/max_new5。新策略无 B。
+- 脚本：`easexpvol_s707.py` / `run_s707.sh`。
