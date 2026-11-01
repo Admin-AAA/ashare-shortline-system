@@ -8176,3 +8176,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：SEXPTDVOL；SEXPFATVOL；FINAVOL；TDVOL；SUEGTDVOL。非仓位。不碰数据网关。
 - 规则：FINA∩TD∩vol；sc_fina；K20/max_new5。新策略无 B。
 - 脚本：`finatdvol_s697.py` / `run_s697.sh`。
+
+### §696 SEXPVOL_sc_rel_h20 — REJECT（A 否·正段；B 亦否）
+- 每笔 P19 +0.00 / P20 +3.06 / P21 +6.06 / W0 −4.00 / W00 −3.17 / W1 +2.19 / W2 +3.47 / R12 +2.61（**正段 5/8**）
+- R12 86笔 +2.61% PF1.66 MDD−9.4；N3 254笔 +2.70 PF1.66 MDD−14.3；彩票型
+- 判定 ✓✓✓**✗**✓ → **A 否**。同进程 SEXPVOL_base：R12 +4.62 / N3 +2.89 / MDD−12.4 → **B 否**（R12/N3 每笔降、MDD 加深）。
+- → **REJECTED**；线上 mid-sales-exp-vol 仍按绝对降幅（§694 去封顶）。解读：相对降幅在放量子集仍伤正段/近一年——**停 SEXPVOL 相对降幅排序轴**。
+
+### §697 FINATDVOL_h20 — REJECT（A 否·PF/正段）
+- 每笔 P19 −1.56 / P20 +1.71 / P21 +5.08 / W0 −5.28 / W00 −0.57 / W1 +4.53 / W2 +0.51 / R12 +1.53（**正段 5/8**）
+- R12 65笔 +1.53% **PF1.29** MDD−8.6；N3 185笔 +2.39 PF1.56 MDD−11.2；彩票型
+- 判定 ✓**✗**✓**✗**✓ → **否决**（R12 PF<1.3、正段不足；W0 −5.28 破 −5）。解读：财务费用∩周期同销售费用∩周期——不镜像盈余∩周期；**财务费用∩周期效率双合取∩放量暂缓**。
+
+## §698 [中线·现役改进] 财务费用∩放量同样本改按相对降幅排序（FINAVOL_sc_rel_h20）— 预注册（2026-11-02 04:53 CST 写于跑任何收益之前）
+- 白话：现役 mid-fina-exp-vol（降幅≥0.5∩放量，排序去封顶）**事件一字不改**，只把同日排序从绝对降幅 dq 换成 **相对降幅 dq/(finaexp+dq) 降序**。同进程 FINAVOL_base(绝对 dq)。
+- 想法：SEXPVOL_sc_rel 刚否；非 vol 的 FINA_sc_rel 曾 B 贴线否——本题接到 **放量子集**（增量排序，非 −pct）。B 门对照 base。
+- 去重：FINA_sc_rel；FINAVOL_sc_amtr；SEXPVOL_sc_rel。非仓位。不碰数据网关。
+- 规则：同样本 FINAVOL；sc_rel vs sc_raw；K20/max_new5。B 门对照 base。
+- 脚本：`finavol_sc_rel_s698.py` / `run_s698.sh`。
+
+## §699 [中线·文献] 业绩加速∩营业周期∩放量（EATDVOL_h20）— 预注册（2026-11-02 04:53 CST 写于跑任何收益之前）
+- 白话：G（业绩加速）∩ TD缩短≥20 ∩ 放量≥1.5×amt20；按 sc_g 排序；持20。
+- 想法 / 文献：财务/销售费用∩周期暂缓；SUEG∩TD 已上线——试 **加速∩周期效率** 双合取∩放量（硬合取，非 −pct；EAVOL/TDVOL 已上线，≠SUE 门槛）。对照 EAVOL/SUEGTDVOL/TDVOL。
+- 去重：SUEGTDVOL；EAVOL；TDVOL；FINATDVOL；SEXPTDVOL。非仓位。不碰数据网关。
+- 规则：G∩TD∩vol；sc_g；K20/max_new5。新策略无 B。
+- 脚本：`eatdvol_s699.py` / `run_s699.sh`。
