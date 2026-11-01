@@ -8552,3 +8552,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：RPUVOL；IOTDVOL；RPU20；TDVOL；IOUVOL。非仓位。不碰数据网关。
 - 规则：RPU∩TD∩vol；sc=−pct；K20/max_new5。新策略无 B。
 - 脚本：`rputdvol_s727.py` / `run_s727.sh`。
+
+### §726 DINCVOL_v18_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +3.88 / P20 −0.60 / P21 +1.41 / W0 +0.51 / W00 −1.87 / W1 +3.12 / W2 +5.55 / R12 +2.15（**正段 6/8**）
+- R12 127笔 +2.15% PF1.34 MDD−13.6；N3 306笔 +3.49 PF1.74 MDD−10.3；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 DINCVOL_base(1.5×)：R12 +2.27 / N3 +4.53 / MDD−12.2 → **B 否**（R12/N3 每笔均降；虽回撤收窄不计）。
+- → **REJECTED**；线上 mid-dividend-increase-vol 仍放量≥1.5×。解读：量能硬抬收窄回撤却伤每笔——**停 DINCVOL 放量硬抬轴**（接 FATTD/EATD/FINA）。
+
+### §727 RPUTDVOL_h20 — REJECT（样本崩）
+- 每笔 P19 +25.55 / 近段多空 / R12 —（**正段 1/8**）
+- R12 **0笔**；全样本近乎空窗。判定否决。
+- → **REJECTED**。解读：回购弱反应∩周期合取空窗——**回购弱反应∩周期效率双合取∩放量暂缓**。
+
+## §728 [中线·现役改进] 略增∩放量 放量硬抬≥1.8×（FLZVOL_v18_h20）— 预注册（2026-11-02 07:09 CST 写于跑任何收益之前）
+- 白话：现役 mid-forecast-slight-vol（略增∩放量1.5×，按净利下限排序）把 **放量硬抬** 到 **≥1.8×amt20**；事件/排序不变。同进程 FLZVOL_base(1.5×)。
+- 想法：DINCVOL/IO/SEXP 量能轴已终点或否——改试略增∩放量现役（硬门槛，非 −pct）。对照 FLZVOL_v13 软扩已否。B 门对照 base。
+- 去重：FLZVOL_v13；DINCVOL_v18；IOVOL_v18；SEXPVOL_v18。非仓位。不碰数据网关。
+- 规则：(略增∩vol1.8) vs (…∩vol1.5)；sc=net_profit_min；K20/max_new5。B 门对照 base。
+- 脚本：`flzvol_v18_s728.py` / `run_s728.sh`。
+
+## §729 [中线·文献] 回购弱反应∩资产周转效率∩放量（RPUFATVOL_h20）— 预注册（2026-11-02 07:09 CST 写于跑任何收益之前）
+- 白话：回购预案≥市值0.5% ∩ 弱反应带 ∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20；按 −pct 排序；持20。
+- 想法 / 文献：回购弱反应∩周期刚崩——改试 **回购弱反应∩周转**（硬合取，非 −pct；RPU20/FATVOL 已上线）。对照 RPUTDVOL/RPUVOL/FATTDVOL。
+- 去重：RPUTDVOL；RPUVOL；IOFATVOL；FATTDVOL。非仓位。不碰数据网关。
+- 规则：RPU∩FAT∩vol；sc=−pct；K20/max_new5。新策略无 B。
+- 脚本：`rpufatvol_s729.py` / `run_s729.sh`。
