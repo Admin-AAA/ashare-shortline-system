@@ -8201,3 +8201,29 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：SUEGTDVOL；EAVOL；TDVOL；FINATDVOL；SEXPTDVOL。非仓位。不碰数据网关。
 - 规则：G∩TD∩vol；sc_g；K20/max_new5。新策略无 B。
 - 脚本：`eatdvol_s699.py` / `run_s699.sh`。
+
+### §698 FINAVOL_sc_rel_h20 — REJECT（A 否·PF；B 亦否）
+- 每笔 P19 +2.14 / P20 +0.46 / P21 +4.98 / W0 −4.18 / W00 −1.95 / W1 +6.51 / W2 +0.72 / R12 +0.81（**正段 6/8**）
+- R12 82笔 +0.81% **PF1.15** MDD−8.0；N3 238笔 +2.85 PF1.63 MDD−9.8；彩票型
+- 判定 ✓**✗**✓✓✓ → **A 否**。同进程 FINAVOL_base：R12 +2.33 / N3 +2.76 / MDD−11.0 → **B 否**（R12 每笔大降）。
+- → **REJECTED**；线上 mid-fina-exp-vol 仍按绝对降幅去封顶。解读：相对降幅在 FINA∩放量伤近一年 PF——**停 FINAVOL 相对降幅排序轴**（接 SEXPVOL_sc_rel）。
+
+### §699 EATDVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +1.25 / P20 −0.93 / P21 +2.34 / W0 −1.34 / W00 +1.69 / W1 +3.32 / W2 +1.41 / R12 +3.05（**正段 6/8**）
+- R12 65笔 +3.05% PF1.61 MDD−6.6；N3 180笔 +2.73 PF1.67 MDD−13.0；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 05:03 CST）：`mid-ea-td-vol`（kind=`ea_td_vol`）；`s699_onboard_metrics.py`；replay 22批/52只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：加速∩周期镜像盈余∩周期成立——费用∩周期轴已否，加速族可续试 FAT 腿。
+
+## §700 [中线·现役改进] 业绩加速∩营业周期∩放量同样本改按TD缩短排序（EATDVOL_sc_td_h20）— 预注册（2026-11-02 05:03 CST 写于跑任何收益之前）
+- 白话：现役 mid-ea-td-vol（G∩TD∩放量）**事件一字不改**，只把同日排序从 sc_g 换成 **TD缩短天数**（封顶200）。同进程 EATDVOL_base(按 sc_g)。
+- 想法：刚上线双合取——试事件内另一键排序（增量排序，非 −pct）。对照 SUEGTDVOL_sc_td 已否、FATTDVOL_sc_td 已否。B 门对照 base。
+- 去重：EATDVOL；SUEGTDVOL_sc_td；FATTDVOL_sc_td。非仓位。不碰数据网关。
+- 规则：同样本 EATDVOL；sc_td vs sc_g；K20/max_new5。B 门对照 base。
+- 脚本：`eatdvol_sc_td_s700.py` / `run_s700.sh`。
+
+## §701 [中线·文献] 业绩加速∩固定资产周转∩放量（EAFATVOL_h20）— 预注册（2026-11-02 05:03 CST 写于跑任何收益之前）
+- 白话：G ∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20；按 sc_g 排序；持20。
+- 想法 / 文献：EA∩TD 刚上线——镜像试 **加速∩资产周转效率** 双合取∩放量（硬合取，非 −pct；对照 SUEG∩FAT 已上线）。对照 EATDVOL/SUEGFATVOL/EAVOL/FATVOL。
+- 去重：EATDVOL；SUEGFATVOL；EAVOL；FATVOL；FZGFATVOL。非仓位。不碰数据网关。
+- 规则：G∩FAT∩vol；sc_g；K20/max_new5。新策略无 B。
+- 脚本：`eafatvol_s701.py` / `run_s701.sh`。

@@ -4,6 +4,7 @@
 G 与现役 mid-earnings-accel 相同；另要求信号日成交额 ≥1.5×前20日均额。
 事件时点 / 股池：同 earnings_accel_candidates。不另改数据网关。
 实盘推荐不设仓位上限（k_slots/max_new 仅回测口径）。
+§699 EATDVOL→ mid-ea-td-vol：G∩TD∩放量。
 """
 from __future__ import annotations
 
@@ -100,3 +101,26 @@ def eavol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         })
     res.sort(key=lambda x: (-float(x["score"]), str(x["code"])))
     return res
+
+def eatdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§699：G ∩ TD缩短 ∩ 放量≥1.5×amt20；排序 min(dtp,300)（同 EAVOL）。"""
+    from app.services.midterm_fina_events import td_candidates
+
+    ea = eavol_candidates(db, as_of)
+    td = td_candidates(db, as_of)
+    if ea is None or td is None:
+        return None
+    td_by = {p["code"]: p for p in td}
+    out: list[dict[str, Any]] = []
+    for p0 in ea:
+        e = td_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["td_improve"] = e.get("improve")
+        q["td_cur"] = e.get("cur")
+        q["td_prev"] = e.get("prev")
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+

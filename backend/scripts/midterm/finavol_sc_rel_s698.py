@@ -16,8 +16,8 @@ def prep():
     vol = c("amount").is_not_null() & c("amt20").is_not_null() & (c("amount") >= 1.5 * c("amt20"))
     sig = (c("FINA") & vol).fill_null(False)
     # prev ≈ finaexp + dq；相对降幅 dq/prev（与 §416 一致）
-    prev = (c("finaexp_of_gr") + c("dq")).fill_null(None)
-    rel = pl.when(prev.is_not_null() & (prev.abs() > 1e-9)).then(c("dq") / prev).otherwise(0.0)
+    prev = c("finaexp_of_gr") + c("dq")
+    rel = pl.when(prev.is_not_null() & (prev.abs() > 1e-9)).then(c("dq") / prev).otherwise(pl.lit(0.0))
     return df.with_columns(
         sig.alias("FINAVOL"),
         (c("dq").fill_null(0) - tie).alias("sc_raw"),
