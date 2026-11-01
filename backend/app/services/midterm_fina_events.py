@@ -199,15 +199,15 @@ def sexp_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 # §359 FINA_h20（财务费用率同比下降；规则同 §203 / lt_research70，未调参）
 FINA_CUR_LO, FINA_CUR_HI = -2.0, 15.0
 FINA_PREV_LO, FINA_PREV_HI = -2.0, 25.0
-FINA_DELTA_MIN, FINA_DELTA_CAP = 0.5, 8.0
+FINA_DELTA_MIN, FINA_DELTA_CAP = 0.5, 8.0  # CAP 仅历史对照；§396 起排序不再封顶
 
 
 def fina_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """FINA_h20：财务费用/营业总收入 同比下降 ≥0.5 百分点。"""
+    """FINA_h20：财务费用/营业总收入 同比下降 ≥0.5 百分点。§396：排序用原始降幅（不封顶）。"""
     def passes(cur: float, prev: float):
         delta = prev - cur
         ok = (FINA_CUR_LO <= cur <= FINA_CUR_HI and FINA_PREV_LO <= prev <= FINA_PREV_HI and delta >= FINA_DELTA_MIN)
-        return ok, min(delta, FINA_DELTA_CAP), {"delta": delta}
+        return ok, delta, {"delta": delta}  # §396：不再 min(delta, FINA_DELTA_CAP)
     return _fina_events(db, as_of, "finaexp_of_gr", passes)
 
 

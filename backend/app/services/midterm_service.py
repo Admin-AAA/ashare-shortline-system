@@ -149,7 +149,7 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-fina-exp-drop": {
         "name": "财务费用率同比下降（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告：财务费用率（finaexp_of_gr，财务费用/营业总收入）本期∈[-2,15]、去年同报告期∈[-2,25]，且同比下降≥0.5个百分点。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按降幅（封顶8个百分点）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：融资成本负担减轻事件；原按同市值超额标准于§203/§279否决，§359按用户批准的§282绝对收益标准复判达标后上线。",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告：财务费用率（finaexp_of_gr，财务费用/营业总收入）本期∈[-2,15]、去年同报告期∈[-2,25]，且同比下降≥0.5个百分点。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按降幅（原始百分点，§396 起不再封顶8）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：融资成本负担减轻事件；§359 上线后 §396 去掉排序封顶（事件门槛不变）。",
         "kind": "fina_yoy",
         "hold_days": 20,
         "schedule": "daily",
@@ -1581,7 +1581,7 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：销售费用率 {_f(p.get('prev'), 1)}% → "
                       f"{_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点")
         elif kind == "fina_yoy":
-            score, label, better = round(float(p["score"]), 2), "财务费用率降幅(百分点，封顶8)", "higher"
+            score, label, better = round(float(p["score"]), 2), "财务费用率降幅(百分点)", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：财务费用率 {_f(p.get('prev'), 1)}% → "
                       f"{_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点")
         elif kind == "dinc_yoy":
