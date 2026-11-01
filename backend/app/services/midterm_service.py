@@ -119,6 +119,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §489 标准化意外∩业绩加速（scripts/midterm/sueg_s489.py SUEG_h20；§282 达标；2026-11-01 上线）
+    "mid-sue-accel": {
+        "name": "标准化意外∩业绩加速（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在「财报业绩加速」事件池上再要求标准化意外盈利 SUE≥2（单季扣非相对去年同季的变化 ÷ 该公司过去8期该变化的标准差；单季扣非须为正）。按 min(SUE,20) 从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：Bernard–Thomas SUE 与业绩加速合取（§489），两路盈余信息同向。",
+        "kind": "sue_accel",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §103 业绩预告正向漂移（scripts/midterm/lt_research20.py F_any_h20，预注册 3 版中采纳的一版，未调参；实盘候选 app/services/midterm_forecast.py）
     "mid-forecast-beat": {
         "name": "业绩预告首次预喜（持20日）",
@@ -928,7 +937,8 @@ def earnings_accel_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
                 continue
             if dtp >= 50 and orv >= 20 and pdd > 0 and dtp > prev_dtp:
                 out[code] = {"code": code, "ann_date": str(r["ann_date"]), "end_date": cur, "dt_netprofit_yoy": float(dtp),
-                             "or_yoy": float(orv), "prev_dt_netprofit_yoy": float(prev_dtp)}
+                             "or_yoy": float(orv), "prev_dt_netprofit_yoy": float(prev_dtp),
+                             "profit_dedt": float(pdd)}
     if not out:
         return []
     ok = _liq_ok(db, as_of, dates, sorted(out))
@@ -1236,6 +1246,19 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 result[sid] = "no_data"
                 continue
             picks = [p for p in ea if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+        if meta.get("kind") == "sue_accel":
+            from app.services.midterm_sueg import sueg_candidates
+            held = _held_codes(db, sid, as_of)
+            sg = sueg_candidates(db, as_of)
+            if sg is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in sg if p["code"] not in held]
             if not picks:
                 result[sid] = 0
                 continue
@@ -1742,6 +1765,13 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             else:
                 score, label, better = _shown_pct(p.get("dt_netprofit_yoy"), p["score"]), "扣非净利同比(%)", "higher"
                 note = _RANK_CAP_NOTE
+        elif kind == "sue_accel":
+            score, label, better = round(float(p["score"]), 4), "SUE(封顶20)", "higher"
+            note = _RANK_CAP_NOTE
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：SUE {_f(p.get('sue'), 2)}，"
+                      f"单季扣非 {_f(float(p.get('q_sq') or 0) / 1e8, 2)} 亿；"
+                      f"业绩加速（扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%，上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，"
+                      f"营收同比 {_f(p.get('or_yoy'), 1)}%）")
         elif kind == "forecast_beat":
             score, label, better = _shown_pct(p.get("p_change_min"), p["score"]), "预告净利增幅下限(%)", "higher"
             note = _RANK_CAP_NOTE

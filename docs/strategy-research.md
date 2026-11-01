@@ -5301,3 +5301,18 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：lt_research122 SUE ∩ G；sc_sue；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`sueg_s489.py` / `run_s489.sh`。
+
+## §488 / §489 判定（2026-11-01）
+
+### §488 EA_orv15_h20 — REJECT
+- 每笔 P19 +1.57 / P20 −1.30 / P21 +1.60 / W0 −4.54 / W00 −0.82 / W1 +1.15 / W2 +1.42 / R12 +5.38（**正段 5/8**）
+- R12 96笔 +5.38% PF2.29 MDD−8.7；N3 253笔 +2.40 PF1.51 MDD−24.1；§285 **彩票型**
+- 判定 ✓✓✓✗✓ → **否决**（正段不足；N3 彩票）。不改现役 mid-earnings-accel。
+
+### §489 SUEG_h20 — ADOPT → 已上线
+- 每笔 P19 +3.96 / P20 +0.42 / P21 +3.43 / W0 −2.00 / W00 −1.36 / W1 +0.95 / W2 +0.37 / R12 +4.01（**正段 6/8**）
+- R12 86笔 +4.01% PF1.91 MDD−11.6；N3 215笔 +2.02 PF1.45 MDD−19.2；§285 **稳健型**
+- 判定 ✓✓✓✓✓ → **ADOPT**。新策略无 B。
+- 上线（2026-11-01 16:21 CST）：`mid-sue-accel`（kind=`sue_accel`，`midterm_sueg.sueg_candidates`：G 同现役 EA 网关 3 期；SUE 用本地 fina parquet + 当期 profit_dedt；排序 min(SUE,20)）；`s489_onboard_metrics.py` 写入 metrics；实盘不设仓位上限。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-sue-accel --execute` → 2026-07-29~10-30 **30批/269只**（origin=replay，errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid 现役含 mid-sue-accel。
