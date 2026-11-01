@@ -8627,3 +8627,27 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：BTVOL；RPFATVOL；FATTDVOL；BT。非仓位。不碰数据网关。
 - 规则：BT∩FAT∩vol；sc=prem；K20/max_new5。新策略无 B。
 - 脚本：`btfatvol_s733.py` / `run_s733.sh`。
+
+### §732 FATVOL_v18_h20 — REJECT（A 否·正段）
+- 每笔 P19 +0.66 / P20 −0.81 / P21 +3.72 / W0 −3.27 / W00 −2.52 / W1 +4.27 / W2 +3.86 / R12 +3.40（**正段 5/8**）
+- R12 87笔 +3.40% PF2.17 MDD−8.9；N3 256笔 +3.85 PF2.25 MDD−10.3；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**。同进程 base：R12 +1.35 / N3 +2.75 / MDD−11.6（近一年/三年抬但正段不足；B 亦不计）。
+- → **REJECTED**；线上 mid-fa-turn-vol 仍放量≥1.5×。解读：量能硬抬抬近一年却伤正段——**停 FATVOL 放量硬抬轴**（接 FATTDVOL_v18）。
+
+### §733 BTFATVOL_h20 — REJECT（样本崩）
+- 每笔几乎空窗（P21 1笔）；R12 **0笔**；正段 1/8。判定否决。
+- → **REJECTED**。解读：大宗∩周转合取空窗——**大宗∩效率双合取∩放量暂缓**。
+
+## §734 [中线·现役改进] 营业周期∩放量 放量硬抬≥1.8×（TDVOL_v18_h20）— 预注册（2026-11-02 07:29 CST 写于跑任何收益之前）
+- 白话：现役 mid-turn-days-vol（TD缩短≥20∩放量1.5×，按缩短天数排序）把 **放量硬抬** 到 **≥1.8×amt20**；TD/排序不变。同进程 TDVOL_base(1.5×)。
+- 想法：FATVOL 量能硬抬刚否——对称试周期单腿∩放量现役（硬门槛，非 −pct）。对照 FATTD/EATD v18 已否。B 门对照 base。
+- 去重：FATVOL_v18；FATTDVOL_v18；EATDVOL_v18；TDVOL_i25。非仓位。不碰数据网关。
+- 规则：(TD∩vol1.8) vs (TD∩vol1.5)；sc_td；K20/max_new5。B 门对照 base。
+- 脚本：`tdvol_v18_s734.py` / `run_s734.sh`。
+
+## §735 [中线·文献] 净负债转净现金∩营业周期∩放量（NCSTDVOL_h20）— 预注册（2026-11-02 07:29 CST 写于跑任何收益之前）
+- 白话：净负债→净现金 ∩ TD缩短≥20 ∩ 放量≥1.5×amt20；按 sc_ncs 排序；持20。
+- 想法 / 文献：大宗∩效率刚崩；NCSVOL（净现金∩放量）已否——改试 **净现金∩周期**（硬合取，非 −pct；对照 SUEGTD/DINCFAT 候补族）。对照 NCSVOL/DINCTDVOL/TDVOL。
+- 去重：NCSVOL；DINCTDVOL；DINCFATVOL；TDVOL。非仓位。不碰数据网关。
+- 规则：NCS∩TD∩vol；sc_ncs；K20/max_new5。新策略无 B。
+- 脚本：`ncstdvol_s735.py` / `run_s735.sh`。
