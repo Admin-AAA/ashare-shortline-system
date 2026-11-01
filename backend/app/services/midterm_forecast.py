@@ -302,6 +302,36 @@ def forecast_preincrease_underreact_candidates(db, as_of: str, store: bool = Tru
         out.append(q)
     return sorted(out, key=lambda x: (-x["score"], x["code"]))
 
+
+def forecast_preincrease_vol_candidates(db, as_of: str, store: bool = True) -> list[dict[str, Any]] | None:
+    """§517 FZGVOL_h20：预增事件 ∩ 信号日成交额≥1.5×amt20；排序仍按增幅封顶300（与研究 fzgvol_s517 一致）。"""
+    from sqlalchemy import text, bindparam
+    base = forecast_preincrease_candidates(db, as_of, store=store)
+    if base is None:
+        return None
+    if not base:
+        return []
+    codes = [p["code"] for p in base]
+    rows = db.execute(text(
+        "SELECT code, amount FROM daily_kbars WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    amt_by = {r["code"]: float(r["amount"]) for r in rows if r["amount"] is not None}
+    out = []
+    for p0 in base:
+        amount = amt_by.get(p0["code"])
+        amt20 = p0.get("amt20")
+        try:
+            amt20_f = float(amt20) if amt20 is not None else None
+        except (TypeError, ValueError):
+            amt20_f = None
+        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.5 * amt20_f:
+            continue
+        q = dict(p0)
+        q["amount"] = amount
+        q["vol_ratio"] = round(amount / amt20_f, 4)
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
 def forecast_slight_candidates(db, as_of: str, store: bool = True) -> list[dict[str, Any]] | None:
     """§435/§438 FLZ_h20：首次业绩预告 type=略增 且 p_change_min>0、net_profit_min>0；按净利下限降序（§438）。"""
     import pandas as pd

@@ -5715,3 +5715,35 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：FZG ∩ (amount≥1.5·amt20)；sc_a；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`fzgvol_s517.py` / `run_s517.sh`。
+
+## §516 / §517 判定（2026-11-01 18:04 CST）
+
+### §516 BT_p014_h20 — REJECT（A 否；B 本可过）
+- 每笔 P19 +1.00 / P20 +2.10 / P21 +1.21 / W0 −1.98 / W00 +0.00 / W1 +3.81 / W2 +4.24 / R12 +3.82（**正段 6/8**）
+- R12 **29**笔 +3.82% PF1.91 MDD−5.9；N3 129笔 +3.94 PF2.02 MDD−9.4；彩票型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 笔数 29<30）。同进程 BT_base(prem≥1.35%)：R12 +3.29 / N3 +3.75 / MDD−9.4 → 每笔均抬、回撤不深 → **B 本可过**。样本 31→29。
+- → **REJECTED**；线上仍 prem≥1.35%。解读：溢价轴再抬到 1.4%/1.5% 均卡 R12 笔数——现役停在 1.35%。
+
+### §517 FZGVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +1.58 / P20 +1.24 / P21 +3.31 / W0 +1.32 / W00 −4.22 / W1 +1.90 / W2 +7.95 / R12 +1.63（**正段 7/8**）
+- R12 104笔 +1.63% PF1.42 MDD−8.6；N3 264笔 +3.29 PF1.91 MDD−16.6；彩票型
+- 判定 ✓✓✓✓✓ → **ADOPT**。新策略无 B。
+- 上线（2026-11-01 18:06 CST）：`mid-forecast-preincrease-vol`（kind=`forecast_preincrease_vol`）；`s517_onboard_metrics.py`。
+- replay：→ 2026-07-29~10-30 **11批/29只**（errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid 现役含 mid-forecast-preincrease-vol。
+
+## §518 [中线·现役改进] 业绩加速放量硬门槛≥2.0×amt20（EAVOL_v20_h20）— 预注册（2026-11-01 18:07 CST 写于跑任何收益之前）
+- 白话：现役 mid-earnings-accel-vol（§513 amount≥1.5×amt20）把放量门槛抬到 **≥2.0×**；G 不变；排序仍 dtp 封顶300。同进程 EAVOL_base(≥1.5×)。
+- 想法：EAVOL/SUEGVOL/FZGVOL 量能确认连续 ADOPT；本题对现役 EAVOL 做 **量能轴硬抬**（硬门槛，非 −pct）。
+- 去重：EAVOL；SUEGVOL；FZGVOL；EAU。非仓位。
+- 规则：G ∩ (amount≥2.0·amt20) vs G ∩ (amount≥1.5·amt20)；sc_g；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`eavol_v20_s518.py` / `run_s518.sh`。
+
+## §519 [中线·文献] 略增∩放量≥1.5×amt20（FLZVOL_h20）— 预注册（2026-11-01 18:07 CST 写于跑任何收益之前）
+- 白话：现役略增事件（type=略增、增幅>0、净利下限>0）**再**要求信号日成交额≥1.5×前20日均额；按净利下限降序（与线上 §438 一致）；持20。
+- 想法 / 文献：预增∩放量刚 ADOPT；略增子集接同款量能确认（硬合取，非 −pct）。对照 FLZU 弱反应已上线、FLZ_sc_pct 已否。
+- 去重：FLZ；FLZU；FZGVOL；EAVOL。非仓位。不碰数据网关。
+- 规则：FLZ ∩ (amount≥1.5·amt20)；sc_np；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`flzvol_s519.py` / `run_s519.sh`。
