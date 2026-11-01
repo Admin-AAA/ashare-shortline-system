@@ -47,7 +47,7 @@ CG_MIN_YOY, CG_STREAK, CG_STREAK_CAP, CG_NPY_CAP = 5.0, 4, 12, 100.0
 DINC_INC_TH = 0.30
 
 FINA_FIELDS = ("ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt,"
-               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr")
+               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr,turn_days")
 _FINA_TTL = 1800.0
 _fina_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _div_local: dict[str, Any] = {}
@@ -103,7 +103,7 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     for k in ("ts_code", "ann_date", "end_date"):
         f[k] = f[k].astype(str).str.strip()
     for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt",
-              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr"):
+              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr", "turn_days"):
         if k in f.columns:
             f[k] = pd.to_numeric(f[k], errors="coerce")
     f = f[(f["ann_date"].str.len() == 8) & (f["end_date"].str.len() == 8)]
@@ -511,6 +511,50 @@ def dinc_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         if code not in out or inc > out[code]["score"]:
             out[code] = item
     return _attach(db, as_of, dates, out)
+
+
+# §599 TDVOL_h20（营业周期缩短∩放量；规则同 §184 / lt_research61，未调参）
+TD_IMPROVE, TD_LO, TD_HI, TD_PREV_HI, TD_CAP = 20.0, 30.0, 400.0, 800.0, 200.0
+
+
+def td_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """TD_h20：营业周期同比缩短≥20 日（本期∈[30,400]、去年∈[30,800]）；排序缩短天数封顶200。"""
+    def passes(cur: float, prev: float):
+        improve = prev - cur
+        ok = (TD_LO <= cur <= TD_HI and TD_LO <= prev <= TD_PREV_HI and improve >= TD_IMPROVE)
+        return ok, min(improve, TD_CAP), {"improve": improve}
+    return _fina_events(db, as_of, "turn_days", passes)
+
+
+def tdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§599 TDVOL_h20：营业周期缩短 ∩ 信号日成交额≥1.5×amt20；排序缩短天数封顶200。"""
+    from sqlalchemy import text, bindparam
+    base = td_candidates(db, as_of)
+    if base is None:
+        return None
+    if not base:
+        return []
+    codes = [p["code"] for p in base]
+    rows = db.execute(text(
+        "SELECT code, amount FROM daily_kbars WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    amt_by = {r["code"]: float(r["amount"]) for r in rows if r["amount"] is not None}
+    out = []
+    for p0 in base:
+        amount = amt_by.get(p0["code"])
+        amt20 = p0.get("amt20")
+        try:
+            amt20_f = float(amt20) if amt20 is not None else None
+        except (TypeError, ValueError):
+            amt20_f = None
+        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.5 * amt20_f:
+            continue
+        q = dict(p0)
+        q["amount"] = amount
+        q["vol_ratio"] = round(amount / amt20_f, 4)
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
 
 def dincvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     """§535 DINCVOL_h20：分红增加 ∩ 信号日成交额≥1.5×amt20；排序增幅（与研究 dincvol_s535 一致）。"""
