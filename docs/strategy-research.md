@@ -7965,3 +7965,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 想法 / 文献：盈余∩CAS 刚否、含CAS的BS双合取已暂缓——试 **效率∩流动资产结构** 双合取∩放量（硬合取，非 −pct）。对照 FATTDVOL/SUEGFATVOL/CASVOL/FATVOL。
 - 去重：SUEGCASVOL；TADCASVOL；ETDCASVOL；FATTDVOL；FATVOL；CASVOL。非仓位。不碰数据网关。
 - 门槛：§282 绝对收益（新策略无 B）。
+
+### §678 SUEGFATVOL_s25_h20 — REJECT（A 否·正段；B 亦否）
+- 每笔 P19 +0.20 / P20 −0.45 / P21 +5.69 / W0 −2.04 / W00 +3.37 / W1 −0.80 / W2 +3.81 / R12 +3.54（**正段 5/8**）
+- R12 59笔 +3.54% PF1.77 MDD−7.8；N3 129笔 +2.54 PF1.59 MDD−9.1；稳健型
+- 判定 ✓✓✓**✗**✓ → **否决**。同进程 SUEGFATVOL_base：R12 +4.81 / N3 +3.60 → **B 亦否**。
+- → **REJECTED**；线上 mid-sue-fa-vol 仍 SUE≥2.2。解读：盈余∩FAT 上再硬抬 SUE 同 SUEGTD——**停 SUEGFATVOL SUE硬抬轴**。
+
+### §679 FATCASVOL_h20 — REJECT
+- 每笔 P19 −0.36 / P20 −0.24 / P21 +2.64 / W0 −2.20 / W00 −0.01 / W1 +0.05 / W2 +2.11 / R12 +2.54（**正段 4/8**）
+- R12 83笔 +2.54% PF1.59 MDD−11.8；N3 233笔 +1.53 PF1.34 MDD−15.6；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**（正段不足）。解读：效率∩CAS 不镜像效率∩TD——**效率∩流动资产结构双合取∩放量暂缓**。
+
+## §680 [中线·现役改进] FAT∩TD∩放量 FAT升幅硬抬≥0.15（FATTDVOL_r015_h20）— 预注册（2026-11-02 03:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-fa-td-vol（FAT≥0.12∩TD缩短≥20∩放量）把 **FAT 升幅硬抬** 到 **≥0.15**；TD/放量/排序不变。同进程 FATTDVOL_base(≥0.12)。
+- 想法：§662 FAT 0.12 刚 ADOPT；本题再贴门槛硬抬（硬门槛，非 −pct）。B 门对照 base。TD 缩短硬抬已停。
+- 去重：FATTDVOL_r012；FATTDVOL_i25；FATVOL_r012。非仓位。
+- 门槛：A=§282；B=相对 base R12&N3 每笔不降、N3 MDD 不加深。
+
+## §681 [中线·文献] 营业周期∩流动资产占比∩放量（TDCASVOL_h20）— 预注册（2026-11-02 03:25 CST 写于跑任何收益之前）
+- 白话：TD缩短≥20 ∩ CAS升幅≥3.0pp ∩ 信号日成交额≥1.5×amt20；排序 TD 缩短天数封顶200；持20。
+- 想法 / 文献：FAT∩CAS 刚否——改试 **周期效率∩流动资产结构** 双合取∩放量（硬合取，非 −pct）。对照 FATTDVOL/FATCASVOL/TDVOL/CASVOL。
+- 去重：FATCASVOL；SUEGCASVOL；TADCASVOL；FATTDVOL；TDVOL；CASVOL。非仓位。不碰数据网关。
+- 门槛：§282 绝对收益（新策略无 B）。
