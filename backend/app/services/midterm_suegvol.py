@@ -2,6 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
+另：§669 SUEGTDVOL（SUEG∩TD∩放量）→ mid-sue-td-vol。
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -45,5 +46,28 @@ def suegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         item["amount"] = amount
         item["vol_ratio"] = round(amount / amt20_f, 4)
         out.append(item)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
+
+def suegtdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§669：SUE≥2.2 ∩ G ∩ TD缩短 ∩ 放量≥1.5×amt20；排序 min(SUE,20)。"""
+    from app.services.midterm_fina_events import td_candidates
+
+    sg = suegvol_candidates(db, as_of)
+    td = td_candidates(db, as_of)
+    if sg is None or td is None:
+        return None
+    td_by = {p["code"]: p for p in td}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = td_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["td_improve"] = e.get("improve")
+        q["td_cur"] = e.get("cur")
+        q["td_prev"] = e.get("prev")
+        out.append(q)
     out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
     return out
