@@ -8677,3 +8677,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：NCSTDVOL；NCSVOL；DINCFATVOL；FATTDVOL。非仓位。不碰数据网关。
 - 规则：NCS∩FAT∩vol；sc_ncs；K20/max_new5。新策略无 B。
 - 脚本：`ncsfatvol_s737.py` / `run_s737.sh`。
+
+### §736 CASVOL_v18_h20 — REJECT（A 否·PF；B 亦否）
+- 每笔 P19 +0.41 / P20 +1.29 / P21 +3.72 / W0 −2.71 / W00 −1.51 / W1 +2.48 / W2 +0.67 / R12 +0.42（**正段 6/8**）
+- R12 87笔 +0.42% **PF1.09** MDD−11.3；N3 245笔 +1.20 PF1.31 MDD−12.4；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**。同进程 base：R12 +3.62 / N3 +2.11 → **B 亦否**。
+- → **REJECTED**；线上 mid-cas-vol 仍放量≥1.5×。解读：量能硬抬稀释近一年——**停 CASVOL 放量硬抬轴**。
+
+### §737 NCSFATVOL_h20 — REJECT（A 否·PF/正段）
+- 每笔 P19 −2.15 / P20 +0.97 / P21 +4.71 / W0 −1.66 / W00 −0.07 / W1 +9.87 / W2 +1.74 / R12 +1.36（**正段 5/8**）
+- R12 57笔 +1.36% **PF1.28** MDD−8.6；N3 134笔 +4.61 PF2.14 MDD−6.9；彩票型
+- 判定 ✓**✗**✓**✗**✓ → **否决**。解读：净现金∩周转不镜像净现金∩周期——近一年 PF/正段不够；**净现金∩周转效率双合取∩放量暂缓**。
+
+## §738 [中线·现役改进] 股东权益/负债∩放量 放量硬抬≥1.8×（ETDVOL_v18_h20）— 预注册（2026-11-02 07:50 CST 写于跑任何收益之前）
+- 白话：现役 mid-etd-vol（ETD升幅≥0.20∩放量1.5×，按升幅排序）把 **放量硬抬** 到 **≥1.8×amt20**；ETD/排序不变。同进程 ETDVOL_base(1.5×)。
+- 想法：CAS/TD/FAT 量能硬抬刚否——改试 BS 权益覆盖∩放量现役（硬门槛，非 −pct）。对照 ETD 升幅硬抬已停。B 门对照 base。
+- 去重：CASVOL_v18；TDVOL_v18；ETDVOL；ETDVOL_d025。非仓位。不碰数据网关。
+- 规则：(ETD∩vol1.8) vs (ETD∩vol1.5)；sc_etd；K20/max_new5。B 门对照 base。
+- 脚本：`etdvol_v18_s738.py` / `run_s738.sh`。
+
+## §739 [中线·文献] 净负债转净现金∩有形资产杠杆∩放量（NCSTADVOL_h20）— 预注册（2026-11-02 07:50 CST 写于跑任何收益之前）
+- 白话：净负债→净现金 ∩ TAD升幅≥0.25 ∩ 放量≥1.5×amt20；按 sc_ncs 排序；持20。
+- 想法 / 文献：NCS∩FAT 刚否；NCS∩TD 已上线——改试 **净现金∩有形资产杠杆**（硬合取，非 −pct；TADVOL 已上线）。对照 NCSTDVOL/NCSFATVOL/TADVOL/SUEGTADVOL。
+- 去重：NCSFATVOL；NCSTDVOL；SUEGTADVOL；TADVOL。非仓位。不碰数据网关。
+- 规则：NCS∩TAD∩vol；sc_ncs；K20/max_new5。新策略无 B。
+- 脚本：`ncstadvol_s739.py` / `run_s739.sh`。
