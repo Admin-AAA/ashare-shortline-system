@@ -136,6 +136,16 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "schedule": "daily",
     },
 
+    # §435 业绩预告略增单拆（scripts/midterm/flz_s435.py FLZ_h20；§282 达标；2026-11-01 上线）
+    "mid-forecast-slight": {
+        "name": "业绩预告略增（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今新发布的业绩预告，同一报告期只认公司第一次预告：类型为略增、预告净利同比增幅下限>0、预告净利润下限>0。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按预告增幅下限（封顶300%）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：略增 PEAD；与 mid-forecast-beat / preincrease / turnaround 事件子集不同。",
+        "kind": "forecast_slight",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
+
     # §109 股权激励草案（含股票期权）公告后漂移（原按 −r20；§402 改为按信号日 −pct 排序，事件门槛不变；实盘候选 app/services/midterm_incentive.py）
     "mid-incentive-option": {
         "name": "股票期权激励草案首次公告（持20日）",
@@ -1219,6 +1229,19 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+        if meta.get("kind") == "forecast_slight":
+            from app.services.midterm_forecast import forecast_slight_candidates
+            held = _held_codes(db, sid, as_of)
+            fb = forecast_slight_candidates(db, as_of)
+            if fb is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in fb if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
         if meta.get("kind") == "incentive_option":
             from app.services.midterm_incentive import incentive_candidates
             held = _held_codes(db, sid, as_of)
@@ -1625,6 +1648,11 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = _shown_pct(p.get("p_change_min"), p["score"]), "预告净利增幅下限(%)", "higher"
             note = _RANK_CAP_NOTE
             reason = (f"{p.get('ann_date', '')} 首次业绩预告预增（{p.get('end_date', '')}）："
+                      f"增幅下限 {_f(p.get('p_change_min'), 1)}%，净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e4)} 亿元")
+        elif kind == "forecast_slight":
+            score, label, better = _shown_pct(p.get("p_change_min"), p["score"]), "预告净利增幅下限(%)", "higher"
+            note = _RANK_CAP_NOTE
+            reason = (f"{p.get('ann_date', '')} 首次业绩预告略增（{p.get('end_date', '')}）："
                       f"增幅下限 {_f(p.get('p_change_min'), 1)}%，净利下限 {_f(float(p.get('net_profit_min') or 0) / 1e4)} 亿元")
         elif kind == "incentive_option":
             score, label, better = round(float(p["r20"]) * 100, 2), "公告前20日涨幅(%)", "lower"
