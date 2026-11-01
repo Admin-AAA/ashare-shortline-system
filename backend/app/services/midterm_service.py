@@ -99,6 +99,17 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 5,
         "schedule": "daily",
     },
+
+    # §461 回购预案弱反应持20（scripts/midterm/rpu20_s461.py RPU20_h20；§282 达标；2026-11-01 上线）
+    "mid-repurchase-plan-underreact": {
+        "name": "回购预案弱反应（金额≥市值0.5%，持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在「回购预案金额≥市值0.5%」事件池上，只保留信号日涨跌落在−1%~+2%、且收盘未封涨停的票；按信号日涨跌从低到高（越弱反应优先），次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：短线 RPU 持5已上线；§461 证中线持20 亦达标。与 mid-repurchase-underreact（持5）仅持有期不同。",
+        "kind": "repurchase_underreact",
+        "min_ratio": 0.005,
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §95 新权重复评（scripts/midterm/lt_research15.py EA_h20，即 §93 G_h20 原条件，未调参）
     "mid-earnings-accel": {
         "name": "财报业绩加速（持20日）",
