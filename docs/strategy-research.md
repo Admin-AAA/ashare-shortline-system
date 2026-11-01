@@ -8080,3 +8080,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 想法 / 文献：盈余∩分红刚否——改试 **分红∩资产周转效率** 双合取∩放量（硬合取，非 −pct；对照 SUEG∩FAT 已上线）。对照 DINCVOL/SUEGFATVOL/FATVOL。
 - 去重：SUEGDINCVOL；DINCVOL；SUEGFATVOL；FZGFATVOL；FATVOL。非仓位。不碰数据网关。
 - 门槛：§282 绝对收益（新策略无 B）。
+
+### §688 SUEGTDVOL_sc_td_h20 — REJECT（A 过；B 否）
+- 每笔 P19 n=0 / P20 +1.95 / P21 +6.60 / W0 +3.25 / W00 +2.90 / W1 +0.13 / W2 +1.05 / R12 +6.38（**正段 7/8**）
+- R12 44笔 +6.38% PF2.55 MDD−5.1；N3 105笔 +2.98 PF1.78 MDD−8.3；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 SUEGTDVOL_base：R12 +8.79 / N3 +3.98 / MDD−8.2 → **B 否**（R12/N3 每笔降、MDD 略加深）。
+- → **REJECTED**；线上 mid-sue-td-vol 仍按 SUE 排序。解读：改按 TD 排序稀释近一年——**停 SUEGTDVOL TD排序轴**。
+
+### §689 DINCFATVOL_h20 — REJECT（笔数不足）
+- 每笔 P19 −4.94 / P20 +3.84 / P21 +4.54 / W0 +0.65 / W00 +0.27 / W1 +1.83 / W2 +6.15 / R12 +9.85（**正段 7/8**）
+- R12 29笔 +9.85% PF3.58 MDD−6.4；N3 60笔 +7.00 PF3.28 MDD−6.1；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 n=29<30）。解读：分红∩FAT 收益强但近一年笔数贴线不足——**暂不放宽笔数门；分红∩效率双合取∩放量可续试 TD 腿**。
+
+## §690 [中线·现役改进] ETD∩FAT∩放量同样本改按FAT升幅排序（ETDFATVOL_sc_fat_h20）— 预注册（2026-11-02 04:13 CST 写于跑任何收益之前）
+- 白话：现役 mid-etd-fa-vol（ETD≥0.20∩FAT≥0.10∩放量）**事件一字不改**，只把同日排序从 ETD 升幅换成 **FAT 升幅**（封顶2.0）。同进程 ETDFATVOL_base(按ETD)。
+- 想法：SUEG 双合取上改效率键排序均 B 否；本题在 **跨族 BS∩效率** 上再验 FAT 键排序（增量排序，非 −pct）。B 门对照 base。
+- 去重：ETDFATVOL；SUEGFATVOL_sc_fat；FATTDVOL_sc_td。非仓位。
+- 门槛：A=§282；B=相对 base R12&N3 每笔不降、N3 MDD 不加深。
+
+## §691 [中线·文献] 分红增加∩营业周期∩放量（DINCTDVOL_h20）— 预注册（2026-11-02 04:13 CST 写于跑任何收益之前）
+- 白话：分红增幅≥30% ∩ TD缩短≥20 ∩ 信号日成交额≥1.5×amt20；排序分红增幅；持20。
+- 想法 / 文献：§689 DINCFAT 贴线否（n=29）——改试 **分红∩周期效率** 双合取∩放量（硬合取，非 −pct；对照 SUEG∩TD 已上线）。对照 DINCFATVOL/SUEGTDVOL/DINCVOL/TDVOL。
+- 去重：DINCFATVOL；SUEGDINCVOL；SUEGTDVOL；DINCVOL；TDVOL。非仓位。不碰数据网关。
+- 门槛：§282 绝对收益（新策略无 B）。
