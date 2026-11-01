@@ -8377,3 +8377,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：FZGTDVOL；FZGFATVOL；EADINCVOL；EATDVOL；FZGVOL。非仓位。不碰数据网关。
 - 规则：G∩FZG∩vol；sc_g；K20/max_new5。新策略无 B。
 - 脚本：`eafzgvol_s713.py` / `run_s713.sh`。
+
+### §712 EATDVOL_d60_h20 — ADOPT → 已上线（dtp 55→60）
+- 每笔 P19 +0.26 / P20 −0.66 / P21 +3.77 / W0 +0.86 / W00 +2.76 / W1 +6.33 / W2 +1.59 / R12 +3.89（**正段 7/8**）
+- R12 64笔 +3.89% PF1.83 MDD−7.8；N3 171笔 +4.22 PF2.11 MDD−10.3；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 EATDVOL_base(≥55)：R12 +3.68 / N3 +3.92 / MDD−11.2 → **B 过**（R12/N3 每笔抬、回撤收窄）。
+- → **ADOPT**。上线（2026-11-02 06:09 CST）：`mid-ea-td-vol` dtp **≥55→≥60**；`s712_onboard_metrics.py`；replay 强制覆盖 22批/43只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：加速∩周期上再抬 dtp 仍成立。
+
+### §713 EAFZGVOL_h20 — REJECT（样本崩）
+- 每笔 P19 −2.11 / P20 −0.34 / P21 +4.21 / W0 −11.19 / W00 −12.17 / W1 — / W2 +3.75 / R12 —（**正段 2/8**）
+- R12 **0笔**；近段几乎无成交（W1=0）。判定全否。
+- → **REJECTED**。解读：加速∩预增合取近两年空窗——**加速∩预告类双合取∩放量暂缓**。
+
+## §714 [中线·现役改进] 业绩加速∩营业周期∩放量 dtp硬抬≥65（EATDVOL_d65_h20）— 预注册（2026-11-02 06:09 CST 写于跑任何收益之前）
+- 白话：现役 mid-ea-td-vol（dtp≥60∩TD≥25∩放量，TD排序）把 **dtp 再硬抬** 到 **≥65**；其余不变。同进程 EATDVOL_base(≥60)。
+- 想法：§712 d60 刚 ADOPT——续试贴档（硬门槛，非 −pct）。B 门对照 base。
+- 去重：EATDVOL_d60；EATDVOL_d55；EAVOL_d55。非仓位。不碰数据网关。
+- 规则：G&dtp≥65∩TD≥25∩vol vs ≥60；sc_td；K20/max_new5。B 门对照 base。
+- 脚本：`eatdvol_d65_s714.py` / `run_s714.sh`。
+
+## §715 [中线·文献] 扭亏∩营业周期∩放量（FTTDVOL_h20）— 预注册（2026-11-02 06:09 CST 写于跑任何收益之前）
+- 白话：首次预告扭亏（净利下限>0）∩ TD缩短≥20 ∩ 放量≥1.5×amt20；按扭亏净利下限排序；持20。
+- 想法 / 文献：加速∩预增刚崩；预增∩TD 曾样本崩——改试 **扭亏∩周期效率**（硬合取，非 −pct；对照 mid-forecast-turnaround / TDVOL）。对照 FZGTDVOL/EAFZGVOL/TDVOL。
+- 去重：FZGTDVOL；EAFZGVOL；FTVOL；TDVOL。非仓位。不碰数据网关。
+- 规则：扭亏∩TD∩vol；sc=net_profit_min；K20/max_new5。新策略无 B。
+- 脚本：`fttdvol_s715.py` / `run_s715.sh`。

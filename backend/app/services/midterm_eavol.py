@@ -103,7 +103,7 @@ def eavol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return res
 
 def eatdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§699/§700/§702/§708：G(dtp≥55) ∩ TD缩短≥25 ∩ 放量≥1.5×amt20；排序 TD缩短封顶200。"""
+    """§699–§712：G(dtp≥60) ∩ TD缩短≥25 ∩ 放量≥1.5×amt20；排序 TD缩短封顶200（§712 dtp硬抬）。"""
     from app.services.midterm_fina_events import td_candidates
 
     ea = eavol_candidates(db, as_of)
@@ -117,7 +117,7 @@ def eatdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
             dtp = float(p0.get("dt_netprofit_yoy"))
         except (TypeError, ValueError):
             continue
-        if dtp < 55.0:  # §708：G 内 dtp 硬抬 ≥55（eavol 仍≥50，仅本策略收紧）
+        if dtp < 60.0:  # §712：G 内 dtp 硬抬 ≥60（§708 曾≥55；eavol 仍≥50，仅本策略收紧）
             continue
         e = td_by.get(p0["code"])
         if e is None:
