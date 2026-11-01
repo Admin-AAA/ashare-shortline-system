@@ -395,6 +395,36 @@ def forecast_slight_candidates(db, as_of: str, store: bool = True) -> list[dict[
     return sorted(res, key=lambda x: (-x["score"], x["code"]))
 
 
+
+def forecast_slight_vol_candidates(db, as_of: str, store: bool = True) -> list[dict[str, Any]] | None:
+    """§519 FLZVOL_h20：略增事件 ∩ 信号日成交额≥1.5×amt20；排序净利下限（与 §438 / 研究 flzvol_s519 一致）。"""
+    from sqlalchemy import text, bindparam
+    base = forecast_slight_candidates(db, as_of, store=store)
+    if base is None:
+        return None
+    if not base:
+        return []
+    codes = [p["code"] for p in base]
+    rows = db.execute(text(
+        "SELECT code, amount FROM daily_kbars WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    amt_by = {r["code"]: float(r["amount"]) for r in rows if r["amount"] is not None}
+    out = []
+    for p0 in base:
+        amount = amt_by.get(p0["code"])
+        amt20 = p0.get("amt20")
+        try:
+            amt20_f = float(amt20) if amt20 is not None else None
+        except (TypeError, ValueError):
+            amt20_f = None
+        if amount is None or amt20_f is None or amt20_f <= 0 or amount < 1.5 * amt20_f:
+            continue
+        q = dict(p0)
+        q["amount"] = amount
+        q["vol_ratio"] = round(amount / amt20_f, 4)
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
 def forecast_slight_underreact_candidates(db, as_of: str, store: bool = True) -> list[dict[str, Any]] | None:
     """§453 FLZU_h20：略增事件 ∩ 信号日 pct∈[-1,+2] 且未封涨停；排序净利下限（与 §438 / 研究 flzu_s453 一致）。"""
     from sqlalchemy import text, bindparam
