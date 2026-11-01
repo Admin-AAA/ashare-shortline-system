@@ -293,11 +293,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "schedule": "daily",
     },
 
-    # §525/§536/§550 销售费用率下降∩放量（降幅≥0.35，§550 软扩；scripts/midterm/sexpvol_d035_s550.py；2026-11-01 上线）
+    # §525/§536/§550/§694 销售费用率下降∩放量（降幅≥0.35；§694 排序去封顶；scripts/midterm/sexpvol_sc_raw_s694.py）
     "mid-sales-exp-vol": {
         "name": "销售费用率下降∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，在「销售费用率同比下降≥0.35个百分点」事件池上再要求信号日成交额≥1.5×前20日均额（§550：降幅 0.4→0.35；放量仍≥1.5×）。按降幅（封顶10个百分点）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：费用纪律事件 × 量能确认（§525）+ 降幅再软扩（§550）。",
+        "summary": "每个交易日盘后，在「销售费用率同比下降≥0.35个百分点」事件池上再要求信号日成交额≥1.5×前20日均额（§550：降幅 0.4→0.35；放量仍≥1.5×）。按降幅（原始百分点，§694 起不再封顶10）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：费用纪律事件 × 量能确认（§525）+ 降幅再软扩（§550）+ 排序去封顶（§694）。",
         "kind": "sexp_vol",
         "hold_days": 20,
         "schedule": "daily",
@@ -2313,7 +2313,7 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：销售费用率 {_f(p.get('prev'), 1)}% → "
                       f"{_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点")
         elif kind == "sexp_vol":
-            score, label, better = round(float(p["score"]), 2), "销售费用率降幅(百分点，封顶10)", "higher"
+            score, label, better = round(float(p["score"]), 2), "销售费用率降幅(百分点，原始/§694去封顶)", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告销售费用率下降放量："
                       f"{_f(p.get('prev'), 1)}% → {_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点；"
                       f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")

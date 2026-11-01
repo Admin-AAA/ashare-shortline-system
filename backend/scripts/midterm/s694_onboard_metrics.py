@@ -1,0 +1,66 @@
+"""§694 SEXPVOL_sc_raw_h20 上线：刷新 mid-sales-exp-vol metrics（排序去封顶）。"""
+import json, sys
+from pathlib import Path
+import pandas as pd
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from s282_quality import tail_metrics, overall_label, verdict
+from s309_excess_hs300 import load_hs300, summarize, idx_returns, METRICS, T
+
+SID, NAME = "mid-sales-exp-vol", "SEXPVOL_sc_raw_h20"
+SRC = Path(__file__).resolve().parents[2] / "output/research/s694"
+KEYS = ("n", "win", "avg", "pf", "days", "tot", "mdd", "bench", "excess", "ex_win")
+
+
+def main(dry=False):
+    res = json.loads((SRC / "res.json").read_text())[NAME]
+    phases = {k: {x: v[x] for x in KEYS if x in v} for k, v in res.items()}
+    ix = load_hs300()
+    q = {"standard": "§282", "basis": "§694 现役改进：SEXPVOL 同样本排序去封顶10；真实成交"}
+    for w, pk in (("R12", "R12 2025-10~2026-10"), ("N3", "N3 2024-01~2026-10")):
+        d = pd.read_csv(SRC / f"trades_{NAME}_{w}.csv", dtype={"code": str})
+        T.mkdir(parents=True, exist_ok=True)
+        d.to_parquet(T / f"r694__{NAME}__{w}.parquet", index=False)
+        d = d.sort_values(["entry", "exit", "code"])
+        tm = tail_metrics((d["ret"] * 100).tolist())
+        m = res[pk]
+        assert tm["n"] == m["n"] and abs(tm["avg"] - m["avg"]) < 0.011, (w, tm, m)
+        hs = summarize((d["ret"] * 100).tolist(), idx_returns(ix, d["entry"], d["exit"], "open"))
+        q[w] = {"n": tm["n"], "avg": m["avg"], "pf": m["pf"], "mdd": m["mdd"], "win": m["win"], "streak": tm["streak"],
+                "median": round(tm["median"], 2), "trim5": round(tm["trim5"], 2), "trim_both5": round(tm["trim_both5"], 2),
+                "top10_share": None if tm["top10_share"] is None else round(tm["top10_share"], 3), "top10_red": tm["top10_red"],
+                "label": tm["label"], "robust": tm["robust"], "excess": m.get("excess"), **hs}
+    p8 = {k.split()[0]: v["avg"] for k, v in res.items() if not k.startswith("N3")}
+    v = verdict("mid", q["R12"], q["N3"], p8)
+    q.update({"label": overall_label(q["R12"], q["N3"]), "pass": v["pass"], "fail": v["fail"], "pos_phases": v["pos_phases"],
+              "n_phases": v["n_phases"], "bear": {"W0": p8["W0"], "W00": p8["W00"]}, "phase_avg": p8,
+              "label_rule": "§285：两头各去5%后均值>0 且 中位数>0（R12、N3 都满足才是稳健型）",
+              "hs300_basis": "逐笔：策略净收益(已扣0.3%) − 同持有期沪深300（买入日开盘→卖出日开盘，不扣成本）；§309，只展示"})
+    assert v["pass"], v
+    base = json.loads((SRC / "res.json").read_text())["SEXPVOL_base"]
+    b_r12, b_n3 = base["R12 2025-10~2026-10"], base["N3 2024-01~2026-10"]
+    ex = [round(res[k]["excess"], 2) for k in res if not k.startswith("N3") and "excess" in res[k]]
+    entry = {
+        "recent_12m": phases["R12 2025-10~2026-10"], "phases": phases,
+        "config": ("scripts/midterm/sexpvol_sc_raw_s694.py SEXPVOL_sc_raw_h20（§694：SEXP≥0.35 ∩ amount≥1.5·amt20，排序=原始降幅去封顶）："
+                   "realistic、回测 k_slots=20 max_new=5（实盘推荐不设此上限），次日开盘买持20日"),
+        "window": "2019-01~2026-10-16 分阶段（P19~R12/N3）",
+        "generated": "2026-11-02",
+        "note": ("成本0.3%/笔；开盘涨停不买、跌停封死顺延卖出；回撤按逐日盯市。8 段每笔 6/8 为正。"
+                 + (("同日同市值五分位超额(参考) " + " / ".join(f"{x:+.2f}" for x in ex) + "（只展示）。") if ex else "")
+                 + "最近12个月 86 笔 +4.62%/笔 PF2.31 回撤 −5.9%；近3年 254 笔 +2.89%/笔 PF1.77 回撤 −12.4%。"
+                 f"相对封顶10 base：R12 +4.62 vs +{b_r12['avg']:.2f}、N3 +2.89 vs +{b_n3['avg']:.2f}、"
+                 f"MDD −12.4 vs {b_n3['mdd']} → §694 B 过（R12/N3 持平不伤回撤），上线排序去封顶。"
+                 "实盘推荐不设仓位上限；回测指标按20仓位口径（k_slots=20、max_new=5）。"),
+        "quality": q,
+        "backtest_position_caps": {"k_slots": 20, "max_new": 5, "note": "仅回测；实盘推荐不设仓位上限"},
+    }
+    print(json.dumps({"pass": v["pass"], "label": q["label"], "R12": q["R12"]["avg"], "N3": q["N3"]["avg"],
+                      "B": {"R12": q["R12"]["avg"] >= b_r12["avg"], "N3": q["N3"]["avg"] >= b_n3["avg"],
+                            "mdd_ok": q["N3"]["mdd"] >= b_n3["mdd"]}}, ensure_ascii=False))
+    if not dry:
+        mt = json.loads(METRICS.read_text()); mt[SID] = entry
+        METRICS.write_text(json.dumps(mt, ensure_ascii=False, indent=1)); print("written", METRICS)
+
+
+if __name__ == "__main__":
+    main(dry="--dry" in sys.argv)

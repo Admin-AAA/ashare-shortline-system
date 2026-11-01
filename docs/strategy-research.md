@@ -8151,3 +8151,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：SEXPTDVOL；SUEGFATVOL；FZGFATVOL；SEXPVOL；FATVOL。非仓位。不碰数据网关。
 - 规则：SEXP∩FAT∩vol；sc_sexp；K20/max_new5。新策略无 B。
 - 脚本：`sexpfatvol_s695.py` / `run_s695.sh`。
+
+### §694 SEXPVOL_sc_raw_h20 — ADOPT → 已上线（排序去封顶）
+- 每笔 P19 +0.43 / P20 +1.48 / P21 +2.85 / W0 −2.66 / W00 −2.40 / W1 +2.00 / W2 +2.03 / R12 +4.62（**正段 6/8**）
+- R12 86笔 +4.62% PF2.31 MDD−5.9；N3 254笔 +2.89 PF1.77 MDD−12.4；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 SEXPVOL_base(封顶10)：R12 +4.62 / N3 +2.89 / MDD−12.4 → **B 过**（R12/N3 持平、回撤不加深；少数 dq>10 票改序）。
+- → **ADOPT**。上线（2026-11-02 04:45 CST）：`mid-sales-exp-vol` 排序 **去封顶10**（事件门槛仍≥0.35∩放量）；`s694_onboard_metrics.py`；replay 强制覆盖 32批/573只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：放量子集去封顶不伤近一年/三年——镜像 FINA_sc_raw，与非 vol 的 SEXP_sc_raw（B 否）不对称。
+
+### §695 SEXPFATVOL_h20 — REJECT（正段不足）
+- 每笔 P19 +3.38 / P20 +0.45 / P21 +2.38 / W0 −3.36 / W00 −1.24 / W1 +0.94 / W2 −0.16 / R12 +5.27（**正段 5/8**）
+- R12 81笔 +5.27% PF2.76 MDD−5.5；N3 233笔 +2.11 PF1.56 MDD−16.3；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**（正段不足）。解读：近一年强但 W2/熊市段拖累；费用∩周转不镜像盈余∩周转——**费用∩效率双合取∩放量暂缓**（接 SEXPTD）。
+
+## §696 [中线·现役改进] 销售费用∩放量同样本改按相对降幅排序（SEXPVOL_sc_rel_h20）— 预注册（2026-11-02 04:45 CST 写于跑任何收益之前）
+- 白话：现役 mid-sales-exp-vol（§694 已去封顶）**事件一字不改**，只把同日排序从绝对降幅 dq 换成 **相对降幅 dq/prev_q 降序**。同进程 SEXPVOL_base(绝对 dq)。
+- 想法：非 vol 的 SEXP_sc_rel 曾伤正段；本题接到 **放量子集+去封顶后**（增量排序，非 −pct）。B 门对照 base。
+- 去重：SEXP_sc_rel；SEXPVOL_sc_raw；SEXPVOL_sc_amtr。非仓位。不碰数据网关。
+- 规则：同样本 SEXPVOL；sc_rel vs sc_raw；K20/max_new5。B 门对照 base。
+- 脚本：`sexpvol_sc_rel_s696.py` / `run_s696.sh`。
+
+## §697 [中线·文献] 财务费用率下降∩营业周期∩放量（FINATDVOL_h20）— 预注册（2026-11-02 04:45 CST 写于跑任何收益之前）
+- 白话：FINA≥0.5 ∩ TD缩短≥20 ∩ 放量≥1.5×amt20；按 FINA 原始降幅（去封顶）排序；持20。
+- 想法 / 文献：费用∩效率（SEXP∩TD/FAT）刚暂缓——改试 **财务费用∩周期效率** 双合取∩放量（硬合取，非 −pct；FINAVOL/TDVOL/SUEGTD 已上线）。对照 FINAVOL/SUEGTDVOL/SEXPTDVOL。
+- 去重：SEXPTDVOL；SEXPFATVOL；FINAVOL；TDVOL；SUEGTDVOL。非仓位。不碰数据网关。
+- 规则：FINA∩TD∩vol；sc_fina；K20/max_new5。新策略无 B。
+- 脚本：`finatdvol_s697.py` / `run_s697.sh`。
