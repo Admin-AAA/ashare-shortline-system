@@ -266,6 +266,42 @@ def forecast_preincrease_candidates(db, as_of: str, store: bool = True) -> list[
     return sorted(res, key=lambda x: (-x["score"], x["code"]))
 
 
+
+
+def forecast_preincrease_underreact_candidates(db, as_of: str, store: bool = True) -> list[dict[str, Any]] | None:
+    """§451 FZGU_h20：预增事件 ∩ 信号日 pct∈[-1,+2] 且未封涨停；排序仍按增幅封顶300（与研究 fzgu_s451 一致）。"""
+    from sqlalchemy import text, bindparam
+    base = forecast_preincrease_candidates(db, as_of, store=store)
+    if base is None:
+        return None
+    if not base:
+        return []
+    codes = [p["code"] for p in base]
+    rows = db.execute(text(
+        "SELECT code, pct_chg, close FROM daily_kbars "
+        "WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    by = {r["code"]: r for r in rows}
+    out = []
+    for p0 in base:
+        r = by.get(p0["code"])
+        if not r or r["pct_chg"] is None or r["close"] is None:
+            continue
+        pct = float(r["pct_chg"])
+        if pct < -1.0 or pct > 2.0:
+            continue
+        close = float(r["close"])
+        code = p0["code"]
+        band = 0.198 if code.startswith(("3", "688")) else 0.098
+        pre = close / (1 + pct / 100.0) if pct > -99.999 else close
+        ul = pre * (1 + band)
+        if close >= ul - 0.005:
+            continue
+        q = dict(p0)
+        q["signal_pct"] = round(pct, 3)
+        out.append(q)
+    return sorted(out, key=lambda x: (-x["score"], x["code"]))
+
 def forecast_slight_candidates(db, as_of: str, store: bool = True) -> list[dict[str, Any]] | None:
     """§435/§438 FLZ_h20：首次业绩预告 type=略增 且 p_change_min>0、net_profit_min>0；按净利下限降序（§438）。"""
     import pandas as pd
