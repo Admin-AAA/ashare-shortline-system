@@ -1,6 +1,6 @@
 """批量实时报价（dataset ``quote.realtime``）。
 
-统一走数据网关：promax rt_k → quantdata rt_min → xiaoshi 快照（遵守管理面启停开关）。
+统一走数据网关：promax rt_k → 新浪 → 通达信 → 腾讯 → AKShare → quantdata rt_min → 小石（遵守管理面启停开关）。
 （旧的 token 爬虫报价客户端已删除。）
 
     from app.services.realtime_quote_client import fetch_realtime_quotes

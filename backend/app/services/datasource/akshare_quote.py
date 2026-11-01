@@ -1,6 +1,6 @@
 """AKShare 全市场实时快照：``quote.realtime`` 的第二备份（promax rt_k 耗尽后的兜底之一）。
 
-链路位置（quote_realtime.py）：promax rt_k → 新浪 realtime_quote → 腾讯 qt（.env 开关）→ **AKShare 快照** → quantdata rt_min → 小石。
+链路位置（quote_realtime.py）：promax rt_k → 新浪 realtime_quote → 通达信 HQ → 腾讯 qt（.env 开关）→ **AKShare 快照** → quantdata rt_min → 小石。
 只有前面几级没拿到的代码才会来这里（fill 模式），所以平时基本不被调用。
 
 数据源（``ASHARE_QUOTE_AKSHARE_FUNC``）：

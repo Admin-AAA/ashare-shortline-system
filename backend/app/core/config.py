@@ -79,6 +79,9 @@ class Settings(BaseSettings):
     # AKShare 全市场实时快照（quote.realtime 第二备份，见 datasource/akshare_quote.py）。
     quote_akshare_enabled: bool = True          # ASHARE_QUOTE_AKSHARE_ENABLED=false 整体关闭
     quote_akshare_func: str = "sina"            # sina（实测可用、已对账）| em（东财，未对账，本机 IP 曾被 push2 断连）
+    # 通达信公开 HQ（quote.realtime，新浪之后；见 datasource/tdx_quote.py）。无密钥。
+    tdx_quote_enabled: bool = True              # ASHARE_TDX_QUOTE_ENABLED=false 整体关闭
+    tdx_quote_hosts: str = ""                   # ASHARE_TDX_QUOTE_HOSTS=ip:port,ip:port；空=内置公开列表
     tushare_teajoin_intraday_yield: bool = False
     tushare_teajoin_intraday_read_timeout_seconds: float = 15.0
     # * promax 额度专留实时行情（rt_k/rt_min）：其余接口的链路里只要还有别的上游，就不把 promax 放进去；
