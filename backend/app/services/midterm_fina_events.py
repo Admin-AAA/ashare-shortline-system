@@ -184,11 +184,11 @@ def udp_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 # §357 SEXP_h20（销售费用率同比下降；规则同 §198 / lt_research68，未调参）
 SEXP_CUR_LO, SEXP_CUR_HI = 0.2, 40.0
 SEXP_PREV_LO, SEXP_PREV_HI = 0.2, 60.0
-SEXP_DELTA_MIN, SEXP_DELTA_CAP = 1.0, 10.0
+SEXP_DELTA_MIN, SEXP_DELTA_CAP = 0.5, 10.0  # §426：门槛 1.0→0.5
 
 
 def sexp_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """SEXP_h20：销售费用/营业总收入 同比下降 ≥1.0 百分点。"""
+    """SEXP_h20：销售费用/营业总收入 同比下降 ≥0.5 百分点（§426：原≥1.0）。"""
     def passes(cur: float, prev: float):
         delta = prev - cur
         ok = (SEXP_CUR_LO <= cur <= SEXP_CUR_HI and SEXP_PREV_LO <= prev <= SEXP_PREV_HI and delta >= SEXP_DELTA_MIN)
