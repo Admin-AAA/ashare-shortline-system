@@ -89,6 +89,16 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §364 回购预案弱反应（scripts/shortline_research/rpu_s364.py RPU_h5；§282 短线 8 段全过；2026-11-01 上线）
+    "mid-repurchase-underreact": {
+        "name": "回购预案弱反应（金额≥市值0.5%，持5日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在「回购预案金额≥市值0.5%」事件池上，只保留信号日（公告后首个交易日）涨跌落在−1%~+2%、且收盘未封涨停的票；按回购金额上限/总市值从高到低，次日开盘买入，各持有5个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：公司大额回购是硬信号，首日几乎没定价时短线反应不足；§364 按§282短线标准达标后上线。",
+        "kind": "repurchase_underreact",
+        "min_ratio": 0.005,
+        "hold_days": 5,
+        "schedule": "daily",
+    },
     # §95 新权重复评（scripts/midterm/lt_research15.py EA_h20，即 §93 G_h20 原条件，未调参）
     "mid-earnings-accel": {
         "name": "财报业绩加速（持20日）",
@@ -597,6 +607,43 @@ def _scaled_total_mv(
             return shares * c_t
         return snap
     return snap * c_t / c_bd
+
+
+
+def _filter_repurchase_underreact(db, as_of: str, pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """§364：信号日 pct∈[-1,+2] 且未封涨停；保留原 ratio 降序。"""
+    if not pool:
+        return []
+    codes = [p["code"] for p in pool]
+    rows = db.execute(text(
+        "SELECT code, pct_chg, close, high, low, up_limit FROM daily_kbars "
+        "WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    by = {r["code"]: r for r in rows}
+    out = []
+    for p in pool:
+        r = by.get(p["code"])
+        if not r or r["pct_chg"] is None or r["close"] is None:
+            continue
+        pct = float(r["pct_chg"])
+        if pct < -1.0 or pct > 2.0:
+            continue
+        close = float(r["close"])
+        code = p["code"]
+        band = 0.198 if code.startswith(("3", "688")) else 0.098
+        ul = r["up_limit"]
+        if ul is None:
+            # 缺涨停价时用前收近似：close/(1+pct/100)
+            pre = close / (1 + pct / 100.0) if pct != -100 else close
+            ul = pre * (1 + band)
+        else:
+            ul = float(ul)
+        if close >= ul - 0.005:
+            continue
+        q = dict(p)
+        q["signal_pct"] = round(pct, 3)
+        out.append(q)
+    return out
 
 
 def repurchase_plan_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
@@ -1166,6 +1213,20 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+        if meta.get("kind") == "repurchase_underreact":
+            held = _held_codes(db, sid, as_of)
+            if rp_cands == "unset":
+                rp_cands = repurchase_plan_candidates(db, as_of)
+            if rp_cands is None:
+                result[sid] = "no_data"
+                continue
+            pool = [p for p in rp_cands if p["ratio"] >= meta["min_ratio"] and p["code"] not in held]
+            picks = _filter_repurchase_underreact(db, as_of, pool)
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
         # daily_basic 市值未更新到 as_of 时不拿旧市值排名/算小盘指数（10-16 批次曾用 10-09 市值）：标 data_error，补数后重跑。
         basic_max = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
         if basic_max is None or str(basic_max)[:10] < as_of:
@@ -1483,6 +1544,10 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
         elif kind == "repurchase":
             score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
             reason = f"{p.get('ann_date', '')} 回购预案，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，占总市值 {_f(score)}%"
+        elif kind == "repurchase_underreact":
+            score, label, better = round(float(p["ratio"]) * 100, 3), "回购金额上限/总市值(%)", "higher"
+            reason = (f"{p.get('ann_date', '')} 回购预案弱反应，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，"
+                      f"占总市值 {_f(score)}%，信号日涨跌 {_f(p.get('signal_pct'))}%")
         elif kind == "earnings_accel":
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%")

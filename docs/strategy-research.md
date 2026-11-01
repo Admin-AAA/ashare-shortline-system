@@ -4089,3 +4089,9 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：同 lt_research23 RP_r05；`RP_base`＝sc_r；`RP_mv_combo`＝当日 RP_r05 内 sc_r 百分位 + (−total_mv) 百分位等权；持 20；K20/max_new5。
 - 判定：A §282 中线；B 相对 RP_base：R12/N3 每笔≥base、N3 回撤不更深、8 段≥6 段≥base 且 W0≥base。A+B → 建议上线只改排序；否则否决。
 - 脚本：`lt_research143.py`；`run_s365.sh`；输出 `backend/output/research/s365/`。
+
+### §364 / §365 结果（2026-11-01 09:52–09:56 CST 跑完；预注册 06b614dd 于跑数前已推送；规则未改）
+- 运行：串行单进程；§364 每段约 8–12 秒，§365 每段约 8–12 秒；swap 空闲约 746–890MB；只读本地 parquet。
+- **§364 RPU_h5（回购预案弱反应，持5日）— 达标 → 上线**：每笔 P19 +3.11 / P20 +0.49 / P21 +0.58 / W0 +1.02 / W00 +0.08 / W1 +3.01 / W2 +1.08 / R12 +1.20（**正段 8/8**，熊市段 ≥−5）；R12 127笔 胜52.8% +1.20%/笔 PF1.56 MDD−3.7；N3 345笔 +1.82% PF1.96 MDD−8.7；两头各去5% R12 +0.86 / N3 +1.53，中位数 +0.36/+0.60 → **稳健型**。判定 ✓✓✓✓✓。→ **ADOPT**。上线 id=`mid-repurchase-underreact`（kind=`repurchase_underreact`，持 5 日；事件=现役 RP_r05，另加信号日 pct∈[-1,+2] 且未涨停；按金额/市值降序；实盘不设仓位上限）。接入 `/mid` 日推 + `rebuild_replay_picks.py --onboard` 近 3 月。
+- **§365 RP_mv_combo（回购金额/市值百分位+小市值百分位）— 否决**：自身 A 条 R12 PF1.12 <1.3（第2条不过）；相对 RP_base：R12 +0.53 vs +1.35、N3 +2.26 vs +2.55 均下降 → B 否。→ **REJECTED**；线上 mid-repurchase-plan 不变。解读：给回购再叠「小市值」维会伤近一年每笔，与 FA_combo/RP_combo 同类——事件强度排序不宜再被市值/涨跌幅组合稀释。
+- 产物：`rpu_s364.py` / `run_s364.sh` / `output/research/s364/`；`lt_research143.py` / `run_s365.sh` / `output/research/s365/`。
