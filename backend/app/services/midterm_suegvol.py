@@ -2,7 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
-另：§669 SUEGTDVOL（SUEG∩TD∩放量）→ mid-sue-td-vol。
+另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol。
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -68,6 +68,29 @@ def suegtdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         q["td_improve"] = e.get("improve")
         q["td_cur"] = e.get("cur")
         q["td_prev"] = e.get("prev")
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
+
+def suegfatvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§671：SUE≥2.2 ∩ G ∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20；排序 min(SUE,20)。"""
+    from app.services.midterm_fina_events import fat_candidates
+
+    sg = suegvol_candidates(db, as_of)
+    fat = fat_candidates(db, as_of)
+    if sg is None or fat is None:
+        return None
+    fat_by = {p["code"]: p for p in fat}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = fat_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["fat_dq"] = e.get("dq")
+        q["fat_cur"] = e.get("cur")
+        q["fat_prev"] = e.get("prev")
         out.append(q)
     out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
     return out

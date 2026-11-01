@@ -7870,3 +7870,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 想法 / 文献：SUEG∩TD 刚上线——镜像试 **盈余∩资产周转效率** 双合取∩放量（硬合取，非 −pct）。对照 SUEGTDVOL/FATTDVOL/SUEGVOL/FATVOL。
 - 去重：SUEGTDVOL；FATTDVOL；SUEGVOL；FATVOL；TADFATVOL。非仓位。不碰数据网关。
 - 门槛：§282 绝对收益（新策略无 B）。
+
+### §670 SUEGTDVOL_s25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 n=0 / P20 +0.80 / P21 +6.05 / W0 +1.91 / W00 +3.72 / W1 +0.51 / W2 +0.57 / R12 +7.53（**正段 7/8**）
+- R12 42笔 +7.53% PF3.07 MDD−5.1；N3 92笔 +3.73 PF1.97 MDD−7.0；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 SUEGTDVOL_base：R12 +8.79 / N3 +3.98 → **B 否**（R12/N3 每笔均降；MDD 虽收窄不计）。
+- → **REJECTED**；线上 mid-sue-td-vol 仍 SUE≥2.2。解读：双合取上再硬抬 SUE 2.5 不镜像单腿 s22——**停 SUEGTDVOL SUE硬抬轴**。
+
+### §671 SUEGFATVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +0.20 / P20 +1.04 / P21 +6.52 / W0 −1.97 / W00 +1.63 / W1 +1.84 / W2 +3.79 / R12 +3.67（**正段 7/8**）
+- R12 66笔 +3.67% PF1.80 MDD−8.0；N3 153笔 +3.19 PF1.82 MDD−8.7；彩票型
+- 判定 ✓✓✓✓✓ → **达标/采纳**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 02:46 CST）：`mid-sue-fa-vol`（kind=`sue_fa_vol`）；`s671_onboard_metrics.py`；replay 19批/45只（2026-07-29~10-30）；`safe_backend_restart` health 200。
+- 解读：盈余∩资产周转效率双合取∩放量过线——接 SUEGTDVOL。
+
+## §672 [中线·现役改进] SUEG∩FAT∩放量 FAT升幅硬抬≥0.12（SUEGFATVOL_r012_h20）— 预注册（2026-11-02 02:46 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-fa-vol（SUE≥2.2∩G∩FAT≥0.10∩放量）把 **FAT 升幅硬抬** 到 **≥0.12**；SUE/G/放量/排序不变。同进程 SUEGFATVOL_base(≥0.10)。
+- 想法：§671 刚 ADOPT；§662 在 FATTD 上 FAT 0.12 曾过 B——镜像接到 **盈余∩FAT 双合取**（硬门槛，非 −pct）。B 门对照 base。
+- 去重：SUEGFATVOL；FATTDVOL_r012；ETDFATVOL_r012。非仓位。
+- 门槛：A=§282；B=相对 base R12&N3 每笔不降、N3 MDD 不加深。
+
+## §673 [中线·文献] 盈余加速∩股东权益/负债∩放量（SUEGETDVOL_h20）— 预注册（2026-11-02 02:46 CST 写于跑任何收益之前）
+- 白话：SUE≥2.2 ∩ G ∩ ETD升幅≥0.20 ∩ 信号日成交额≥1.5×amt20；排序 min(SUE,20)；持20。
+- 想法 / 文献：SUEG∩TD/FAT 刚上线——再试 **盈余∩BS杠杆** 双合取∩放量（硬合取，非 −pct）。对照 SUEGTDVOL/SUEGFATVOL/ETDVOL/SUEGVOL。
+- 去重：SUEGTDVOL；SUEGFATVOL；ETDFATVOL；SUEGVOL；ETDVOL。非仓位。不碰数据网关。
+- 门槛：§282 绝对收益（新策略无 B）。
