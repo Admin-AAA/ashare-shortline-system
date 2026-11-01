@@ -5647,3 +5647,37 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：G ∩ (amount≥1.5·amt20)；sc_g；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`eavol_s513.py` / `run_s513.sh`。
+
+## §512 / §513 判定（2026-11-01 17:35 CST）
+
+### §512 BT_p012_h20 — ADOPT → 已上线
+- 每笔 P19 +1.01 / P20 +2.21 / P21 +1.19 / W0 −1.72 / W00 +0.07 / W1 +3.67 / W2 +3.97 / R12 +3.01（**正段 7/8**）
+- R12 32笔 +3.01% PF1.68 MDD−6.8；N3 135笔 +3.60 PF1.92 MDD−9.4；彩票型
+- 判定 ✓✓✓✓✓ → **ADOPT**。同进程 BT_base：R12 +2.39 / N3 +3.45 / MDD−9.4 → 每笔均抬、回撤不深 → **B 过**。样本 33→32。
+- 上线（2026-11-01 17:40 CST）：`mid-block-trade-premium` prem 1%→**≥1.2%**（ratio 仍≥0.45%）；`s512_onboard_metrics.py` 刷新 metrics（R12 +3.01 / N3 +3.60）。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-block-trade-premium --execute` → 2026-07-29~10-30 **6批**（origin=replay；门槛抬高后更稀）。
+- `safe_backend_restart` 后 health 8765 **200**；summary 已改≥1.2%。
+
+### §513 EAVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +1.71 / P20 +0.29 / P21 +3.19 / W0 −3.57 / W00 −1.92 / W1 +3.63 / W2 +1.10 / R12 +1.56（**正段 6/8**）
+- R12 72笔 +1.56% PF1.30 MDD−10.7；N3 196笔 +2.19 PF1.52 MDD−13.4；彩票型
+- 判定 ✓✓✓✓✓ → **ADOPT**。新策略无 B。
+- 上线（2026-11-01 17:40 CST）：`mid-earnings-accel-vol`（kind=`earnings_accel_vol`，`midterm_eavol.eavol_candidates`：G 同现役 EA；amount≥1.5×amt20；排序 dtp 封顶300）；`s513_onboard_metrics.py` 写入 metrics。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-earnings-accel-vol --execute` → 2026-07-29~10-30 **28批/166只**（origin=replay，errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid 现役含 mid-earnings-accel-vol。
+
+## §514 [中线·现役改进] 大宗溢价硬门槛≥1.35%（BT_p0135_h20）— 预注册（2026-11-01 17:40 CST 写于跑任何收益之前）
+- 白话：现役 mid-block-trade-premium（§512 prem≥1.2%、ratio≥0.45%）把 **溢价** 再抬到 **≥1.35%**；ratio 仍≥0.45%；排序仍 premium。同进程 BT_base(prem≥1.2%,ratio≥0.45%)。
+- 想法：溢价轴 0→0.5→1→1.2% 连续 ADOPT；1.5% 仅差 R12 笔数。本题取 **1.35%** 中间档（硬门槛，非 −pct）。
+- 去重：BT_p012/p015/p01；BT_r06；BTU。非仓位。
+- 规则：prem≥1.35% & ratio≥0.45% vs prem≥1.2% & ratio≥0.45%；sc_prem；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`lt_research220.py` / `run_s514.sh`。
+
+## §515 [中线·文献] SUEG∩放量≥1.5×amt20（SUEGVOL_h20）— 预注册（2026-11-01 17:40 CST 写于跑任何收益之前）
+- 白话：SUE≥2 ∩ 业绩加速 G（同 SUEG），**再**要求信号日成交额≥1.5×前20日均额；按 min(SUE,20) 降序；持 20。
+- 想法 / 文献：EAVOL（G∩放量）刚 ADOPT；SUEG 已上线——把同一量能确认接到 SUEG 合取上（硬合取，非 −pct）。对照 SUEGU 弱反应刚否。
+- 去重：SUEG；EAVOL；SUEGU；SUEG25。非仓位。不碰数据网关。
+- 规则：SUE∩G∩(amount≥1.5·amt20)；sc_sue；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`suegvol_s515.py` / `run_s515.sh`。

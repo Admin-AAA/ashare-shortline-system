@@ -162,35 +162,63 @@ def label_events(
 
 
 def pending_events(db: Session, limit: int, *, scan_cap: int = 20000) -> list[EventView]:
-    """挑还没有成功标签、或正文/规则已经对不上的事件。"""
+    """挑还没有成功标签、或正文/规则已经对不上的事件。
+
+    试跑时按来源分层，避免题材成分/龙虎榜席位把样本淹掉；
+    优先公告、研报、调研、预告、回购、涨停原因等文本。
+    """
+    skip_sources = {"kpl_concept_cons"}
+    prefer = [
+        "announcement:eastmoney", "announcement:cninfo", "announcement:xiaoshi",
+        "report_rc", "stk_surv", "forecast", "repurchase", "share_float",
+        "stk_holdertrade", "kpl_list", "limit_list_ths", "ths_hot", "st",
+        "dividend", "stk_managers", "stk_alert", "idx_anns", "eco_cal",
+        "top_list", "stk_shock", "stk_high_shock", "cn_schedule", "top_inst",
+    ]
     found: list[EventView] = []
-    offset = 0
-    batch = 200
-    while len(found) < limit and offset < scan_cap:
-        rows = db.scalars(
-            select(TextEvent).order_by(TextEvent.publish_date.desc(), TextEvent.id.desc()).offset(offset).limit(batch)
-        ).all()
-        if not rows:
-            break
-        keys = {(row.source, row.event_id) for row in rows}
-        labels = {
-            (item.source, item.event_id): item
-            for item in db.scalars(
+    seen: set[tuple[str, str]] = set()
+
+    def _take(rows: list) -> None:
+        for row in rows:
+            if row.source in skip_sources:
+                continue
+            key = (row.source, row.event_id)
+            if key in seen:
+                continue
+            view = EventView.from_row(row)
+            label = db.scalar(
                 select(TextEventLabel).where(
                     TextEventLabel.prompt_version == PROMPT_VERSION,
-                    TextEventLabel.source.in_([key[0] for key in keys]),
-                    TextEventLabel.event_id.in_([key[1] for key in keys]),
+                    TextEventLabel.source == row.source,
+                    TextEventLabel.event_id == row.event_id,
                 )
-            ).all()
-        }
-        for row in rows:
-            view = EventView.from_row(row)
-            if _needs_work(view, labels.get((row.source, row.event_id))):
+            )
+            if _needs_work(view, label):
                 found.append(view)
+                seen.add(key)
                 if len(found) >= limit:
-                    break
-        offset += batch
-    return found
+                    return
+
+    # 每类先取一部分，保证分布
+    per = max(5, limit // max(1, len(prefer)))
+    for source in prefer:
+        if len(found) >= limit:
+            break
+        rows = db.scalars(
+            select(TextEvent).where(TextEvent.source == source)
+            .order_by(TextEvent.publish_date.desc(), TextEvent.id.desc())
+            .limit(per)
+        ).all()
+        _take(list(rows))
+    if len(found) < limit:
+        rows = db.scalars(
+            select(TextEvent).where(TextEvent.source.notin_(list(skip_sources)))
+            .order_by(TextEvent.publish_date.desc(), TextEvent.id.desc())
+            .limit(min(scan_cap, limit * 20))
+        ).all()
+        _take(list(rows))
+    return found[:limit]
+
 
 
 def _needs_work(event: EventView, label: TextEventLabel | None) -> bool:

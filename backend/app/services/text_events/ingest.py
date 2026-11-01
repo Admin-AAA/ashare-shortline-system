@@ -53,8 +53,12 @@ def load_sessions(db: Session, start: str, end: str) -> tuple[list[str], str]:
 
 
 def upsert_events(db: Session, rows: Iterable[dict[str, Any]], *, provider: str) -> int:
-    written = 0
+    # 同批次可能有重复 event_id（上游分页重叠或同文多记录），先按 (source, event_id) 去重。
+    deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
+        deduped[(row["source"], row["event_id"])] = row
+    written = 0
+    for row in deduped.values():
         existing = db.scalar(
             select(TextEvent).where(TextEvent.source == row["source"], TextEvent.event_id == row["event_id"])
         )
