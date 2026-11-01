@@ -201,3 +201,66 @@ def forecast_turnaround_candidates(db, as_of: str, store: bool = True) -> list[d
     res = [{**out[c], "name": names.get(c, ""), "total_mv": float(ok[c]["total_mv"] or 0), "amt20": float(ok[c]["amt20"])}
            for c in ok]
     return sorted(res, key=lambda x: (-x["score"], x["code"]))
+
+
+def forecast_preincrease_candidates(db, as_of: str, store: bool = True) -> list[dict[str, Any]] | None:
+    """§433 FZG_h20：首次业绩预告 type=预增 且 p_change_min>0、net_profit_min>0；按增幅封顶300降序（与研究 fzg_s433 一致）。"""
+    import pandas as pd
+    from app.services.midterm_service import _liq_ok
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 251"), {"d": as_of})]
+    if len(dates) < 251 or dates[0] != as_of:
+        return None
+    d0 = _dt.date.fromisoformat(dates[1]) + _dt.timedelta(days=1)
+    d1 = _dt.date.fromisoformat(as_of)
+    start, end = d0.strftime("%Y%m%d"), d1.strftime("%Y%m%d")
+    frames = []
+    d = d0
+    while d <= d1:
+        f = _fetch_forecast_day(d.strftime("%Y%m%d"))
+        if f is None:
+            return None
+        if len(f):
+            frames.append(f)
+        d += _dt.timedelta(days=1)
+    if not frames:
+        return []
+    new = pd.concat(frames, ignore_index=True)
+    for k in ("ts_code", "ann_date", "end_date", "type"):
+        new[k] = new[k].astype(str).str.strip()
+    new = new[(new["ann_date"] >= start) & (new["ann_date"] <= end)]
+    if new.empty:
+        return []
+    if store:
+        _store_live(new)
+    codes = sorted(set(new["ts_code"].str.slice(0, 6)))
+    hist = _history(codes)
+    earlier = set(zip(hist.loc[hist["ann_date"] < start, "ts_code"], hist.loc[hist["ann_date"] < start, "end_date"]))
+    first = new.sort_values(["ann_date"], kind="stable").drop_duplicates(["ts_code", "end_date"], keep="first")
+    out: dict[str, dict[str, Any]] = {}
+    for _, r in first.iterrows():
+        if (r["ts_code"], r["end_date"]) in earlier:
+            continue
+        code = r["ts_code"][:6]
+        if code[0] in "489":
+            continue
+        if r["type"] != "预增":
+            continue
+        pmin = pd.to_numeric(r["p_change_min"], errors="coerce")
+        npmin = pd.to_numeric(r["net_profit_min"], errors="coerce")
+        if pd.isna(pmin) or pd.isna(npmin) or not (pmin > 0 and npmin > 0):
+            continue
+        score = min(float(pmin), 300.0)
+        if code not in out or score > out[code]["score"]:
+            out[code] = {"code": code, "ann_date": r["ann_date"], "end_date": r["end_date"], "forecast_type": "预增",
+                         "p_change_min": float(pmin), "net_profit_min": float(npmin), "score": score}
+    if not out:
+        return []
+    ok = _liq_ok(db, as_of, dates, sorted(out))
+    names = dict(db.execute(text("SELECT code,name FROM stocks WHERE code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"codes": sorted(ok) or ["-"]}).all())
+    res = [{**out[c], "name": names.get(c, ""), "total_mv": float(ok[c]["total_mv"] or 0), "amt20": float(ok[c]["amt20"])}
+           for c in ok]
+    return sorted(res, key=lambda x: (-x["score"], x["code"]))
+
