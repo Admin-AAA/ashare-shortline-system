@@ -12,16 +12,15 @@ PH = dict(PH); PH["N3 2024-01~2026-10"] = ("2024-01-01", "2026-10-16")
 
 
 def prep():
-    # TAD from R85 (delta≥0.20 in signal); CAS from R89 (delta≥3.0)
-    tad = R85.prep().select(["code", "trade_date", "liq", "amount", "amt20", "delta", "sc_tad", "TAD"])
-    cas = R89.prep().select(["code", "trade_date", c("delta").alias("cas_delta"), c("CAS").alias("CAS")])
-    df = tad.join(cas, on=["code", "trade_date"], how="left")
+    # keep full panel (incl lim_up_open) from TAD; join CAS flag from R89
+    df = R85.prep()
+    cas = R89.prep().select(["code", "trade_date", c("CAS").alias("CAS")])
+    df = df.join(cas, on=["code", "trade_date"], how="left")
     tie = c("code").cast(pl.Int64, strict=False).fill_null(0) * 1e-10
     vol = c("amount").is_not_null() & c("amt20").is_not_null() & (c("amount") >= 1.5 * c("amt20"))
     tad_live = c("TAD") & (c("delta") >= 0.25)
-    cas_live = c("CAS")  # already ≥3.0
     return df.with_columns(
-        (tad_live & cas_live & vol).fill_null(False).alias("TADCASVOL"),
+        (tad_live & c("CAS").fill_null(False) & vol).fill_null(False).alias("TADCASVOL"),
         (c("sc_tad") - tie).alias("sc_tadcasvol"),
     ).sort("code", "trade_date")
 
@@ -38,6 +37,7 @@ if __name__ == "__main__":
     phases, out = sys.argv[1].split(","), sys.argv[2]
     df = prep()
     print("TADCASVOL/year", df.group_by(c("trade_date").str.slice(0, 4).alias("y")).agg(c("TADCASVOL").sum()).sort("y").to_dicts(), flush=True)
+    print("has lim_up_open", "lim_up_open" in df.columns, flush=True)
     res = json.load(open(out)) if os.path.exists(out) else {}
     for ph in phases:
         s, e = PH[ph]
