@@ -6789,13 +6789,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 标准：§282；否则否决。
 - 脚本：`atvol_s591.py` / `run_s591.sh`。
 
+### §590 EAVOL_sc_orv_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +2.11 / P20 +0.85 / P21 +2.89 / W0 −4.08 / W00 −1.04 / W1 +3.35 / W2 +0.84 / R12 +2.28（**正段 6/8**）
+- R12 73笔 +2.28% PF1.46 MDD−11.3；N3 197笔 +2.28 PF1.54 MDD−13.5；彩票型
+- 判定 ✓✓✓✓✓ → A 过。同进程 EAVOL_base(dtp)：R12 +1.56 / N3 +2.19 / MDD**−13.4** → 每笔抬但 **N3 MDD 略深（−13.5）→ B 否**。
+- → **REJECTED**；线上 mid-earnings-accel-vol 仍按 dtp。解读：orv 排序同 amtr——抬均笔伤回撤；**停 EAVOL orv 排序轴**。
 
+### §591 ATVOL_h20 — REJECT
+- 每笔 P19 +1.45 / P20 −0.38 / P21 +1.64 / W0 −3.52 / W00 −3.14 / W1 +3.89 / W2 +4.97 / R12 +2.01（**正段 5/8**）
+- R12 85笔 +2.01% PF1.44 MDD−8.0；N3 245笔 +3.56 PF1.88 MDD−14.7；稳健型
+- 判定 ✓✓✓**✗**✓ → **否决**。解读：资产周转∩放量正段不足——与 AT/GME 同向。
 
+## §592 [中线·现役改进] SUEG∩放量同样本改按营收同比排序（SUEGVOL_sc_orv_h20）— 预注册（2026-11-01 21:46 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-accel-vol（SUE≥2 ∩ G ∩ amount≥1.5×amt20）**事件一字不改**，只把同日排序从 min(SUE,20) 换成 **or_yoy 降序**。同进程 SUEGVOL_base(按 SUE)。
+- 想法：EAVOL orv 排序刚 B 否；本题接到 **SUEG∩放量**（G 内已含 orv≥20，增量排序键，非 −pct）。B 门对照 base。amtr/EAVOL-orv 排序轴已停。
+- 去重：SUEGVOL；EAVOL_sc_orv；SUEG_s25。非仓位。
+- 规则：同样本 SUEGVOL；sc_orv vs sc_sue；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`suegvol_sc_orv_s592.py` / `run_s592.sh`。
 
-
-
-
-
-
-
+## §593 [中线·文献] 应收周转扩张∩放量≥1.5×amt20（ARTVOL_h20）— 预注册（2026-11-01 21:46 CST 写于跑任何收益之前）
+- 白话：ART（Δar_turn≥0.30 且本期≥2.0，§180）**再**要求信号日成交额≥1.5×前20日均额；排序 ΔART 封顶5.0。持20。
+- 想法 / 文献：ATVOL 正段不足；周转族接到应收周转∩放量（硬合取，非 −pct）。对照 ART/ATVOL/GMEVOL。
+- 去重：ART；ATVOL；NCSVOL。非仓位。不碰数据网关。
+- 规则：ART ∩ (amount≥1.5·amt20)；sc_art；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`artvol_s593.py` / `run_s593.sh`。
 
