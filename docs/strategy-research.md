@@ -5872,3 +5872,35 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：FINA ∩ (amount≥1.5·amt20)；sc=降幅去封顶；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`finavol_s527.py` / `run_s527.sh`。
+
+## §526 / §527 判定（2026-11-01 18:42 CST）
+
+### §526 SUEGVOL_v13_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +4.19 / P20 +0.42 / P21 +4.83 / W0 −2.06 / W00 +0.56 / W1 +2.96 / W2 +2.20 / R12 +2.49（**正段 7/8**）
+- R12 76笔 +2.49% PF1.50 MDD−10.7；N3 183笔 +2.57 PF1.63 MDD−12.9；彩票型
+- 判定 ✓✓✓✓✓ → A 过。同进程 SUEGVOL_base：R12 +2.80 / N3 +2.82 / MDD−10.4 → 每笔降、回撤更深 → **B 否**。
+- → **REJECTED**；线上 mid-sue-accel-vol 仍 ≥1.5×。解读：SUEG 软扩同向稀释——量能软扩三连否（FZG/FLZ/SUEG）。
+
+### §527 FINAVOL_h20 — ADOPT → 已上线
+- 每笔 P19 +1.45 / P20 +0.23 / P21 +5.99 / W0 −4.28 / W00 −3.34 / W1 +3.87 / W2 +1.89 / R12 +2.33（**正段 6/8**）
+- R12 82笔 +2.33% PF1.51 MDD−7.4；N3 238笔 +2.76 PF1.66 MDD−11.0；彩票型
+- 判定 ✓✓✓✓✓ → **ADOPT**。新策略无 B。
+- 上线（2026-11-01 18:42 CST）：`mid-fina-exp-vol`（kind=`fina_vol`）；`s527_onboard_metrics.py`。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-fina-exp-vol --execute` → 2026-07-29~10-30 **27批/202只**（origin=replay，errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid 现役含 mid-fina-exp-vol。
+
+## §528 [中线·现役改进] 业绩加速放量软扩≥1.3×amt20（EAVOL_v13_h20）— 预注册（2026-11-01 18:42 CST 写于跑任何收益之前）
+- 白话：现役 mid-earnings-accel-vol（§513 amount≥1.5×amt20）把放量门槛软扩到 **≥1.3×**；G 不变；排序仍 dtp 封顶300。同进程 EAVOL_base(≥1.5×)。
+- 想法：量能软扩 FZG/FLZ/SUEG 均否；EAVOL 末例再验（硬门槛轴软扩，非 −pct）。B 门对照 base。
+- 去重：EAVOL；EAVOL_v20；SUEGVOL_v13。非仓位。
+- 规则：G ∩ (amount≥1.3·amt20) vs ≥1.5×；sc_g；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`eavol_v13_s528.py` / `run_s528.sh`。
+
+## §529 [中线·文献] 回购预案∩放量≥1.5×amt20（RPVOL_h20）— 预注册（2026-11-01 18:42 CST 写于跑任何收益之前）
+- 白话：现役回购预案（金额≥市值0.5%）**再**要求信号日成交额≥1.5×前20日均额；排序仍 ratio。持20。
+- 想法 / 文献：费用纪律∩放量刚 ADOPT；回购事件接同款量能确认（硬合取，非 −pct）。对照 RPU 弱反应已上线。
+- 去重：RP；RPU；SEXPVOL；FINAVOL；IOVOL。非仓位。不碰数据网关。
+- 规则：RP_r05 ∩ (amount≥1.5·amt20)；sc_r；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`rpvol_s529.py` / `run_s529.sh`。

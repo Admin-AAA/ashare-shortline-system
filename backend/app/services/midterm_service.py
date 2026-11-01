@@ -301,6 +301,16 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+
+    # §527 财务费用率下降∩放量（scripts/midterm/finavol_s527.py FINAVOL_h20；§282 达标；2026-11-01 上线）
+    "mid-fina-exp-vol": {
+        "name": "财务费用率下降∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在「财务费用率同比下降≥0.5个百分点」事件池上再要求信号日成交额≥1.5×前20日均额。按降幅（原始百分点，§396 去封顶）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：融资成本减轻事件 × 量能确认（§527）。",
+        "kind": "fina_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §421 分红上调持20（scripts/midterm/lt_research48.py DINC_h20 = §158 规则；§282 绝对收益复判达标；2026-11-01 上线）
     "mid-dividend-increase": {
         "name": "现金分红同比增加（持20日）",
@@ -1518,6 +1528,20 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 result[sid] = "no_data"
                 continue
             picks = [p for p in cands if p["code"] not in held]
+
+        if meta.get("kind") == "fina_vol":
+            from app.services.midterm_fina_events import finavol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = finavol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
             if not picks:
                 result[sid] = 0
                 continue
@@ -2009,6 +2033,11 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["score"]), 2), "财务费用率降幅(百分点)", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：财务费用率 {_f(p.get('prev'), 1)}% → "
                       f"{_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点")
+        elif kind == "fina_vol":
+            score, label, better = round(float(p["score"]), 2), "财务费用率降幅(百分点)", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告财务费用率下降放量："
+                      f"{_f(p.get('prev'), 1)}% → {_f(p.get('cur'), 1)}%，同比下降 {_f(p.get('delta'), 1)} 个百分点；"
+                      f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "dinc_yoy":
             score, label, better = round(float(p["inc"]) * 100, 1), "每股派现同比增幅(%)", "higher"
             reason = (f"{p.get('ann_date', '')} 首次公布 {p.get('end_date', '')} 分红预案：每股税前派现 {_f(p.get('cash_div_tax'), 3)} 元，"
