@@ -611,12 +611,13 @@ def _scaled_total_mv(
 
 
 def _filter_repurchase_underreact(db, as_of: str, pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """§364：信号日 pct∈[-1,+2] 且未封涨停；保留原 ratio 降序。"""
+    """§364：信号日 pct∈[-1,+2] 且未封涨停；保留原 ratio 降序。
+    daily_kbars 无 up_limit 列，涨停价用前收 ×(1+9.8%/19.8%) 近似（与研究脚本一致）。"""
     if not pool:
         return []
     codes = [p["code"] for p in pool]
     rows = db.execute(text(
-        "SELECT code, pct_chg, close, high, low, up_limit FROM daily_kbars "
+        "SELECT code, pct_chg, close FROM daily_kbars "
         "WHERE trade_date=:d AND code IN :codes"
     ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
     by = {r["code"]: r for r in rows}
@@ -631,13 +632,8 @@ def _filter_repurchase_underreact(db, as_of: str, pool: list[dict[str, Any]]) ->
         close = float(r["close"])
         code = p["code"]
         band = 0.198 if code.startswith(("3", "688")) else 0.098
-        ul = r["up_limit"]
-        if ul is None:
-            # 缺涨停价时用前收近似：close/(1+pct/100)
-            pre = close / (1 + pct / 100.0) if pct != -100 else close
-            ul = pre * (1 + band)
-        else:
-            ul = float(ul)
+        pre = close / (1 + pct / 100.0) if pct > -99.999 else close
+        ul = pre * (1 + band)
         if close >= ul - 0.005:
             continue
         q = dict(p)
