@@ -6023,3 +6023,34 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：UDP ∩ (amount≥1.5·amt20)；sc_udp；K20/max_new5。新策略无 B。
 - 标准：§282；否则否决。
 - 脚本：`udpvol_s537.py` / `run_s537.sh`。
+
+## §536 / §537 判定（2026-11-01 19:20 CST）
+
+### §536 SEXPVOL_d04_h20 — ADOPT → 已上线
+- 每笔 P19 +0.22 / P20 +1.59 / P21 +2.99 / W0 −2.71 / W00 −2.63 / W1 +1.68 / W2 +2.18 / R12 +3.32（**正段 6/8**）
+- R12 86笔 +3.32% PF1.89 MDD−5.8；N3 253笔 +2.38 PF1.61 MDD−12.9；稳健型
+- 判定 ✓✓✓✓✓ → A 过。同进程 SEXPVOL_base(≥0.5)：R12 +3.11 / N3 +1.96 / MDD−13.2 → 每笔均抬、回撤不深 → **B 过**。
+- → **ADOPT**。上线（2026-11-01 19:20 CST）：`mid-sales-exp-vol` 降幅 **0.5→0.4**（放量仍≥1.5×）；`s536_onboard_metrics.py`。
+- replay：`REPLAY_AUTO_BACKFILL_ENABLED=1 rebuild_replay_picks.py --onboard mid-sales-exp-vol --execute` → 2026-07-29~10-30 **31批/533只**（origin=replay，errors/no_data 0）。
+- `safe_backend_restart` 后 health 8765 **200**；/mid mid-sales-exp-vol 已改≥0.4。
+
+### §537 UDPVOL_h20 — REJECT
+- 每笔 P19 −0.44 / P20 −0.26 / P21 +0.02 / W0 −3.49 / W00 −2.29 / W1 +1.35 / W2 +3.80 / R12 +0.88（**正段 4/8**）
+- R12 80笔 +0.88% **PF1.19** MDD−10.4；N3 231笔 +1.86 PF1.46 MDD−16.2；彩票型
+- 判定 ✓**✗**✓**✗**✓ → **否决**（近一年 PF、正段）。解读：未分配利润∩放量伤近一年质量。
+
+## §538 [中线·现役改进] 财务费用∩放量降幅软扩≥0.4（FINAVOL_d04_h20）— 预注册（2026-11-01 19:20 CST 写于跑任何收益之前）
+- 白话：现役 mid-fina-exp-vol（降幅≥0.5 ∩ amount≥1.5×amt20）把 **降幅门槛** 软扩到 **≥0.4**；放量不变；排序仍去封顶。同进程 FINAVOL_base(≥0.5)。
+- 想法：SEXPVOL 降幅软扩刚 ADOPT；同费用轴 FINAVOL 镜像软扩（非 −pct）。B 门对照 base。
+- 去重：FINAVOL；SEXPVOL_d04；FINA。非仓位。
+- 规则：FINA≥0.4∩vol1.5 vs ≥0.5∩vol1.5；sc 去封顶；K20/max_new5。B 门对照 base。
+- 标准：§282 + 现役改进 B 门；否则否决。
+- 脚本：`finavol_d04_s538.py` / `run_s538.sh`。
+
+## §539 [中线·文献] 预告合集∩放量≥1.5×amt20（FAVOL_h20）— 预注册（2026-11-01 19:20 CST 写于跑任何收益之前）
+- 白话：业绩预告合集（预增/扭亏/略增，p_change_min>0 且净利下限>0）**再**要求信号日成交额≥1.5×前20日均额；排序增幅封顶300。持20。
+- 想法 / 文献：预增/略增单拆∩放量已 ADOPT、扭亏∩放量否；合集∩放量测是否互补（硬合取，非 −pct）。对照 FZGVOL/FLZVOL。
+- 去重：FZGVOL；FLZVOL；FTZVOL；FA。非仓位。不碰数据网关。
+- 规则：FA ∩ (amount≥1.5·amt20)；sc_a；K20/max_new5。新策略无 B。
+- 标准：§282；否则否决。
+- 脚本：`favol_s539.py` / `run_s539.sh`。

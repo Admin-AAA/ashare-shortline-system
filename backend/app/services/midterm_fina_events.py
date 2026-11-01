@@ -197,9 +197,14 @@ def sexp_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 
 def sexpvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§525 SEXPVOL_h20：销售费用率下降 ∩ 信号日成交额≥1.5×amt20；排序降幅封顶10（与研究 sexpvol_s525 一致）。"""
+    """§525/§536 SEXPVOL：销售费用率下降≥0.4 ∩ 放量≥1.5×amt20；排序降幅封顶10（§536 软扩 0.5→0.4）。"""
     from sqlalchemy import text, bindparam
-    base = sexp_candidates(db, as_of)
+    # §536：仅 vol 变体软扩降幅门槛；mid-sales-exp-drop 仍走 sexp_candidates(≥0.5)
+    def passes(cur: float, prev: float):
+        delta = prev - cur
+        ok = (SEXP_CUR_LO <= cur <= SEXP_CUR_HI and SEXP_PREV_LO <= prev <= SEXP_PREV_HI and delta >= 0.4)
+        return ok, min(delta, SEXP_DELTA_CAP), {"delta": delta}
+    base = _fina_events(db, as_of, "saleexp_to_gr", passes)
     if base is None:
         return None
     if not base:

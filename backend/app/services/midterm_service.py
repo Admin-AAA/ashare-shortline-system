@@ -283,11 +283,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "schedule": "daily",
     },
 
-    # §525 销售费用率下降∩放量（scripts/midterm/sexpvol_s525.py SEXPVOL_h20；§282 达标；2026-11-01 上线）
+    # §525/§536 销售费用率下降∩放量（降幅≥0.4，§536 软扩；scripts/midterm/sexpvol_d04_s536.py；2026-11-01 上线）
     "mid-sales-exp-vol": {
         "name": "销售费用率下降∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，在「销售费用率同比下降≥0.5个百分点」事件池上再要求信号日成交额≥1.5×前20日均额。按降幅（封顶10个百分点）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：费用纪律事件 × 量能确认（§525）。",
+        "summary": "每个交易日盘后，在「销售费用率同比下降≥0.4个百分点」事件池上再要求信号日成交额≥1.5×前20日均额（§536：降幅 0.5→0.4；放量仍≥1.5×）。按降幅（封顶10个百分点）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：费用纪律事件 × 量能确认（§525）+ 降幅软扩（§536）。",
         "kind": "sexp_vol",
         "hold_days": 20,
         "schedule": "daily",
@@ -1538,6 +1538,11 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 result[sid] = "no_data"
                 continue
             picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
 
         if meta.get("kind") == "fina_vol":
             from app.services.midterm_fina_events import finavol_candidates
@@ -1552,12 +1557,6 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
-            if not picks:
-                result[sid] = 0
-                continue
-            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
-            continue
-
 
         if meta.get("kind") == "dinc_vol":
             from app.services.midterm_fina_events import dincvol_candidates
