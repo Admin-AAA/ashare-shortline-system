@@ -10462,6 +10462,13 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：QN∩SUEG∩vol；sc_qn；K20/max_new5。新策略无 B。
 - 脚本：`qnsuegvol_s875.py` / `run_s875.sh`。
 
+### §875 QNSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +5.27 / P20 +0.62 / P21 +5.61 / W0 −1.60 / W00 −0.10 / W1 +1.51 / W2 +4.40 / R12 +3.08（**正段 6/8**）
+- R12 67笔 +3.08% PF1.62 MDD−8.9；N3 158笔 +2.98 PF1.76 MDD−8.6；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 01:45 CST）：`mid-qn-sue-vol`（kind=`qn_sue_vol`）；FINA_FIELDS 增 `q_npta`；`s875_onboard_metrics.py`；replay onboard 14批/27只（2026-08-01~11-02；VIP 熔断时走本地 fina 基线）；`safe_backend_restart`。解读：单季ROA扩张∩盈余合取成立（ROE/ROIC∩SUEG 曾否）。
+
+
 
 
 
