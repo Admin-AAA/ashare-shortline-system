@@ -10495,6 +10495,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
 - → **ADOPT**。上线（2026-11-03 02:02 CST）：`mid-roy-sue-vol`（kind=`roy_sue_vol`）；FINA_FIELDS 增 `roe_yoy`；`s877_onboard_metrics.py`；replay onboard 15批/34只（2026-08-01~11-02）；`safe_backend_restart`。解读：roe_yoy 水平∩盈余合取成立（≠§847 ΔROE∩SUEG 曾否）。
 
+## §878 [中线·现役改进] 单季总资产净利率扩张∩盈余加速∩放量 orv硬抬≥25（QNSUEGVOL_o25_h20）— 预注册（2026-11-03 02:05 CST 写于跑任何收益之前）
+- 白话：现役 mid-qn-sue-vol（§876 已冻 dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；QN/SUE/dtp/放量/排序不变。同进程 QNSUEGVOL_base(orv≥20)。
+- 想法：§876 d55 刚 ADOPT——续试 orv 轴（硬门槛，非 −pct；对照 FAT_o25 刚过、多数 SUEG 合取 o25 曾否）。B 门对照 base。
+- 去重：QNSUEGVOL_d55；ROESUEGVOL。非仓位。不碰数据网关。
+- 规则：QN∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_qn；K20/max_new5。B 对照 base。
+- 脚本：`qnsuegvol_o25_s878.py` / `run_s878.sh`。
+
+## §879 [中线·现役改进] ROE同比高增∩盈余加速∩放量 dtp硬抬≥55（ROYSUEGVOL_d55_h20）— 预注册（2026-11-03 02:05 CST 写于跑任何收益之前）
+- 白话：现役 mid-roy-sue-vol（§877：ROY≥20∩SUE≥2.2∩G∩放量≥1.5×，排序 roe_yoy封顶100）把 **G 内 dtp 硬抬** 到 **≥55**；ROY/SUE/orv/放量/排序不变。同进程 ROYSUEGVOL_base(dtp≥50)。
+- 想法：§877 刚 ADOPT——镜像 QN/FAT/QS_d55（硬门槛，非 −pct）。B 门对照 base。
+- 去重：ROYSUEGVOL；ROESUEGVOL（ΔROE 曾否）。非仓位。不碰数据网关。
+- 规则：ROY∩SUEG∩vol；G.dtp≥55；sc_roy；K20/max_new5。B 对照 base。
+- 脚本：`roysuegvol_d55_s879.py` / `run_s879.sh`。
+
+
 
 
 
