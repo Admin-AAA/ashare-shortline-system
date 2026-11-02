@@ -10523,6 +10523,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - → **REJECT**。现役 mid-roy-sue-vol 维持 §877 口径（G dtp≥50/orv≥20）；**冻 dtp 轴**。解读：ROY水平∩SUEG 抬 dtp 无增量（≠QN/FAT 的 d55 路径）。
 
 
+## §880 [中线·现役改进] ROE同比高增∩盈余加速∩放量 orv硬抬≥25（ROYSUEGVOL_o25_h20）— 预注册（2026-11-03 02:24 CST 写于跑任何收益之前）
+- 白话：现役 mid-roy-sue-vol（§879 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；ROY/SUE/dtp/放量/排序不变。同进程 ROYSUEGVOL_base(orv≥20)。
+- 想法：§879 d55 B 否——续试 orv 轴（硬门槛，非 −pct；对照 QN/FAT_o25 刚过）。B 门对照 base。
+- 去重：ROYSUEGVOL_d55；ROESUEGVOL。非仓位。不碰数据网关。
+- 规则：ROY∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_roy；K20/max_new5。B 对照 base。
+- 脚本：`roysuegvol_o25_s880.py` / `run_s880.sh`。
+
+## §881 [中线·现役改进] 每股股权自由现金流改善∩盈余加速∩放量 orv硬抬≥25（FCFESUEGVOL_o25_h20）— 预注册（2026-11-03 02:24 CST 写于跑任何收益之前）
+- 白话：现役 mid-fcfe-sue-vol（§870 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；FCFE/SUE/dtp/放量/排序不变。同进程 FCFESUEGVOL_base(orv≥20)。
+- 想法：§870 d55 A 否后注明 orv 轴可续——对称试 o25（硬门槛；对照多数 SUEG 合取 o25 曾否、FAT/QN_o25 刚过）。B 门对照 base。
+- 去重：FCFESUEGVOL_d55；FCFFSUEGVOL_o25（曾否）。非仓位。不碰数据网关。
+- 规则：FCFE∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_fcfe；K20/max_new5。B 对照 base。
+- 脚本：`fcfesuegvol_o25_s881.py` / `run_s881.sh`。
+
+
 
 
 
