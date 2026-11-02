@@ -10231,12 +10231,42 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：CFPS∩SUEG(dtp≥55∩orv≥25)∩vol；sc_cfps；K20/max_new5。B 门。
 - 脚本：`cfpssuegvol_o25_s858.py` / `run_s858.sh`。
 
+### §858 CFPSSUEGVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +15.27 / P20 +1.13 / P21 +7.30 / W0 −0.30 / W00 +4.40 / W1 +2.93 / W2 +3.49 / R12 +5.32（**正段 7/8**）
+- R12 50笔 +5.32% PF2.31 MDD−5.5；N3 109笔 +4.17 PF2.11 MDD−5.4；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥55)：R12 +5.05 / N3 +4.33 / MDD−5.4 → **B 否**（N3 每笔低于 base；R12 虽抬、MDD 同深）。
+- → **REJECTED**；线上 mid-cfps-sue-vol 仍 orv≥20。解读：再抬到 25 伤近三年——**停 CFPSSUEGVOL orv硬抬轴**（≥20 为终点；接 dtp≥55 终点）。CFPS∩SUEG 双轴到站。
+
+
+
 ## §859 [中线·文献] 盈利质量切换∩盈余加速∩放量（EQSSUEGVOL_h20）— 预注册（2026-11-02 22:10 CST 写于跑任何收益之前）
 - 白话：EQS（非经常性损益占比大降且扣非上升）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按研究 sc_eqs 排序；持20。
 - 想法 / 文献：BPS∩SUEG 刚否、CFPS∩SUEG 已上线——对称试 **盈利质量切换∩盈余意外**（硬合取，非 −pct；EQS/EQSVOL 曾否）。对照 EQSVOL/CFPSSUEGVOL/SUEGVOL。
 - 去重：EQSVOL；CFPSSUEGVOL；BPSSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
 - 规则：EQS∩SUEG∩vol；sc_eqs；K20/max_new5。新策略无 B。
 - 脚本：`eqssuegvol_s859.py` / `run_s859.sh`。
+
+### §859 EQSSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 n=0 / P20 +10.04 / P21 +4.03 / W0 +1.31 / W00 +6.49 / W1 +1.74 / W2 +5.98 / R12 +11.71（**正段 7/8**，P19 空）
+- R12 22笔 +11.71% PF4.95 MDD−5.5；N3 36笔 +8.54 PF4.33 MDD−5.4；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 n=22 < 门槛25；样本偏稀）。
+- → **REJECTED**。解读：EQS∩SUEG 近窗好看但覆盖不足——单腿 EQS/EQSVOL 曾否，合取未过笔数门。
+
+## §860 [中线·文献] 现金比率改善∩盈余加速∩放量（CASHSUEGVOL_h20）— 预注册（2026-11-02 22:48 CST 写于跑任何收益之前）
+- 白话：CASH升幅≥0.10（cash_ratio 区间约束）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶1.5）排序；持20。
+- 想法 / 文献：EQS/BPS∩SUEG 刚否、CFPS∩SUEG 双轴到站——对称试 **现金比率改善∩盈余意外**（硬合取，非 −pct；CASH/CASHVOL 曾否）。对照 CASHVOL/CFPSSUEGVOL/SUEGVOL。
+- 去重：CASHVOL；EQSSUEGVOL；BPSSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：CASH∩SUEG∩vol；sc_cash；K20/max_new5。新策略无 B。
+- 脚本：`cashsuegvol_s860.py` / `run_s860.sh`。
+
+## §861 [中线·文献] 每股未分配利润高增∩盈余加速∩放量（UDPSUEGVOL_h20）— 预注册（2026-11-02 22:48 CST 写于跑任何收益之前）
+- 白话：UDP增速≥30%（undist_profit_ps 本期≥0.5、去年>0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按增速（封顶2）排序；持20。
+- 想法 / 文献：与 CASH∩SUEG 配对——试 **留存利润积累∩盈余意外**（硬合取，非 −pct；UDP/UDPVOL 曾测）。对照 UDPVOL/CASHSUEGVOL/SUEGVOL。
+- 去重：UDPVOL；CASHSUEGVOL；EQSSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：UDP∩SUEG∩vol；sc_udp；K20/max_new5。新策略无 B。
+- 脚本：`udpsuegvol_s861.py` / `run_s861.sh`。
+
+
 
 
 
