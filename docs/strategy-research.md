@@ -9351,3 +9351,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：BT∩CAS∩vol；sc_prem；K20/max_new5。新策略无 B。
 - 脚本：`btcasvol_s791.py` / `run_s791.sh`。
 
+### §790 TADVOL_sc_pct_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +1.00 / P20 +0.60 / P21 +1.15 / W0 −3.46 / W00 −1.68 / W1 +2.02 / W2 +1.60 / R12 +1.23（**正段 6/8**）
+- R12 84笔 +1.23% PF1.30 MDD−10.6；N3 235笔 +1.63 PF1.40 MDD−14.2；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base：R12 +2.18 / N3 +3.64 / MDD−8.7 → **B 否**（近一年/三年每笔均降、回撤更深）。
+- → **REJECTED**；线上 mid-tad-vol 仍按升幅排序。解读：改按 −pct 同 CAS——伤每笔；**停 TADVOL −pct排序轴**（接升幅/量能）。
+
+### §791 BTCASVOL_h20 — REJECT（笔数不足·全窗空）
+- 每笔各窗 n=0（**正段 0/8**）
+- R12 **0**笔；全样本空窗
+- 判定（样本崩）→ **否决**。解读：大宗∩流动资产同∩TAD/ETD——空窗；**记候补，勿硬抬/软扩凑笔数**；**大宗∩BS/结构双合取∩放量暂缓**（TAD/ETD/CAS 三腿；接大宗∩效率）。
+
+## §792 [中线·现役改进] 股东权益/负债∩放量 改按−pct排序（ETDVOL_sc_pct_h20）— 预注册（2026-11-02 12:26 CST 写于跑任何收益之前）
+- 白话：现役 mid-etd-vol（ETD升幅≥0.20∩放量1.5×，按升幅排序）**事件一字不改**，只把同日排序换成 **−pct**。同进程 ETDVOL_base(按升幅)。
+- 想法：CAS/TAD −pct 刚否——对称试 **ETD 末条 BS 单腿现役**（增量排序，非 −pct 堆门槛；三腿可能非对称）。B 门对照 base。
+- 去重：CASVOL_sc_pct；TADVOL_sc_pct；ETDVOL_v18；ETDVOL_d025。非仓位。不碰数据网关。
+- 规则：同样本 ETDVOL；sc_−pct vs sc_etd；K20/max_new5。B 门对照 base。
+- 脚本：`etdvol_sc_pct_s792.py` / `run_s792.sh`。
+
+## §793 [中线·文献] 销售费用∩盈余加速∩放量（SEXPSUEGVOL_h20）— 预注册（2026-11-02 12:26 CST 写于跑任何收益之前）
+- 白话：SEXP降幅≥0.35 ∩ SUE≥2.2∩G ∩ 放量≥1.5×amt20；按 SEXP 原始降幅排序；持20。
+- 想法 / 文献：激励∩SUEG 刚候补；销售费用∩BS 暂缓——改试 **费用∩盈余加速**（硬合取，非 −pct；SEXPVOL/SUEGVOL 已上线）。对照 IOSUEGVOL/SEXPCASVOL/SUEGVOL/SEXPVOL。
+- 去重：IOSUEGVOL；SEXPCASVOL；SEXPETDVOL；SEXPFATVOL；SUEGDINCVOL。非仓位。不碰数据网关。
+- 规则：SEXP∩SUEG∩vol；sc_sexp 去封顶；K20/max_new5。新策略无 B。
+- 脚本：`sexpsuegvol_s793.py` / `run_s793.sh`。
+
