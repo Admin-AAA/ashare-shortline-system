@@ -10938,12 +10938,42 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：OPGR∩SUEG∩vol；G.dtp≥55；sc_opgr；K20/max_new5。B 对照 base。
 - 脚本：`opgrsuegvol_d55_s910.py` / `run_s910.sh`。
 
+### §910 OPGRSUEGVOL_d55_h20 — REJECT（B 门否；冻 dtp≥50）
+- 每笔 P19 +2.05 / P20 −0.56 / P21 +8.03 / W0 −1.59 / W00 +1.32 / W1 +1.59 / W2 +3.40 / R12 +3.35（**正段 6/8**）
+- R12 69笔 +3.35% PF1.76 MDD−9.2；N3 153笔 +2.89 PF1.78 MDD−8.5；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +3.37 / N3 +2.95 MDD−8.3；d55 R12 +3.35 / N3 +2.89 MDD−8.5 → **B 否**（N3 每笔回落且 MDD 加深）。
+- → **REJECT**。现役 mid-opgr-sue-vol 维持 §908 口径（G dtp≥50/orv≥20）；**冻 dtp 轴**。解读：OPGR∩SUEG 抬 dtp 无增量（≠EBT/FAT_d55）。
+
+
 ## §911 [中线·文献] 速动比率改善∩盈余加速∩放量（QUICKSUEGVOL_h20）— 预注册（2026-11-03 05:28 CST 写于跑任何收益之前）
 - 白话：quick_ratio 改善≥0.10（本期≥0.8）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶2）排序；持20。
 - 想法 / 文献：OPGR∩SUEG 刚 ADOPT、CR/CASH∩SUEG 曾否——对称试 **速动比率改善∩盈余意外**（硬合取；≠流动/现金比率）。对照 QR/CRVOL/CASHSUEGVOL。
 - 去重：QRVOL；CRSUEGVOL；CASHSUEGVOL；SUEGVOL。非仓位。不碰数据网关。去杠杆/有息负债∩SUEG 仍暂缓。
 - 规则：QUICK∩SUEG∩vol；sc_qr；K20/max_new5。新策略无 B。
 - 脚本：`quicksuegvol_s911.py` / `run_s911.sh`。
+
+### §911 QUICKSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 −4.77 / P20 +1.79 / P21 +3.02 / W0 +0.02 / W00 +2.54 / W1 +6.95 / W2 +0.17 / R12 +4.78（**正段 7/8**）
+- R12 34笔 +4.78% PF2.27 MDD−5.9；N3 61笔 +4.52 PF2.33 MDD−5.6；稳健型
+- 判定 ✓✓✓✓✓ → **达标**。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 05:38 CST）：`mid-quick-sue-vol`（kind=`quick_sue_vol`）；FINA_FIELDS 增 `quick_ratio`；`s911_onboard_metrics.py`；replay onboard 10批/15只（2026-08-01~11-02）；`safe_backend_restart`。解读：速动比率∩盈余合取成立（CR/CASH∩SUEG 曾否不对称）。
+
+
+
+## §912 [中线·现役改进] 营业利润率改善∩盈余加速∩放量 orv硬抬≥25（OPGRSUEGVOL_o25_h20）— 预注册（2026-11-03 05:38 CST 写于跑任何收益之前）
+- 白话：现役 mid-opgr-sue-vol（§910 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；OPGR/SUE/dtp/放量/排序不变。同进程 OPGRSUEGVOL_base(orv≥20)。
+- 想法：§910 d55 B 否——续试 orv 轴（硬门槛；对照 ART/DTEPS/ROA_o25 曾过）。B 门对照 base。
+- 去重：OPGRSUEGVOL_d55；QUICKSUEGVOL。非仓位。不碰数据网关。
+- 规则：OPGR∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_opgr；K20/max_new5。B 对照 base。
+- 脚本：`opgrsuegvol_o25_s912.py` / `run_s912.sh`。
+
+## §913 [中线·现役改进] 速动比率改善∩盈余加速∩放量 dtp硬抬≥55（QUICKSUEGVOL_d55_h20）— 预注册（2026-11-03 05:38 CST 写于跑任何收益之前）
+- 白话：现役 mid-quick-sue-vol（§911：quick改善≥0.10∩SUE≥2.2∩G∩放量，排序Δ封顶2）把 **G 内 dtp 硬抬** 到 **≥55**；QUICK/SUE/orv/放量/排序不变。同进程 QUICKSUEGVOL_base(dtp≥50)。
+- 想法：§911 刚 ADOPT——镜像 EBT/FAT/QN_d55。B 门对照 base。
+- 去重：QUICKSUEGVOL；OPGRSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：QUICK∩SUEG∩vol；G.dtp≥55；sc_qr；K20/max_new5。B 对照 base。
+- 脚本：`quicksuegvol_d55_s913.py` / `run_s913.sh`。
+
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
 - 白话：BEPS≥20（basic_eps_yoy 水平）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 basic_eps_yoy（封顶100）排序；持20。
