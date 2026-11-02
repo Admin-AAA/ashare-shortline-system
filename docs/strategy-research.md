@@ -9583,3 +9583,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：ADMINSUEGVOL_o25；ADMINSUEGVOL_d60；SEXPSUEGVOL_o30；SUEGTDVOL_o30。非仓位。不碰数据网关。
 - 规则：(ADMIN∩SUEG_dtp55_orv30∩vol) vs (ADMIN∩SUEG_dtp55_orv25∩vol)；sc_admin；K20/max_new5。B 门对照 base。
 - 脚本：`adminsuegvol_o30_s809.py` / `run_s809.sh`。
+
+
+### §808 SEXPSUEGVOL_o40_h20 — ADOPT → 已上线（orv 35→40）
+- 每笔 P19 +1.46 / P20 −1.09 / P21 +3.82 / W0 +2.97 / W00 +1.10 / W1 −1.38 / W2 +2.85 / R12 +13.61（**正段 6/8**）
+- R12 37笔 +13.61% PF8.10 MDD−3.7；N3 84笔 +6.63 PF3.01 MDD−4.5；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥35∩dtp≥60)：R12 +13.11 / N3 +5.95 / MDD−5.0 → **B 过**（近一年/三年每笔均抬；回撤更浅或持平）。
+- → **ADOPT**。上线（2026-11-02 15:00 CST）：`mid-sexp-sue-vol` orv **≥35→≥40**（dtp仍≥60）；`s808_onboard_metrics.py`；replay 强制覆盖 12批/23只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：费用∩盈余营收腿续抬仍成立。
+
+### §809 ADMINSUEGVOL_o30_h20 — ADOPT → 已上线（orv 25→30）
+- 每笔 P19 +2.91 / P20 +1.30 / P21 +6.47 / W0 −0.55 / W00 +2.35 / W1 −0.46 / W2 +3.27 / R12 +7.08（**正段 6/8**）
+- R12 53笔 +7.08% PF2.75 MDD−4.9；N3 118笔 +4.03 PF1.97 MDD−5.6；**彩票型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥25∩dtp≥55)：R12 +6.34 / N3 +3.71 / MDD−6.6 → **B 过**（近一年/三年每笔均抬；回撤更浅）。
+- → **ADOPT**。上线（2026-11-02 15:00 CST）：`mid-admin-sue-vol` orv **≥25→≥30**（dtp仍≥55）；`s809_onboard_metrics.py`；replay 强制覆盖 18批/37只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：管理费用∩盈余营收腿续抬成立（dtp 轴已停于 55）。
+
+## §810 [中线·现役改进] 销售费用∩盈余加速∩放量 orv再抬≥45（SEXPSUEGVOL_o45_h20）— 预注册（2026-11-02 15:00 CST 写于跑任何收益之前）
+- 白话：现役 mid-sexp-sue-vol（§808 已抬至 G dtp≥60∩orv≥40）把 **G 内 orv 再硬抬** 到 **≥45**；SEXP/SUE/dtp/放量/排序不变。同进程 SEXPSUEGVOL_base(orv≥40)。
+- 想法：§808 o40 刚 ADOPT——续试贴档（硬门槛，非 −pct）。B 门对照 base。
+- 去重：SEXPSUEGVOL_o40；SEXPSUEGVOL_d60；SUEGTDVOL_o30。非仓位。不碰数据网关。
+- 规则：(SEXP∩SUEG_dtp60_orv45∩vol) vs (SEXP∩SUEG_dtp60_orv40∩vol)；sc_sexp；K20/max_new5。B 门对照 base。
+- 脚本：`sexpsuegvol_o45_s810.py` / `run_s810.sh`。
+
+## §811 [中线·现役改进] 管理费用∩盈余加速∩放量 orv再抬≥35（ADMINSUEGVOL_o35_h20）— 预注册（2026-11-02 15:00 CST 写于跑任何收益之前）
+- 白话：现役 mid-admin-sue-vol（§809 已抬至 G dtp≥55∩orv≥30）把 **G 内 orv 再硬抬** 到 **≥35**；ADMIN/SUE/dtp/放量/排序不变。同进程 ADMINSUEGVOL_base(orv≥30)。
+- 想法：§809 o30 刚 ADOPT——续试贴档（硬门槛，非 −pct）。B 门对照 base。
+- 去重：ADMINSUEGVOL_o30；ADMINSUEGVOL_d60；SEXPSUEGVOL_o35。非仓位。不碰数据网关。
+- 规则：(ADMIN∩SUEG_dtp55_orv35∩vol) vs (ADMIN∩SUEG_dtp55_orv30∩vol)；sc_admin；K20/max_new5。B 门对照 base。
+- 脚本：`adminsuegvol_o35_s811.py` / `run_s811.sh`。

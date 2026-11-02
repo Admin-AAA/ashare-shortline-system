@@ -112,7 +112,7 @@ def suegfatvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return out
 
 def sexpsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§793/§798/§800/§802/§804/§806 SEXPSUEGVOL：SEXP降幅≥0.35 ∩ SUE≥2.2∩G(dtp≥60,orv≥35)∩放量≥1.5×amt20（§802 dtp；§806 orv再抬；suegvol 仍≥50/≥20）；排序 SEXP 原始降幅（去封顶）。"""
+    """§793/§798/§800/§802/§804/§806/§808 SEXPSUEGVOL：SEXP降幅≥0.35 ∩ SUE≥2.2∩G(dtp≥60,orv≥40)∩放量≥1.5×amt20（§802 dtp；§808 orv再抬；suegvol 仍≥50/≥20）；排序 SEXP 原始降幅（去封顶）。"""
     from app.services.midterm_fina_events import (
         SEXP_CUR_HI,
         SEXP_CUR_LO,
@@ -139,13 +139,13 @@ def sexpsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         e = sx_by.get(p0["code"])
         if e is None:
             continue
-        # §798/§800/§802/§804/§806：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥60、orv≥35（不改动 mid-sue-accel-vol）
+        # §798/§800/§802/§804/§806/§808：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥60、orv≥40（不改动 mid-sue-accel-vol）
         try:
             dtp = float(p0.get("dt_netprofit_yoy"))
             orv = float(p0.get("or_yoy"))
         except (TypeError, ValueError):
             continue
-        if dtp < 60.0 or orv < 35.0:
+        if dtp < 60.0 or orv < 40.0:
             continue
         q = dict(p0)
         q["sexp_delta"] = e.get("delta", e.get("score"))
@@ -161,7 +161,7 @@ def sexpsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 
 def adminsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§801/§803/§805 ADMINSUEGVOL：ADMIN降幅≥1.0 ∩ SUE≥2.2∩G(dtp≥55,orv≥25)∩放量≥1.5×amt20（§803 dtp；§805 orv硬抬；suegvol 仍≥50/≥20）；排序 ADMIN 降幅封顶10。"""
+    """§801/§803/§805/§809 ADMINSUEGVOL：ADMIN降幅≥1.0 ∩ SUE≥2.2∩G(dtp≥55,orv≥30)∩放量≥1.5×amt20（§803 dtp；§809 orv再抬；suegvol 仍≥50/≥20）；排序 ADMIN 降幅封顶10。"""
     from app.services.midterm_fina_events import (
         ADMIN_CUR_HI,
         ADMIN_CUR_LO,
@@ -190,13 +190,13 @@ def adminsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         e = ad_by.get(p0["code"])
         if e is None:
             continue
-        # §803/§805：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥55、orv≥25
+        # §803/§805/§809：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥55、orv≥30
         try:
             dtp = float(p0.get("dt_netprofit_yoy"))
             orv = float(p0.get("or_yoy"))
         except (TypeError, ValueError):
             continue
-        if dtp < 55.0 or orv < 25.0:
+        if dtp < 55.0 or orv < 30.0:
             continue
         q = dict(p0)
         q["admin_delta"] = e.get("delta", e.get("score"))
