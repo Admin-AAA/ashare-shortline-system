@@ -10441,6 +10441,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - R12 21笔 +0.75% PF1.12 MDD−6.3；N3 34笔 +3.16 PF1.66 MDD−6.0；彩票型
 - 判定 ✓✗✓✓✗ → **否决**。解读：EQT∩SUEG 覆盖不足且近窗弱——单腿 EQT/BPS∩SUEG 曾否，合取未救笔数/质量门。
 
+## §874 [中线·现役改进] 固定资产周转改善∩盈余加速∩放量 orv硬抬≥25（FATSUEGVOL_o25_h20）— 预注册（2026-11-03 01:23 CST 写于跑任何收益之前）
+- 白话：现役 mid-fat-sue-vol（§872 已冻 dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；FAT/SUE/dtp/放量/排序不变。同进程 FATSUEGVOL_base(orv≥20)。
+- 想法：§872 d55 刚 ADOPT——续试 orv 轴（硬门槛，非 −pct；对照 UDP/CFPS_o25 曾否、SUEGTD_o25 曾过）。B 门对照 base。
+- 去重：FATSUEGVOL_d55；SUEGFATVOL_o25（曾否）。非仓位。不碰数据网关。
+- 规则：FAT∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_fat；K20/max_new5。B 对照 base。
+- 脚本：`fatsuegvol_o25_s874.py` / `run_s874.sh`。
+
+## §875 [中线·文献] 单季总资产净利率扩张∩盈余加速∩放量（QNSUEGVOL_h20）— 预注册（2026-11-03 01:23 CST 写于跑任何收益之前）
+- 白话：QN扩张≥0.5（q_npta≥1.0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按扩张（封顶5）排序；持20。
+- 想法 / 文献：EQT∩SUEG 刚否、ROE/ROIC∩SUEG 曾否——对称试 **单季 ROA/总资产净利率扩张∩盈余意外**（硬合取，非 −pct；QN/QNVOL 曾测；≠ROE 差分）。对照 QNVOL/ROESUEGVOL/NPMSUEGVOL。
+- 去重：QNVOL；ROESUEGVOL；ROICSUEGVOL；NPMSUEGVOL。非仓位。不碰数据网关。
+- 规则：QN∩SUEG∩vol；sc_qn；K20/max_new5。新策略无 B。
+- 脚本：`qnsuegvol_s875.py` / `run_s875.sh`。
+
+
 
 
 ## 晚间例行进度（2026-11-02 ~20:48→21:25 CST）
