@@ -9798,3 +9798,29 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：ADMINTDVOL；ADMFATVOL；SEXPETDVOL；FINAETDVOL；ADMINSUEGVOL；ETDVOL。非仓位。不碰数据网关。
 - 规则：ADMIN∩ETD∩vol；sc_admin；K20/max_new5。新策略无 B。
 - 脚本：`adminetdvol_s825.py` / `run_s825.sh`。
+
+
+### §824 OPSUEGVOL_d65_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +6.42 / P20 −0.56 / P21 +6.48 / W0 −1.43 / W00 +2.34 / W1 +3.51 / W2 +3.79 / R12 +4.41（**正段 6/8**）
+- R12 67笔 +4.41% PF1.93 MDD−8.1；N3 148笔 +4.00 PF1.98 MDD−7.9；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥60∩orv≥20)：R12 +4.25 / N3 +4.04 / MDD−7.9 → **B 否**（N3 每笔略降 4.00 vs 4.04；MDD 持平）。
+- → **REJECTED**；线上 mid-op-sue-vol 仍 dtp≥60。解读：再抬到 65 伤近三年每笔——**停 OPSUEGVOL dtp硬抬轴**（≥60 为终点；接 orv≥20 终点）。OP∩SUEG 双轴到站。
+
+### §825 ADMINETDVOL_h20 — REJECT（A 否·正段）
+- 每笔 P19 +0.00 / P20 +0.85 / P21 +3.72 / W0 −5.35 / W00 −1.91 / W1 +7.16 / W2 +2.43 / R12 +4.75（**正段 5/8**）
+- R12 64笔 +4.75% PF2.47 MDD−7.5；N3 175笔 +5.09 PF2.53 MDD−9.6；彩票型
+- 判定 ✓✓✓✗✓ → **否决**。解读：管理费用∩杠杆合取未过 A（正段不足）——对照 SEXPETD/FINAETD 曾否、ADMIN∩SUEG 已上线。
+
+## §826 [中线·文献] 管理费用∩流动资产占比∩放量（ADMINCASVOL_h20）— 预注册（2026-11-02 17:00 CST 写于跑任何收益之前）
+- 白话：ADMIN降幅≥1.0 ∩ CAS升幅≥3.0pp ∩ 放量≥1.5×amt20；按 ADMIN 降幅（封顶10）排序；持20。
+- 想法 / 文献：ADMIN∩ETD 刚否、OP/REV∩SUEG 门槛轴到站——改试 **管理费用∩流动资产结构**（硬合取，非 −pct；EACAS 已上线；SEXPCAS/FINACAS 曾否）。对照 ADMINETDVOL/EACASVOL/ADMINSUEGVOL。
+- 去重：ADMINETDVOL；ADMINTDVOL；ADMFATVOL；SEXPCASVOL；FINACASVOL；EACASVOL。非仓位。不碰数据网关。
+- 规则：ADMIN∩CAS∩vol；sc_admin；K20/max_new5。新策略无 B。
+- 脚本：`admincasvol_s826.py` / `run_s826.sh`。
+
+## §827 [中线·文献] 单季营业利润环比加速∩盈余加速∩放量（QOPSUEGVOL_h20）— 预注册（2026-11-02 17:00 CST 写于跑任何收益之前）
+- 白话：QOP加速≥20 ∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 QOP 加速（封顶100）排序；持20。
+- 想法 / 文献：OP/REV∩SUEG 刚到站——改试 **单季营业利润环比加速∩盈余意外**（硬合取，非 −pct；QOPVOL 曾否、OPSUEG 已上线；q_op_qoq≠累计 op_yoy）。对照 QOPVOL/OPSUEGVOL/SUEGVOL。
+- 去重：QOPVOL；OPSUEGVOL；REVSUEGVOL；SUEGVOL；EAVOL。非仓位。不碰数据网关。
+- 规则：QOP∩SUEG∩vol；sc_qop；K20/max_new5。新策略无 B。
+- 脚本：`qopsuegvol_s827.py` / `run_s827.sh`。
