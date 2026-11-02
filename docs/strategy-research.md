@@ -10212,6 +10212,34 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：BPS∩SUEG∩vol；sc_bps；K20/max_new5。新策略无 B。
 - 脚本：`bpssuegvol_s857.py` / `run_s857.sh`。
 
+### §856 CFPSSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 +5.40 / P20 +1.05 / P21 +7.81 / W0 −1.34 / W00 +3.77 / W1 +3.04 / W2 +4.43 / R12 +5.05（**正段 7/8**）
+- R12 53笔 +5.05% PF2.24 MDD−5.1；N3 117笔 +4.33 PF2.21 MDD−5.4；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +4.75 / N3 +4.29 / MDD−6.2 → **B 过**（R12/N3 每笔均抬，N3 MDD −5.4 更浅）。
+- → **ADOPT**。上线（2026-11-02 22:10 CST）：`mid-cfps-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s856_onboard_metrics.py`；replay 强制覆盖 10批/14只（2026-08-01~11-02）；`safe_backend_restart`。解读：每股现金流∩盈余上抬扣非腿成立——镜像 QS/FCFF_d55。
+
+### §857 BPSSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 +4.64 / P20 −0.96 / P21 +5.26 / W0 −1.54 / W00 +10.14 / W1 +8.84 / W2 +14.72 / R12 +0.95（**正段 6/8**）
+- R12 20笔 +0.95% PF1.15 MDD−6.1；N3 31笔 +4.70 PF1.98 MDD−5.7；彩票型
+- 判定 ✓**✗**✓✓**✗** → **否决**（R12 PF/稳健不足；样本偏稀）。
+- → **REJECTED**。解读：BPS∩SUEG 近一年不够——单腿 BPS/BPSVOL 曾否，合取未救近窗。
+
+## §858 [中线·现役改进] 每股现金流同比加速∩盈余加速∩放量 orv硬抬≥25（CFPSSUEGVOL_o25_h20）— 预注册（2026-11-02 22:10 CST 写于跑任何收益之前）
+- 白话：现役 mid-cfps-sue-vol（§856 已抬至 G dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；CFPS/SUE/dtp/放量/排序不变。同进程 CFPSSUEGVOL_base(orv≥20)。
+- 想法：§856 d55 刚 ADOPT——续试 orv 轴（硬门槛，非 −pct）。B 门对照 base。
+- 去重：CFPSSUEGVOL_d55；QSSUEGVOL_o25；FCFFSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：CFPS∩SUEG(dtp≥55∩orv≥25)∩vol；sc_cfps；K20/max_new5。B 门。
+- 脚本：`cfpssuegvol_o25_s858.py` / `run_s858.sh`。
+
+## §859 [中线·文献] 盈利质量切换∩盈余加速∩放量（EQSSUEGVOL_h20）— 预注册（2026-11-02 22:10 CST 写于跑任何收益之前）
+- 白话：EQS（非经常性损益占比大降且扣非上升）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按研究 sc_eqs 排序；持20。
+- 想法 / 文献：BPS∩SUEG 刚否、CFPS∩SUEG 已上线——对称试 **盈利质量切换∩盈余意外**（硬合取，非 −pct；EQS/EQSVOL 曾否）。对照 EQSVOL/CFPSSUEGVOL/SUEGVOL。
+- 去重：EQSVOL；CFPSSUEGVOL；BPSSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：EQS∩SUEG∩vol；sc_eqs；K20/max_new5。新策略无 B。
+- 脚本：`eqssuegvol_s859.py` / `run_s859.sh`。
+
+
+
 ## 晚间例行进度（2026-11-02 ~20:48→21:25 CST）
 - 健康：8765 `/api/health` 200；5174 200；HEAD 起点 81d94fd0 → 本轮提交后更新；swap used≈9–10G → 串行。
 - 选股：短线最近约 2026-10-30；中线 2026-11-02 ok=4 / data_error=4（预告系含 KeyError top_n）/ no_signal=8 / 周度 not_signal_day=5；长线 3/3 @2026-10-30 ok。
