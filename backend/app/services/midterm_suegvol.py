@@ -2,7 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
-另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol。
+另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol。
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -110,3 +110,44 @@ def suegfatvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         out.append(q)
     out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
     return out
+
+def sexpsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§793 SEXPSUEGVOL：SEXP降幅≥0.35 ∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 SEXP 原始降幅（去封顶）。"""
+    from app.services.midterm_fina_events import (
+        SEXP_CUR_HI,
+        SEXP_CUR_LO,
+        SEXP_PREV_HI,
+        SEXP_PREV_LO,
+        _fina_events,
+    )
+
+    sg = suegvol_candidates(db, as_of)
+    if sg is None:
+        return None
+
+    def passes(cur: float, prev: float):
+        delta = prev - cur
+        ok = (SEXP_CUR_LO <= cur <= SEXP_CUR_HI and SEXP_PREV_LO <= prev <= SEXP_PREV_HI and delta >= 0.35)
+        return ok, delta, {"delta": delta}
+
+    sx = _fina_events(db, as_of, "saleexp_to_gr", passes)
+    if sx is None:
+        return None
+    sx_by = {p["code"]: p for p in sx}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = sx_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["sexp_delta"] = e.get("delta", e.get("score"))
+        q["sexp_cur"] = e.get("cur")
+        q["sexp_prev"] = e.get("prev")
+        try:
+            q["score"] = float(q["sexp_delta"])
+        except (TypeError, ValueError):
+            continue
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+

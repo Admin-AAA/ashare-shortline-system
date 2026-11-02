@@ -9376,3 +9376,29 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：SEXP∩SUEG∩vol；sc_sexp 去封顶；K20/max_new5。新策略无 B。
 - 脚本：`sexpsuegvol_s793.py` / `run_s793.sh`。
 
+### §792 ETDVOL_sc_pct_h20 — REJECT（A 否·近一年；B 亦否）
+- 每笔 P19 +4.22 / P20 +1.16 / P21 +2.98 / W0 −3.58 / W00 −1.46 / W1 +2.88 / W2 +1.50 / R12 +0.86（**正段 6/8**）
+- R12 84笔 +0.86% PF1.19 MDD−10.1；N3 242笔 +1.81 PF1.44 MDD−12.1；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**（近一年）。同进程 base：R12 +2.05 / N3 +2.96 / MDD−11.1 → 每笔劣 → B 亦否。
+- → **REJECTED**；线上 mid-etd-vol 仍按升幅排序。解读：改按 −pct 同 CAS/TAD——伤近一年；**停 ETDVOL −pct排序轴**（接升幅/量能；BS 单腿 −pct 三否）。
+
+### §793 SEXPSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +3.39 / P20 +0.90 / P21 +5.00 / W0 +2.67 / W00 +1.15 / W1 −0.91 / W2 +1.78 / R12 +8.33（**正段 7/8**）
+- R12 47笔 +8.33% PF3.37 MDD−6.7；N3 118笔 +3.62 PF1.96 MDD−7.5；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 12:42 CST）：`mid-sexp-sue-vol`（kind=`sexp_sue_vol`）；`s793_onboard_metrics.py`；replay onboard 14批/31只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：费用∩盈余加速合取成立——对照激励∩SUEG 过稀、费用∩BS 暂缓，非对称。
+
+## §794 [中线·现役改进] 销售费用∩盈余加速∩放量 放量硬抬≥1.8×（SEXPSUEGVOL_v18_h20）— 预注册（2026-11-02 12:35 CST 写于跑任何收益之前）
+- 白话：现役 mid-sexp-sue-vol（SEXP≥0.35∩SUEG∩放量1.5×，按降幅排序）把 **放量硬抬** 到 **≥1.8×amt20**；SEXP/SUEG/排序不变。同进程 SEXPSUEGVOL_base(1.5×)。
+- 想法：§793 刚 ADOPT——试中间档量能硬抬（硬门槛，非 −pct；SEXPVOL/IOVOL/ETDFAT 的 v18 曾 ADOPT）。B 门对照 base。
+- 去重：SEXPVOL_v18；SUEGVOL_v18；SUEGTDVOL_v18；SEXPSUEGVOL。非仓位。不碰数据网关。
+- 规则：(SEXP∩SUEG∩vol1.8) vs (SEXP∩SUEG∩vol1.5)；sc_sexp；K20/max_new5。B 门对照 base。
+- 脚本：`sexpsuegvol_v18_s794.py` / `run_s794.sh`。
+
+## §795 [中线·文献] 财务费用∩盈余加速∩放量（FINASUEGVOL_h20）— 预注册（2026-11-02 12:35 CST 写于跑任何收益之前）
+- 白话：FINA降幅≥门槛 ∩ SUE≥2.2∩G ∩ 放量≥1.5×amt20；按 FINA 降幅排序；持20。
+- 想法 / 文献：销售费用∩SUEG 刚 ADOPT——镜像试 **财务费用∩盈余加速**（硬合取，非 −pct；FINAVOL/SUEGVOL 已上线；≠FINA∩BS 暂缓）。对照 SEXPSUEGVOL/FINACASVOL/FINAETDVOL/SUEGVOL。
+- 去重：SEXPSUEGVOL；FINACASVOL；FINAETDVOL；FINATDVOL；IOSUEGVOL。非仓位。不碰数据网关。
+- 规则：FINA∩SUEG∩vol；sc_fina；K20/max_new5。新策略无 B。
+- 脚本：`finasuegvol_s795.py` / `run_s795.sh`。
+
