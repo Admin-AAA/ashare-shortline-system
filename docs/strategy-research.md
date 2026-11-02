@@ -9824,3 +9824,29 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：QOPVOL；OPSUEGVOL；REVSUEGVOL；SUEGVOL；EAVOL。非仓位。不碰数据网关。
 - 规则：QOP∩SUEG∩vol；sc_qop；K20/max_new5。新策略无 B。
 - 脚本：`qopsuegvol_s827.py` / `run_s827.sh`。
+
+
+### §826 ADMINCASVOL_h20 — REJECT（A 否·正段/质量）
+- 每笔 P19 −0.66 / P20 +0.17 / P21 +3.58 / W0 −5.40 / W00 +0.05 / W1 +0.89 / W2 +3.88 / R12 +1.62（**正段 6/8**）
+- R12 76笔 +1.62% PF1.38 MDD−8.8；N3 206笔 +1.99 PF1.50 MDD−12.4；彩票型
+- 判定 ✓✓✓✗✓ → **否决**。解读：管理费用∩流动资产合取未过 A——对照 SEXPCAS/FINACAS/ADMINETD 曾否、EACAS 已上线。
+
+### §827 QOPSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +10.80 / P20 +0.72 / P21 +5.80 / W0 +0.17 / W00 −0.21 / W1 +3.19 / W2 +0.14 / R12 +1.78（**正段 7/8**）
+- R12 62笔 +1.78% PF1.35 MDD−7.3；N3 132笔 +1.81 PF1.40 MDD−8.9；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 17:10 CST）：`mid-qop-sue-vol`（kind=`qop_sue_vol`）；`s827_onboard_metrics.py`；replay onboard 20批/42只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：单季营业利润环比加速∩盈余合取成立（单腿 QOPVOL 曾否）——镜像 OP/REV∩SUEG。
+
+## §828 [中线·现役改进] 单季营业利润环比加速∩盈余加速∩放量 dtp硬抬≥55（QOPSUEGVOL_d55_h20）— 预注册（2026-11-02 17:10 CST 写于跑任何收益之前）
+- 白话：现役 mid-qop-sue-vol（QOP≥20∩G(dtp≥50)∩SUE≥2.2∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；QOP/SUE/orv/放量/排序不变。同进程 QOPSUEGVOL_base(dtp≥50)。
+- 想法：§827 刚 ADOPT——镜像 OPSUEG/SEXPSUEG/ADMINSUEG 的 d55 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：QOPSUEGVOL；OPSUEGVOL_d55；SEXPSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：QOP∩SUEG(dtp≥55)∩vol；sc_qop；K20/max_new5。B 门。
+- 脚本：`qopsuegvol_d55_s828.py` / `run_s828.sh`。
+
+## §829 [中线·文献] 经营现金流/营收改善∩盈余加速∩放量（OCFSSUEGVOL_h20）— 预注册（2026-11-02 17:10 CST 写于跑任何收益之前）
+- 白话：OCFS升幅≥3.0 ∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 OCFS 升幅（封顶30）排序；持20。
+- 想法 / 文献：QOP∩SUEG 刚 ADOPT——对称试 **现金流质量∩盈余意外**（硬合取，非 −pct；OCFSVOL 曾否、SUEGVOL 已上线）。对照 OCFSVOL/QOPSUEGVOL/SUEGVOL。
+- 去重：OCFSVOL；QOPSUEGVOL；OPSUEGVOL；SUEGVOL；OCSDVOL。非仓位。不碰数据网关。
+- 规则：OCFS∩SUEG∩vol；sc_ocfs；K20/max_new5。新策略无 B。
+- 脚本：`ocfssuegvol_s829.py` / `run_s829.sh`。
