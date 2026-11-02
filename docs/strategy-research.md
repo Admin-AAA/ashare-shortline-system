@@ -10584,12 +10584,42 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：ART∩SUEG∩vol；G.dtp≥55；sc_art；K20/max_new5。B 对照 base。
 - 脚本：`artsuegvol_d55_s884.py` / `run_s884.sh`。
 
+### §884 ARTSUEGVOL_d55_h20 — REJECT（B 门否；冻 dtp≥50）
+- 每笔 P19 +2.02 / P20 −2.79 / P21 +7.07 / W0 +1.74 / W00 +3.62 / W1 +2.00 / W2 +1.80 / R12 +4.25（**正段 7/8**）
+- R12 51笔 +4.25% PF1.97 MDD−5.9；N3 93笔 +3.19 PF1.74 MDD−5.8；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +4.25 / N3 +3.30 MDD−6.0；d55 R12 +4.25 / N3 +3.19 MDD−5.8 → **B 否**（N3 每笔回落）。
+- → **REJECT**。现役 mid-art-sue-vol 维持 §883 口径（G dtp≥50/orv≥20）；**冻 dtp 轴**。解读：ART∩SUEG 抬 dtp 无增量（≠FAT/QN_d55）。
+
+
 ## §885 [中线·文献] 流动资产周转扩张∩盈余加速∩放量（CATSUEGVOL_h20）— 预注册（2026-11-03 02:47 CST 写于跑任何收益之前）
 - 白话：CAT升幅≥0.10（ca_turn≥0.50）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ΔCAT（封顶1.0）排序；持20。
 - 想法 / 文献：ART∩SUEG 刚 ADOPT、AT∩SUEG 刚否——对称试 **流动资产周转∩盈余意外**（硬合取；≠ART/FAT）。对照 CAT/CATVOL/ARTSUEGVOL。
 - 去重：CAT；CATVOL；ARTSUEGVOL；ATSUEGVOL。非仓位。不碰数据网关。
 - 规则：CAT∩SUEG∩vol；sc_cat；K20/max_new5。新策略无 B。
 - 脚本：`catsuegvol_s885.py` / `run_s885.sh`。
+
+### §885 CATSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +1.49 / P20 +1.33 / P21 +10.00 / W0 +1.26 / W00 +0.41 / W1 +0.07 / W2 +4.03 / R12 +4.02（**正段 8/8**）
+- R12 51笔 +4.02% PF1.90 MDD−7.7；N3 97笔 +2.97 PF1.66 MDD−7.7；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 02:58 CST）：`mid-cat-sue-vol`（kind=`cat_sue_vol`）；FINA_FIELDS 增 `ca_turn`；`s885_onboard_metrics.py`；replay onboard 17批/33只（2026-08-01~11-02）；`safe_backend_restart`。解读：流动资产周转∩盈余合取成立（单腿 CAT/CATVOL 曾否；AT∩SUEG 曾否不对称）。
+
+## §886 [中线·现役改进] 流动资产周转扩张∩盈余加速∩放量 dtp硬抬≥55（CATSUEGVOL_d55_h20）— 预注册（2026-11-03 02:58 CST 写于跑任何收益之前）
+- 白话：现役 mid-cat-sue-vol（§885：CAT升幅≥0.10∩SUE≥2.2∩G∩放量≥1.5×，排序Δca_turn封顶1）把 **G 内 dtp 硬抬** 到 **≥55**；CAT/SUE/orv/放量/排序不变。同进程 CATSUEGVOL_base(dtp≥50)。
+- 想法：§885 刚 ADOPT——镜像 FAT/QN_d55；ART_d55 刚 B 否。B 门对照 base。
+- 去重：CATSUEGVOL；ARTSUEGVOL_d55（曾否）。非仓位。不碰数据网关。
+- 规则：CAT∩SUEG∩vol；G.dtp≥55；sc_cat；K20/max_new5。B 对照 base。
+- 脚本：`catsuegvol_d55_s886.py` / `run_s886.sh`。
+
+## §887 [中线·现役改进] 应收周转扩张∩盈余加速∩放量 orv硬抬≥25（ARTSUEGVOL_o25_h20）— 预注册（2026-11-03 02:58 CST 写于跑任何收益之前）
+- 白话：现役 mid-art-sue-vol（§884 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；ART/SUE/dtp/放量/排序不变。同进程 ARTSUEGVOL_base(orv≥20)。
+- 想法：§884 d55 B 否——续试 orv 轴（硬门槛；对照 QN/FAT_o25 刚过、ROY_o25 曾否）。B 门对照 base。
+- 去重：ARTSUEGVOL_d55；CATSUEGVOL。非仓位。不碰数据网关。
+- 规则：ART∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_art；K20/max_new5。B 对照 base。
+- 脚本：`artsuegvol_o25_s887.py` / `run_s887.sh`。
+
+
+
 
 
 
