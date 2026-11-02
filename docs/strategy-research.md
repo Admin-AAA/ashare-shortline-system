@@ -9744,3 +9744,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：REVSUEGVOL_d55；OPSUEGVOL_o25；SEXPSUEGVOL_o25；SUEGTDVOL_o25。非仓位。不碰数据网关。
 - 规则：REV∩SUEG(dtp≥55∩orv≥25)∩vol；sc_rev；K20/max_new5。B 门。
 - 脚本：`revsuegvol_o25_s821.py` / `run_s821.sh`。
+
+
+### §820 OPSUEGVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +4.77 / P20 −0.60 / P21 +7.08 / W0 −0.60 / W00 +3.07 / W1 +3.48 / W2 +2.31 / R12 +4.98（**正段 6/8**）
+- R12 66笔 +4.98% PF1.98 MDD−7.9；N3 145笔 +3.84 PF1.91 MDD−8.8；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥55)：R12 +3.79 / N3 +3.73 / MDD−8.6 → **B 否**（N3 MDD 更深 −8.8 vs −8.6；虽 R12/N3 每笔抬）。
+- → **REJECTED**；线上 mid-op-sue-vol 仍 orv≥20。解读：再抬到 25 伤近三年回撤——**停 OPSUEGVOL orv硬抬轴**（≥20 为终点；dtp 轴可续）。
+
+### §821 REVSUEGVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +6.12 / P20 −0.32 / P21 +7.74 / W0 +1.23 / W00 +3.04 / W1 +3.72 / W2 +1.19 / R12 +4.92（**正段 7/8**）
+- R12 58笔 +4.92% PF2.08 MDD−5.6；N3 134笔 +3.52 PF1.85 MDD−8.9；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥55)：R12 +4.84 / N3 +3.65 / MDD−8.5 → **B 否**（N3 每笔降且 MDD 更深）。
+- → **REJECTED**；线上 mid-rev-sue-vol 仍 orv≥20。解读：再抬到 25 伤近三年——**停 REVSUEGVOL orv硬抬轴**（≥20 为终点；接 OPSUEG orv 终点）。
+
+## §822 [中线·现役改进] 营业利润加速∩盈余加速∩放量 dtp再抬≥60（OPSUEGVOL_d60_h20）— 预注册（2026-11-02 16:35 CST 写于跑任何收益之前）
+- 白话：现役 mid-op-sue-vol（§818 已抬至 G dtp≥55∩orv≥20；§820 o25 刚否）把 **G 内 dtp 再硬抬** 到 **≥60**；OP/SUE/orv/放量/排序不变。同进程 OPSUEGVOL_base(dtp≥55)。
+- 想法：orv 轴刚停——镜像 SEXPSUEG_d60 路径续试 dtp（硬门槛，非 −pct）。B 门对照 base。
+- 去重：OPSUEGVOL_d55；OPSUEGVOL_o25；SEXPSUEGVOL_d60；ADMINSUEGVOL_d60。非仓位。不碰数据网关。
+- 规则：OP∩SUEG(dtp≥60∩orv≥20)∩vol；sc_op；K20/max_new5。B 门。
+- 脚本：`opsuegvol_d60_s822.py` / `run_s822.sh`。
+
+## §823 [中线·现役改进] 营收加速∩盈余加速∩放量 dtp再抬≥60（REVSUEGVOL_d60_h20）— 预注册（2026-11-02 16:35 CST 写于跑任何收益之前）
+- 白话：现役 mid-rev-sue-vol（§819 已抬至 G dtp≥55∩orv≥20；§821 o25 刚否）把 **G 内 dtp 再硬抬** 到 **≥60**；REV/SUE/orv/放量/排序不变。同进程 REVSUEGVOL_base(dtp≥55)。
+- 想法：orv 轴刚停——镜像 OPSUEG_d60 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：REVSUEGVOL_d55；REVSUEGVOL_o25；OPSUEGVOL_d60；SEXPSUEGVOL_d60。非仓位。不碰数据网关。
+- 规则：REV∩SUEG(dtp≥60∩orv≥20)∩vol；sc_rev；K20/max_new5。B 门。
+- 脚本：`revsuegvol_d60_s823.py` / `run_s823.sh`。
