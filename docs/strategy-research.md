@@ -10082,3 +10082,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：ROEVOL；ROICSUEGVOL；NPMSUEGVOL；QSSUEGVOL。非仓位。不碰数据网关。
 - 规则：ROE∩SUEG∩vol；sc_roe；K20/max_new5。新策略无 B。
 - 脚本：`roesuegvol_s847.py` / `run_s847.sh`。
+
+### §846 QSSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 +2.23 / P20 +0.85 / P21 +9.04 / W0 −2.20 / W00 +2.53 / W1 +4.16 / W2 +2.54 / R12 +6.42（**正段 7/8**）
+- R12 64笔 +6.42% PF2.58 MDD−6.4；N3 144笔 +4.69 PF2.31 MDD−7.6；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +5.89 / N3 +4.43 / MDD−7.9 → **B 过**（每笔均抬、回撤不深）。
+- → **ADOPT**。上线（2026-11-02 19:35 CST）：`mid-qs-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s846_onboard_metrics.py`；replay 强制覆盖 20批/56只（2026-08-03~11-02）；`safe_backend_restart`。解读：单季营收∩盈余上抬扣非腿成立——对照 NPM/OCFS_d55 否决不对称。
+
+### §847 ROESUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 +2.31 / P20 −1.43 / P21 +7.17 / W0 −1.03 / W00 +0.84 / W1 +1.55 / W2 +6.10 / R12 +0.99（**正段 6/8**）
+- R12 60笔 +0.99% PF1.17 MDD−9.4；N3 113笔 +2.26 PF1.46 MDD−9.8；彩票型
+- 判定 ✓✗✓✓✓ → **否决**。解读：ROE∩盈余近一年偏弱、质量门未过——对照 ROEVOL/ROIC∩SUEG；**不接 ROE∩SUEG 门槛轴**。
+
+## §848 [中线·现役改进] 单季营收加速∩盈余加速∩放量 orv硬抬≥25（QSSUEGVOL_o25_h20）— 预注册（2026-11-02 19:35 CST 写于跑任何收益之前）
+- 白话：现役 mid-qs-sue-vol（§846 已抬至 G dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；QS/SUE/dtp/放量/排序不变。同进程 QSSUEGVOL_base(orv≥20)。
+- 想法：§846 d55 刚 ADOPT——续试 orv 轴（硬门槛，非 −pct；对照 OCFS_o25 曾 ADOPT）。B 门对照 base。
+- 去重：QSSUEGVOL_d55；OCFSSUEGVOL_o25；NPMSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：QS∩SUEG(dtp≥55∩orv≥25)∩vol；sc_qs；K20/max_new5。B 门。
+- 脚本：`qssuegvol_o25_s848.py` / `run_s848.sh`。
+
+## §849 [中线·文献] 自由现金流每股改善∩盈余加速∩放量（FCFFSUEGVOL_h20）— 预注册（2026-11-02 19:35 CST 写于跑任何收益之前）
+- 白话：FCFF升幅≥0.5元/股（本期 fcff_ps>0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ΔFCFF（封顶5）排序；持20。
+- 想法 / 文献：QS∩SUEG 刚 ADOPT、ROE/ROIC∩SUEG 刚否——对称试 **自由现金流每股∩盈余意外**（硬合取，非 −pct；FCFFVOL 曾否）。对照 FCFF/OCFSSUEGVOL/SUEGVOL。
+- 去重：FCFFVOL；OCFSSUEGVOL；OCFVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：FCFF∩SUEG∩vol；sc_fcff；K20/max_new5。新策略无 B。
+- 脚本：`fcffsuegvol_s849.py` / `run_s849.sh`。

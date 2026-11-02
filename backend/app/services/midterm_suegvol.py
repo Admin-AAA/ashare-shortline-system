@@ -443,7 +443,7 @@ def npmsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return out
 
 def qssuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§844 QSSUEGVOL：QS加速≥20（q_sales_yoy≥20且同比加速≥20）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序加速封顶100。"""
+    """§844/§846 QSSUEGVOL：QS加速≥20（q_sales_yoy≥20且同比加速≥20）∩ SUE≥2.2∩G(dtp≥55)∩放量≥1.5×amt20（§846 dtp硬抬；suegvol 仍≥50/≥20）；排序加速封顶100。"""
     from app.services.midterm_fina_events import _fina_events
 
     sg = suegvol_candidates(db, as_of)
@@ -463,6 +463,13 @@ def qssuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     for p0 in sg:
         e = qs_by.get(p0["code"])
         if e is None:
+            continue
+        # §846：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥55
+        try:
+            dtp = float(p0.get("dt_netprofit_yoy"))
+        except (TypeError, ValueError):
+            continue
+        if dtp < 55.0:
             continue
         q = dict(p0)
         q["q_sales_yoy"] = e.get("q_sales_yoy", e.get("cur"))
