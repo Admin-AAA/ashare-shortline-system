@@ -9326,3 +9326,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：IO∩SUEG∩vol；sc −pct；K20/max_new5。新策略无 B。
 - 脚本：`iosuegvol_s789.py` / `run_s789.sh`。
 
+### §788 CASVOL_sc_pct_h20 — REJECT（A 否·正段；B 亦否）
+- 每笔 P19 +0.84 / P20 −0.29 / P21 +1.71 / W0 −3.22 / W00 −0.71 / W1 +1.53 / W2 −0.51 / R12 +3.08（**正段 4/8**）
+- R12 91笔 +3.08% PF1.80 MDD−7.9；N3 254笔 +1.47 PF1.38 MDD−15.9；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**。同进程 base(按升幅)：R12 +3.62 / N3 +2.11 / MDD−13.1 → 每笔与回撤均劣 → B 亦否。
+- → **REJECTED**；线上 mid-cas-vol 仍按 CAS 升幅排序。解读：改按 −pct 伤正段/近一年——**停 CASVOL −pct排序轴**（接升幅/量能/净利确认）。
+
+### §789 IOSUEGVOL_h20 — REJECT（笔数不足）
+- 每笔 P19 n=0 / P20 +0.47 / P21 −7.90 / W0 −12.41 / W00 n=0 / W1 n=0 / W2 n=0 / R12 +27.98（**正段 2/8**）
+- R12 **1**笔；N3 1笔；样本极稀
+- 判定 ✓✓✓**✗✗** → **否决**（R12 n=1<30）。解读：激励∩盈余加速同 IOSUE——合取过稀；**记候补，勿硬抬/软扩凑笔数**；**激励∩盈余加速双合取∩放量暂缓**（接激励∩BS）。
+
+## §790 [中线·现役改进] 有形资产/负债∩放量 改按−pct排序（TADVOL_sc_pct_h20）— 预注册（2026-11-02 12:18 CST 写于跑任何收益之前）
+- 白话：现役 mid-tad-vol（TAD升幅≥0.25∩放量1.5×，按升幅排序）**事件一字不改**，只把同日排序换成 **−pct**。同进程 TADVOL_base(按升幅)。
+- 想法：CAS −pct 刚否——对称试 **TAD 现役**（增量排序，非 −pct 堆门槛；IO/SEXP 的 −pct 曾成立，CAS 否决不对称可能）。B 门对照 base。
+- 去重：CASVOL_sc_pct；TADVOL_v18；TADVOL_d030；TADETDVOL_sc_etd。非仓位。不碰数据网关。
+- 规则：同样本 TADVOL；sc_−pct vs sc_tad；K20/max_new5。B 门对照 base。
+- 脚本：`tadvol_sc_pct_s790.py` / `run_s790.sh`。
+
+## §791 [中线·文献] 大宗溢价∩流动资产∩放量（BTCASVOL_h20）— 预注册（2026-11-02 12:18 CST 写于跑任何收益之前）
+- 白话：大宗占比≥0.45%∩溢价≥1.35% ∩ CAS升幅≥3.0pp ∩ 放量≥1.5×amt20；按溢价排序；持20。
+- 想法 / 文献：大宗∩TAD/ETD 刚空窗；大宗∩效率刚否——改试 **大宗∩流动资产结构**（硬合取，非 −pct；BT/CASVOL/EACAS 已上线；≠TAD/ETD BS杠杆腿）。对照 BTTADVOL/BTETDVOL/BTFATVOL/CASVOL。
+- 去重：BTTADVOL；BTETDVOL；BTFATVOL；BTTDVOL；IOCASVOL。非仓位。不碰数据网关。
+- 规则：BT∩CAS∩vol；sc_prem；K20/max_new5。新策略无 B。
+- 脚本：`btcasvol_s791.py` / `run_s791.sh`。
+
