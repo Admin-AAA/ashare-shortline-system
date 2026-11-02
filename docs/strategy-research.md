@@ -10172,14 +10172,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +2.37 / N3 +2.50 / MDD−6.7 → **B 否**（N3 每笔 2.49 < base 2.50，且 MDD −6.8 更深）。
 - → **REJECTED**；线上 mid-ocf-sue-vol 仍 dtp≥50。解读：抬到 55 伤近三年——**停 OCFSUEGVOL dtp硬抬轴**（≥50 为终点）。下一试 orv 轴（§854）。
 
-## §854 [中线·现役改进] 经营现金流加速∩盈余加速∩放量 orv硬抬≥25（OCFSUEGVOL_o25_h20）— 预注册占位（晚间例行断点）
-- 白话：现役 mid-ocf-sue-vol（G dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；OCF/SUE/dtp/放量/排序不变。
-- 备注：脚本待写；与 §855 文献腿配对开跑。
+## §854 [中线·现役改进] 经营现金流加速∩盈余加速∩放量 orv硬抬≥25（OCFSUEGVOL_o25_h20）— 预注册（2026-11-02 21:27 CST 写于跑任何收益之前）
+- 白话：现役 mid-ocf-sue-vol（§853 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；OCF/SUE/dtp/放量/排序不变。同进程 OCFSUEGVOL_base(orv≥20)。
+- 想法：§853 d55 刚否——续试 orv 轴（硬门槛，非 −pct；对照 OCFS_o25 曾 ADOPT、FCFF_o25 刚否）。B 门对照 base。
+- 去重：OCFSUEGVOL_d55；OCFSSUEGVOL_o25；FCFFSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：OCF∩SUEG(dtp≥50∩orv≥25)∩vol；sc_ocf；K20/max_new5。B 门。
+- 脚本：`ocfsuegvol_o25_s854.py` / `run_s854.sh`。
 
-## §855 [中线·文献] 下一因子∩SUEG — 预注册占位（晚间例行断点）
-- 备注：从队列取下一未试文献腿（常见 CFPS/BPS/EQ/CASH 等）；与 §854 配对。
+## §855 [中线·文献] 每股现金流同比加速∩盈余加速∩放量（CFPSSUEGVOL_h20）— 预注册（2026-11-02 21:27 CST 写于跑任何收益之前）
+- 白话：CFPS加速≥20pp（cfps_yoy≥20）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按加速（封顶100）排序；持20。
+- 想法 / 文献：OCF∩SUEG 刚 ADOPT、FCFF 双轴到站——对称试 **每股现金流同比加速∩盈余意外**（硬合取，非 −pct；≠OCF 的 ocf_yoy 口径；CFPS/CFPSVOL 曾否）。对照 CFPSVOL/OCFSUEGVOL/FCFFSUEGVOL。
+- 去重：CFPSVOL；OCFSUEGVOL；OCFVOL；FCFFSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：CFPS∩SUEG∩vol；sc_cfps；K20/max_new5。新策略无 B。
+- 脚本：`cfpssuegvol_s855.py` / `run_s855.sh`。
 
 ## 晚间例行进度（2026-11-02 ~20:48→21:25 CST）
 - 健康：8765 `/api/health` 200；5174 200；HEAD 起点 81d94fd0 → 本轮提交后更新；swap used≈9–10G → 串行。
 - 选股：短线最近约 2026-10-30；中线 2026-11-02 ok=4 / data_error=4（预告系含 KeyError top_n）/ no_signal=8 / 周度 not_signal_day=5；长线 3/3 @2026-10-30 ok。
-- 研究：§850 ADOPT；§851 ADOPT；§852 REJECT（FCFF 双轴到站）；§853 REJECT（冻 OCF dtp≥50）；断点 §854/§855。
+- 研究：§850 ADOPT；§851 ADOPT；§852 REJECT（FCFF 双轴到站）；§853 REJECT（冻 OCF dtp≥50）；例行后开跑 §854 OCFSUEG_o25 + §855 CFPSSUEG（2026-11-02 21:27 CST）。
