@@ -10851,12 +10851,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：ROA∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_roa；K20/max_new5。B 对照 base。
 - 脚本：`roasuegvol_o25_s904.py` / `run_s904.sh`。
 
+### §904 ROASUEGVOL_o25_h20 — ADOPT → 已上线（orv 20→25）
+- 每笔 P19 +1.77 / P20 −0.88 / P21 +7.47 / W0 +0.20 / W00 +0.51 / W1 +2.91 / W2 +4.13 / R12 +3.06（**正段 7/8**）
+- R12 59笔 +3.06% PF1.68 MDD−6.8；N3 128笔 +3.27 PF1.8 MDD−7.3；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +2.23 / N3 +3.09 MDD−7.8；o25 R12 +3.06 / N3 +3.27 MDD−7.3 → **B 过**。
+- → **ADOPT**。上线（2026-11-03 04:58 CST）：`mid-roa-sue-vol` orv **≥20→≥25**（dtp仍≥50）；`s904_onboard_metrics.py`；replay 强制覆盖 19批/42只（2026-08-01~11-02）；`safe_backend_restart`。解读：全年ROA∩盈余上抬营收腿成立——镜像 ART/DTEPS_o25（dtp 轴已冻）。ROA∩SUEG 双轴到站（dtp冻/orv≥25）。
+
+
 ## §905 [中线·现役改进] 利息负担/总资本下降∩盈余加速∩放量 orv硬抬≥25（ITCSUEGVOL_o25_h20）— 预注册（2026-11-03 04:47 CST 写于跑任何收益之前）
 - 白话：现役 mid-itc-sue-vol（§903 已抬至 G dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；ITC/SUE/dtp/放量/排序不变。同进程 ITCSUEGVOL_base(orv≥20)。
 - 想法：§903 d55 刚 ADOPT——续试 orv 轴（硬门槛，非 −pct）。B 门对照 base。
 - 去重：ITCSUEGVOL_d55；ROASUEGVOL_o25。非仓位。不碰数据网关。
 - 规则：ITC∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_itc；K20/max_new5。B 对照 base。
 - 脚本：`itcsuegvol_o25_s905.py` / `run_s905.sh`。
+
+### §905 ITCSUEGVOL_o25_h20 — ADOPT → 已上线（orv 20→25）
+- 每笔 P19 +4.65 / P20 +3.00 / P21 +8.88 / W0 +1.27 / W00 +1.02 / W1 +3.83 / W2 +5.71 / R12 +4.32（**正段 8/8**）
+- R12 37笔 +4.32% PF1.86 MDD−7.7；N3 80笔 +4.41 PF2.2 MDD−7.1；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +3.13 / N3 +4.17 MDD−7.4；o25 R12 +4.32 / N3 +4.41 MDD−7.1 → **B 过**。
+- → **ADOPT**。上线（2026-11-03 04:58 CST）：`mid-itc-sue-vol` orv **≥20→≥25**（dtp仍≥55）；`s905_onboard_metrics.py`；replay 强制覆盖 14批/17只（2026-08-01~11-02）；`safe_backend_restart`。解读：利息负担∩盈余上抬营收腿成立——镜像 QN/FAT_o25；ITC∩SUEG 双轴到站。
+
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
