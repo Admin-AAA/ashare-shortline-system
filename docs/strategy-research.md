@@ -10179,12 +10179,38 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：OCF∩SUEG(dtp≥50∩orv≥25)∩vol；sc_ocf；K20/max_new5。B 门。
 - 脚本：`ocfsuegvol_o25_s854.py` / `run_s854.sh`。
 
+### §854 OCFSUEGVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +8.67 / P20 +3.08 / P21 +7.63 / W0 −0.83 / W00 +4.47 / W1 +0.81 / W2 +3.23 / R12 +2.66（**正段 7/8**）
+- R12 49笔 +2.66% PF1.66 MDD−6.4；N3 101笔 +2.31 PF1.61 MDD−7.3；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥50)：R12 +2.37 / N3 +2.50 / MDD−6.7 → **B 否**（N3 每笔低于 base，且 N3 MDD −7.3 更深；R12 虽抬）。
+- → **REJECTED**；线上 mid-ocf-sue-vol 仍 orv≥20。解读：再抬到 25 伤近三年——**停 OCFSUEGVOL orv硬抬轴**（≥20 为终点；接 dtp≥50 终点）。OCF∩SUEG 双轴到站。
+
 ## §855 [中线·文献] 每股现金流同比加速∩盈余加速∩放量（CFPSSUEGVOL_h20）— 预注册（2026-11-02 21:27 CST 写于跑任何收益之前）
 - 白话：CFPS加速≥20pp（cfps_yoy≥20）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按加速（封顶100）排序；持20。
 - 想法 / 文献：OCF∩SUEG 刚 ADOPT、FCFF 双轴到站——对称试 **每股现金流同比加速∩盈余意外**（硬合取，非 −pct；≠OCF 的 ocf_yoy 口径；CFPS/CFPSVOL 曾否）。对照 CFPSVOL/OCFSUEGVOL/FCFFSUEGVOL。
 - 去重：CFPSVOL；OCFSUEGVOL；OCFVOL；FCFFSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
 - 规则：CFPS∩SUEG∩vol；sc_cfps；K20/max_new5。新策略无 B。
 - 脚本：`cfpssuegvol_s855.py` / `run_s855.sh`。
+
+### §855 CFPSSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +7.64 / P20 +1.05 / P21 +7.75 / W0 −1.03 / W00 +3.43 / W1 +3.02 / W2 +4.89 / R12 +4.75（**正段 7/8**）
+- R12 54笔 +4.75% PF2.13 MDD−5.1；N3 122笔 +4.29 PF2.21 MDD−6.2；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 21:45 CST）：`mid-cfps-sue-vol`（kind=`cfps_sue_vol`）；`s855_onboard_metrics.py`；replay onboard 10批/15只（2026-08-01~11-02）；`safe_backend_restart`。解读：每股现金流同比加速∩盈余合取成立（单腿 CFPS/CFPSVOL 曾否；≠OCF∩SUEG）。
+
+## §856 [中线·现役改进] 每股现金流同比加速∩盈余加速∩放量 dtp硬抬≥55（CFPSSUEGVOL_d55_h20）— 预注册（2026-11-02 21:45 CST 写于跑任何收益之前）
+- 白话：现役 mid-cfps-sue-vol（CFPS∩G(dtp≥50)∩SUE≥2.2∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；CFPS/SUE/orv/放量/排序不变。同进程 CFPSSUEGVOL_base(dtp≥50)。
+- 想法：§855 刚 ADOPT——镜像 QS/FCFF 的 d55 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：CFPSSUEGVOL；QSSUEGVOL_d55；FCFFSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：CFPS∩SUEG(dtp≥55)∩vol；sc_cfps；K20/max_new5。B 门。
+- 脚本：`cfpssuegvol_d55_s856.py` / `run_s856.sh`。
+
+## §857 [中线·文献] 每股净资产加速∩盈余加速∩放量（BPSSUEGVOL_h20）— 预注册（2026-11-02 21:45 CST 写于跑任何收益之前）
+- 白话：BPS加速≥20pp（bps_yoy≥20）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按加速（封顶100）排序；持20。
+- 想法 / 文献：CFPS∩SUEG 刚 ADOPT——对称试 **每股净资产加速∩盈余意外**（硬合取，非 −pct；BPS/BPSVOL 曾否）。对照 BPSVOL/CFPSSUEGVOL/SUEGVOL。
+- 去重：BPSVOL；CFPSSUEGVOL；EQTVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：BPS∩SUEG∩vol；sc_bps；K20/max_new5。新策略无 B。
+- 脚本：`bpssuegvol_s857.py` / `run_s857.sh`。
 
 ## 晚间例行进度（2026-11-02 ~20:48→21:25 CST）
 - 健康：8765 `/api/health` 200；5174 200；HEAD 起点 81d94fd0 → 本轮提交后更新；swap used≈9–10G → 串行。

@@ -2,7 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
-另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844/§846 QSSUEGVOL→ mid-qs-sue-vol；§849/§850 FCFFSUEGVOL→ mid-fcff-sue-vol；§851 OCFSUEGVOL→ mid-ocf-sue-vol。
+另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844/§846 QSSUEGVOL→ mid-qs-sue-vol；§849/§850 FCFFSUEGVOL→ mid-fcff-sue-vol；§851 OCFSUEGVOL→ mid-ocf-sue-vol；§855 CFPSSUEGVOL→ mid-cfps-sue-vol。
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -609,3 +609,36 @@ def ocfsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
     return out
 
+def cfpssuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§855 CFPSSUEGVOL：CFPS加速≥20（cfps_yoy≥20）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序加速封顶100。≠ OCFSUEGVOL。"""
+    from app.services.midterm_fina_events import _fina_events
+
+    sg = suegvol_candidates(db, as_of)
+    if sg is None:
+        return None
+
+    def passes(cur: float, prev: float):
+        accel = cur - prev
+        ok = cur >= 20.0 and accel >= 20.0
+        return ok, min(accel, 100.0), {"cfps_yoy": cur, "prev_cfps_yoy": prev, "cfps_accel": accel}
+
+    qs = _fina_events(db, as_of, "cfps_yoy", passes)
+    if qs is None:
+        return None
+    qs_by = {p["code"]: p for p in qs}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = qs_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["cfps_yoy"] = e.get("cfps_yoy", e.get("cur"))
+        q["prev_cfps_yoy"] = e.get("prev_cfps_yoy", e.get("prev"))
+        q["cfps_accel"] = e.get("cfps_accel", e.get("score"))
+        try:
+            q["score"] = float(q["cfps_accel"])
+        except (TypeError, ValueError):
+            continue
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
