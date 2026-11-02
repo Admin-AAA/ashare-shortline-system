@@ -10909,12 +10909,41 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：OPGR∩SUEG∩vol；sc_opgr；K20/max_new5。新策略无 B。
 - 脚本：`opgrsuegvol_s908.py` / `run_s908.sh`。
 
+### §908 OPGRSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +2.87 / P20 −0.33 / P21 +7.49 / W0 −1.59 / W00 +0.34 / W1 +1.87 / W2 +3.32 / R12 +3.37（**正段 6/8**）
+- R12 69笔 +3.37% PF1.77 MDD−9.2；N3 154笔 +2.95 PF1.8 MDD−8.3；彩票型
+- 判定 ✓✓✓✓✓ → **达标**。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 05:25 CST）：`mid-opgr-sue-vol`（kind=`opgr_sue_vol`）；FINA_FIELDS 增 `op_of_gr`；`s908_onboard_metrics.py`；replay onboard 22批/56只（2026-08-01~11-02）；`safe_backend_restart`。解读：营业利润率∩盈余合取成立（NPM/EBIT/GME∩SUEG 曾否不对称）。
+
+
 ## §909 [中线·文献] 权益/总资本升∩盈余加速∩放量（ETCSUEGVOL_h20）— 预注册（2026-11-03 05:17 CST 写于跑任何收益之前）
 - 白话：eqt_to_talcapital 升≥1.0（本期≥30）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶10）排序；持20。
 - 想法 / 文献：DEBT∩SUEG 刚暂缓、ITC∩SUEG 已上线——对称试 **权益占总资本抬升∩盈余意外**（硬合取；字段≠debt_to_assets/int_to_talcap；≠ETD 杠杆）。对照 ETD/DEBTSUEGVOL/ITCSUEGVOL。
 - 去重：ETDVOL；DEBTSUEGVOL；ITCSUEGVOL；EQTSUEGVOL。非仓位。不碰数据网关。去杠杆∩SUEG / 有息负债∩SUEG 仍暂缓。
 - 规则：ETC∩SUEG∩vol；sc_etc；K20/max_new5。新策略无 B。
 - 脚本：`etcsuegvol_s909.py` / `run_s909.sh`。
+
+### §909 ETCSUEGVOL_h20 — REJECT（A 否·R12 PF）
+- 每笔 P19 +5.15 / P20 +3.78 / P21 +8.50 / W0 +2.02 / W00 −0.49 / W1 +5.15 / W2 +5.10 / R12 +1.50（**正段 7/8**）
+- R12 47笔 +1.50% PF1.26 MDD−9.0；N3 87笔 +3.17 PF1.77 MDD−8.2；彩票型
+- 判定 ✓✗✓✓✓ → **否决**（R12 PF<1.3）。解读：权益/总资本∩SUEG 正段可看但近一年 PF 不足——对照 DEBT∩SUEG 暂缓、ITC∩SUEG 成立不外推。
+
+
+
+
+## §910 [中线·现役改进] 营业利润率改善∩盈余加速∩放量 dtp硬抬≥55（OPGRSUEGVOL_d55_h20）— 预注册（2026-11-03 05:28 CST 写于跑任何收益之前）
+- 白话：现役 mid-opgr-sue-vol（§908：op_of_gr改善≥1.0∩SUE≥2.2∩G∩放量，排序Δ封顶10）把 **G 内 dtp 硬抬** 到 **≥55**；OPGR/SUE/orv/放量/排序不变。同进程 OPGRSUEGVOL_base(dtp≥50)。
+- 想法：§908 刚 ADOPT——镜像 EBT/FAT/QN/CAT_d55。B 门对照 base。
+- 去重：OPGRSUEGVOL；NPMSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：OPGR∩SUEG∩vol；G.dtp≥55；sc_opgr；K20/max_new5。B 对照 base。
+- 脚本：`opgrsuegvol_d55_s910.py` / `run_s910.sh`。
+
+## §911 [中线·文献] 速动比率改善∩盈余加速∩放量（QUICKSUEGVOL_h20）— 预注册（2026-11-03 05:28 CST 写于跑任何收益之前）
+- 白话：quick_ratio 改善≥0.10（本期≥0.8）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶2）排序；持20。
+- 想法 / 文献：OPGR∩SUEG 刚 ADOPT、CR/CASH∩SUEG 曾否——对称试 **速动比率改善∩盈余意外**（硬合取；≠流动/现金比率）。对照 QR/CRVOL/CASHSUEGVOL。
+- 去重：QRVOL；CRSUEGVOL；CASHSUEGVOL；SUEGVOL。非仓位。不碰数据网关。去杠杆/有息负债∩SUEG 仍暂缓。
+- 规则：QUICK∩SUEG∩vol；sc_qr；K20/max_new5。新策略无 B。
+- 脚本：`quicksuegvol_s911.py` / `run_s911.sh`。
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
 - 白话：BEPS≥20（basic_eps_yoy 水平）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 basic_eps_yoy（封顶100）排序；持20。
