@@ -8863,3 +8863,17 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 每笔 P19 −2.12 / P20 +2.28 / P21 +4.32 / W0 −2.60 / W00 −1.12 / W1 +7.42 / W2 +0.63 / R12 +0.54（**正段 5/8**）
 - R12 64笔 +0.54% **PF1.12** MDD−10.1；N3 168笔 +3.06 PF1.81 MDD−11.3；彩票型
 - 判定 ✓**✗**✓**✗**✓ → **否决**。解读：有形资产∩周期不镜像净现金∩周期/周转∩周期——近一年 PF/正段不够；**有形资产∩周期效率双合取∩放量暂缓**（接 CAS∩TD）。
+
+## §752 [中线·现役改进] 净现金∩周期∩放量 TD缩短硬抬≥25（NCSTDVOL_td025_h20）— 预注册（2026-11-02 09:03 CST 写于跑任何收益之前）
+- 白话：现役 mid-ncs-td-vol（NCS∩TD≥20∩放量1.5×，按sc_ncs排序）把 **TD缩短硬抬** 到 **≥25**；NCS/放量/排序不变。同进程 NCSTDVOL_base(TD≥20)。
+- 想法：ETDFAT 量能硬抬刚 ADOPT；NCSTD 放量硬抬候补勿凑样——改试 **刚上线净现金∩周期的 TD 腿**（硬门槛，非 −pct；镜像 EATDVOL_td025 曾 ADOPT）。B 门对照 base。
+- 去重：NCSTDVOL_v18；EATDVOL_td025；SUEGTDVOL_i25；TDVOL_i25。非仓位。不碰数据网关。
+- 规则：(NCS∩improve≥25∩vol) vs (NCS∩TD≥20∩vol)；sc_ncs；K20/max_new5。B 门对照 base。
+- 脚本：`ncstdvol_td025_s752.py` / `run_s752.sh`。例行冲突串行让行。
+
+## §753 [中线·文献] 流动资产/负债∩周转效率∩放量（CASFATVOL_h20）— 预注册（2026-11-02 09:03 CST 写于跑任何收益之前）
+- 白话：CAS升幅≥3.0pp ∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20；按 sc_cas 排序；持20。
+- 想法 / 文献：TAD∩TD/CAS∩TD 刚否；ETD∩FAT 已上线且刚抬量——改试 **流动资产∩周转**（硬合取，非 −pct；CASVOL/FATVOL/ETDFAT 已上线）。对照 CASTDVOL/TADTDVOL/ETDFATVOL/CASVOL。
+- 去重：CASTDVOL；TADTDVOL；TADFATVOL；NCSFATVOL；CASVOL。非仓位。不碰数据网关。
+- 规则：CAS∩FAT∩vol；sc_cas；K20/max_new5。新策略无 B。
+- 脚本：`casfatvol_s753.py` / `run_s753.sh`。例行冲突串行让行。
