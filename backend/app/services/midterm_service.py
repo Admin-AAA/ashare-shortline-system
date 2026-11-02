@@ -621,6 +621,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §889 利润总额同比加速∩盈余加速∩放量（scripts/midterm/ebtsuegvol_s889.py EBTSUEGVOL_h20；§282 达标；2026-11-03 上线）
+    "mid-ebt-sue-vol": {
+        "name": "利润总额同比加速∩盈余加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足利润总额同比（ebt_yoy）≥20%且较去年同报告期加速≥20个百分点，与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥20），且信号日成交额≥1.5×前20日均额；按加速（封顶100）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：利润总额加速 × 盈余惊喜加速 × 量能确认（§889；≠营业利润/营收∩SUEG）。",
+        "kind": "ebt_sue_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §735 净负债转净现金∩营业周期∩放量（scripts/midterm/ncstdvol_s735.py NCSTDVOL_h20；§282 达标；2026-11-02 上线）
     "mid-ncs-td-vol": {
         "name": "净负债转净现金∩营业周期∩放量（持20日）",
@@ -2294,6 +2303,21 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+
+        if meta.get("kind") == "ebt_sue_vol":
+            from app.services.midterm_suegvol import ebtsuegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = ebtsuegvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
 
 
 

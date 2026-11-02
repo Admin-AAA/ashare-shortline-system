@@ -10638,12 +10638,42 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：CAT∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_cat；K20/max_new5。B 对照 base。
 - 脚本：`catsuegvol_o25_s888.py` / `run_s888.sh`。
 
+### §888 CATSUEGVOL_o25_h20 — REJECT（B 门否；冻 orv≥20）
+- 每笔 P19 +1.96 / P20 +0.82 / P21 +9.96 / W0 +1.56 / W00 +1.57 / W1 −0.06 / W2 +2.82 / R12 +5.61（**正段 7/8**）
+- R12 44笔 +5.61% PF2.42 MDD−5.5；N3 88笔 +3.40 PF1.78 MDD−7.1；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +5.14 / N3 +3.49 MDD−7.1；o25 R12 +5.61 / N3 +3.40 MDD−7.1 → **B 否**（N3 每笔回落）。
+- → **REJECT**。现役 mid-cat-sue-vol 维持 §886 口径（G dtp≥55/orv≥20）；**冻 orv 轴**。解读：CAT∩SUEG 双轴到站（d55 过 / o25 B 否）。
+
+
 ## §889 [中线·文献] 利润总额同比加速∩盈余加速∩放量（EBTSUEGVOL_h20）— 预注册（2026-11-03 03:13 CST 写于跑任何收益之前）
 - 白话：EBT加速≥20（ebt_yoy≥20）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按加速（封顶100）排序；持20。
 - 想法 / 文献：CAT/ART∩SUEG 刚 ADOPT、单腿 EBT/EBTVOL 曾否——对称试 **利润总额加速∩盈余意外**（硬合取；≠扣非/营收加速现役）。对照 EBT/OPSUEGVOL/REVSUEGVOL。
 - 去重：EBT；EBTVOL；OPSUEGVOL；REVSUEGVOL。非仓位。不碰数据网关。
 - 规则：EBT∩SUEG∩vol；sc_ebt；K20/max_new5。新策略无 B。
 - 脚本：`ebtsuegvol_s889.py` / `run_s889.sh`。
+
+### §889 EBTSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +0.97 / P20 +0.08 / P21 +7.28 / W0 −1.79 / W00 +2.24 / W1 +3.72 / W2 +3.32 / R12 +3.59（**正段 7/8**）
+- R12 69笔 +3.59% PF1.70 MDD−8.9；N3 157笔 +3.55 PF1.86 MDD−8.4；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 03:25 CST）：`mid-ebt-sue-vol`（kind=`ebt_sue_vol`）；FINA_FIELDS 增 `ebt_yoy`；`s889_onboard_metrics.py`；replay onboard 22批/64只（2026-08-01~11-02）；`safe_backend_restart`。解读：利润总额加速∩盈余合取成立（单腿 EBT 曾否；≠现役 OP/REV∩SUEG）。
+
+## §890 [中线·现役改进] 利润总额同比加速∩盈余加速∩放量 dtp硬抬≥55（EBTSUEGVOL_d55_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-ebt-sue-vol（§889：EBT加速≥20∩SUE≥2.2∩G∩放量≥1.5×，排序加速封顶100）把 **G 内 dtp 硬抬** 到 **≥55**；EBT/SUE/orv/放量/排序不变。同进程 EBTSUEGVOL_base(dtp≥50)。
+- 想法：§889 刚 ADOPT——镜像 FAT/QN/CAT_d55（硬门槛）。B 门对照 base。
+- 去重：EBTSUEGVOL；OPSUEGVOL_d55（曾否）。非仓位。不碰数据网关。
+- 规则：EBT∩SUEG∩vol；G.dtp≥55；sc_ebt；K20/max_new5。B 对照 base。
+- 脚本：`ebtsuegvol_d55_s890.py` / `run_s890.sh`。
+
+## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
+- 白话：BEPS≥20（basic_eps_yoy 水平）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 basic_eps_yoy（封顶100）排序；持20。
+- 想法 / 文献：EBT∩SUEG 刚 ADOPT、EPS∩放量曾否、ROY∩SUEG 已上线——对称试 **基本每股收益同比水平∩盈余意外**（硬合取；≠扣非加速/EBT加速）。对照 EPS/EPSVOL/ROYSUEGVOL。
+- 去重：EPS；EPSVOL；ROYSUEGVOL；EBTSUEGVOL。非仓位。不碰数据网关。
+- 规则：BEPS∩SUEG∩vol；sc_beps；K20/max_new5。新策略无 B。
+- 脚本：`bepsuegvol_s891.py` / `run_s891.sh`。
+
+
+
 
 
 
