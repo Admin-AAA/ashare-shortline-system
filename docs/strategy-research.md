@@ -11024,12 +11024,39 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：WC∩SUEG∩vol；sc_wc；K20/max_new5。新策略无 B。
 - 脚本：`wcsuegvol_s916.py` / `run_s916.sh`。
 
+### §916 WCSUEGVOL_h20 — REJECT（A 否·正段）
+- 每笔 P19 −1.91 / P20 −0.18 / P21 +3.92 / W0 −1.51 / W00 +0.30 / W1 +0.45 / W2 +3.68 / R12 +5.00（**正段 5/8**）
+- R12 51笔 +5.00% PF2.05 MDD−6.4；N3 111笔 +3.44 PF1.81 MDD−7.4；彩票型
+- 判定 ✓✓✓✗✓ → **否决**。解读：营运资本∩SUEG 正段不足（P19/P20/W0 负）——对照 QUICK∩SUEG 成立不外推绝对额增速。
+
+
 ## §917 [中线·文献] 总资产同比减速∩盈余加速∩放量（ASSYSUEGVOL_h20）— 预注册（2026-11-03 06:03 CST 写于跑任何收益之前）
 - 白话：assets_yoy 同比降幅≥5pp（本期∈[−30,40]）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按降幅（封顶30）排序；持20。
 - 想法 / 文献：低资产增长文献 × 盈余意外——试 **资产增速回落∩SUEG**（硬合取；≠去杠杆 debt_to_assets；≠有息负债）。对照 ASSY/DEBTSUEGVOL/WCSUEGVOL。
 - 去重：DEBTSUEGVOL；WCSUEGVOL；EQTSUEGVOL；SUEGVOL。非仓位。不碰数据网关。去杠杆∩SUEG 仍暂缓。
 - 规则：ASSY∩SUEG∩vol；sc_assy；K20/max_new5。新策略无 B。
 - 脚本：`assysuegvol_s917.py` / `run_s917.sh`。
+
+### §917 ASSYSUEGVOL_h20 — REJECT（A 否·正段/样本）
+- 每笔 P19 −0.17 / P20 +6.19 / P21 +6.70 / W0 −2.34 / W00 −1.67 / W1 +4.36 / W2 −0.71 / R12 +1.96（**正段 4/8**）
+- R12 21笔 +1.96% PF1.33 MDD−6.5；N3 54笔 +2.11 PF1.47 MDD−6.3；彩票型
+- 判定 ✓✓✓✗✗ → **否决**（正段不足；R12 n<30）。解读：资产增速回落∩SUEG 样本稀且熊市段负——**低资产增长∩SUEG 暂缓**。
+
+
+
+## §918 [中线·文献] 扣非ROA扩张∩盈余加速∩放量（ROADPSUEGVOL_h20）— 预注册（2026-11-03 06:12 CST 写于跑任何收益之前）
+- 白话：roa_dp 扩张≥1.0（本期≥3）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶10）排序；持20。
+- 想法 / 文献：ROA∩SUEG 已上线（roa）、QN∩SUEG 已上线（q_npta）、WC/ASSY∩SUEG 刚否——对称试 **roa_dp 扣非口径扩张∩盈余意外**（硬合取；≠全年roa/单季q_npta）。对照 ROA/QN/ROEDTSUEGVOL。
+- 去重：ROASUEGVOL；QNSUEGVOL；ROEDTSUEGVOL；ROICSUEGVOL。非仓位。不碰数据网关。
+- 规则：ROADP∩SUEG∩vol；sc_roadp；K20/max_new5。新策略无 B。
+- 脚本：`roadpsuegvol_s918.py` / `run_s918.sh`。
+
+## §919 [中线·文献] 非流动资产占比升∩盈余加速∩放量（NCASUEGVOL_h20）— 预注册（2026-11-03 06:12 CST 写于跑任何收益之前）
+- 白话：nca_to_assets 升≥1.0（本期≥30）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶10）排序；持20。
+- 想法 / 文献：CAS∩SUEG（流动资产占比）曾否、ASSY∩SUEG 刚否——对称试 **非流动资产占比抬升∩盈余意外**（硬合取；≠ca_to_assets/资产增速）。对照 CAS/CASSUEGVOL/ASSYSUEGVOL。
+- 去重：CASSUEGVOL；ASSYSUEGVOL；TBASUEGVOL；SUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
+- 规则：NCA∩SUEG∩vol；sc_nca；K20/max_new5。新策略无 B。
+- 脚本：`ncasuegvol_s919.py` / `run_s919.sh`。
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
