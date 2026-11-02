@@ -2,7 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
-另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844/§846 QSSUEGVOL→ mid-qs-sue-vol；§849/§850 FCFFSUEGVOL→ mid-fcff-sue-vol；§851 OCFSUEGVOL→ mid-ocf-sue-vol；§855/§856 CFPSSUEGVOL→ mid-cfps-sue-vol；§861/§862 UDPSUEGVOL→ mid-udp-sue-vol；§869 FCFESUEGVOL→ mid-fcfe-sue-vol。
+另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844/§846 QSSUEGVOL→ mid-qs-sue-vol；§849/§850 FCFFSUEGVOL→ mid-fcff-sue-vol；§851 OCFSUEGVOL→ mid-ocf-sue-vol；§855/§856 CFPSSUEGVOL→ mid-cfps-sue-vol；§861/§862 UDPSUEGVOL→ mid-udp-sue-vol；§869 FCFESUEGVOL→ mid-fcfe-sue-vol；§871 FATSUEGVOL→ mid-fat-sue-vol。
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -722,6 +722,33 @@ def fcfesuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         q["fcfe_dq"] = e.get("fcfe_dq", e.get("score"))
         try:
             q["score"] = float(q["fcfe_dq"])
+        except (TypeError, ValueError):
+            continue
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
+
+def fatsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§871 FATSUEGVOL：FAT升幅≥0.10（fa_turn本期≥0.5）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 ΔFAT封顶2。≠ SUEGFATVOL（后者按SUE排序且升幅≥0.12）。"""
+    from app.services.midterm_fina_events import fat_candidates
+
+    sg = suegvol_candidates(db, as_of)
+    fat = fat_candidates(db, as_of)
+    if sg is None or fat is None:
+        return None
+    fat_by = {p["code"]: p for p in fat}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = fat_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["fat_dq"] = e.get("dq", e.get("score"))
+        q["fat_cur"] = e.get("cur")
+        q["fat_prev"] = e.get("prev")
+        try:
+            q["score"] = float(min(float(q["fat_dq"]), 2.0))
         except (TypeError, ValueError):
             continue
         out.append(q)
