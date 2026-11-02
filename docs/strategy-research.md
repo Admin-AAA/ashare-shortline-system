@@ -9276,3 +9276,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：BT∩TAD∩vol；sc_prem；K20/max_new5。新策略无 B。
 - 脚本：`bttadvol_s785.py` / `run_s785.sh`。
 
+### §784 SUEGFATVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +1.66 / P20 +0.06 / P21 +7.02 / W0 −0.58 / W00 +1.89 / W1 +1.48 / W2 +2.63 / R12 +4.93（**正段 7/8**）
+- R12 62笔 +4.93% PF2.07 MDD−6.7；N3 143笔 +3.31 PF1.79 MDD−8.5；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base：R12 +4.81 / N3 +3.60 / MDD−8.4 → **B 否**（近一年略升、三年每笔 −0.29；回撤略深）。
+- → **REJECTED**；线上 mid-sue-fa-vol 仍 orv≥20。解读：盈余∩周转上抬营收腿不镜像 SUEGTD_o25——**停 SUEGFATVOL orv硬抬轴**（接 dtp/SUE/FAT/量能/排序）。
+
+### §785 BTTADVOL_h20 — REJECT（笔数不足·全窗空）
+- 每笔各窗 n=0（**正段 0/8**）
+- R12 **0**笔；全样本空窗
+- 判定（样本崩）→ **否决**。解读：大宗∩有形资产合取空窗（接 BTFAT/BTTD）；**记候补，勿硬抬/软扩凑笔数**；**大宗∩有形资产双合取∩放量暂缓**（接大宗∩效率）。
+
+## §786 [中线·现役改进] 盈余∩周期∩放量 orv硬抬≥30（SUEGTDVOL_o30_h20）— 预注册（2026-11-02 12:02 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-td-vol（§782 已抬至 G orv≥25∩dtp≥55∩SUE≥2.2∩TD∩放量，按SUE排序）把 **G 内 orv 再硬抬** 到 **≥30**；SUE/dtp/TD/放量/排序不变。同进程 SUEGTDVOL_base(orv≥25)。
+- 想法：§782 o25 刚 ADOPT——续试贴档（硬门槛，非 −pct；对照 EATDVOL_d60 曾连抬）。B 门对照 base。
+- 去重：SUEGTDVOL_o25；SUEGVOL_o25；SUEGFATVOL_o25；EATDVOL_o25。非仓位。不碰数据网关。
+- 规则：(SUEG_orv30∩TD∩vol) vs (SUEG_orv25∩TD∩vol)；sc_sue；K20/max_new5。B 门对照 base。
+- 脚本：`suegtdvol_o30_s786.py` / `run_s786.sh`。
+
+## §787 [中线·文献] 大宗溢价∩股东权益杠杆∩放量（BTETDVOL_h20）— 预注册（2026-11-02 12:02 CST 写于跑任何收益之前）
+- 白话：大宗占比≥0.45%∩溢价≥1.35% ∩ ETD升幅≥0.20 ∩ 放量≥1.5×amt20；按溢价排序；持20。
+- 想法 / 文献：大宗∩TAD 刚空窗；大宗∩FAT/TD 刚否——改试 **大宗∩股东权益杠杆**（硬合取，非 −pct；BT/ETDVOL/ETDFAT 已上线）。对照 BTTADVOL/BTFATVOL/BTTDVOL/ETDVOL。
+- 去重：BTTADVOL；BTFATVOL；BTTDVOL；BTVOL；IOETDVOL。非仓位。不碰数据网关。
+- 规则：BT∩ETD∩vol；sc_prem；K20/max_new5。新策略无 B。
+- 脚本：`btetdvol_s787.py` / `run_s787.sh`。
+
