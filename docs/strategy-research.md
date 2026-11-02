@@ -8776,3 +8776,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：NCSTDVOL；NCSETDVOL；NCSTADVOL；NCSFATVOL；SUEGTADVOL。非仓位。不碰数据网关。
 - 规则：NCS∩SUEG∩vol；sc_ncs；K20/max_new5。新策略无 B。
 - 脚本：`ncssuegvol_s745.py` / `run_s745.sh`。例行约 8:47 冲突时串行让行。
+
+### §744 SUEGFATVOL_v18_h20 — REJECT（A 否·正段；B 亦否）
+- 每笔 P19 +4.35 / P20 −1.96 / P21 +5.60 / W0 −0.75 / W00 −0.65 / W1 +2.12 / W2 +4.24 / R12 +3.28（**正段 5/8**）
+- R12 51笔 +3.28% PF1.62 MDD−5.9；N3 122笔 +3.27 PF1.78 MDD−7.1；稳健型
+- 判定 ✓✓✓**✗**✓ → **否决**。同进程 base：R12 +4.81 / N3 +3.60 → **B 亦否**。
+- → **REJECTED**；线上 mid-sue-fa-vol 仍放量≥1.5×。解读：量能硬抬伤正段并稀释近一年——**停 SUEGFATVOL 放量硬抬轴**（接 SUEGTDVOL_v18）。
+
+### §745 NCSSUEGVOL_h20 — REJECT（笔数不足）
+- 每笔 P19 n=0 / P20 +8.07 / P21 +2.65 / W0 +4.10 / W00 +17.30 / W1 +2.54 / W2 +4.93 / R12 +5.94（**正段 7/8**）
+- R12 **7笔** +5.94% PF3.51 MDD−2.6；N3 **15笔** +4.45 PF3.04 MDD−2.5；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**。解读：净现金∩盈余加速合取过稀——**记候补，勿硬抬/软扩凑笔数**；**净现金∩盈余加速双合取∩放量暂缓**。
+
+## §746 [中线·现役改进] 净现金∩周期∩放量 放量硬抬≥1.8×（NCSTDVOL_v18_h20）— 预注册（2026-11-02 08:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-ncs-td-vol（NCS∩TD∩放量1.5×，按sc_ncs排序）把 **放量硬抬** 到 **≥1.8×amt20**；NCS/TD/排序不变。同进程 NCSTDVOL_base(1.5×)。
+- 想法：SUEG∩效率量能硬抬刚否——改试 **刚上线的净现金∩周期现役**（硬门槛，非 −pct；SEXPVOL/IOVOL 的 v18 曾 ADOPT）。B 门对照 base。
+- 去重：SUEGTDVOL_v18；SUEGFATVOL_v18；TDVOL_v18；NCSTDVOL。非仓位。不碰数据网关。
+- 规则：(NCS∩TD∩vol1.8) vs (NCS∩TD∩vol1.5)；sc_ncs；K20/max_new5。B 门对照 base。
+- 脚本：`ncstdvol_v18_s746.py` / `run_s746.sh`。例行约 8:47 冲突时串行让行。
+
+## §747 [中线·文献] 净负债转净现金∩业绩加速∩放量（NCSEAVOL_h20）— 预注册（2026-11-02 08:25 CST 写于跑任何收益之前）
+- 白话：净负债→净现金 ∩ G（业绩加速，dtp≥50）∩ 放量≥1.5×amt20；按 sc_ncs 排序；持20。
+- 想法 / 文献：NCS∩SUEG 刚候补勿凑样——改试 **净现金∩业绩加速**（无 SUE 门槛，硬合取，非 −pct；EAVOL/NCSTDVOL/EATD 已上线）。对照 NCSSUEGVOL/EATDVOL/EAVOL/NCSTDVOL。
+- 去重：NCSSUEGVOL；EATADVOL；EAETDVOL；EAFATVOL；NCSTDVOL。非仓位。不碰数据网关。
+- 规则：NCS∩G∩vol；sc_ncs；K20/max_new5。新策略无 B。
+- 脚本：`ncseavol_s747.py` / `run_s747.sh`。例行约 8:47 冲突时串行让行。
