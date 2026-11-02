@@ -10822,12 +10822,41 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：ROA∩SUEG∩vol；G.dtp≥55；sc_roa；K20/max_new5。B 对照 base。
 - 脚本：`roasuegvol_d55_s902.py` / `run_s902.sh`。
 
+### §902 ROASUEGVOL_d55_h20 — REJECT（A 否；冻 dtp≥50）
+- 每笔 P19 −1.18 / P20 −1.04 / P21 +7.94 / W0 −1.01 / W00 +0.20 / W1 +2.42 / W2 +4.68 / R12 +2.55（**正段 5/8**）
+- R12 63笔 +2.55% PF1.53 MDD−7.6；N3 132笔 +3.03 PF1.71 MDD−7.4；彩票型
+- 判定 ✓✓✓**✗**✓ → **A 否**。B门对照 base: R12 +2.23 / N3 +3.09 MDD−7.8；d55 R12 +2.55 / N3 +3.03 MDD−7.4 → **B 亦否**（N3 每笔回落）。
+- → **REJECT**。现役 mid-roa-sue-vol 维持 §900 口径（G dtp≥50/orv≥20）；**冻 dtp 轴**。解读：全年ROA∩SUEG 抬 dtp 无增量（≠QN/EBT_d55）。
+
+
 ## §903 [中线·现役改进] 利息负担/总资本下降∩盈余加速∩放量 dtp硬抬≥55（ITCSUEGVOL_d55_h20）— 预注册（2026-11-03 04:33 CST 写于跑任何收益之前）
 - 白话：现役 mid-itc-sue-vol（§901：ITC降幅≥1.0∩SUE≥2.2∩G∩放量，排序降幅封顶10）把 **G 内 dtp 硬抬** 到 **≥55**；ITC/SUE/orv/放量/排序不变。同进程 ITCSUEGVOL_base(dtp≥50)。
 - 想法：§901 刚 ADOPT——镜像 ROA/EBT_d55。B 门对照 base。
 - 去重：ITCSUEGVOL；ROASUEGVOL_d55；FINASUEGVOL。非仓位。不碰数据网关。
 - 规则：ITC∩SUEG∩vol；G.dtp≥55；sc_itc；K20/max_new5。B 对照 base。
 - 脚本：`itcsuegvol_d55_s903.py` / `run_s903.sh`。
+
+### §903 ITCSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 +4.65 / P20 +2.44 / P21 +9.09 / W0 +0.83 / W00 +0.08 / W1 +3.83 / W2 +7.44 / R12 +3.13（**正段 8/8**）
+- R12 44笔 +3.13% PF1.61 MDD−8.1；N3 89笔 +4.17 PF2.12 MDD−7.4；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +2.58 / N3 +3.87 MDD−7.5；d55 R12 +3.13 / N3 +4.17 MDD−7.4 → **B 过**。
+- → **ADOPT**。上线（2026-11-03 04:44 CST）：`mid-itc-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s903_onboard_metrics.py`；replay 强制覆盖 16批/21只（2026-08-01~11-02）；`safe_backend_restart`。解读：利息负担∩盈余上抬扣非腿成立——镜像 EBT/FAT/QN_d55（≠ROA_d55 A否）。
+
+
+
+## §904 [中线·现役改进] ROA同比扩张∩盈余加速∩放量 orv硬抬≥25（ROASUEGVOL_o25_h20）— 预注册（2026-11-03 04:47 CST 写于跑任何收益之前）
+- 白话：现役 mid-roa-sue-vol（§902 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；ROA/SUE/dtp/放量/排序不变。同进程 ROASUEGVOL_base(orv≥20)。
+- 想法：§902 d55 刚否——续试 orv 轴（硬门槛，非 −pct；对照 ART/DTEPS_o25 曾 ADOPT）。B 门对照 base。
+- 去重：ROASUEGVOL_d55；ITCSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：ROA∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_roa；K20/max_new5。B 对照 base。
+- 脚本：`roasuegvol_o25_s904.py` / `run_s904.sh`。
+
+## §905 [中线·现役改进] 利息负担/总资本下降∩盈余加速∩放量 orv硬抬≥25（ITCSUEGVOL_o25_h20）— 预注册（2026-11-03 04:47 CST 写于跑任何收益之前）
+- 白话：现役 mid-itc-sue-vol（§903 已抬至 G dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；ITC/SUE/dtp/放量/排序不变。同进程 ITCSUEGVOL_base(orv≥20)。
+- 想法：§903 d55 刚 ADOPT——续试 orv 轴（硬门槛，非 −pct）。B 门对照 base。
+- 去重：ITCSUEGVOL_d55；ROASUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：ITC∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_itc；K20/max_new5。B 对照 base。
+- 脚本：`itcsuegvol_o25_s905.py` / `run_s905.sh`。
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
