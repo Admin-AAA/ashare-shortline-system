@@ -48,5 +48,5 @@ for p in "P19 2019:2019-01-01:2020-04-29" "P20 2020:2020-01-01:2021-04-30" "P21 
   run_ph "$n" "$a" "$b" || { ec=$?; [ "$ec" = "99" ] && echo "STOPPED_FOR_MORNING_S899" | tee -a "$LOG"; exit 0; }
 done
 echo "DONE_S899 $(date)" | tee -a "$LOG"
-"$PY" crsuegvol_s899.py "$OUT" CRSUEGVOL_h20 25 | tee "$OUTD/eval.txt"
+"$PY" s286_287_eval.py "$OUT" CRSUEGVOL_h20 25 | tee "$OUTD/eval.txt"
 

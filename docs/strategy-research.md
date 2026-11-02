@@ -10766,12 +10766,39 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：IDE∩SUEG∩vol；sc_ide；K20/max_new5。新策略无 B。
 - 脚本：`idesuegvol_s898.py` / `run_s898.sh`。
 
+### §898 IDESUEGVOL_h20 — REJECT（A 否·样本/正段）
+- 每笔 P19 n=0 / P20 −0.01 / P21 +12.84 / W0 −4.28 / W00 −7.47 / W1 +13.33 / W2 +6.97 / R12 +7.27（**正段 4/8**）
+- R12 17笔 +7.27% PF2.81 MDD−2.7；N3 35笔 +8.02 PF3.94 MDD−3.2；稳健型
+- 判定 ✓✓✓**✗✗** → **否决**（R12 n<30；正段不足；W00 <−5）。解读：IDE∩SUEG 近一年/三年强但样本稀、熊市段砸——对照 IDE/INTD∩SUEG；**有息杠杆∩SUEG 暂缓**。
+
+
 ## §899 [中线·文献] 流动比率改善∩盈余加速∩放量（CRSUEGVOL_h20）— 预注册（2026-11-03 04:08 CST 写于跑任何收益之前）
 - 白话：CR（current_ratio 升幅≥0.20，本期∈[0.5,5]、去年∈[0.3,8]）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶2.0）排序；持20。
 - 想法 / 文献：INTD/IDE∩SUEG 同批；流动性∩放量族曾暂停、CASH∩SUEG 曾否——对称试 **流动比率∩盈余意外**（硬合取；≠现金比率/速动）。对照 CR/CRVOL/CASHSUEGVOL。
 - 去重：CRVOL；CASHSUEGVOL；QRVOL；IDESUEGVOL。非仓位。不碰数据网关。
 - 规则：CR∩SUEG∩vol；sc_cr；K20/max_new5。新策略无 B。
 - 脚本：`crsuegvol_s899.py` / `run_s899.sh`。
+
+### §899 CRSUEGVOL_h20 — REJECT（A 否·样本）
+- 每笔 P19 +0.01 / P20 +5.40 / P21 +5.56 / W0 +2.36 / W00 −2.86 / W1 +8.24 / W2 +1.63 / R12 +3.02（**正段 7/8**）
+- R12 26笔 +3.02% PF1.66 MDD−7.8；N3 45笔 +3.90 PF2.05 MDD−7.5；彩票型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 n<30）。解读：流动比率∩SUEG 方向尚可但样本不足——对照 CRVOL/CASH∩SUEG；**流动性比率∩SUEG 暂缓**。
+
+
+
+## §900 [中线·文献] ROA同比扩张∩盈余加速∩放量（ROASUEGVOL_h20）— 预注册（2026-11-03 04:20 CST 写于跑任何收益之前）
+- 白话：ROA同比扩张≥1.0pp（本期 roa≥3）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δroa（封顶10）排序；持20。
+- 想法 / 文献：IDE/CR∩SUEG 刚否（样本稀）——改试 **全年ROA扩张∩盈余意外**（硬合取；≠单季 q_npta/QN∩SUEG 已上线）。对照 ROA/QNSUEGVOL/ROESUEGVOL。
+- 去重：QNSUEGVOL；ROESUEGVOL；ROYSUEGVOL；QROESUEGVOL。非仓位。不碰数据网关。
+- 规则：ROA∩SUEG∩vol；sc_roa；K20/max_new5。新策略无 B。
+- 脚本：`roasuegvol_s900.py` / `run_s900.sh`。
+
+## §901 [中线·文献] 利息负担/总资本下降∩盈余加速∩放量（ITCSUEGVOL_h20）— 预注册（2026-11-03 04:20 CST 写于跑任何收益之前）
+- 白话：int_to_talcap 同比下降≥1.0pp（去年≥1.0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按降幅（封顶10）排序；持20。
+- 想法 / 文献：有息杠杆∩SUEG 刚暂缓——改试 **利息负担率下降∩盈余意外**（硬合取；字段≠interestdebt/EBITDA）。对照 ITC/FINASUEGVOL/INTDSUEGVOL。
+- 去重：FINASUEGVOL；INTDSUEGVOL；IDESUEGVOL；ROASUEGVOL。非仓位。不碰数据网关。
+- 规则：ITC∩SUEG∩vol；sc_itc；K20/max_new5。新策略无 B。
+- 脚本：`itcsuegvol_s901.py` / `run_s901.sh`。
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
