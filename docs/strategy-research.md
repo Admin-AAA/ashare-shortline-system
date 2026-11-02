@@ -11078,12 +11078,39 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：PTO∩SUEG∩vol；sc_pto；K20/max_new5。新策略无 B。
 - 脚本：`ptosuegvol_s920.py` / `run_s920.sh`。
 
+### §920 PTOSUEGVOL_h20 — REJECT（A 否·样本崩）
+- 每笔 P19 n=0 / P20 −2.53 / P21 +1.07 / W0 −4.16 / W00 +7.82 / W1 n=0 / W2 −6.22 / R12 −7.58（**正段 2/8**）
+- R12 8笔 −7.58% PF0.0 MDD−3.8；N3 11笔 −7.21 PF0.06 MDD−4.1；彩票型
+- 判定 ✗✗✓✗✗ → **否决**（样本崩）。解读：营业利润/利润总额∩SUEG 过稀——**profit_to_op∩SUEG 暂缓**（勿硬抬凑样）。
+
+
 ## §921 [中线·文献] 单季扣非ROE扩张∩盈余加速∩放量（QDTROESUEGVOL_h20）— 预注册（2026-11-03 06:20 CST 写于跑任何收益之前）
 - 白话：q_dt_roe 扩张≥1.0（本期≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶10）排序；持20。
 - 想法 / 文献：QROE∩SUEG 曾否、ROY/QN 已上线——对称试 **单季扣非ROE扩张∩盈余意外**（硬合取；字段≠q_roe；corr 高但口径扣非）。对照 QROESUEGVOL/QNSUEGVOL/ROYSUEGVOL。
 - 去重：QROESUEGVOL；QNSUEGVOL；ROYSUEGVOL；ROEDTSUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
 - 规则：QDTROE∩SUEG∩vol；sc_qdtroe；K20/max_new5。新策略无 B。
 - 脚本：`qdtroesuegvol_s921.py` / `run_s921.sh`。
+
+### §921 QDTROESUEGVOL_h20 — REJECT（A 否·正段/R12）
+- 每笔 P19 +9.00 / P20 −0.96 / P21 +5.00 / W0 −0.84 / W00 +1.01 / W1 −1.10 / W2 +8.30 / R12 −2.02（**正段 4/8**）
+- R12 42笔 −2.02% PF0.64 MDD−7.3；N3 95笔 +0.97 PF1.21 MDD−6.7；彩票型
+- 判定 ✗✗✓✗✓ → **否决**。解读：单季扣非ROE∩SUEG 同 QROE∩SUEG——正段不足且近一年负；**q_dt_roe∩SUEG 暂缓**。
+
+
+
+## §922 [中线·文献] 销售费用率下降∩盈余加速∩放量（EXPSUEGVOL_h20）— 预注册（2026-11-03 06:29 CST 写于跑任何收益之前）
+- 白话：expense_of_sales 同比降≥1.0（去年≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按降幅（封顶10）排序；持20。
+- 想法 / 文献：SEXPSUEG（saleexp_to_gr）已上线、PTO/QDTROE 刚否——对称试 **expense_of_sales 口径费用率下降∩盈余意外**（硬合取；字段≠saleexp_to_gr）。对照 SEXPSUEGVOL/ADMINSUEGVOL/PTOSUEGVOL。
+- 去重：SEXPSUEGVOL；ADMINSUEGVOL；QSEXPSUEG；SUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
+- 规则：EXP∩SUEG∩vol；sc_exp；K20/max_new5。新策略无 B。
+- 脚本：`expsuegvol_s922.py` / `run_s922.sh`。
+
+## §923 [中线·文献] 加权ROE扩张∩盈余加速∩放量（ROEWAASUEGVOL_h20）— 预注册（2026-11-03 06:29 CST 写于跑任何收益之前）
+- 白话：roe_waa 扩张≥1.0（本期≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶10）排序；持20。
+- 想法 / 文献：ROY（roe_yoy）已上线、ROEDT/QDTROE∩SUEG 刚否——对称试 **加权ROE水平扩张∩盈余意外**（硬合取；≠roe_yoy/roe_dt）。对照 ROY/ROEDTSUEGVOL/QROESUEGVOL。
+- 去重：ROYSUEGVOL；ROEDTSUEGVOL；QROESUEGVOL；ROICSUEGVOL。非仓位。不碰数据网关。
+- 规则：ROEWAA∩SUEG∩vol；sc_roewaa；K20/max_new5。新策略无 B。
+- 脚本：`roewaasuegvol_s923.py` / `run_s923.sh`。
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
