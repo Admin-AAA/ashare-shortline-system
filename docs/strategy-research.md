@@ -9301,3 +9301,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：BT∩ETD∩vol；sc_prem；K20/max_new5。新策略无 B。
 - 脚本：`btetdvol_s787.py` / `run_s787.sh`。
 
+### §786 SUEGTDVOL_o30_h20 — REJECT（A 过；B 否）
+- 每笔 P19 n=0 / P20 +1.54 / P21 +5.63 / W0 +2.82 / W00 +3.41 / W1 −2.57 / W2 +0.65 / R12 +11.44（**正段 6/8**）
+- R12 36笔 +11.44% PF5.56 MDD−3.0；N3 84笔 +4.28 PF2.19 MDD−9.2；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥25)：R12 +10.80 / N3 +4.59 / MDD−7.6 → **B 否**（近一年抬、三年每笔 −0.31 且回撤更深）。
+- → **REJECTED**；线上 mid-sue-td-vol 仍 orv≥25。解读：再抬到 30 伤三年——**停 SUEGTDVOL orv硬抬轴**（≥25 为终点；接 dtp/SUE/TD/量能/排序）。
+
+### §787 BTETDVOL_h20 — REJECT（笔数不足·全窗空）
+- 每笔各窗 n=0（**正段 0/8**）
+- R12 **0**笔；全样本空窗
+- 判定（样本崩）→ **否决**。解读：大宗∩股东权益同∩TAD——空窗；**记候补，勿硬抬/软扩凑笔数**；**大宗∩BS杠杆双合取∩放量暂缓**（TAD/ETD；接大宗∩效率）。
+
+## §788 [中线·现役改进] 流动资产∩放量 改按−pct排序（CASVOL_sc_pct_h20）— 预注册（2026-11-02 12:11 CST 写于跑任何收益之前）
+- 白话：现役 mid-cas-vol（CAS升幅≥3.0pp∩放量1.5×，按CAS升幅排序）**事件一字不改**，只把同日排序换成 **−pct**。同进程 CASVOL_base(按升幅)。
+- 想法：SUEGTD orv 刚终点；大宗∩BS 刚空窗——改试 **CAS 现役另一键排序**（增量排序，非 −pct 堆门槛；SEXPVOL/IOVOL 的 −pct 曾成立）。B 门对照 base。
+- 去重：CASVOL_d40；CASVOL_v18；EACASVOL_sc_cas；CASVOL。非仓位。不碰数据网关。
+- 规则：同样本 CASVOL；sc_−pct vs sc_cas；K20/max_new5。B 门对照 base。
+- 脚本：`casvol_sc_pct_s788.py` / `run_s788.sh`。
+
+## §789 [中线·文献] 激励期权∩盈余加速∩放量（IOSUEGVOL_h20）— 预注册（2026-11-02 12:11 CST 写于跑任何收益之前）
+- 白话：激励期权事件 ∩ SUE≥2.2∩G ∩ 放量≥1.5×amt20；按 −pct 排序；持20。
+- 想法 / 文献：激励∩BS/效率刚候补或暂缓；IOSUE（无加速无放量）曾过稀——改试 **激励∩盈余加速∩放量**（硬合取，非 −pct；IOVOL/SUEGVOL 已上线）。对照 IOSUE/IOCASVOL/SUEGVOL/IOVOL。
+- 去重：IOSUE；IOCASVOL；IOTADVOL；IOETDVOL；SUEGDINCVOL。非仓位。不碰数据网关。
+- 规则：IO∩SUEG∩vol；sc −pct；K20/max_new5。新策略无 B。
+- 脚本：`iosuegvol_s789.py` / `run_s789.sh`。
+
