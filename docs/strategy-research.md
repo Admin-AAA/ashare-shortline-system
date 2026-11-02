@@ -9200,3 +9200,29 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：DINCETDVOL；DINCCASVOL；DINCFATVOL；DINCTDVOL；TADETDVOL。非仓位。不碰数据网关。
 - 规则：DINC∩TAD∩vol；sc_inc；K20/max_new5。新策略无 B。
 - 脚本：`dinctadvol_s779.py` / `run_s779.sh`。
+
+### §778 SUEGVOL_s23_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +1.96 / P20 +0.31 / P21 +7.30 / W0 −1.94 / W00 +2.27 / W1 +3.11 / W2 +3.36 / R12 +4.49（**正段 7/8**）
+- R12 70笔 +4.49% PF2.05 MDD−10.2；N3 163笔 +3.77 PF2.06 MDD−8.9；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base：R12 +4.49 / N3 +3.94 / MDD−8.9 → **B 否**（近一年持平、三年每笔 −0.17）。
+- → **REJECTED**；线上 mid-sue-accel-vol 仍 SUE≥2.2。解读：贴档 2.3 不镜像 s22——近一年无增益、三年略逊；**停 SUEGVOL SUE硬抬轴**（≥2.2 为终点；接 s25）。
+
+### §779 DINCTADVOL_h20 — REJECT（笔数不足）
+- 每笔 P19 −12.64 / P20 +1.28 / P21 +0.19 / W0 +2.73 / W00 −4.94 / W1 +5.43 / W2 +14.36 / R12 +30.66（**正段 6/8**）
+- R12 **7**笔 +30.66% PF99 MDD−1.8；N3 17笔 +17.92 PF17.73 MDD−1.8；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 n=7<30）。解读：股利∩有形资产杠杆同∩CAS/ETD——指标虚高但样本稀；**记候补，勿硬抬/软扩凑笔数**；**股利∩BS杠杆双合取∩放量暂缓**（CAS/ETD/TAD 三腿；接预告族∩BS）。
+
+## §780 [中线·现役改进] 盈余加速∩放量 orv硬抬≥25（SUEGVOL_o25_h20）— 预注册（2026-11-02 11:27 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-accel-vol（SUE≥2.2∩G(orv≥20)∩放量1.5×，按SUE排序）把 **G 内 orv 硬抬** 到 **≥25**；SUE/dtp/加速/放量/排序不变。同进程 SUEGVOL_base(orv≥20)。
+- 想法：SUE 硬抬刚终点于 2.2；EACAS/EATD 的 orv 硬抬曾否——对称试 **SUEG 单腿营收腿硬抬**（硬门槛，非 −pct；orv 软扩曾 B 否，硬抬未试）。B 门对照 base。
+- 去重：SUEGVOL_o15；SUEGVOL_s23；EACASVOL_o25；EATDVOL_o25。非仓位。不碰数据网关。
+- 规则：(SUE≥2.2∩G_orv25∩vol) vs (SUE≥2.2∩G_orv20∩vol)；sc_sue；K20/max_new5。B 门对照 base。
+- 脚本：`suegvol_o25_s780.py` / `run_s780.sh`。
+
+## §781 [中线·文献] 激励期权∩有形资产杠杆∩放量（IOTADVOL_h20）— 预注册（2026-11-02 11:27 CST 写于跑任何收益之前）
+- 白话：激励期权事件 ∩ TAD升幅≥0.20 ∩ 放量≥1.5×amt20；按 −pct 排序；持20。
+- 想法 / 文献：股利∩TAD/CAS/ETD 刚候补；激励∩CAS 刚候补——改试 **激励∩有形资产杠杆**（硬合取，非 −pct；IOVOL/TADVOL/TADETD 已上线；≠IOTD/IOFAT 效率腿）。对照 IOCASVOL/DINCTADVOL/IOTDVOL/TADVOL。
+- 去重：IOCASVOL；DINCTADVOL；IOTDVOL；IOFATVOL；TADETDVOL。非仓位。不碰数据网关。
+- 规则：IO∩TAD∩vol；sc −pct；K20/max_new5。新策略无 B。
+- 脚本：`iotadvol_s781.py` / `run_s781.sh`。
+
