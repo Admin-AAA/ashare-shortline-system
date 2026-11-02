@@ -11051,12 +11051,39 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：ROADP∩SUEG∩vol；sc_roadp；K20/max_new5。新策略无 B。
 - 脚本：`roadpsuegvol_s918.py` / `run_s918.sh`。
 
+### §918 ROADPSUEGVOL_h20 — REJECT（A 否·正段）
+- 每笔 P19 +2.25 / P20 −0.50 / P21 +7.38 / W0 −0.50 / W00 −0.08 / W1 +0.23 / W2 +5.82 / R12 +3.36（**正段 5/8**）
+- R12 55笔 +3.36% PF1.73 MDD−6.7；N3 119笔 +3.09 PF1.77 MDD−6.4；稳健型
+- 判定 ✓✓✓✗✓ → **否决**。解读：roa_dp∩SUEG 正段不足——对照 ROA∩SUEG 成立不外推扣非口径。
+
+
 ## §919 [中线·文献] 非流动资产占比升∩盈余加速∩放量（NCASUEGVOL_h20）— 预注册（2026-11-03 06:12 CST 写于跑任何收益之前）
 - 白话：nca_to_assets 升≥1.0（本期≥30）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶10）排序；持20。
 - 想法 / 文献：CAS∩SUEG（流动资产占比）曾否、ASSY∩SUEG 刚否——对称试 **非流动资产占比抬升∩盈余意外**（硬合取；≠ca_to_assets/资产增速）。对照 CAS/CASSUEGVOL/ASSYSUEGVOL。
 - 去重：CASSUEGVOL；ASSYSUEGVOL；TBASUEGVOL；SUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
 - 规则：NCA∩SUEG∩vol；sc_nca；K20/max_new5。新策略无 B。
 - 脚本：`ncasuegvol_s919.py` / `run_s919.sh`。
+
+### §919 NCASUEGVOL_h20 — REJECT（A 否·R12 PF）
+- 每笔 P19 +3.52 / P20 +2.32 / P21 +4.98 / W0 +2.51 / W00 +2.20 / W1 +6.37 / W2 −3.82 / R12 +1.05（**正段 7/8**）
+- R12 33笔 +1.05% PF1.17 MDD−7.0；N3 60笔 +1.75 PF1.34 MDD−6.8；彩票型
+- 判定 ✓✗✓✓✓ → **否决**（R12 PF<1.3）。解读：非流动资产占比∩SUEG 近一年弱——对照 CAS∩SUEG 曾否。
+
+
+
+## §920 [中线·文献] 营业利润/利润总额改善∩盈余加速∩放量（PTOSUEGVOL_h20）— 预注册（2026-11-03 06:20 CST 写于跑任何收益之前）
+- 白话：profit_to_op 改善≥1.0（本期≥50）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶10）排序；持20。
+- 想法 / 文献：OPGR/NPM∩SUEG 路径分叉、ROADP/NCA 刚否——试 **营业利润占利润总额抬升∩盈余意外**（硬合取；≠op_of_gr/净利率）。对照 OPGR/PTG/EBITSUEGVOL。
+- 去重：OPGRSUEGVOL；PTGSUEGVOL；EBITSUEGVOL；NPMSUEGVOL。非仓位。不碰数据网关。
+- 规则：PTO∩SUEG∩vol；sc_pto；K20/max_new5。新策略无 B。
+- 脚本：`ptosuegvol_s920.py` / `run_s920.sh`。
+
+## §921 [中线·文献] 单季扣非ROE扩张∩盈余加速∩放量（QDTROESUEGVOL_h20）— 预注册（2026-11-03 06:20 CST 写于跑任何收益之前）
+- 白话：q_dt_roe 扩张≥1.0（本期≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶10）排序；持20。
+- 想法 / 文献：QROE∩SUEG 曾否、ROY/QN 已上线——对称试 **单季扣非ROE扩张∩盈余意外**（硬合取；字段≠q_roe；corr 高但口径扣非）。对照 QROESUEGVOL/QNSUEGVOL/ROYSUEGVOL。
+- 去重：QROESUEGVOL；QNSUEGVOL；ROYSUEGVOL；ROEDTSUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
+- 规则：QDTROE∩SUEG∩vol；sc_qdtroe；K20/max_new5。新策略无 B。
+- 脚本：`qdtroesuegvol_s921.py` / `run_s921.sh`。
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
