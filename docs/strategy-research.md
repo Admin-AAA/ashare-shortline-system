@@ -9610,3 +9610,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：ADMINSUEGVOL_o30；ADMINSUEGVOL_d60；SEXPSUEGVOL_o35。非仓位。不碰数据网关。
 - 规则：(ADMIN∩SUEG_dtp55_orv35∩vol) vs (ADMIN∩SUEG_dtp55_orv30∩vol)；sc_admin；K20/max_new5。B 门对照 base。
 - 脚本：`adminsuegvol_o35_s811.py` / `run_s811.sh`。
+
+
+### §810 SEXPSUEGVOL_o45_h20 — ADOPT → 已上线（orv 40→45）
+- 每笔 P19 +7.45 / P20 −1.48 / P21 +2.28 / W0 +2.31 / W00 +1.16 / W1 −2.03 / W2 +2.63 / R12 +14.17（**正段 6/8**）
+- R12 35笔 +14.17% PF10.27 MDD−4.2；N3 78笔 +6.73 PF3.02 MDD−4.2；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥40∩dtp≥60)：R12 +13.61 / N3 +6.63 / MDD−4.5 → **B 过**（近一年/三年每笔均抬；回撤更浅）。
+- → **ADOPT**。上线（2026-11-02 15:20 CST）：`mid-sexp-sue-vol` orv **≥40→≥45**（dtp仍≥60）；`s810_onboard_metrics.py`；replay 强制覆盖 11批/21只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：费用∩盈余营收腿续抬仍成立。
+
+### §811 ADMINSUEGVOL_o35_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +2.91 / P20 +1.18 / P21 +6.54 / W0 −0.46 / W00 +2.41 / W1 −0.43 / W2 +3.27 / R12 +6.50（**正段 6/8**）
+- R12 50笔 +6.50% PF2.45 MDD−5.4；N3 115笔 +3.71 PF1.85 MDD−5.6；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥30∩dtp≥55)：R12 +7.08 / N3 +4.03 / MDD−5.6 → **B 否**（近一年/三年每笔均降；回撤持平）。
+- → **REJECTED**；线上 mid-admin-sue-vol 仍 orv≥30。解读：再抬到 35 伤每笔——**停 ADMINSUEGVOL orv硬抬轴**（≥30 为终点；接 dtp≥55 终点）。
+
+## §812 [中线·现役改进] 销售费用∩盈余加速∩放量 orv再抬≥50（SEXPSUEGVOL_o50_h20）— 预注册（2026-11-02 15:20 CST 写于跑任何收益之前）
+- 白话：现役 mid-sexp-sue-vol（§810 已抬至 G dtp≥60∩orv≥45）把 **G 内 orv 再硬抬** 到 **≥50**；SEXP/SUE/dtp/放量/排序不变。同进程 SEXPSUEGVOL_base(orv≥45)。
+- 想法：§810 o45 刚 ADOPT——续试贴档（硬门槛，非 −pct）。B 门对照 base。
+- 去重：SEXPSUEGVOL_o45；SEXPSUEGVOL_d60；SUEGTDVOL_o30。非仓位。不碰数据网关。
+- 规则：(SEXP∩SUEG_dtp60_orv50∩vol) vs (SEXP∩SUEG_dtp60_orv45∩vol)；sc_sexp；K20/max_new5。B 门对照 base。
+- 脚本：`sexpsuegvol_o50_s812.py` / `run_s812.sh`。
+
+## §813 [中线·现役改进] 销售费用∩盈余加速∩放量 dtp再抬≥65（SEXPSUEGVOL_d65_h20）— 预注册（2026-11-02 15:20 CST 写于跑任何收益之前）
+- 白话：现役 mid-sexp-sue-vol（§810 已抬至 G dtp≥60∩orv≥45）把 **G 内 dtp 再硬抬** 到 **≥65**；SEXP/SUE/orv/放量/排序不变。同进程 SEXPSUEGVOL_base(dtp≥60)。
+- 想法：ADMIN orv 刚停——改试费用∩盈余 **dtp 续抬**（硬门槛，非 −pct；对照 SUEGTD_d60 否 / SEXPSUEG_d60 ADOPT）。B 门对照 base。
+- 去重：SEXPSUEGVOL_d60；SEXPSUEGVOL_o45；ADMINSUEGVOL_d60；SUEGTDVOL_d60。非仓位。不碰数据网关。
+- 规则：(SEXP∩SUEG_dtp65_orv45∩vol) vs (SEXP∩SUEG_dtp60_orv45∩vol)；sc_sexp；K20/max_new5。B 门对照 base。
+- 脚本：`sexpsuegvol_d65_s813.py` / `run_s813.sh`。
