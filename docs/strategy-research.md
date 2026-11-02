@@ -10107,3 +10107,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：FCFFVOL；OCFSSUEGVOL；OCFVOL；SUEGVOL。非仓位。不碰数据网关。
 - 规则：FCFF∩SUEG∩vol；sc_fcff；K20/max_new5。新策略无 B。
 - 脚本：`fcffsuegvol_s849.py` / `run_s849.sh`。
+
+### §848 QSSUEGVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +2.23 / P20 +0.46 / P21 +8.97 / W0 −1.70 / W00 +2.78 / W1 +3.57 / W2 +2.30 / R12 +6.08（**正段 7/8**）
+- R12 60笔 +6.08% PF2.46 MDD−5.5；N3 134笔 +4.33 PF2.17 MDD−7.7；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥55)：R12 +6.42 / N3 +4.69 / MDD−7.6 → **B 否**（R12/N3 每笔均低于 base，且 N3 MDD −7.7 更深）。
+- → **REJECTED**；线上 mid-qs-sue-vol 仍 orv≥20。解读：再抬到 25 伤近一年/三年——**停 QSSUEGVOL orv硬抬轴**（≥20 为终点；dtp 已停于 55）。QS∩SUEG 双轴到站。
+
+### §849 FCFFSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +14.36 / P20 +1.28 / P21 +5.65 / W0 −0.48 / W00 +10.82 / W1 +3.64 / W2 +2.84 / R12 +4.26（**正段 7/8**）
+- R12 38笔 +4.26% PF1.92 MDD−8.5；N3 82笔 +3.70 PF2.00 MDD−8.1；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 19:50 CST）：`mid-fcff-sue-vol`（kind=`fcff_sue_vol`）；`s849_onboard_metrics.py`；replay onboard 4批/5只（2026-08-11~11-02）；`safe_backend_restart`。解读：自由现金流每股∩盈余合取成立（单腿 FCFFVOL 曾否）。
+
+## §850 [中线·现役改进] 自由现金流每股改善∩盈余加速∩放量 dtp硬抬≥55（FCFFSUEGVOL_d55_h20）— 预注册（2026-11-02 19:50 CST 写于跑任何收益之前；晚间例行后再开跑）
+- 白话：现役 mid-fcff-sue-vol（FCFF≥0.5∩G(dtp≥50)∩SUE≥2.2∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；FCFF/SUE/orv/放量/排序不变。同进程 FCFFSUEGVOL_base(dtp≥50)。
+- 想法：§849 刚 ADOPT——镜像 QS/NPM 的 d55 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：FCFFSUEGVOL；QSSUEGVOL_d55；NPMSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：FCFF∩SUEG(dtp≥55)∩vol；sc_fcff；K20/max_new5。B 门。
+- 脚本：待写 `fcffsuegvol_d55_s850.py` / `run_s850.sh`（例行后再开）。
+
+## §851 [中线·文献] 经营现金流加速∩盈余加速∩放量（OCFSUEGVOL_h20 / OCF∩SUEG）— 预注册占位（2026-11-02 19:50 CST；例行后再定稿开跑）
+- 白话：待例行后与 §850 一并开跑；候选方向 OCF加速∩SUEG（lt_research50）或对称文献腿。
+- 备注：**本轮 20:40 前不硬开新回测**，断点=§850/§851。

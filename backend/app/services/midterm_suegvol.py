@@ -2,7 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
-另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844 QSSUEGVOL→ mid-qs-sue-vol。
+另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844/§846 QSSUEGVOL→ mid-qs-sue-vol；§849 FCFFSUEGVOL→ mid-fcff-sue-vol。
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -477,6 +477,40 @@ def qssuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         q["qs_accel"] = e.get("qs_accel", e.get("score"))
         try:
             q["score"] = float(q["qs_accel"])
+        except (TypeError, ValueError):
+            continue
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
+def fcffsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§849 FCFFSUEGVOL：FCFF升幅≥0.5（本期 fcff_ps>0）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 ΔFCFF封顶5。"""
+    from app.services.midterm_fina_events import _fina_events
+
+    sg = suegvol_candidates(db, as_of)
+    if sg is None:
+        return None
+
+    def passes(cur: float, prev: float):
+        dq = cur - prev
+        ok = (cur > 0.0 and dq >= 0.5)
+        return ok, min(dq, 5.0), {"fcff_cur": cur, "fcff_prev": prev, "fcff_dq": dq}
+
+    oc = _fina_events(db, as_of, "fcff_ps", passes)
+    if oc is None:
+        return None
+    oc_by = {p["code"]: p for p in oc}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = oc_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["fcff_cur"] = e.get("fcff_cur", e.get("cur"))
+        q["fcff_prev"] = e.get("fcff_prev", e.get("prev"))
+        q["fcff_dq"] = e.get("fcff_dq", e.get("score"))
+        try:
+            q["score"] = float(q["fcff_dq"])
         except (TypeError, ValueError):
             continue
         out.append(q)
