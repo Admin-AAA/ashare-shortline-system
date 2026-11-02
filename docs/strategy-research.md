@@ -10266,6 +10266,34 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：UDP∩SUEG∩vol；sc_udp；K20/max_new5。新策略无 B。
 - 脚本：`udpsuegvol_s861.py` / `run_s861.sh`。
 
+### §860 CASHSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 +4.87 / P20 +1.04 / P21 +4.45 / W0 −2.01 / W00 +2.74 / W1 +6.83 / W2 +4.96 / R12 −2.62（**正段 6/8**）
+- R12 31笔 −2.62% PF0.59 MDD−7.5；N3 67笔 +1.98 PF1.49 MDD−6.8；彩票型
+- 判定 **✗✗**✓✓✓ → **否决**（近一年每笔为负、PF不足）。
+- → **REJECTED**。解读：CASH∩SUEG 近窗翻车——单腿 CASHVOL 曾否，合取未救 R12。
+
+### §861 UDPSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +0.04 / P20 −0.50 / P21 +4.14 / W0 +0.36 / W00 +2.28 / W1 +3.80 / W2 +7.33 / R12 +6.32（**正段 7/8**）
+- R12 44笔 +6.32% PF2.64 MDD−5.3；N3 80笔 +6.02 PF2.74 MDD−4.8；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 22:56 CST）：`mid-udp-sue-vol`（kind=`udp_sue_vol`）；`s861_onboard_metrics.py`；replay onboard 8批/12只（2026-08-01~11-02）；`safe_backend_restart`。解读：未分配利润高增∩盈余合取成立（单腿 UDP/UDPVOL 曾测）。
+
+## §862 [中线·现役改进] 每股未分配利润高增∩盈余加速∩放量 dtp硬抬≥55（UDPSUEGVOL_d55_h20）— 预注册（2026-11-02 22:56 CST 写于跑任何收益之前）
+- 白话：现役 mid-udp-sue-vol（UDP∩G(dtp≥50)∩SUE≥2.2∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；UDP/SUE/orv/放量/排序不变。同进程 UDPSUEGVOL_base(dtp≥50)。
+- 想法：§861 刚 ADOPT——镜像 CFPS/QS 的 d55 路径。B 门对照 base。
+- 去重：UDPSUEGVOL；CFPSSUEGVOL_d55；QSSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：UDP∩SUEG(dtp≥55)∩vol；sc_udp；K20/max_new5。B 门。
+- 脚本：`udpsuegvol_d55_s862.py` / `run_s862.sh`。
+
+## §863 [中线·文献] 流动负债占比下降∩盈余加速∩放量（CLDSUEGVOL_h20）— 预注册（2026-11-02 22:56 CST 写于跑任何收益之前）
+- 白话：CLD（流动负债/负债合计同比下降≥5pp）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按降幅排序；持20。
+- 想法 / 文献：UDP∩SUEG 刚 ADOPT、CASH∩SUEG 刚否——对称试 **负债结构改善∩盈余意外**（硬合取，非 −pct；CLD 曾上线长线/中线变体）。对照 CLDVOL/UDPSUEGVOL/SUEGVOL。
+- 去重：CLD；UDPSUEGVOL；CASHSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：CLD∩SUEG∩vol；sc_cld；K20/max_new5。新策略无 B。
+- 脚本：`cldsuegvol_s863.py` / `run_s863.sh`。
+
+
+
 
 
 

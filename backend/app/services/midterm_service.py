@@ -558,6 +558,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §861 每股未分配利润高增∩盈余加速∩放量（scripts/midterm/udpsuegvol_s861.py UDPSUEGVOL_h20；§282 达标；2026-11-02 上线）
+    "mid-udp-sue-vol": {
+        "name": "每股未分配利润高增∩盈余加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足每股未分配利润同比增速≥30%（本期≥0.5元、去年同期>0），与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥20），且信号日成交额≥1.5×前20日均额；按增速（封顶2）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：留存利润积累 × 盈余惊喜加速 × 量能确认（§861）。",
+        "kind": "udp_sue_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §735 净负债转净现金∩营业周期∩放量（scripts/midterm/ncstdvol_s735.py NCSTDVOL_h20；§282 达标；2026-11-02 上线）
     "mid-ncs-td-vol": {
         "name": "净负债转净现金∩营业周期∩放量（持20日）",
@@ -2135,6 +2144,21 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
 
+
+        if meta.get("kind") == "udp_sue_vol":
+            from app.services.midterm_suegvol import udpsuegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = udpsuegvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
         if meta.get("kind") == "ea_td_vol":
             from app.services.midterm_eavol import eatdvol_candidates
             held = _held_codes(db, sid, as_of)
@@ -2808,6 +2832,12 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["score"]), 1), "每股现金流同比加速(pp,封顶100)×SUEG合取", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：cfps_yoy {_f(p.get('prev_cfps_yoy'), 1)}% → {_f(p.get('cfps_yoy'), 1)}%"
                       f"（加速 {_f(p.get('cfps_accel'), 1)}pp）∩ SUE {_f(p.get('sue'), 2)}；"
+                      f"业绩加速（扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%，上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，"
+                      f"营收同比 {_f(p.get('or_yoy'), 1)}%）；成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "udp_sue_vol":
+            score, label, better = round(float(p["score"]), 2), "未分配利润同比增速(封顶2)×SUEG合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：未分配利润/股 {_f(p.get('udp_prev'), 2)} → {_f(p.get('udp_cur'), 2)}"
+                      f"（增速 {_f(p.get('udp_g'), 2)}）∩ SUE {_f(p.get('sue'), 2)}；"
                       f"业绩加速（扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%，上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，"
                       f"营收同比 {_f(p.get('or_yoy'), 1)}%）；成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "ea_td_vol":
