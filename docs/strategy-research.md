@@ -10008,3 +10008,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：EBITVOL；NPMSUEGVOL；GMESUEGVOL；PTGVOL。非仓位。不碰数据网关。
 - 规则：EBIT∩SUEG∩vol；sc_ebit；K20/max_new5。新策略无 B。
 - 脚本：`ebitsuegvol_s841.py` / `run_s841.sh`。
+
+### §840 NPMSUEGVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +2.06 / P20 +0.02 / P21 +7.95 / W0 −0.15 / W00 +1.25 / W1 +1.43 / W2 +2.35 / R12 +2.87（**正段 7/8**）
+- R12 63笔 +2.87% PF1.60 MDD−6.8；N3 138笔 +2.37 PF1.56 MDD−8.1；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥50)：R12 +2.71 / N3 +2.62 / MDD−7.9 → **B 否**（N3 每笔 2.37 < base 2.62，且 MDD −8.1 更深）。
+- → **REJECTED**；线上 mid-npm-sue-vol 仍 orv≥20。解读：再抬到 25 伤近三年——**停 NPMSUEGVOL orv硬抬轴**（≥20 为终点；接 dtp≥50 终点）。NPM∩SUEG 双轴到站。
+
+### §841 EBITSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 −0.63 / P20 −0.29 / P21 +8.46 / W0 −1.01 / W00 +1.15 / W1 +0.52 / W2 +3.96 / R12 +3.20（**正段 5/8**）
+- R12 65笔 +3.20% PF1.65 MDD−7.6；N3 144笔 +2.78 PF1.69 MDD−8.2；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**（正段不足）。解读：EBIT利润率∩盈余合取未过正段门——对照单腿 EBITVOL / GME∩SUEG 同病；**不接 EBIT∩SUEG 门槛轴**。
+
+## §842 [中线·文献] 净利润/营收改善∩盈余加速∩放量（PTGSUEGVOL_h20）— 预注册（2026-11-02 18:48 CST 写于跑任何收益之前）
+- 白话：PTG升幅≥2.0pp（本期 profit_to_gr≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶20）排序；持20。
+- 想法 / 文献：NPM∩SUEG 双轴到站、EBIT/GME∩SUEG 刚否——对称试 **净利润/营收口径∩盈余意外**（硬合取，非 −pct；PTGVOL 曾否、≠netprofit_margin）。对照 PTGVOL/NPMSUEGVOL/EBITSUEGVOL。
+- 去重：PTGVOL；NPMSUEGVOL；EBITSUEGVOL；GMESUEGVOL。非仓位。不碰数据网关。
+- 规则：PTG∩SUEG∩vol；sc_ptg；K20/max_new5。新策略无 B。
+- 脚本：`ptgsuegvol_s842.py` / `run_s842.sh`。
+
+## §843 [中线·文献] 营业成本率下降∩盈余加速∩放量（GCSUEGVOL_h20）— 预注册（2026-11-02 18:48 CST 写于跑任何收益之前）
+- 白话：GC降幅≥2.0pp（本期 gc_of_gr∈[30,95]、去年∈[30,100]）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按降幅（封顶20）排序；持20。
+- 想法 / 文献：利润率∩SUEG 轴收口中——对称试 **成本率下降∩盈余意外**（硬合取，非 −pct；GCVOL 曾否）。对照 GCVOL/GMESUEGVOL/NPMSUEGVOL。
+- 去重：GCVOL；GMESUEGVOL；PTGSUEGVOL；COGSVOL。非仓位。不碰数据网关。
+- 规则：GC∩SUEG∩vol；sc_gc；K20/max_new5。新策略无 B。
+- 脚本：`gcsuegvol_s843.py` / `run_s843.sh`。
