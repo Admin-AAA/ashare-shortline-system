@@ -10292,6 +10292,34 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：CLD∩SUEG∩vol；sc_cld；K20/max_new5。新策略无 B。
 - 脚本：`cldsuegvol_s863.py` / `run_s863.sh`。
 
+### §862 UDPSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 −3.44 / P20 −0.36 / P21 +4.28 / W0 +0.23 / W00 +2.28 / W1 +3.80 / W2 +7.97 / R12 +6.73（**正段 6/8**）
+- R12 43笔 +6.73% PF2.84 MDD−5.3；N3 78笔 +6.38 PF2.91 MDD−4.8；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +6.32 / N3 +6.02 / MDD−4.8 → **B 过**（R12/N3 每笔均抬，N3 MDD 持平）。
+- → **ADOPT**。上线（2026-11-02 23:22 CST）：`mid-udp-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s862_onboard_metrics.py`；replay 强制覆盖 8批/11只（2026-08-01~11-02）；`safe_backend_restart`。解读：未分配利润∩盈余上抬扣非腿成立——镜像 CFPS/QS_d55。
+
+### §863 CLDSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 −4.87 / P20 +3.56 / P21 +6.09 / W0 +1.12 / W00 +5.43 / W1 +11.19 / W2 +1.47 / R12 +7.80（**正段 7/8**）
+- R12 26笔 +7.80% PF2.87 MDD−6.0；N3 40笔 +7.29 PF3.0 MDD−5.8；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**（近三年笔数偏稀 / 末条门槛未过）。
+- → **REJECTED**。解读：CLD∩SUEG 近窗尚可但覆盖不足。
+
+## §864 [中线·现役改进] 每股未分配利润高增∩盈余加速∩放量 orv硬抬≥25（UDPSUEGVOL_o25_h20）— 预注册（2026-11-02 23:22 CST 写于跑任何收益之前）
+- 白话：现役 mid-udp-sue-vol（§862 已抬至 G dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；UDP/SUE/dtp/放量/排序不变。同进程 UDPSUEGVOL_base(orv≥20)。
+- 想法：§862 d55 刚 ADOPT——续试 orv 轴。B 门对照 base。
+- 去重：UDPSUEGVOL_d55；CFPSSUEGVOL_o25；QSSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：UDP∩SUEG(dtp≥55∩orv≥25)∩vol；sc_udp；K20/max_new5。B 门。
+- 脚本：`udpsuegvol_o25_s864.py` / `run_s864.sh`。
+
+## §865 [中线·文献] 有形资产/负债改善∩盈余加速∩放量（TADSUEGVOL_h20）— 预注册（2026-11-02 23:22 CST 写于跑任何收益之前）
+- 白话：TAD升幅≥0.20（tangibleasset_to_debt 区间约束）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶2）排序；持20。
+- 想法 / 文献：CLD/CASH∩SUEG 刚否、UDP∩SUEG 已上线——对称试 **有形资产偿债改善∩盈余意外**（硬合取，非 −pct；TAD/TADVOL 曾测）。对照 TADVOL/UDPSUEGVOL/CLDSUEGVOL。
+- 去重：TADVOL；CLDSUEGVOL；UDPSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：TAD∩SUEG∩vol；sc_tad；K20/max_new5。新策略无 B。
+- 脚本：`tadsuegvol_s865.py` / `run_s865.sh`。
+
+
+
 
 
 
