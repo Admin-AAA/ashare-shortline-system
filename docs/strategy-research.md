@@ -8902,3 +8902,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：SEXPFATVOL；SEXPTDVOL；ETDFATVOL；ETDCASVOL；SEXPVOL。非仓位。不碰数据网关。
 - 规则：SEXP∩ETD∩vol；sc_sexp；K20/max_new5。新策略无 B。
 - 脚本：`sexpetdvol_s755.py` / `run_s755.sh`。
+
+### §754 EAVOL_v18_h20 — REJECT（A 否·R12/PF/正段；B 亦否）
+- 每笔 P19 +0.85 / P20 −0.55 / P21 +4.78 / W0 −3.06 / W00 −1.91 / W1 +2.67 / W2 +3.04 / R12 −0.04（**正段 4/8**）
+- R12 69笔 −0.04% **PF0.99** MDD−11.0；N3 182笔 +1.74 PF1.43 MDD−12.0；彩票型
+- 判定 **✗✗**✓**✗**✓ → **否决**。同进程 base：R12 +1.56 / N3 +2.19 → **B 亦否**。
+- → **REJECTED**；线上 mid-earnings-accel-vol 仍放量≥1.5×。解读：1.8× 同 2.0×——量能硬抬伤近一年；**停 EAVOL 放量硬抬轴**（接 v20）。
+
+### §755 SEXPETDVOL_h20 — REJECT（A 否·PF/正段）
+- 每笔 P19 −0.35 / P20 −1.91 / P21 +3.63 / W0 −3.14 / W00 −0.03 / W1 +5.79 / W2 +1.00 / R12 +0.38（**正段 4/8**）
+- R12 67笔 +0.38% **PF1.10** MDD−9.1；N3 185笔 +2.59 PF1.70 MDD−10.6；彩票型
+- 判定 ✓**✗**✓**✗**✓ → **否决**。解读：费用∩股东权益杠杆同∩周转/周期——近一年 PF/正段不够；**销售费用∩BS/效率双合取∩放量暂缓**（接 SEXPFAT/SEXPTD）。
+
+## §756 [中线·现役改进] 盈余加速∩放量 放量硬抬≥1.8×（SUEGVOL_v18_h20）— 预注册（2026-11-02 09:23 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-accel-vol（SUE≥2.2∩G∩放量1.5×，按SUE排序）把 **放量硬抬** 到 **≥1.8×amt20**；SUEG/排序不变。同进程 SUEGVOL_base(1.5×)。
+- 想法：EAVOL_v18 刚否——对称试 **SUEG∩放量现役中间档 1.8×**（硬门槛，非 −pct；SUEGVOL_v20 曾否；SEXPVOL/IOVOL/ETDFAT 的 v18 曾 ADOPT）。B 门对照 base。
+- 去重：SUEGVOL_v20；EAVOL_v18；SUEGTDVOL_v18；SUEGVOL_s22。非仓位。不碰数据网关。
+- 规则：(SUE≥2.2∩G∩vol1.8) vs (SUE≥2.2∩G∩vol1.5)；sc_sue；K20/max_new5。B 门对照 base。
+- 脚本：`suegvol_v18_s756.py` / `run_s756.sh`。
+
+## §757 [中线·文献] 财务费用率下降∩股东权益杠杆∩放量（FINAETDVOL_h20）— 预注册（2026-11-02 09:23 CST 写于跑任何收益之前）
+- 白话：FINA降幅≥0.5 ∩ ETD升幅≥0.20 ∩ 放量≥1.5×amt20；按 FINA 原始降幅排序；持20。
+- 想法 / 文献：销售费用∩ETD 刚否——改试 **财务费用∩股东权益杠杆**（硬合取，非 −pct；FINAVOL/ETDVOL/ETDFAT 已上线；≠SEXPTD/FINATD 已否的效率腿）。对照 SEXPETDVOL/FINATDVOL/ETDFATVOL/FINAVOL。
+- 去重：SEXPETDVOL；FINATDVOL；ETDFATVOL；FINAVOL_v18；ETDCASVOL。非仓位。不碰数据网关。
+- 规则：FINA∩ETD∩vol；sc_fina 去封顶；K20/max_new5。新策略无 B。
+- 脚本：`finaetdvol_s757.py` / `run_s757.sh`。
