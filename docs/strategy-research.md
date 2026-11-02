@@ -8877,3 +8877,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：CASTDVOL；TADTDVOL；TADFATVOL；NCSFATVOL；CASVOL。非仓位。不碰数据网关。
 - 规则：CAS∩FAT∩vol；sc_cas；K20/max_new5。新策略无 B。
 - 脚本：`casfatvol_s753.py` / `run_s753.sh`。例行冲突串行让行。
+
+### §752 NCSTDVOL_td025_h20 — REJECT（A 否·R12/PF/正段；B 亦否）
+- 每笔 P19 −7.12 / P20 −2.09 / P21 +4.26 / W0 +0.08 / W00 +0.88 / W1 +6.72 / W2 +2.11 / R12 −1.55（**正段 5/8**）
+- R12 30笔 −1.55% **PF0.74** MDD−8.4；N3 79笔 +2.59 PF1.60 MDD−7.5；彩票型
+- 判定 **✗✗**✓**✗**✓ → **否决**。同进程 base：R12 +1.89 / N3 +3.49 / MDD−6.0 → **B 亦否**。
+- → **REJECTED**；线上 mid-ncs-td-vol 仍 TD≥20。解读：抬 TD 腿砸近一年——**停 NCSTDVOL TD缩短硬抬轴**（接放量硬抬候补）。
+
+### §753 CASFATVOL_h20 — REJECT（A 否·正段）
+- 每笔 P19 −0.20 / P20 +0.88 / P21 +1.58 / W0 −1.97 / W00 −1.03 / W1 +1.37 / W2 +1.33 / R12 +4.69（**正段 5/8**）
+- R12 83笔 +4.69% PF2.37 MDD−9.4；N3 233笔 +2.54 PF1.65 MDD−13.2；稳健型
+- 判定 ✓✓✓**✗**✓ → **否决**。解读：近一年强但正段不够；**流动资产∩周转效率双合取∩放量暂缓**（接 CAS∩TD）。
+
+## §754 [中线·现役改进] 业绩加速∩放量 放量硬抬≥1.8×（EAVOL_v18_h20）— 预注册（2026-11-02 09:15 CST 写于跑任何收益之前）
+- 白话：现役 mid-earnings-accel-vol（G∩放量1.5×，按dtp排序）把 **放量硬抬** 到 **≥1.8×amt20**；G/排序不变。同进程 EAVOL_base(1.5×)。
+- 想法：NCSTD TD/CAS∩FAT 刚否；EAVOL_v20 曾否——改试中间档 **1.8×**（硬门槛，非 −pct；SEXPVOL/IOVOL/ETDFAT 的 v18 曾 ADOPT）。B 门对照 base。
+- 去重：EAVOL_v20；EATDVOL_v18；EAVOL_v13；SUEGVOL_v20。非仓位。不碰数据网关。
+- 规则：(G∩vol1.8) vs (G∩vol1.5)；sc_g；K20/max_new5。B 门对照 base。
+- 脚本：`eavol_v18_s754.py` / `run_s754.sh`。
+
+## §755 [中线·文献] 销售费用率下降∩股东权益杠杆∩放量（SEXPETDVOL_h20）— 预注册（2026-11-02 09:15 CST 写于跑任何收益之前）
+- 白话：SEXP降幅≥0.35 ∩ ETD升幅≥0.20 ∩ 放量≥1.5×amt20；按 SEXP 降幅（封顶10）排序；持20。
+- 想法 / 文献：CAS∩周转刚否；SEXP∩FAT/TD 曾否；ETD∩FAT 刚上线抬量——改试 **费用∩股东权益杠杆**（硬合取，非 −pct；SEXPVOL/ETDVOL/ETDFAT 已上线）。对照 SEXPFATVOL/SEXPTDVOL/ETDFATVOL/ETDCASVOL。
+- 去重：SEXPFATVOL；SEXPTDVOL；ETDFATVOL；ETDCASVOL；SEXPVOL。非仓位。不碰数据网关。
+- 规则：SEXP∩ETD∩vol；sc_sexp；K20/max_new5。新策略无 B。
+- 脚本：`sexpetdvol_s755.py` / `run_s755.sh`。
