@@ -10326,6 +10326,32 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 
 
 
+### §864 UDPSUEGVOL_o25_h20 — REJECT（B 否）
+- 每笔 P19 −3.44 / P20 −0.03 / P21 +4.46 / W0 +0.43 / W00 +2.24 / W1 +1.69 / W2 +7.63 / R12 +6.77（**正段 6/8**）
+- R12 42笔 +6.77% PF2.84 MDD−5.3；N3 75笔 +5.88 PF2.71 MDD−4.9；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20, dtp≥55)：R12 +6.73 / N3 +6.38 / MDD−4.8 → **B 否**（N3 每笔 5.88<6.38，且 N3 MDD −4.9 略深于 −4.8）。
+- → **REJECTED**；线上 mid-udp-sue-vol 仍 orv≥20。解读：再抬到 25 伤近三年——**停 UDPSUEGVOL orv硬抬轴**（≥20 为终点；接 dtp≥55 终点）。UDP∩SUEG 双轴到站。
+
+### §865 TADSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 −4.62 / P20 +2.43 / P21 +3.71 / W0 +0.16 / W00 −5.78 / W1 +9.39 / W2 −2.57 / R12 +2.73（**正段 5/8**）
+- R12 14笔 +2.73% PF1.49 MDD−3.0；N3 25笔 +4.70 PF2.1 MDD−2.9；彩票型
+- 判定 ✓✓✓**✗✗** → **否决**（近一年/近三年笔数偏稀，正段不足）。
+- → **REJECTED**。解读：TAD∩SUEG 覆盖不足且近窗弱——单腿 TAD/TADVOL 曾测，合取未救。
+
+## §866 [中线·文献] 流动资产占比改善∩盈余加速∩放量（CASSUEGVOL_h20）— 预注册（2026-11-02 23:38 CST 写于跑任何收益之前）
+- 白话：CAS升幅≥3.0pp（ca_to_assets 区间约束）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶25）排序；持20。
+- 想法 / 文献：TAD/CLD/CASH∩SUEG 刚否、UDP∩SUEG 已上线——对称试 **流动资产占比改善∩盈余意外**（硬合取，非 −pct；CAS/CASVOL 曾测）。对照 CASVOL/UDPSUEGVOL/TADSUEGVOL。
+- 去重：CASVOL；TADSUEGVOL；CLDSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：CAS∩SUEG∩vol；sc_cas；K20/max_new5。新策略无 B。
+- 脚本：`cassuegvol_s866.py` / `run_s866.sh`。
+
+## §867 [中线·文献] 股东权益/负债改善∩盈余加速∩放量（ETDSUEGVOL_h20）— 预注册（2026-11-02 23:38 CST 写于跑任何收益之前）
+- 白话：ETD升幅≥0.20（eqt_to_debt 区间约束）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶2）排序；持20。
+- 想法 / 文献：TAD∩SUEG 刚否——对称试 **权益偿债改善∩盈余意外**（硬合取，非 −pct；ETD/ETDVOL 曾测）。对照 ETDVOL/TADSUEGVOL/CASSUEGVOL。
+- 去重：ETDVOL；TADSUEGVOL；EQSSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：ETD∩SUEG∩vol；sc_etd；K20/max_new5。新策略无 B。
+- 脚本：`etdsuegvol_s867.py` / `run_s867.sh`。
+
 ## 晚间例行进度（2026-11-02 ~20:48→21:25 CST）
 - 健康：8765 `/api/health` 200；5174 200；HEAD 起点 81d94fd0 → 本轮提交后更新；swap used≈9–10G → 串行。
 - 选股：短线最近约 2026-10-30；中线 2026-11-02 ok=4 / data_error=4（预告系含 KeyError top_n）/ no_signal=8 / 周度 not_signal_day=5；长线 3/3 @2026-10-30 ok。
