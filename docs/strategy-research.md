@@ -9850,3 +9850,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：OCFSVOL；QOPSUEGVOL；OPSUEGVOL；SUEGVOL；OCSDVOL。非仓位。不碰数据网关。
 - 规则：OCFS∩SUEG∩vol；sc_ocfs；K20/max_new5。新策略无 B。
 - 脚本：`ocfssuegvol_s829.py` / `run_s829.sh`。
+
+
+### §828 QOPSUEGVOL_d55_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +9.91 / P20 −0.27 / P21 +4.61 / W0 +0.19 / W00 −0.21 / W1 +2.93 / W2 +0.14 / R12 +1.64（**正段 6/8**）
+- R12 62笔 +1.64% PF1.31 MDD−7.4；N3 129笔 +1.64 PF1.35 MDD−8.7；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +1.78 / N3 +1.81 / MDD−8.9 → **B 否**（R12/N3 每笔均降）。
+- → **REJECTED**；线上 mid-qop-sue-vol 仍 dtp≥50。解读：再抬到 55 伤每笔——**停 QOPSUEGVOL dtp硬抬轴**（≥50 为终点；orv 轴可续）。
+
+### §829 OCFSSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +1.44 / P20 +2.47 / P21 +6.88 / W0 −0.22 / W00 +2.85 / W1 +1.72 / W2 +2.94 / R12 +10.23（**正段 7/8**）
+- R12 52笔 +10.23% PF3.65 MDD−6.6；N3 112笔 +5.99 PF2.58 MDD−6.2；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 17:20 CST）：`mid-ocfs-sue-vol`（kind=`ocfs_sue_vol`）；`s829_onboard_metrics.py`；replay onboard 16批/25只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：现金流质量∩盈余合取成立（单腿 OCFSVOL 曾否）——近一年/三年每笔显著抬升。
+
+## §830 [中线·现役改进] 经营现金流/营收改善∩盈余加速∩放量 dtp硬抬≥55（OCFSSUEGVOL_d55_h20）— 预注册（2026-11-02 17:20 CST 写于跑任何收益之前）
+- 白话：现役 mid-ocfs-sue-vol（OCFS≥3.0∩G(dtp≥50)∩SUE≥2.2∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；OCFS/SUE/orv/放量/排序不变。同进程 OCFSSUEGVOL_base(dtp≥50)。
+- 想法：§829 刚 ADOPT——镜像 SEXPSUEG/OPSUEG 的 d55 路径（硬门槛，非 −pct；对照 QOPSUEG_d55 刚否）。B 门对照 base。
+- 去重：OCFSSUEGVOL；QOPSUEGVOL_d55；OPSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：OCFS∩SUEG(dtp≥55)∩vol；sc_ocfs；K20/max_new5。B 门。
+- 脚本：`ocfssuegvol_d55_s830.py` / `run_s830.sh`。
+
+## §831 [中线·现役改进] 单季营业利润环比加速∩盈余加速∩放量 orv硬抬≥25（QOPSUEGVOL_o25_h20）— 预注册（2026-11-02 17:20 CST 写于跑任何收益之前）
+- 白话：现役 mid-qop-sue-vol（§828 d55 刚否，仍 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；QOP/SUE/dtp/放量/排序不变。同进程 QOPSUEGVOL_base(orv≥20)。
+- 想法：dtp 轴刚停——改试营收腿（硬门槛，非 −pct；对照 OPSUEG_o25 曾否）。B 门对照 base。
+- 去重：QOPSUEGVOL_d55；OPSUEGVOL_o25；SEXPSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：QOP∩SUEG(dtp≥50∩orv≥25)∩vol；sc_qop；K20/max_new5。B 门。
+- 脚本：`qopsuegvol_o25_s831.py` / `run_s831.sh`。
