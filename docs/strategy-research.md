@@ -9771,3 +9771,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：REVSUEGVOL_d55；REVSUEGVOL_o25；OPSUEGVOL_d60；SEXPSUEGVOL_d60。非仓位。不碰数据网关。
 - 规则：REV∩SUEG(dtp≥60∩orv≥20)∩vol；sc_rev；K20/max_new5。B 门。
 - 脚本：`revsuegvol_d60_s823.py` / `run_s823.sh`。
+
+
+### §822 OPSUEGVOL_d60_h20 — ADOPT → 已上线（dtp 55→60）
+- 每笔 P19 +6.42 / P20 −0.20 / P21 +7.50 / W0 −1.44 / W00 +2.36 / W1 +3.95 / W2 +3.79 / R12 +4.25（**正段 6/8**）
+- R12 68笔 +4.25% PF1.89 MDD−8.3；N3 151笔 +4.04 PF2.02 MDD−7.9；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥55∩orv≥20)：R12 +3.79 / N3 +3.73 / MDD−8.6 → **B 过**（每笔均抬、回撤改善）。
+- → **ADOPT**。上线（2026-11-02 16:45 CST）：`mid-op-sue-vol` dtp **≥55→≥60**（orv仍≥20）；`s822_onboard_metrics.py`；replay 强制覆盖 21批/55只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：利润加速∩盈余再抬 dtp 成立——**对照 ADMINSUEG_d60 否决不对称**（orv 轴已停于 20）。
+
+### §823 REVSUEGVOL_d60_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +8.55 / P20 −0.47 / P21 +8.28 / W0 +0.78 / W00 +3.08 / W1 +2.76 / W2 +2.38 / R12 +4.17（**正段 7/8**）
+- R12 62笔 +4.17% PF1.90 MDD−6.8；N3 138笔 +3.29 PF1.78 MDD−8.8；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥55∩orv≥20)：R12 +4.84 / N3 +3.65 / MDD−8.5 → **B 否**（R12/N3 每笔均降；MDD 更深）。
+- → **REJECTED**；线上 mid-rev-sue-vol 仍 dtp≥55。解读：再抬到 60 伤每笔——**停 REVSUEGVOL dtp硬抬轴**（≥55 为终点；接 orv≥20 终点）。
+
+## §824 [中线·现役改进] 营业利润加速∩盈余加速∩放量 dtp再抬≥65（OPSUEGVOL_d65_h20）— 预注册（2026-11-02 16:45 CST 写于跑任何收益之前）
+- 白话：现役 mid-op-sue-vol（§822 已抬至 G dtp≥60∩orv≥20）把 **G 内 dtp 再硬抬** 到 **≥65**；OP/SUE/orv/放量/排序不变。同进程 OPSUEGVOL_base(dtp≥60)。
+- 想法：§822 d60 刚 ADOPT（对照 ADMINSUEG_d60 否）——续试贴档（硬门槛，非 −pct）。B 门对照 base。
+- 去重：OPSUEGVOL_d60；REVSUEGVOL_d60；SEXPSUEGVOL_d65。非仓位。不碰数据网关。
+- 规则：OP∩SUEG(dtp≥65∩orv≥20)∩vol；sc_op；K20/max_new5。B 门。
+- 脚本：`opsuegvol_d65_s824.py` / `run_s824.sh`。
+
+## §825 [中线·文献] 管理费用∩股东权益杠杆∩放量（ADMINETDVOL_h20）— 预注册（2026-11-02 16:45 CST 写于跑任何收益之前）
+- 白话：ADMIN降幅≥1.0 ∩ ETD升幅≥0.20 ∩ 放量≥1.5×amt20；按 ADMIN 降幅（封顶10）排序；持20。
+- 想法 / 文献：REV∩SUEG dtp 刚终点、ADMIN∩TD/FAT 曾否——改试 **管理费用∩杠杆结构**（硬合取，非 −pct；ADMINSUEG 已上线；SEXPETD/FINAETD 曾否）。对照 ADMINSUEGVOL/SEXPETDVOL/ETDVOL。
+- 去重：ADMINTDVOL；ADMFATVOL；SEXPETDVOL；FINAETDVOL；ADMINSUEGVOL；ETDVOL。非仓位。不碰数据网关。
+- 规则：ADMIN∩ETD∩vol；sc_admin；K20/max_new5。新策略无 B。
+- 脚本：`adminetdvol_s825.py` / `run_s825.sh`。

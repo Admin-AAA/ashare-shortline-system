@@ -212,7 +212,7 @@ def adminsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 
 def opsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§816/§818 OPSUEGVOL：OP加速≥20 ∩ SUE≥2.2∩G(dtp≥55)∩放量≥1.5×amt20（§818 dtp硬抬；suegvol 仍≥50/≥20）；排序 OP加速封顶100。"""
+    """§816/§818/§822 OPSUEGVOL：OP加速≥20 ∩ SUE≥2.2∩G(dtp≥60)∩放量≥1.5×amt20（§822 dtp再抬；suegvol 仍≥50/≥20）；排序 OP加速封顶100。"""
     from app.services.midterm_fina_events import _fina_events
 
     sg = suegvol_candidates(db, as_of)
@@ -233,12 +233,12 @@ def opsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         e = op_by.get(p0["code"])
         if e is None:
             continue
-        # §818：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥55
+        # §818/§822：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥60
         try:
             dtp = float(p0.get("dt_netprofit_yoy"))
         except (TypeError, ValueError):
             continue
-        if dtp < 55.0:
+        if dtp < 60.0:
             continue
         q = dict(p0)
         q["op_yoy"] = e.get("op_yoy", e.get("cur"))
