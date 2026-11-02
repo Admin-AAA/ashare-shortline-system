@@ -40,7 +40,7 @@ run_ph() {
     free_mb=$(sysctl -n vm.swapusage | awk -F'free = ' '{print $2}' | awk '{print int($1)}')
   done
   echo "== $name $(date +%H:%M:%S) swap_free_mb=$free_mb" | tee -a "$LOG"
-  LT_START="$s" LT_END="$lend" /usr/bin/time -l env PYTHONPATH=../..:. "$PY" cfpssuegvol_s856.py "$name" "$OUT" >>"$LOG" 2>&1
+  LT_START="$s" LT_END="$lend" /usr/bin/time -l env PYTHONPATH=../..:. "$PY" cfpssuegvol_d55_s856.py "$name" "$OUT" >>"$LOG" 2>&1
   echo "phase_exit=$?" | tee -a "$LOG"
 }
 for p in "P19 2019:2019-01-01:2020-04-29" "P20 2020:2020-01-01:2021-04-30" "P21 2021:2021-01-01:2022-04-30" "W0 2022-04~2023-03:2022-04-01:2023-07-29" "W00 2023-04~12:2023-04-01:2024-04-29" "W1 2024:2024-01-01:2025-04-30" "W2 2025-01~09:2025-01-01:2026-01-28" "R12 2025-10~2026-10:2025-10-01:2026-10-16" "N3 2024-01~2026-10:2024-01-01:2026-10-16"; do
@@ -49,13 +49,4 @@ for p in "P19 2019:2019-01-01:2020-04-29" "P20 2020:2020-01-01:2021-04-30" "P21 
 done
 echo "DONE_S856 $(date)" | tee -a "$LOG"
 "$PY" s286_287_eval.py "$OUT" CFPSSUEGVOL_d55_h20 25 | tee "$OUTD/eval.txt"
-"$PY" - <<'PY' | tee -a "$OUTD/eval.txt"
-import json
-r=json.load(open("/Users/wangao/Desktop/ashare-shortline-system/backend/output/research/s856/res.json"))
-b,d=r["CFPSSUEGVOL_base"], r["CFPSSUEGVOL_d55_h20"]
-R,N="R12 2025-10~2026-10","N3 2024-01~2026-10"
-print("B门对照 base:", {k: (b[k].get("avg"), b[k].get("pf"), b[k].get("mdd"), b[k].get("n")) for k in (R,N)})
-print("d55:", {k: (d[k].get("avg"), d[k].get("pf"), d[k].get("mdd"), d[k].get("n")) for k in (R,N)})
-ok = (d[R]["avg"]>=b[R]["avg"] and d[N]["avg"]>=b[N]["avg"] and abs(d[N]["mdd"])<=abs(b[N]["mdd"])+1e-9)
-print("B门", "过" if ok else "否")
-PY
+
