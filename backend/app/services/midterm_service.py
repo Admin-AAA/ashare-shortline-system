@@ -639,6 +639,24 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §900 ROA同比扩张∩盈余加速∩放量（scripts/midterm/roasuegvol_s900.py ROASUEGVOL_h20；§282 达标；2026-11-03 上线；≠ mid-qn-sue-vol）
+    "mid-roa-sue-vol": {
+        "name": "ROA同比扩张∩盈余加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足总资产净利率（roa）≥3%且较去年同报告期扩张≥1.0个百分点，与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥20），且信号日成交额≥1.5×前20日均额；按扩张（封顶10）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：全年ROA扩张 × 盈余惊喜加速 × 量能确认（§900；≠单季q_npta的 mid-qn-sue-vol）。",
+        "kind": "roa_sue_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
+    # §901 利息负担/总资本下降∩盈余加速∩放量（scripts/midterm/itcsuegvol_s901.py ITCSUEGVOL_h20；§282 达标；2026-11-03 上线）
+    "mid-itc-sue-vol": {
+        "name": "利息负担/总资本下降∩盈余加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足利息负担/总资本（int_to_talcap）同比下降≥1.0个百分点（去年≥1.0），与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥20），且信号日成交额≥1.5×前20日均额；按降幅（封顶10）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：利息负担减轻 × 盈余惊喜加速 × 量能确认（§901；≠财务费用率/有息负债绝对额∩SUEG）。",
+        "kind": "itc_sue_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §735 净负债转净现金∩营业周期∩放量（scripts/midterm/ncstdvol_s735.py NCSTDVOL_h20；§282 达标；2026-11-02 上线）
     "mid-ncs-td-vol": {
         "name": "净负债转净现金∩营业周期∩放量（持20日）",
@@ -2341,6 +2359,33 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
 
+        if meta.get("kind") == "roa_sue_vol":
+            from app.services.midterm_suegvol import roasuegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = roasuegvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+        if meta.get("kind") == "itc_sue_vol":
+            from app.services.midterm_suegvol import itcsuegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = itcsuegvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
 
 
 
@@ -3050,6 +3095,30 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["score"]), 2), "ROE同比(封顶100)×SUEG合取", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：roe_yoy {_f(p.get('roe_yoy'), 1)}%"
                       f"∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "art_sue_vol":
+            score, label, better = round(float(p["score"]), 3), "应收周转升幅(封顶5)×SUEG合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：ar_turn {_f(p.get('art_prev'), 2)} → {_f(p.get('art_cur'), 2)}"
+                      f"（升幅 {_f(p.get('art_dq'), 2)}）∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "cat_sue_vol":
+            score, label, better = round(float(p["score"]), 3), "流动资产周转升幅(封顶1)×SUEG合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：ca_turn {_f(p.get('cat_prev'), 2)} → {_f(p.get('cat_cur'), 2)}"
+                      f"（升幅 {_f(p.get('cat_dq'), 2)}）∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "ebt_sue_vol":
+            score, label, better = round(float(p["score"]), 2), "利润总额加速(封顶100)×SUEG合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：ebt加速 {_f(p.get('ebt_accel'), 1)}pp"
+                      f"∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "dteps_sue_vol":
+            score, label, better = round(float(p["score"]), 2), "扣非EPS同比(封顶100)×SUEG合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：dt_eps_yoy {_f(p.get('dt_eps_yoy'), 1)}%"
+                      f"∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "roa_sue_vol":
+            score, label, better = round(float(p["score"]), 2), "ROA扩张(封顶10)×SUEG合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：roa {_f(p.get('roa_prev'), 2)} → {_f(p.get('roa_cur'), 2)}"
+                      f"（扩张 {_f(p.get('roa_dq'), 2)}pp）∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "itc_sue_vol":
+            score, label, better = round(float(p["score"]), 2), "利息负担降幅(封顶10)×SUEG合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：int_to_talcap {_f(p.get('itc_prev'), 2)} → {_f(p.get('itc_cur'), 2)}"
+                      f"（降幅 {_f(p.get('itc_drop'), 2)}pp）∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
 
         elif kind == "ea_td_vol":
             score, label, better = round(float(p["score"]), 1), "营业周期缩短天数(封顶200)×EA合取", "higher"
