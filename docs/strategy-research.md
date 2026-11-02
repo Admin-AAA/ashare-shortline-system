@@ -10448,6 +10448,13 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：FAT∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_fat；K20/max_new5。B 对照 base。
 - 脚本：`fatsuegvol_o25_s874.py` / `run_s874.sh`。
 
+### §874 FATSUEGVOL_o25_h20 — ADOPT → 已上线（orv 20→25）
+- 每笔 P19 +0.33 / P20 −0.01 / P21 +5.89 / W0 −0.54 / W00 +2.20 / W1 +1.72 / W2 +2.37 / R12 +5.77（**正段 6/8**）
+- R12 60笔 +5.77% PF2.34 MDD−6.6；N3 138笔 +3.67 PF1.91 MDD−8.5；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +4.43 / N3 +3.27 MDD−8.5；o25 R12 +5.77 / N3 +3.67 MDD−8.5 → **B 过**。
+- → **ADOPT**。上线（2026-11-03 01:34 CST）：`mid-fat-sue-vol` orv **≥20→≥25**（dtp仍≥55）；`s874_onboard_metrics.py`；replay 强制覆盖 13批/20只（2026-08-01~11-02）；`safe_backend_restart`。解读：固定资产周转∩盈余上抬营收腿成立——对照 SUEGFAT/多数 SUEG 合取 orv 否决不对称。
+
+
 ## §875 [中线·文献] 单季总资产净利率扩张∩盈余加速∩放量（QNSUEGVOL_h20）— 预注册（2026-11-03 01:23 CST 写于跑任何收益之前）
 - 白话：QN扩张≥0.5（q_npta≥1.0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按扩张（封顶5）排序；持20。
 - 想法 / 文献：EQT∩SUEG 刚否、ROE/ROIC∩SUEG 曾否——对称试 **单季 ROA/总资产净利率扩张∩盈余意外**（硬合取，非 −pct；QN/QNVOL 曾测；≠ROE 差分）。对照 QNVOL/ROESUEGVOL/NPMSUEGVOL。
