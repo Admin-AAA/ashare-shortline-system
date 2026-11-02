@@ -10996,12 +10996,40 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：QUICK∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_qr；K20/max_new5。B 对照 base。
 - 脚本：`quicksuegvol_o25_s914.py` / `run_s914.sh`。
 
+### §914 QUICKSUEGVOL_o25_h20 — REJECT（B 门否；冻 orv≥20）
+- 每笔 P19 +0.01 P20 +2.62 P21 +2.92 W0 +0.67 W00 +2.50 W1 +6.95 W2 -1.18 R12 +5.03（**正段 7/8**）
+- R12 31笔 +5.03% PF2.32 MDD−5.4；N3 57笔 +4.48 PF2.29 MDD−5.1；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +4.78 / N3 +4.52 MDD−5.6；o25 R12 +5.03 / N3 +4.48 MDD−5.1 → **B 否**（N3 每笔回落）。
+- → **REJECT**。现役 mid-quick-sue-vol 维持 §911 口径（G dtp≥50/orv≥20）；**冻 orv 轴**。解读：QUICK∩SUEG 双轴到站（d55/o25 皆 B 否）。
+
+
 ## §915 [中线·文献] 盈余公积扩张∩盈余加速∩放量（SURPSUEGVOL_h20）— 预注册（2026-11-03 05:53 CST 写于跑任何收益之前）
 - 白话：surplus_rese_ps 升≥0.05（本期≥0.5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶1）排序；持20。
 - 想法 / 文献：QUICK∩SUEG 刚 ADOPT、UDP∩SUEG 已上线、资本公积单腿曾否——对称试 **盈余公积扩张∩盈余意外**（硬合取；≠未分配利润/资本公积）。对照 UDP/HSZ/QUICKSUEGVOL。
 - 去重：UDPSUEGVOL；HSZ；QUICKSUEGVOL；SUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
 - 规则：SURP∩SUEG∩vol；sc_surp；K20/max_new5。新策略无 B。
 - 脚本：`surpsuegvol_s915.py` / `run_s915.sh`。
+
+### §915 SURPSUEGVOL_h20 — REJECT（A 否·样本/R12）
+- 每笔 P19 +14.36 P20 +9.36 P21 +3.44 W0 -4.16 W00 +2.98 W1 +7.76 W2 +23.35 R12 -3.27（**正段 6/8**）
+- R12 13笔 −3.27% PF0.42 MDD−4.1；N3 21笔 +3.16 PF1.85 MDD−3.9；彩票型
+- 判定 ✗✗✓✓✗ → **否决**（R12 n<30；近一年负）。解读：盈余公积∩SUEG 过稀且近一年砸——对照 UDP∩SUEG 成立不外推；**盈余公积∩SUEG 暂缓**。
+
+
+
+## §916 [中线·文献] 营运资本扩张∩盈余加速∩放量（WCSUEGVOL_h20）— 预注册（2026-11-03 06:03 CST 写于跑任何收益之前）
+- 白话：working_capital 相对去年同报告期升≥10%（本期>0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按相对升幅（封顶3）排序；持20。
+- 想法 / 文献：QUICK∩SUEG 双轴刚到站、SURP∩SUEG 刚稀——改试 **营运资本扩张∩盈余意外**（硬合取；≠速动/流动比率；字段绝对额相对增速）。对照 QUICK/CR/CASHSUEGVOL。
+- 去重：QUICKSUEGVOL；CRSUEGVOL；CASHSUEGVOL；SUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
+- 规则：WC∩SUEG∩vol；sc_wc；K20/max_new5。新策略无 B。
+- 脚本：`wcsuegvol_s916.py` / `run_s916.sh`。
+
+## §917 [中线·文献] 总资产同比减速∩盈余加速∩放量（ASSYSUEGVOL_h20）— 预注册（2026-11-03 06:03 CST 写于跑任何收益之前）
+- 白话：assets_yoy 同比降幅≥5pp（本期∈[−30,40]）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按降幅（封顶30）排序；持20。
+- 想法 / 文献：低资产增长文献 × 盈余意外——试 **资产增速回落∩SUEG**（硬合取；≠去杠杆 debt_to_assets；≠有息负债）。对照 ASSY/DEBTSUEGVOL/WCSUEGVOL。
+- 去重：DEBTSUEGVOL；WCSUEGVOL；EQTSUEGVOL；SUEGVOL。非仓位。不碰数据网关。去杠杆∩SUEG 仍暂缓。
+- 规则：ASSY∩SUEG∩vol；sc_assy；K20/max_new5。新策略无 B。
+- 脚本：`assysuegvol_s917.py` / `run_s917.sh`。
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
