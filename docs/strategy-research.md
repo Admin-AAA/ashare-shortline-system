@@ -9427,3 +9427,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：FZG∩SUEG∩vol；sc_fzg；K20/max_new5。新策略无 B。
 - 脚本：`fzgsuegvol_s797.py` / `run_s797.sh`。
 
+### §796 SEXPSUEGVOL_sc_sue_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +3.39 / P20 +0.90 / P21 +6.45 / W0 +2.67 / W00 +1.15 / W1 −0.91 / W2 +1.78 / R12 +7.85（**正段 7/8**）
+- R12 47笔 +7.85% PF3.05 MDD−6.7；N3 118笔 +3.43 PF1.88 MDD−7.5；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(按降幅)：R12 +8.33 / N3 +3.62 / MDD−7.5 → **B 否**（近一年/三年每笔均降；回撤持平）。
+- → **REJECTED**；线上 mid-sexp-sue-vol 仍按降幅排序。解读：改按 SUE 排序不抬每笔——**停 SEXPSUEGVOL SUE排序轴**（接放量硬抬）。
+
+### §797 FZGSUEGVOL_h20 — REJECT（笔数不足·近一年空窗）
+- 每笔 P19 n=0 / P20 −2.90 / P21 +7.50 / W0 −6.53 / W00 n=0 / W1 n=0 / W2 +3.75 / R12 n=0（**正段 2/8**）
+- R12 **0**笔；样本极稀
+- 判定（样本崩）→ **否决**。解读：预增∩盈余加速同 FZGSUE——近一年空窗；**记候补，勿硬抬/软扩凑笔数**；**预增∩盈余加速双合取∩放量暂缓**（接预增∩CAS/BS）。
+
+## §798 [中线·现役改进] 销售费用∩盈余加速∩放量 dtp硬抬≥55（SEXPSUEGVOL_d55_h20）— 预注册（2026-11-02 12:55 CST 写于跑任何收益之前）
+- 白话：现役 mid-sexp-sue-vol（SEXP≥0.35∩G(dtp≥50)∩SUE≥2.2∩放量，按降幅排序）把 **G 内 dtp 硬抬** 到 **≥55**；SEXP/SUE/orv/放量/排序不变。同进程 SEXPSUEGVOL_base(dtp≥50)。
+- 想法：排序/量能轴刚否；SUEGTD_d55 曾 ADOPT——镜像试 **费用∩盈余双合取的加速腿**（硬门槛，非 −pct）。B 门对照 base。
+- 去重：SEXPSUEGVOL_v18；SEXPSUEGVOL_sc_sue；SUEGTDVOL_d55；SUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：(SEXP∩SUEG_dtp55∩vol) vs (SEXP∩SUEG_dtp50∩vol)；sc_sexp；K20/max_new5。B 门对照 base。
+- 脚本：`sexpsuegvol_d55_s798.py` / `run_s798.sh`。
+
+## §799 [中线·文献] 略增∩盈余加速∩放量（FLZSUEGVOL_h20）— 预注册（2026-11-02 12:55 CST 写于跑任何收益之前）
+- 白话：略增 ∩ SUE≥2.2∩G ∩ 放量≥1.5×amt20；按净利下限排序；持20。
+- 想法 / 文献：预增∩SUEG 刚空窗；SEXPSUEG 已上线——改试 **略增∩盈余加速**（硬合取，非 −pct；FLZVOL/SUEGVOL 已上线；≠略增∩CAS/BS 暂缓）。对照 FZGSUEGVOL/SEXPSUEGVOL/FLZVOL/SUEGVOL。
+- 去重：FZGSUEGVOL；SEXPSUEGVOL；FLZCASVOL；FLZETDVOL；IOSUEGVOL。非仓位。不碰数据网关。
+- 规则：FLZ∩SUEG∩vol；sc_np；K20/max_new5。新策略无 B。
+- 脚本：`flzsuegvol_s799.py` / `run_s799.sh`。
+
