@@ -10873,6 +10873,22 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 
 
 
+
+## §906 [中线·文献] 资产负债率去杠杆∩盈余加速∩放量（DEBTSUEGVOL_h20）— 预注册（2026-11-03 05:05 CST 写于跑任何收益之前）
+- 白话：debt_to_assets 同比降≥3pp 且本期∈[10,80] ∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按降幅（封顶30）排序；持20。
+- 想法 / 文献：ROA/ITC∩SUEG 双轴刚到站、有息负债∩SUEG 暂缓——对称试 **资产负债率去杠杆∩盈余意外**（硬合取；字段≠interestdebt/IDE；单腿 DEBT/DEBTVOL 曾否）。对照 DEBTVOL/INTDSUEGVOL/ROASUEGVOL。
+- 去重：DEBTVOL；INTDSUEGVOL；IDESUEGVOL；CLDSUEGVOL。非仓位。不碰数据网关。**有息负债∩SUEG 仍暂缓**。
+- 规则：DEBT∩SUEG∩vol；sc_debt；K20/max_new5。新策略无 B。
+- 脚本：`debtsuegvol_s906.py` / `run_s906.sh`。
+
+## §907 [中线·文献] 扣非ROE扩张∩盈余加速∩放量（ROEDTSUEGVOL_h20）— 预注册（2026-11-03 05:05 CST 写于跑任何收益之前）
+- 白话：roe_dt 扩张≥1.0（本期 roe_dt≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δroe_dt（封顶10）排序；持20。
+- 想法 / 文献：ROA∩SUEG 刚 ADOPT、ROY（roe_yoy）已上线、QROE∩SUEG 曾否——对称试 **扣非ROE水平扩张∩盈余意外**（硬合取；字段≠roe_yoy/q_roe；≠全年ROA）。对照 ROY/QROESUEGVOL/ROASUEGVOL。
+- 去重：ROYVOL；QROESUEGVOL；ROASUEGVOL；ROICSUEGVOL。非仓位。不碰数据网关。
+- 规则：ROEDT∩SUEG∩vol；sc_roedt；K20/max_new5。新策略无 B。
+- 脚本：`roedtsuegvol_s907.py` / `run_s907.sh`。
+
+
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
 - 白话：BEPS≥20（basic_eps_yoy 水平）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 basic_eps_yoy（封顶100）排序；持20。
 - 想法 / 文献：EBT∩SUEG 刚 ADOPT、EPS∩放量曾否、ROY∩SUEG 已上线——对称试 **基本每股收益同比水平∩盈余意外**（硬合取；≠扣非加速/EBT加速）。对照 EPS/EPSVOL/ROYSUEGVOL。
