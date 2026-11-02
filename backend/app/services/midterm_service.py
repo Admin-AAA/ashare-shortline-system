@@ -675,6 +675,24 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §924 年化ROA扩张∩盈余加速∩放量（scripts/midterm/roa2suegvol_s924.py ROA2SUEGVOL_h20；§282 达标；2026-11-03 上线；≠ mid-roa-sue-vol）
+    "mid-roa2-sue-vol": {
+        "name": "年化ROA扩张∩盈余加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足年化总资产净利率（roa2_yearly）≥3%且较去年同报告期扩张≥1.0个百分点，与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥20），且信号日成交额≥1.5×前20日均额；按扩张（封顶10）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：年化ROA扩张 × 盈余惊喜加速 × 量能确认（§924；≠全年roa的 mid-roa-sue-vol）。",
+        "kind": "roa2_sue_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
+    # §925 单季销售费用率下降∩盈余加速∩放量（scripts/midterm/qsexpsuegvol_s925.py QSEXPSUEGVOL_h20；§282 达标；2026-11-03 上线；≠ mid-sexp-sue-vol）
+    "mid-qsexp-sue-vol": {
+        "name": "单季销售费用率下降∩盈余加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足单季销售费用率（q_saleexp_to_gr）较去年同报告期下降≥0.5个百分点（去年≥2），与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥20），且信号日成交额≥1.5×前20日均额；按降幅（封顶5）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：单季费用改善 × 盈余惊喜加速 × 量能确认（§925；≠累计saleexp_to_gr的 mid-sexp-sue-vol）。",
+        "kind": "qsexp_sue_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §735 净负债转净现金∩营业周期∩放量（scripts/midterm/ncstdvol_s735.py NCSTDVOL_h20；§282 达标；2026-11-02 上线）
     "mid-ncs-td-vol": {
         "name": "净负债转净现金∩营业周期∩放量（持20日）",
@@ -2432,6 +2450,34 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
 
+        if meta.get("kind") == "qsexp_sue_vol":
+            from app.services.midterm_suegvol import qsexpsuegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = qsexpsuegvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
+        if meta.get("kind") == "roa2_sue_vol":
+            from app.services.midterm_suegvol import roa2suegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = roa2suegvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
 
 
 
@@ -3173,6 +3219,14 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
         elif kind == "quick_sue_vol":
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：quick_ratio {_f(p.get('qr_prev'), 2)} → {_f(p.get('qr_cur'), 2)}"
                       f"（改善 {_f(p.get('qr_dq'), 2)}）∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
+
+        elif kind == "qsexp_sue_vol":
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：q_saleexp_to_gr {_f(p.get('qsexp_prev'), 2)} → {_f(p.get('qsexp_cur'), 2)}"
+                      f"（降幅 {_f(p.get('qsexp_drop'), 2)}pp）∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
+
+        elif kind == "roa2_sue_vol":
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：roa2_yearly {_f(p.get('roa2_prev'), 2)} → {_f(p.get('roa2_cur'), 2)}"
+                      f"（扩张 {_f(p.get('roa2_dq'), 2)}pp）∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
 
         elif kind == "ea_td_vol":
             score, label, better = round(float(p["score"]), 1), "营业周期缩短天数(封顶200)×EA合取", "higher"

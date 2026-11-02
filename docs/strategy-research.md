@@ -11132,12 +11132,41 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：ROA2∩SUEG∩vol；sc_roa2；K20/max_new5。新策略无 B。
 - 脚本：`roa2suegvol_s924.py` / `run_s924.sh`。
 
+### §924 ROA2SUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +0.78 / P20 +0.91 / P21 +7.92 / W0 −1.06 / W00 +0.69 / W1 +2.33 / W2 +4.53 / R12 +3.50（**正段 7/8**）
+- R12 70笔 +3.50% PF1.73 MDD−9.0；N3 157笔 +3.46 PF1.9 MDD−7.9；彩票型
+- 判定 ✓✓✓✓✓ → **达标**。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 06:50 CST）：`mid-roa2-sue-vol`（kind=`roa2_sue_vol`）；FINA_FIELDS 增 `roa2_yearly`；`s924_onboard_metrics.py`；replay onboard 21批/60只（2026-08-01~11-02）；`safe_backend_restart`。解读：年化ROA∩盈余合取成立（≠全年roa；ROADP 曾否不对称）。
+
+
 ## §925 [中线·文献] 单季销售费用率下降∩盈余加速∩放量（QSEXPSUEGVOL_h20）— 预注册（2026-11-03 06:38 CST 写于跑任何收益之前）
 - 白话：q_saleexp_to_gr 同比降≥0.5（去年≥2）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按降幅（封顶5）排序；持20。
 - 想法 / 文献：SEXPSUEG 已上线（累计 saleexp_to_gr）、EXPSUEG 刚否——对称试 **单季销售费用率下降∩盈余意外**（硬合取；≠累计口径）。对照 SEXPSUEGVOL/EXPSUEGVOL/ADMINSUEGVOL。
 - 去重：SEXPSUEGVOL；EXPSUEGVOL；ADMINSUEGVOL；SUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
 - 规则：QSEXP∩SUEG∩vol；sc_qsexp；K20/max_new5。新策略无 B。
 - 脚本：`qsexpsuegvol_s925.py` / `run_s925.sh`。
+
+### §925 QSEXPSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +4.64 / P20 +1.58 / P21 +6.67 / W0 +1.75 / W00 +2.32 / W1 +1.19 / W2 +1.50 / R12 +8.18（**正段 8/8**）
+- R12 46笔 +8.18% PF3.36 MDD−6.1；N3 107笔 +4.28 PF2.25 MDD−6.4；稳健型
+- 判定 ✓✓✓✓✓ → **达标**。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 06:50 CST）：`mid-qsexp-sue-vol`（kind=`qsexp_sue_vol`）；FINA_FIELDS 增 `q_saleexp_to_gr`；`s925_onboard_metrics.py`；replay onboard 14批/31只（2026-08-01~11-02）；`safe_backend_restart`。解读：单季销售费用率∩盈余合取强（8/8；≠累计 SEXPSUEG；EXPSUEG 曾否不对称）。
+
+
+
+## §926 [中线·现役改进] 年化ROA扩张∩盈余加速∩放量 dtp硬抬≥55（ROA2SUEGVOL_d55_h20）— 预注册（2026-11-03 06:50 CST 写于跑任何收益之前）
+- 白话：现役 mid-roa2-sue-vol（§924）把 **G 内 dtp 硬抬** 到 **≥55**；ROA2/SUE/orv/放量/排序不变。同进程 ROA2SUEGVOL_base(dtp≥50)。
+- 想法：§924 刚 ADOPT——镜像 EBT/FAT/QN_d55。B 门对照 base。
+- 去重：ROA2SUEGVOL；ROASUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：ROA2∩SUEG∩vol；G.dtp≥55；sc_roa2；K20/max_new5。B 对照 base。
+- 脚本：`roa2suegvol_d55_s926.py` / `run_s926.sh`。
+
+## §927 [中线·现役改进] 单季销售费用率下降∩盈余加速∩放量 dtp硬抬≥55（QSEXPSUEGVOL_d55_h20）— 预注册（2026-11-03 06:50 CST 写于跑任何收益之前）
+- 白话：现役 mid-qsexp-sue-vol（§925）把 **G 内 dtp 硬抬** 到 **≥55**；QSEXP/SUE/orv/放量/排序不变。同进程 QSEXPSUEGVOL_base(dtp≥50)。
+- 想法：§925 刚 ADOPT——镜像 SEXPSUEG/ADMIN_d55。B 门对照 base。
+- 去重：QSEXPSUEGVOL；SEXPSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：QSEXP∩SUEG∩vol；G.dtp≥55；sc_qsexp；K20/max_new5。B 对照 base。
+- 脚本：`qsexpsuegvol_d55_s927.py` / `run_s927.sh`。
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
