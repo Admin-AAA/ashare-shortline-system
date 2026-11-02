@@ -10551,6 +10551,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - → **REJECT**。现役 mid-fcfe-sue-vol 维持 §869 口径（G dtp≥50/orv≥20）；**冻 orv 轴**。解读：FCFE∩SUEG 双轴到站（d55 A 否 / o25 B 否）。
 
 
+## §882 [中线·文献] 总资产周转扩张∩盈余加速∩放量（ATSUEGVOL_h20）— 预注册（2026-11-03 02:35 CST 写于跑任何收益之前）
+- 白话：AT升幅≥0.05（assets_turn≥0.20）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ΔAT（封顶0.50）排序；持20。
+- 想法 / 文献：FAT∩SUEG 双轴到站、周转单腿 AT/ART/CAT 曾否——对称试 **总资产周转∩盈余意外**（硬合取，非 −pct；≠FAT 的 fa_turn）。对照 AT/ATVOL/FATSUEGVOL。
+- 去重：AT；ATVOL；FATSUEGVOL；ARTSUEGVOL。非仓位。不碰数据网关。
+- 规则：AT∩SUEG∩vol；sc_at；K20/max_new5。新策略无 B。
+- 脚本：`atsuegvol_s882.py` / `run_s882.sh`。
+
+## §883 [中线·文献] 应收周转扩张∩盈余加速∩放量（ARTSUEGVOL_h20）— 预注册（2026-11-03 02:35 CST 写于跑任何收益之前）
+- 白话：ART升幅≥0.30（ar_turn≥2.0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ΔART（封顶5）排序；持20。
+- 想法 / 文献：AT∩SUEG 同批；应收周转单腿/∩放量曾否——对称试 **应收周转∩盈余意外**（硬合取；≠FAT/AT）。对照 ART/ARTVOL/FATSUEGVOL。
+- 去重：ART；ARTVOL；ATSUEGVOL；FATSUEGVOL。非仓位。不碰数据网关。
+- 规则：ART∩SUEG∩vol；sc_art；K20/max_new5。新策略无 B。
+- 脚本：`artsuegvol_s883.py` / `run_s883.sh`。
+
+
 
 
 
