@@ -10423,6 +10423,12 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：FAT∩SUEG∩vol；G.dtp≥55；sc_fat；K20/max_new5。B 对照 base。
 - 脚本：`fatsuegvol_d55_s872.py` / `run_s872.sh`。
 
+### §872 FATSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 −1.30 / P20 +0.12 / P21 +4.92 / W0 −2.20 / W00 +1.97 / W1 +1.46 / W2 +3.26 / R12 +4.43（**正段 6/8**）
+- R12 64笔 +4.43% PF2.01 MDD−7.4；N3 148笔 +3.27 PF1.81 MDD−8.5；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +3.98 / N3 +3.23 MDD−8.6；d55 R12 +4.43 / N3 +3.27 MDD−8.5 → **B 过**。
+- → **ADOPT**。上线（2026-11-03 01:08 CST）：`mid-fat-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s872_onboard_metrics.py`；replay 强制覆盖 13批/22只（2026-08-01~11-02）；`safe_backend_restart`。解读：固定资产周转∩盈余上抬扣非腿成立——镜像 QS/FCFF/CFPS/UDP_d55。
+
 ## §873 [中线·文献] 股东权益同比加速∩盈余加速∩放量（EQTSUEGVOL_h20）— 预注册（2026-11-03 00:55 CST 写于跑任何收益之前）
 - 白话：EQT加速≥20（eqt_yoy≥20）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按加速（封顶100）排序；持20。
 - 想法 / 文献：FAT∩SUEG 刚 ADOPT、BPS/EQS∩SUEG 曾否——对称试 **股东权益同比加速∩盈余意外**（硬合取，非 −pct；EQT/EQTVOL 曾测；≠BPS 的 bvps 口径）。对照 EQTVOL/BPSSUEGVOL/FATSUEGVOL。
