@@ -11190,12 +11190,40 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：ROA2∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_roa2；K20/max_new5。B 对照 base。
 - 脚本：`roa2suegvol_o25_s928.py` / `run_s928.sh`。
 
+### §928 ROA2SUEGVOL_o25_h20 — REJECT（B 门否；冻 orv≥20）
+- 每笔 P19 +1.08 / P20 −0.19 / P21 +8.13 / W0 +0.33 / W00 +1.29 / W1 +1.97 / W2 +3.77 / R12 +4.14（**正段 7/8**）
+- R12 64笔 +4.14% PF1.85 MDD−6.7；N3 146笔 +3.44 PF1.84 MDD−7.7；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +4.05 PF1.87 / N3 +3.50 PF1.90 MDD−7.8；o25 R12 +4.14 PF1.85 / N3 +3.44 PF1.84 MDD−7.7 → **B 否**（近一年略抬但三年每笔/PF 未过）。
+- → **REJECT**。现役 mid-roa2-sue-vol 维持 §926 口径（G dtp≥55/orv≥20）；**冻 orv 轴**。解读：年化ROA∩盈余抬营收腿无增量——**ROA2∩SUEG 双轴到站**（dtp≥55 / orv冻≥20）。
+
+
 ## §929 [中线·现役改进] 单季销售费用率下降∩盈余加速∩放量 orv硬抬≥25（QSEXPSUEGVOL_o25_h20）— 预注册（2026-11-03 07:08 CST 写于跑任何收益之前）
 - 白话：现役 mid-qsexp-sue-vol（§927 已抬至 G dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；QSEXP/SUE/dtp/放量/排序不变。同进程 QSEXPSUEGVOL_base(orv≥20)。
 - 想法：§927 d55 刚 ADOPT——续试 orv 轴。B 门对照 base。
 - 去重：QSEXPSUEGVOL_d55；ROA2SUEGVOL_o25。非仓位。不碰数据网关。
 - 规则：QSEXP∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_qsexp；K20/max_new5。B 对照 base。
 - 脚本：`qsexpsuegvol_o25_s929.py` / `run_s929.sh`。
+
+### §929 QSEXPSUEGVOL_o25_h20 — ADOPT → 已上线（orv 20→25；接 §927 dtp）
+- 每笔 P19 +3.86 / P20 +0.40 / P21 +5.70 / W0 +2.13 / W00 +2.32 / W1 +1.11 / W2 +1.41 / R12 +9.31（**正段 8/8**）
+- R12 43笔 +9.31% PF4.02 MDD−5.1；N3 96笔 +4.86 PF2.41 MDD−5.7；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +9.01 PF3.84 / N3 +4.54 PF2.32 MDD−6.0；o25 R12 +9.31 PF4.02 / N3 +4.86 PF2.41 MDD−5.7 → **B 过**（近一年/三年每笔与 PF 均抬；回撤更浅）。
+- → **ADOPT**。上线（2026-11-03 07:25 CST）：`mid-qsexp-sue-vol` orv **≥20→≥25**（dtp仍≥55）；`s929_onboard_metrics.py`；replay 强制覆盖 12批/27只（2026-08-01~11-02）；`safe_backend_restart`。解读：单季销售费用率∩盈余上抬营收腿成立——镜像 SEXPSUEG/QN/FAT_o25；对照 ROA2_o25 否决不对称。
+
+## §930 [中线·现役改进] 单季销售费用率下降∩盈余加速∩放量 orv再抬≥30（QSEXPSUEGVOL_o30_h20）— 预注册（2026-11-03 07:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-qsexp-sue-vol（§929 已抬至 G dtp≥55∩orv≥25）把 **G 内 orv 再硬抬** 到 **≥30**；QSEXP/SUE/dtp/放量/排序不变。同进程 QSEXPSUEGVOL_base(orv≥25)。
+- 想法：§929 o25 刚 ADOPT——镜像 SEXPSUEG_o30 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：QSEXPSUEGVOL_o25；ROA2SUEGVOL（orv已冻）。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
+- 规则：QSEXP∩SUEG∩vol；G.orv≥30（dtp仍≥55）；sc_qsexp；K20/max_new5。B 对照 base。
+- 脚本：`qsexpsuegvol_o30_s930.py` / `run_s930.sh`。
+
+## §931 [中线·文献] 单季毛利率改善∩盈余加速∩放量（QGCSUEGVOL_h20）— 预注册（2026-11-03 07:25 CST 写于跑任何收益之前）
+- 白话：q_gc_to_gr 较去年同报告期升≥1.0（去年≥10）∩ SUE≥2.2∩G∩放量≥1.5×amt20；按升幅（封顶10）排序；持20。
+- 想法 / 文献：QSEXP∩SUEG 刚 ADOPT o25、毛利率单腿与费用改善对称——试 **单季毛利率（q_gc_to_gr）改善∩盈余意外**（硬合取；≠累计 grossprofit_margin；≠QSEXP 费用侧）。对照 QSEXPSUEG/GPM/SEXP。
+- 去重：QSEXPSUEGVOL；GPMVOL；SEXPSUEGVOL；SUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
+- 规则：QGC∩SUEG∩vol；sc_qgc；K20/max_new5。新策略无 B。
+- 脚本：`qgcsuegvol_s931.py` / `run_s931.sh`。
+
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
