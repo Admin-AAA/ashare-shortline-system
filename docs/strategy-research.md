@@ -8801,3 +8801,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：NCSSUEGVOL；EATADVOL；EAETDVOL；EAFATVOL；NCSTDVOL。非仓位。不碰数据网关。
 - 规则：NCS∩G∩vol；sc_ncs；K20/max_new5。新策略无 B。
 - 脚本：`ncseavol_s747.py` / `run_s747.sh`。例行约 8:47 冲突时串行让行。
+
+### §746 NCSTDVOL_v18_h20 — REJECT（笔数不足；B 亦否·MDD）
+- 每笔 P19 −3.10 / P20 +1.32 / P21 +2.30 / W0 −0.15 / W00 +2.57 / W1 +8.95 / W2 +1.80 / R12 +2.56（**正段 6/8**）
+- R12 **28笔** +2.56% PF1.59 MDD−7.9；N3 76笔 +5.09 PF2.57 MDD−6.9；彩票型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 n=28<30）。同进程 base：R12 +1.89 / N3 +3.49 / MDD−6.0 → **B 亦否**（N3 MDD 加深）。
+- → **REJECTED**；线上 mid-ncs-td-vol 仍放量≥1.5×。解读：指标尚可但样本贴线且三年回撤加深——**记候补，勿硬抬/软扩凑笔数**；**停 NCSTDVOL 放量硬抬轴**。
+
+### §747 NCSEAVOL_h20 — REJECT（笔数不足）
+- 每笔 P19 −2.35 / P20 +3.90 / P21 +1.31 / W0 +0.47 / W00 +0.74 / W1 +5.88 / W2 +5.54 / R12 +4.65（**正段 7/8**）
+- R12 **28笔** +4.65% PF2.00 MDD−6.8；N3 59笔 +5.23 PF2.56 MDD−6.3；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 n=28<30）。解读：指标强但样本贴线——**记候补，勿硬抬/软扩凑笔数**；**净现金∩业绩加速双合取∩放量暂缓**（接 NCSSUEG）。
+
+## §748 [中线·现役改进] TAD∩ETD∩放量 放量硬抬≥1.8×（TADETDVOL_v18_h20）— 预注册（2026-11-02 08:35 CST 写于跑任何收益之前）
+- 白话：现役 mid-tad-etd-vol（TAD≥0.25∩ETD≥0.20∩放量1.5×，按TAD升幅排序）把 **放量硬抬** 到 **≥1.8×amt20**；TAD/ETD/排序不变。同进程 TADETDVOL_base(1.5×)。
+- 想法：NCSTD/SUEG∩效率量能硬抬刚否或候补——改试 **BS 双合取现役**（硬门槛，非 −pct；升幅/排序轴已停）。B 门对照 base。
+- 去重：TADVOL_v18；ETDVOL_v18；TADETDVOL_d030；TADETDVOL_ed025。非仓位。不碰数据网关。
+- 规则：(TAD≥0.25∩ETD∩vol1.8) vs (TAD≥0.25∩ETD∩vol1.5)；sc_tad；K20/max_new5。B 门对照 base。
+- 脚本：`tadetdvol_v18_s748.py` / `run_s748.sh`。例行约 8:47 冲突时串行让行。
+
+## §749 [中线·文献] 流动资产/负债∩周期效率∩放量（CASTDVOL_h20）— 预注册（2026-11-02 08:35 CST 写于跑任何收益之前）
+- 白话：CAS升幅≥3.0pp ∩ TD缩短≥20 ∩ 放量≥1.5×amt20；按 sc_cas 排序；持20。
+- 想法 / 文献：净现金∩加速/盈余候补勿凑样；NCS∩TD 已上线——改试 **流动资产覆盖∩周期**（硬合取，非 −pct；CASVOL/TDVOL/FATTD 已上线）。对照 CASVOL/NCSTDVOL/FATTDVOL/TDVOL。
+- 去重：CASVOL；NCSTDVOL；FATTDVOL；SUEGTDVOL；CASVOL_v18。非仓位。不碰数据网关。
+- 规则：CAS∩TD∩vol；sc_cas；K20/max_new5。新策略无 B。
+- 脚本：`castdvol_s749.py` / `run_s749.sh`。例行约 8:47 冲突时串行让行。
