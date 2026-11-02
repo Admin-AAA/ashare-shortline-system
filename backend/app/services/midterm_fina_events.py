@@ -633,7 +633,7 @@ def fattdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 # §663 ETDFATVOL_h20（ETD ∩ FAT ∩ 放量；排序 ETD 升幅）
 def etdfatvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§663：股东权益/负债改善 ∩ 固定资产周转扩张 ∩ 放量≥1.5×amt20；排序 ETD 升幅。"""
+    """§663/§750：股东权益/负债改善 ∩ 固定资产周转扩张 ∩ 放量≥1.8×amt20（§750 硬抬；原≥1.5×）；排序 ETD 升幅。"""
     etd = etdvol_candidates(db, as_of)
     fat = fat_candidates(db, as_of)
     if etd is None or fat is None:
@@ -644,10 +644,22 @@ def etdfatvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         e = fat_by.get(p0["code"])
         if e is None:
             continue
+        # §750：在 etdvol(≥1.5×) 基础上再硬抬到 ≥1.8×（不改动单腿 etdvol）
+        amount = p0.get("amount")
+        amt20 = p0.get("amt20")
+        try:
+            amt20_f = float(amt20) if amt20 is not None else None
+            amount_f = float(amount) if amount is not None else None
+        except (TypeError, ValueError):
+            amt20_f = None
+            amount_f = None
+        if amount_f is None or amt20_f is None or amt20_f <= 0 or amount_f < 1.8 * amt20_f:
+            continue
         q = dict(p0)
         q["fat_dq"] = e.get("dq")
         q["fat_cur"] = e.get("cur")
         q["fat_prev"] = e.get("prev")
+        q["vol_ratio"] = round(amount_f / amt20_f, 4)
         out.append(q)
     return sorted(out, key=lambda x: (-x["score"], x["code"]))
 
