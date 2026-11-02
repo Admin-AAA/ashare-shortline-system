@@ -8977,3 +8977,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：FINACASVOL；SEXPETDVOL；ETDCASVOL；CASFATVOL；SEXPVOL。非仓位。不碰数据网关。
 - 规则：SEXP∩CAS∩vol；sc_sexp 去封顶；K20/max_new5。新策略无 B。
 - 脚本：`sexpcasvol_s761.py` / `run_s761.sh`。
+
+### §760 SUEGVOL_d55_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +1.12 / P20 +0.16 / P21 +8.56 / W0 −2.03 / W00 +2.04 / W1 +2.80 / W2 +3.23 / R12 +4.61（**正段 7/8**）
+- R12 70笔 +4.61% PF2.10 MDD−9.4；N3 163笔 +3.70 PF2.03 MDD−8.7；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base：R12 +4.49 / N3 +3.94 / MDD−8.9 → **B 否**（近一年略升但三年每笔 −0.24）。
+- → **REJECTED**；线上 mid-sue-accel-vol 仍 dtp≥50。解读：单腿抬 dtp 不镜像 EATDVOL_d55——**停 SUEGVOL dtp硬抬轴**（接放量硬抬）。
+
+### §761 SEXPCASVOL_h20 — REJECT（A 否·正段）
+- 每笔 P19 −0.06 / P20 −1.01 / P21 +3.59 / W0 −1.97 / W00 −1.28 / W1 +3.07 / W2 +3.88 / R12 +2.11（**正段 4/8**）
+- R12 79笔 +2.11% PF1.53 MDD−7.8；N3 209笔 +2.93 PF1.76 MDD−9.8；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**。解读：销售费用∩流动资产同财务费用∩CAS/ETD——正段不够；**销售费用∩BS结构双合取∩放量暂缓**（接 SEXPETD；与财务费用∩BS 同向）。
+
+## §762 [中线·现役改进] 盈余加速∩周期∩放量 dtp硬抬≥55（SUEGTDVOL_d55_h20）— 预注册（2026-11-02 09:51 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-td-vol（SUE≥2.2∩G(dtp≥50)∩TD∩放量1.5×，按SUE排序）把 **G 内 dtp 硬抬** 到 **≥55**；SUE/TD/orv/放量/排序不变。同进程 SUEGTDVOL_base(dtp≥50)。
+- 想法：SUEGVOL_d55 刚 B 否——镜像接到 **盈余∩周期双合取现役**（硬门槛，非 −pct；EATDVOL_d55 曾 ADOPT）。B 门对照 base。
+- 去重：SUEGVOL_d55；EATDVOL_d55；SUEGTDVOL_v18；SUEGTDVOL_s25。非仓位。不碰数据网关。
+- 规则：(SUEG_dtp55∩TD∩vol) vs (SUEG_dtp50∩TD∩vol)；sc_sue；K20/max_new5。B 门对照 base。
+- 脚本：`suegtdvol_d55_s762.py` / `run_s762.sh`。
+
+## §763 [中线·文献] 业绩加速∩流动资产占比∩放量（EACASVOL_h20）— 预注册（2026-11-02 09:51 CST 写于跑任何收益之前）
+- 白话：G(dtp≥50∩orv≥20∩加速) ∩ CAS升幅≥3.0pp ∩ 放量≥1.5×amt20；按 dtp 封顶300排序；持20。
+- 想法 / 文献：费用∩CAS 刚双否；加速∩FAT/TAD/ETD 曾否——改试 **加速∩流动资产结构**（硬合取，非 −pct；EAVOL/CASVOL/EATD 已上线；≠SUEGCAS 已否）。对照 SEXPCASVOL/SUEGCASVOL/EAFATVOL/CASVOL。
+- 去重：SEXPCASVOL；SUEGCASVOL；EAFATVOL；EATADVOL；EAETDVOL。非仓位。不碰数据网关。
+- 规则：G∩CAS∩vol；sc_g；K20/max_new5。新策略无 B。
+- 脚本：`eacasvol_s763.py` / `run_s763.sh`。
