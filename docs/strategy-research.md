@@ -8927,3 +8927,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：SEXPETDVOL；FINATDVOL；ETDFATVOL；FINAVOL_v18；ETDCASVOL。非仓位。不碰数据网关。
 - 规则：FINA∩ETD∩vol；sc_fina 去封顶；K20/max_new5。新策略无 B。
 - 脚本：`finaetdvol_s757.py` / `run_s757.sh`。
+
+### §756 SUEGVOL_v18_h20 — REJECT（A 否·PF；B 亦否）
+- 每笔 P19 +5.56 / P20 −0.85 / P21 +7.20 / W0 −1.10 / W00 +0.16 / W1 +1.69 / W2 +3.28 / R12 +0.91（**正段 6/8**）
+- R12 67笔 +0.91% **PF1.16** MDD−9.6；N3 148笔 +1.80 PF1.42 MDD−9.6；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**。同进程 base：R12 +4.49 / N3 +3.94 / MDD−8.9 → **B 亦否**（每笔双降、三年回撤加深）。
+- → **REJECTED**；线上 mid-sue-accel-vol 仍放量≥1.5×。解读：1.8× 同 2.0×——量能硬抬砸近一年；**停 SUEGVOL 放量硬抬轴**（接 v20）。
+
+### §757 FINAETDVOL_h20 — REJECT（A 否·正段）
+- 每笔 P19 −1.08 / P20 −1.29 / P21 +4.62 / W0 −2.24 / W00 −0.31 / W1 +6.21 / W2 +1.10 / R12 +1.40（**正段 4/8**）
+- R12 65笔 +1.40% PF1.38 MDD−11.7；N3 185笔 +3.16 PF1.82 MDD−9.9；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**。解读：财务费用∩股东权益杠杆同销售费用∩ETD——正段不够；**财务费用∩BS/效率双合取∩放量暂缓**（接 FINATD；与销售费用∩BS/效率同向暂缓）。
+
+## §758 [中线·现役改进] ETD∩FAT∩放量 放量硬抬≥2.0×（ETDFATVOL_v20_h20）— 预注册（2026-11-02 09:30 CST 写于跑任何收益之前）
+- 白话：现役 mid-etd-fa-vol（§750 已抬至放量≥1.8×，ETD∩FAT≥0.10，按ETD升幅排序）把 **放量再硬抬** 到 **≥2.0×amt20**；ETD/FAT/排序不变。同进程 ETDFATVOL_base(1.8×)。
+- 想法：§750 v18 刚 ADOPT——续试贴档（硬门槛，非 −pct；对照 SEXPVOL/IOVOL 的 v20 刚否）。B 门对照 base。
+- 去重：ETDFATVOL_v18；SEXPVOL_v20；IOVOL_v20；TADETDVOL_v18。非仓位。不碰数据网关。
+- 规则：(ETD∩FAT∩vol2.0) vs (ETD∩FAT∩vol1.8)；sc_etd；K20/max_new5。B 门对照 base。
+- 脚本：`etdfatvol_v20_s758.py` / `run_s758.sh`。
+
+## §759 [中线·文献] 财务费用率下降∩流动资产占比∩放量（FINACASVOL_h20）— 预注册（2026-11-02 09:30 CST 写于跑任何收益之前）
+- 白话：FINA降幅≥0.5 ∩ CAS升幅≥3.0pp ∩ 放量≥1.5×amt20；按 FINA 原始降幅排序；持20。
+- 想法 / 文献：财务费用∩ETD 刚否、销售费用∩BS 暂缓——改试 **财务费用∩流动资产结构**（硬合取，非 −pct；FINAVOL/CASVOL/ETDFAT 已上线；≠ETDCAS/CAS∩FAT/TD 已否）。对照 FINAETDVOL/ETDCASVOL/CASFATVOL/FINAVOL。
+- 去重：FINAETDVOL；ETDCASVOL；CASFATVOL；FINATDVOL；CASVOL。非仓位。不碰数据网关。
+- 规则：FINA∩CAS∩vol；sc_fina 去封顶；K20/max_new5。新策略无 B。
+- 脚本：`finacasvol_s759.py` / `run_s759.sh`。
