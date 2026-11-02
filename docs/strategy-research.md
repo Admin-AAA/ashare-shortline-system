@@ -10358,6 +10358,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 判定 ✓✓✓**✗**✓ → **否决**（正段不足 / R12 彩票型）。
 - → **REJECTED**。解读：CAS∩SUEG 近窗尚可但正段不够——单腿 CAS/CASVOL 曾测，合取未过正段门。
 
+### §867 ETDSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 n0 / P20 +1.41 / P21 +5.10 / W0 −2.09 / W00 −6.40 / W1 +9.93 / W2 +0.27 / R12 +1.82（**正段 5/8**）
+- R12 15笔 +1.82% PF1.31 MDD−3.0；N3 28笔 +4.21 PF1.96 MDD−3.8；彩票型
+- 判定 ✓✓✓**✗✗** → **否决**（近一年/近三年笔数偏稀）。
+- → **REJECTED**。解读：ETD∩SUEG 覆盖不足——单腿 ETD/ETDVOL 曾测，合取未救笔数门。
+
+## §868 [中线·文献] 有形资产占比改善∩盈余加速∩放量（TBASUEGVOL_h20）— 预注册（2026-11-02 23:58 CST 写于跑任何收益之前）
+- 白话：TBA升幅≥3.0pp（tbassets_to_totalassets 区间约束）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶25）排序；持20。
+- 想法 / 文献：TAD/CAS/ETD∩SUEG 刚否——改试 **有形资产/总资产占比改善∩盈余意外**（硬合取，非 −pct；TBA/TBAVOL 曾测；≠TAD 杠杆）。对照 TBAVOL/CASSUEGVOL/TADSUEGVOL。
+- 去重：TBAVOL；TADSUEGVOL；CASSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：TBA∩SUEG∩vol；sc_tba；K20/max_new5。新策略无 B。
+- 脚本：`tbasuegvol_s868.py` / `run_s868.sh`。
+
+## §869 [中线·文献] 每股股权自由现金流改善∩盈余加速∩放量（FCFESUEGVOL_h20）— 预注册（2026-11-02 23:58 CST 写于跑任何收益之前）
+- 白话：FCFE 每股环比改善∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 dfcfe（封顶）排序；持20。
+- 想法 / 文献：FCFF∩SUEG 已上线、CFPS∩SUEG 已上线——对称试 **股权自由现金流每股改善∩盈余意外**（硬合取，非 −pct；FCFE 曾测；≠FCFF/CFPS）。对照 FCFFSUEGVOL/CFPSSUEGVOL/FCFEVOL。
+- 去重：FCFEVOL；FCFFSUEGVOL；CFPSSUEGVOL；OCFSUEGVOL。非仓位。不碰数据网关。
+- 规则：FCFE∩SUEG∩vol；sc_fcfe；K20/max_new5。新策略无 B。
+- 脚本：`fcfesuegvol_s869.py` / `run_s869.sh`。
+
 ## 晚间例行进度（2026-11-02 ~20:48→21:25 CST）
 - 健康：8765 `/api/health` 200；5174 200；HEAD 起点 81d94fd0 → 本轮提交后更新；swap used≈9–10G → 串行。
 - 选股：短线最近约 2026-10-30；中线 2026-11-02 ok=4 / data_error=4（预告系含 KeyError top_n）/ no_signal=8 / 周度 not_signal_day=5；长线 3/3 @2026-10-30 ok。
