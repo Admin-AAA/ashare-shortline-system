@@ -10416,6 +10416,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
 - → **ADOPT**。上线（2026-11-03 00:51 CST）：`mid-fat-sue-vol`（kind=`fat_sue_vol`）；`s871_onboard_metrics.py`；replay onboard 13批/24只（2026-08-01~11-02）；`safe_backend_restart`。解读：固定资产周转∩盈余合取成立（≠已上线 mid-sue-fa-vol 按SUE排序）。
 
+## §872 [中线·现役改进] 固定资产周转改善∩盈余加速∩放量 dtp硬抬≥55（FATSUEGVOL_d55_h20）— 预注册（2026-11-03 00:55 CST 写于跑任何收益之前）
+- 白话：现役 mid-fat-sue-vol（§871：FAT升幅≥0.10∩SUE≥2.2∩G∩放量≥1.5×，排序ΔFAT封顶2）把 **G 内 dtp 硬抬** 到 **≥55**；FAT/SUE/orv/放量/排序不变。同进程 FATSUEGVOL_base(dtp≥50)。
+- 想法：§871 刚 ADOPT——镜像 QS/FCFF/CFPS/UDP 的 d55 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：FATSUEGVOL；SUEGFATVOL_d55（曾否）。非仓位。不碰数据网关。
+- 规则：FAT∩SUEG∩vol；G.dtp≥55；sc_fat；K20/max_new5。B 对照 base。
+- 脚本：`fatsuegvol_d55_s872.py` / `run_s872.sh`。
+
+## §873 [中线·文献] 股东权益同比加速∩盈余加速∩放量（EQTSUEGVOL_h20）— 预注册（2026-11-03 00:55 CST 写于跑任何收益之前）
+- 白话：EQT加速≥20（eqt_yoy≥20）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按加速（封顶100）排序；持20。
+- 想法 / 文献：FAT∩SUEG 刚 ADOPT、BPS/EQS∩SUEG 曾否——对称试 **股东权益同比加速∩盈余意外**（硬合取，非 −pct；EQT/EQTVOL 曾测；≠BPS 的 bvps 口径）。对照 EQTVOL/BPSSUEGVOL/FATSUEGVOL。
+- 去重：EQTVOL；BPSSUEGVOL；EQSSUEGVOL；FATSUEGVOL。非仓位。不碰数据网关。
+- 规则：EQT∩SUEG∩vol；sc_eqt；K20/max_new5。新策略无 B。
+- 脚本：`eqtsuegvol_s873.py` / `run_s873.sh`。
+
+
 ## 晚间例行进度（2026-11-02 ~20:48→21:25 CST）
 - 健康：8765 `/api/health` 200；5174 200；HEAD 起点 81d94fd0 → 本轮提交后更新；swap used≈9–10G → 串行。
 - 选股：短线最近约 2026-10-30；中线 2026-11-02 ok=4 / data_error=4（预告系含 KeyError top_n）/ no_signal=8 / 周度 not_signal_day=5；长线 3/3 @2026-10-30 ok。
