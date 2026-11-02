@@ -10967,12 +10967,41 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：OPGR∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_opgr；K20/max_new5。B 对照 base。
 - 脚本：`opgrsuegvol_o25_s912.py` / `run_s912.sh`。
 
+### §912 OPGRSUEGVOL_o25_h20 — REJECT（B 门否；冻 orv≥20）
+- 每笔 P19 +4.43 / P20 +0.00 / P21 +7.74 / W0 −0.28 / W00 +1.46 / W1 +1.22 / W2 +3.03 / R12 +3.71（**正段 6/8**）
+- R12 66笔 +3.71% PF1.78 MDD−8.2；N3 146笔 +2.87 PF1.72 MDD−8.5；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +3.37 / N3 +2.95 MDD−8.3；o25 R12 +3.71 / N3 +2.87 MDD−8.5 → **B 否**（N3 每笔回落且 MDD 加深）。
+- → **REJECT**。现役 mid-opgr-sue-vol 维持 §908 口径（G dtp≥50/orv≥20）；**冻 orv 轴**。解读：OPGR∩SUEG 双轴到站（d55/o25 皆 B 否）。
+
+
 ## §913 [中线·现役改进] 速动比率改善∩盈余加速∩放量 dtp硬抬≥55（QUICKSUEGVOL_d55_h20）— 预注册（2026-11-03 05:38 CST 写于跑任何收益之前）
 - 白话：现役 mid-quick-sue-vol（§911：quick改善≥0.10∩SUE≥2.2∩G∩放量，排序Δ封顶2）把 **G 内 dtp 硬抬** 到 **≥55**；QUICK/SUE/orv/放量/排序不变。同进程 QUICKSUEGVOL_base(dtp≥50)。
 - 想法：§911 刚 ADOPT——镜像 EBT/FAT/QN_d55。B 门对照 base。
 - 去重：QUICKSUEGVOL；OPGRSUEGVOL_o25。非仓位。不碰数据网关。
 - 规则：QUICK∩SUEG∩vol；G.dtp≥55；sc_qr；K20/max_new5。B 对照 base。
 - 脚本：`quicksuegvol_d55_s913.py` / `run_s913.sh`。
+
+### §913 QUICKSUEGVOL_d55_h20 — REJECT（B 门否；冻 dtp≥50）
+- 每笔 P19 −4.77 / P20 +1.43 / P21 +2.04 / W0 +0.12 / W00 +2.96 / W1 +6.78 / W2 +0.17 / R12 +4.78（**正段 7/8**）
+- R12 34笔 +4.78% PF2.27 MDD−5.9；N3 59笔 +4.39 PF2.25 MDD−5.6；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +4.78 / N3 +4.52 MDD−5.6；d55 R12 +4.78 / N3 +4.39 MDD−5.6 → **B 否**（N3 每笔回落）。
+- → **REJECT**。现役 mid-quick-sue-vol 维持 §911 口径（G dtp≥50/orv≥20）；**冻 dtp 轴**。解读：QUICK∩SUEG 抬 dtp 无增量。
+
+
+
+## §914 [中线·现役改进] 速动比率改善∩盈余加速∩放量 orv硬抬≥25（QUICKSUEGVOL_o25_h20）— 预注册（2026-11-03 05:53 CST 写于跑任何收益之前）
+- 白话：现役 mid-quick-sue-vol（§913 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；QUICK/SUE/dtp/放量/排序不变。同进程 QUICKSUEGVOL_base(orv≥20)。
+- 想法：§913 d55 B 否——续试 orv 轴（硬门槛；对照 ART/ROA_o25 曾过、OPGR_o25 刚 B 否）。B 门对照 base。
+- 去重：QUICKSUEGVOL_d55；OPGRSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：QUICK∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_qr；K20/max_new5。B 对照 base。
+- 脚本：`quicksuegvol_o25_s914.py` / `run_s914.sh`。
+
+## §915 [中线·文献] 盈余公积扩张∩盈余加速∩放量（SURPSUEGVOL_h20）— 预注册（2026-11-03 05:53 CST 写于跑任何收益之前）
+- 白话：surplus_rese_ps 升≥0.05（本期≥0.5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶1）排序；持20。
+- 想法 / 文献：QUICK∩SUEG 刚 ADOPT、UDP∩SUEG 已上线、资本公积单腿曾否——对称试 **盈余公积扩张∩盈余意外**（硬合取；≠未分配利润/资本公积）。对照 UDP/HSZ/QUICKSUEGVOL。
+- 去重：UDPSUEGVOL；HSZ；QUICKSUEGVOL；SUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
+- 规则：SURP∩SUEG∩vol；sc_surp；K20/max_new5。新策略无 B。
+- 脚本：`surpsuegvol_s915.py` / `run_s915.sh`。
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
