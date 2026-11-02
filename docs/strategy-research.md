@@ -11217,12 +11217,39 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：QSEXP∩SUEG∩vol；G.orv≥30（dtp仍≥55）；sc_qsexp；K20/max_new5。B 对照 base。
 - 脚本：`qsexpsuegvol_o30_s930.py` / `run_s930.sh`。
 
+### §930 QSEXPSUEGVOL_o30_h20 — ADOPT → 已上线（orv 25→30）
+- 每笔 P19 +3.86 / P20 +0.60 / P21 +5.69 / W0 +1.48 / W00 +3.22 / W1 +1.08 / W2 +1.52 / R12 +9.68（**正段 8/8**）
+- R12 42笔 +9.68% PF4.21 MDD−5.1；N3 89笔 +5.25 PF2.51 MDD−5.4；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base(orv≥25): R12 +9.31 PF4.02 / N3 +4.86 PF2.41 MDD−5.7；o30 R12 +9.68 PF4.21 / N3 +5.25 PF2.51 MDD−5.4 → **B 过**（近一年/三年每笔与 PF 均抬；回撤持平或更浅）。
+- → **ADOPT**。上线（2026-11-03 07:37 CST）：`mid-qsexp-sue-vol` orv **≥25→≥30**（dtp仍≥55）；`s930_onboard_metrics.py`；replay 强制覆盖 12批/25只（2026-08-01~11-02）；`safe_backend_restart`。解读：单季销售费用率∩盈余营收腿续抬成立——镜像 SEXPSUEG_o30。
+
+
 ## §931 [中线·文献] 单季毛利率改善∩盈余加速∩放量（QGCSUEGVOL_h20）— 预注册（2026-11-03 07:25 CST 写于跑任何收益之前）
 - 白话：q_gc_to_gr 较去年同报告期升≥1.0（去年≥10）∩ SUE≥2.2∩G∩放量≥1.5×amt20；按升幅（封顶10）排序；持20。
 - 想法 / 文献：QSEXP∩SUEG 刚 ADOPT o25、毛利率单腿与费用改善对称——试 **单季毛利率（q_gc_to_gr）改善∩盈余意外**（硬合取；≠累计 grossprofit_margin；≠QSEXP 费用侧）。对照 QSEXPSUEG/GPM/SEXP。
 - 去重：QSEXPSUEGVOL；GPMVOL；SEXPSUEGVOL；SUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
 - 规则：QGC∩SUEG∩vol；sc_qgc；K20/max_new5。新策略无 B。
 - 脚本：`qgcsuegvol_s931.py` / `run_s931.sh`。
+
+### §931 QGCSUEGVOL_h20 — REJECT（A 否·样本/R12）
+- 每笔 P19 +1.37 / P20 +11.48 / P21 +6.96 / W0 +2.94 / W00 +3.52 / W1 +4.72 / W2 −6.47 / R12 +0.88（**正段 7/8**）
+- R12 6笔 +0.88% PF1.21 MDD−3.8；N3 11笔 +0.59 PF1.13 MDD−3.8；彩票型
+- 判定 ✓✗✓✓✗ → **否决**（R12 n≪30；PF/近一年弱）。解读：单季毛利率∩SUEG 过稀——对照 QSEXP∩SUEG 成立不外推；**q_gc_to_gr∩SUEG 暂缓**（勿硬抬凑样）。
+
+## §932 [中线·现役改进] 单季销售费用率下降∩盈余加速∩放量 orv再抬≥35（QSEXPSUEGVOL_o35_h20）— 预注册（2026-11-03 07:42 CST 写于跑任何收益之前）
+- 白话：现役 mid-qsexp-sue-vol（§930 已抬至 G dtp≥55∩orv≥30）把 **G 内 orv 再硬抬** 到 **≥35**；QSEXP/SUE/dtp/放量/排序不变。同进程 QSEXPSUEGVOL_base(orv≥30)。
+- 想法：§930 o30 刚 ADOPT——镜像 SEXPSUEG 续抬路径。B 门对照 base。
+- 去重：QSEXPSUEGVOL_o30；QGCSUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
+- 规则：QSEXP∩SUEG∩vol；G.orv≥35（dtp仍≥55）；sc_qsexp；K20/max_new5。B 对照 base。
+- 脚本：`qsexpsuegvol_o35_s932.py` / `run_s932.sh`。
+
+## §933 [中线·文献] 毛利率扩张∩盈余加速∩放量（GPMSUEGVOL_h20）— 预注册（2026-11-03 07:42 CST 写于跑任何收益之前）
+- 白话：grossprofit_margin 较去年同报告期升≥1.0（本期≥15）∩ SUE≥2.2∩G∩放量≥1.5×amt20；按升幅（封顶10）排序；持20。
+- 想法 / 文献：QGC∩SUEG 刚因样本稀否、QSEXP∩SUEG 已抬 orv≥30——对称试 **累计毛利率扩张∩盈余意外**（硬合取；≠q_gc_to_gr；单腿 GPM§164 曾否）。对照 QGCSUEG/QSEXPSUEG/GPM。
+- 去重：QGCSUEGVOL；GPM；GPMVOL；QSEXPSUEGVOL。非仓位。不碰数据网关。有息/去杠杆∩SUEG 仍暂缓。
+- 规则：GPM∩SUEG∩vol；sc_gpm；K20/max_new5。新策略无 B。
+- 脚本：`gpmsuegvol_s933.py` / `run_s933.sh`。
+
 
 
 

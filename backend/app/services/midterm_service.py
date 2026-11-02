@@ -684,11 +684,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §925/§927/§929 单季销售费用率下降∩盈余加速∩放量（scripts/midterm/qsexpsuegvol_o25_s929.py QSEXPSUEGVOL_o25_h20；§282+B 达标；dtp≥55,orv≥25；2026-11-03 上线；≠ mid-sexp-sue-vol）
+    # §925/§927/§929/§930 单季销售费用率下降∩盈余加速∩放量（scripts/midterm/qsexpsuegvol_o30_s930.py QSEXPSUEGVOL_o30_h20；§282+B 达标；dtp≥55,orv≥30；2026-11-03 上线；≠ mid-sexp-sue-vol）
     "mid-qsexp-sue-vol": {
         "name": "单季销售费用率下降∩盈余加速∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足单季销售费用率（q_saleexp_to_gr）较去年同报告期下降≥0.5个百分点（去年≥2），与 SUE≥2.2 且业绩加速 G（扣非同比≥55、营收同比≥25；§927 dtp硬抬、§929 orv硬抬），且信号日成交额≥1.5×前20日均额；按降幅（封顶5）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：单季费用改善 × 盈余惊喜加速 × 量能确认（§925/§927/§929；≠累计saleexp_to_gr的 mid-sexp-sue-vol）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足单季销售费用率（q_saleexp_to_gr）较去年同报告期下降≥0.5个百分点（去年≥2），与 SUE≥2.2 且业绩加速 G（扣非同比≥55、营收同比≥30；§927 dtp硬抬、§929/§930 orv硬抬），且信号日成交额≥1.5×前20日均额；按降幅（封顶5）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：单季费用改善 × 盈余惊喜加速 × 量能确认（§925/§927/§929/§930；≠累计saleexp_to_gr的 mid-sexp-sue-vol）。",
         "kind": "qsexp_sue_vol",
         "hold_days": 20,
         "schedule": "daily",
