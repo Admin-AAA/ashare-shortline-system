@@ -630,11 +630,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §893 扣非每股收益同比高增∩盈余加速∩放量（scripts/midterm/dtepsuegvol_s893.py DTEPSUEGVOL_h20；§282 达标；2026-11-03 上线）
+    # §893/§896 扣非每股收益同比高增∩盈余加速∩放量（scripts/midterm/dtepsuegvol_o25_s896.py DTEPSUEGVOL_o25_h20；§282+B 达标；orv≥25；2026-11-03 上线）
     "mid-dteps-sue-vol": {
         "name": "扣非每股收益同比高增∩盈余加速∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足扣非每股收益同比（dt_eps_yoy）≥20%，与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥20），且信号日成交额≥1.5×前20日均额；按 dt_eps_yoy（封顶100）从高到低排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：扣非EPS同比高增 × 盈余惊喜加速 × 量能确认（§893；≠基本EPS/利润总额∩SUEG）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足扣非每股收益同比（dt_eps_yoy）≥20%，与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥25；§896 orv硬抬），且信号日成交额≥1.5×前20日均额；按 dt_eps_yoy（封顶100）从高到低排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：扣非EPS同比高增 × 盈余惊喜加速 × 量能确认（§893/§896；≠基本EPS/利润总额∩SUEG）。",
         "kind": "dteps_sue_vol",
         "hold_days": 20,
         "schedule": "daily",
