@@ -10530,12 +10530,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：ROY∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_roy；K20/max_new5。B 对照 base。
 - 脚本：`roysuegvol_o25_s880.py` / `run_s880.sh`。
 
+### §880 ROYSUEGVOL_o25_h20 — REJECT（B 门否；冻 orv≥20）
+- 每笔 P19 +2.91 / P20 +0.15 / P21 +6.19 / W0 −0.78 / W00 +1.28 / W1 +2.39 / W2 +2.74 / R12 +3.67（**正段 7/8**）
+- R12 68笔 +3.67% PF1.68 MDD−8.4；N3 155笔 +3.05 PF1.74 MDD−8.5；彩票型（R12 中位−0.53）
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +3.29 / N3 +3.27 MDD−8.6；o25 R12 +3.67 / N3 +3.05 MDD−8.5 → **B 否**（N3 每笔回落）。
+- → **REJECT**。现役 mid-roy-sue-vol 维持 §877 口径（G dtp≥50/orv≥20）；**冻 orv 轴**。解读：ROY∩SUEG 双轴到站（d55/o25 皆 B 否）。
+
+
 ## §881 [中线·现役改进] 每股股权自由现金流改善∩盈余加速∩放量 orv硬抬≥25（FCFESUEGVOL_o25_h20）— 预注册（2026-11-03 02:24 CST 写于跑任何收益之前）
 - 白话：现役 mid-fcfe-sue-vol（§870 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；FCFE/SUE/dtp/放量/排序不变。同进程 FCFESUEGVOL_base(orv≥20)。
 - 想法：§870 d55 A 否后注明 orv 轴可续——对称试 o25（硬门槛；对照多数 SUEG 合取 o25 曾否、FAT/QN_o25 刚过）。B 门对照 base。
 - 去重：FCFESUEGVOL_d55；FCFFSUEGVOL_o25（曾否）。非仓位。不碰数据网关。
 - 规则：FCFE∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_fcfe；K20/max_new5。B 对照 base。
 - 脚本：`fcfesuegvol_o25_s881.py` / `run_s881.sh`。
+
+### §881 FCFESUEGVOL_o25_h20 — REJECT（B 门否；冻 orv≥20）
+- 每笔 P19 +1.35 / P20 −1.18 / P21 +5.90 / W0 −0.82 / W00 +6.12 / W1 +1.92 / W2 +1.04 / R12 +9.53（**正段 6/8**）
+- R12 41笔 +9.53% PF3.33 MDD−7.5；N3 87笔 +5.26 PF2.40 MDD−8.3；彩票型（N3 中位−0.5）
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +9.50 / N3 +5.23 MDD−7.7；o25 R12 +9.53 / N3 +5.26 MDD−8.3 → **B 否**（N3 MDD 恶化）。
+- → **REJECT**。现役 mid-fcfe-sue-vol 维持 §869 口径（G dtp≥50/orv≥20）；**冻 orv 轴**。解读：FCFE∩SUEG 双轴到站（d55 A 否 / o25 B 否）。
+
 
 
 
