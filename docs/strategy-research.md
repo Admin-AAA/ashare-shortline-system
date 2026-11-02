@@ -9452,3 +9452,54 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：FLZ∩SUEG∩vol；sc_np；K20/max_new5。新策略无 B。
 - 脚本：`flzsuegvol_s799.py` / `run_s799.sh`。
 
+
+### §798 SEXPSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 +2.19 / P20 +0.10 / P21 +5.56 / W0 +2.91 / W00 +1.15 / W1 −1.39 / W2 +1.78 / R12 +9.98（**正段 7/8**）
+- R12 43笔 +9.98% PF4.35 MDD−5.3；N3 110笔 +4.12 PF2.12 MDD−7.5；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +8.33 / N3 +3.62 / MDD−7.5 → **B 过**（近一年/三年每笔均抬；回撤持平）。
+- → **ADOPT**。上线（2026-11-02 13:30 CST）：`mid-sexp-sue-vol` dtp **≥50→≥55**（随后 §800 再抬 orv）；`s798_onboard_metrics.py`；随 §800 一并强制 replay。解读：费用∩盈余加速上抬 dtp 镜像 SUEGTD_d55——与量能硬抬/SUE排序否决不对称。
+
+### §799 FLZSUEGVOL_h20 — REJECT（笔数不足·全窗空）
+- 每笔各段 n=0；R12 **0**笔
+- 判定（样本崩）→ **否决**。解读：略增∩盈余加速同预增∩SUEG——合取过稀；**记候补，勿硬抬/软扩凑笔数**；**略增∩盈余加速双合取∩放量暂缓**（接略增∩CAS/BS、预增∩SUEG）。
+
+## §800 [中线·现役改进] 销售费用∩盈余加速∩放量 orv硬抬≥25（SEXPSUEGVOL_o25_h20）— 预注册（2026-11-02 13:05 CST 写于跑任何收益之前）
+- 白话：现役 mid-sexp-sue-vol（§798 已抬至 G dtp≥55∩SEXP≥0.35∩SUE≥2.2∩放量，按降幅排序）把 **G 内 orv 硬抬** 到 **≥25**；SEXP/SUE/dtp/放量/排序不变。同进程 SEXPSUEGVOL_base(orv≥20)。
+- 想法：§798 d55 刚 ADOPT——镜像 SUEGTD 路径续试营收腿（硬门槛，非 −pct；对照 SUEGTDVOL_o25 ADOPT / SUEGVOL_o25 否）。B 门对照 base。
+- 去重：SEXPSUEGVOL_d55；SEXPSUEGVOL_v18；SEXPSUEGVOL_sc_sue；SUEGTDVOL_o25；SUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：(SEXP∩SUEG_dtp55_orv25∩vol) vs (SEXP∩SUEG_dtp55_orv20∩vol)；sc_sexp；K20/max_new5。B 门对照 base。
+- 脚本：`sexpsuegvol_o25_s800.py` / `run_s800.sh`。
+
+## §801 [中线·文献] 管理费用∩盈余加速∩放量（ADMINSUEGVOL_h20）— 预注册（2026-11-02 13:05 CST 写于跑任何收益之前）
+- 白话：ADMIN降幅≥1.0 ∩ SUE≥2.2∩G ∩ 放量≥1.5×amt20；按 ADMIN 降幅（封顶10）排序；持20。
+- 想法 / 文献：销售费用∩SUEG 已上线并抬 dtp；财务费用∩SUEG 刚候补——改试 **管理费用∩盈余加速**（硬合取，非 −pct；ADMINVOL/SUEGVOL 已上线；≠费用∩BS 暂缓）。对照 SEXPSUEGVOL/FINASUEGVOL/ADMINVOL/SUEGVOL。
+- 去重：SEXPSUEGVOL；FINASUEGVOL；ADMINVOL；IOSUEGVOL；FZGSUEGVOL。非仓位。不碰数据网关。
+- 规则：ADMIN∩SUEG∩vol；sc_admin；K20/max_new5。新策略无 B。
+- 脚本：`adminsuegvol_s801.py` / `run_s801.sh`。
+
+### §800 SEXPSUEGVOL_o25_h20 — ADOPT → 已上线（orv 20→25；接 §798 dtp）
+- 每笔 P19 +2.19 / P20 −0.19 / P21 +4.77 / W0 +3.01 / W00 +1.15 / W1 −1.33 / W2 +1.73 / R12 +10.70（**正段 6/8**）
+- R12 42笔 +10.70% PF4.70 MDD−4.8；N3 104笔 +4.56 PF2.23 MDD−7.1；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥55)：R12 +9.98 / N3 +4.12 / MDD−7.5 → **B 过**（近一年/三年每笔均抬；回撤更浅）。
+- → **ADOPT**。上线（2026-11-02 13:35 CST）：`mid-sexp-sue-vol` orv **≥20→≥25**（dtp仍≥55）；`s800_onboard_metrics.py`；replay 强制覆盖 13批/27只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：费用∩盈余加速再抬营收腿成立——镜像 SUEGTD_o25；与单腿 SUEGVOL_o25 否决不对称。
+
+### §801 ADMINSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +2.97 / P20 +1.71 / P21 +6.72 / W0 −0.34 / W00 +1.42 / W1 +1.18 / W2 +3.33 / R12 +4.31（**正段 7/8**）
+- R12 62笔 +4.31% PF1.86 MDD−8.3；N3 141笔 +3.20 PF1.75 MDD−7.7；**彩票型**
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 13:35 CST）：`mid-admin-sue-vol`（kind=`admin_sue_vol`）；`s801_onboard_metrics.py`；replay onboard 18批/44只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：管理费用∩盈余加速合取成立（单腿 ADMIN/ADMINVOL 曾否）——与销售费用∩SUEG 同向，对照财务费用∩SUEG 候补非对称。
+
+## §802 [中线·现役改进] 销售费用∩盈余加速∩放量 dtp再抬≥60（SEXPSUEGVOL_d60_h20）— 预注册（2026-11-02 13:35 CST 写于跑任何收益之前）
+- 白话：现役 mid-sexp-sue-vol（§800 已抬至 G dtp≥55∩orv≥25∩SEXP∩SUE∩放量，按降幅排序）把 **G 内 dtp 再硬抬** 到 **≥60**；SEXP/SUE/orv/放量/排序不变。同进程 SEXPSUEGVOL_base(dtp≥55)。
+- 想法：§798/§800 连抬刚 ADOPT——镜像 SUEGTD_d60 路径（彼否）；硬门槛非 −pct。B 门对照 base。
+- 去重：SEXPSUEGVOL_d55；SEXPSUEGVOL_o25；SUEGTDVOL_d60；EATDVOL_d60。非仓位。不碰数据网关。
+- 规则：(SEXP∩SUEG_dtp60_orv25∩vol) vs (SEXP∩SUEG_dtp55_orv25∩vol)；sc_sexp；K20/max_new5。B 门对照 base。
+- 脚本：`sexpsuegvol_d60_s802.py` / `run_s802.sh`。
+
+## §803 [中线·现役改进] 管理费用∩盈余加速∩放量 dtp硬抬≥55（ADMINSUEGVOL_d55_h20）— 预注册（2026-11-02 13:35 CST 写于跑任何收益之前）
+- 白话：现役 mid-admin-sue-vol（ADMIN≥1.0∩G(dtp≥50)∩SUE≥2.2∩放量，按降幅排序）把 **G 内 dtp 硬抬** 到 **≥55**；ADMIN/SUE/orv/放量/排序不变。同进程 ADMINSUEGVOL_base(dtp≥50)。
+- 想法：§801 刚 ADOPT——镜像 SEXPSUEG/SUEGTD 的 d55 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：ADMINSUEGVOL；SEXPSUEGVOL_d55；SUEGTDVOL_d55；SUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：(ADMIN∩SUEG_dtp55∩vol) vs (ADMIN∩SUEG_dtp50∩vol)；sc_admin；K20/max_new5。B 门对照 base。
+- 脚本：`adminsuegvol_d55_s803.py` / `run_s803.sh`。
+

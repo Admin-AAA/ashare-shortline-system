@@ -450,12 +450,21 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §793 销售费用∩盈余加速∩放量（scripts/midterm/sexpsuegvol_s793.py SEXPSUEGVOL_h20；§282 达标；2026-11-02 上线）
+    # §793/§798/§800 销售费用∩盈余加速∩放量（scripts/midterm/sexpsuegvol_o25_s800.py SEXPSUEGVOL_o25_h20；§282+B 达标；2026-11-02 上线/硬抬）
     "mid-sexp-sue-vol": {
         "name": "销售费用∩盈余加速∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足销售费用/营业总收入同比下降≥0.35 个百分点，与 SUE≥2.2 且业绩加速（G），且信号日成交额≥1.5×前20日均额；按销售费用率降幅（去封顶）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：费用率改善 × 盈余惊喜加速 × 量能确认（§793）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足销售费用/营业总收入同比下降≥0.35 个百分点，与 SUE≥2.2 且业绩加速 G（扣非同比≥55、营收同比≥25、扣非>0、同比加速；§798 dtp / §800 orv 硬抬），且信号日成交额≥1.5×前20日均额；按销售费用率降幅（去封顶）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：费用率改善 × 盈余惊喜加速 × 量能确认（§793/§798/§800）。",
         "kind": "sexp_sue_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
+    # §801 管理费用∩盈余加速∩放量（scripts/midterm/adminsuegvol_s801.py ADMINSUEGVOL_h20；§282 达标；2026-11-02 上线）
+    "mid-admin-sue-vol": {
+        "name": "管理费用∩盈余加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足管理费用/营业总收入同比下降≥1.0 个百分点，与 SUE≥2.2 且业绩加速（G），且信号日成交额≥1.5×前20日均额；按管理费用率降幅（封顶10）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：管理费用率改善 × 盈余惊喜加速 × 量能确认（§801）。",
+        "kind": "admin_sue_vol",
         "hold_days": 20,
         "schedule": "daily",
     },
@@ -1871,6 +1880,20 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             from app.services.midterm_suegvol import sexpsuegvol_candidates
             held = _held_codes(db, sid, as_of)
             cands = sexpsuegvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
+        if meta.get("kind") == "admin_sue_vol":
+            from app.services.midterm_suegvol import adminsuegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = adminsuegvol_candidates(db, as_of)
             if cands is None:
                 result[sid] = "no_data"
                 continue

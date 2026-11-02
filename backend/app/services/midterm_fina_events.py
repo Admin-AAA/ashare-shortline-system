@@ -47,7 +47,7 @@ CG_MIN_YOY, CG_STREAK, CG_STREAK_CAP, CG_NPY_CAP = 5.0, 4, 12, 100.0
 DINC_INC_TH = 0.30
 
 FINA_FIELDS = ("ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt,"
-               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr,turn_days,fa_turn,tangibleasset_to_debt,eqt_to_debt,ca_to_assets")
+               "or_yoy,dt_netprofit_yoy,saleexp_to_gr,finaexp_of_gr,adminexp_of_gr,turn_days,fa_turn,tangibleasset_to_debt,eqt_to_debt,ca_to_assets")
 _FINA_TTL = 1800.0
 _fina_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _div_local: dict[str, Any] = {}
@@ -103,7 +103,7 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     for k in ("ts_code", "ann_date", "end_date"):
         f[k] = f[k].astype(str).str.strip()
     for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt",
-              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr", "turn_days", "fa_turn", "tangibleasset_to_debt", "eqt_to_debt", "ca_to_assets"):
+              "or_yoy", "dt_netprofit_yoy", "saleexp_to_gr", "finaexp_of_gr", "adminexp_of_gr", "turn_days", "fa_turn", "tangibleasset_to_debt", "eqt_to_debt", "ca_to_assets"):
         if k in f.columns:
             f[k] = pd.to_numeric(f[k], errors="coerce")
     f = f[(f["ann_date"].str.len() == 8) & (f["end_date"].str.len() == 8)]
@@ -179,6 +179,12 @@ def udp_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         g = cur / prev - 1.0
         return (g >= UDP_G and cur >= UDP_FLOOR), min(g, UDP_CAP), {"growth": g}
     return _fina_events(db, as_of, "undist_profit_ps", passes)
+
+
+# §361/§801 ADMIN（管理费用率同比下降；规则同 §201 / lt_research69）
+ADMIN_CUR_LO, ADMIN_CUR_HI = 0.5, 40.0
+ADMIN_PREV_LO, ADMIN_PREV_HI = 0.5, 60.0
+ADMIN_DELTA_MIN, ADMIN_DELTA_CAP = 1.0, 10.0
 
 
 # §357 SEXP_h20（销售费用率同比下降；规则同 §198 / lt_research68，未调参）

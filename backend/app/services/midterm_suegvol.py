@@ -112,7 +112,7 @@ def suegfatvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return out
 
 def sexpsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§793 SEXPSUEGVOL：SEXP降幅≥0.35 ∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 SEXP 原始降幅（去封顶）。"""
+    """§793/§798/§800 SEXPSUEGVOL：SEXP降幅≥0.35 ∩ SUE≥2.2∩G(dtp≥55,orv≥25)∩放量≥1.5×amt20（§798 dtp；§800 orv硬抬；suegvol 仍≥50/≥20）；排序 SEXP 原始降幅（去封顶）。"""
     from app.services.midterm_fina_events import (
         SEXP_CUR_HI,
         SEXP_CUR_LO,
@@ -139,12 +139,63 @@ def sexpsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         e = sx_by.get(p0["code"])
         if e is None:
             continue
+        # §798/§800：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥55、orv≥25（不改动 mid-sue-accel-vol）
+        try:
+            dtp = float(p0.get("dt_netprofit_yoy"))
+            orv = float(p0.get("or_yoy"))
+        except (TypeError, ValueError):
+            continue
+        if dtp < 55.0 or orv < 25.0:
+            continue
         q = dict(p0)
         q["sexp_delta"] = e.get("delta", e.get("score"))
         q["sexp_cur"] = e.get("cur")
         q["sexp_prev"] = e.get("prev")
         try:
             q["score"] = float(q["sexp_delta"])
+        except (TypeError, ValueError):
+            continue
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
+
+def adminsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§801 ADMINSUEGVOL：ADMIN降幅≥1.0 ∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 ADMIN 降幅封顶10。"""
+    from app.services.midterm_fina_events import (
+        ADMIN_CUR_HI,
+        ADMIN_CUR_LO,
+        ADMIN_PREV_HI,
+        ADMIN_PREV_LO,
+        ADMIN_DELTA_MIN,
+        ADMIN_DELTA_CAP,
+        _fina_events,
+    )
+
+    sg = suegvol_candidates(db, as_of)
+    if sg is None:
+        return None
+
+    def passes(cur: float, prev: float):
+        delta = prev - cur
+        ok = (ADMIN_CUR_LO <= cur <= ADMIN_CUR_HI and ADMIN_PREV_LO <= prev <= ADMIN_PREV_HI and delta >= ADMIN_DELTA_MIN)
+        return ok, min(delta, ADMIN_DELTA_CAP), {"delta": delta}
+
+    ad = _fina_events(db, as_of, "adminexp_of_gr", passes)
+    if ad is None:
+        return None
+    ad_by = {p["code"]: p for p in ad}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = ad_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["admin_delta"] = e.get("delta", e.get("score"))
+        q["admin_cur"] = e.get("cur")
+        q["admin_prev"] = e.get("prev")
+        try:
+            q["score"] = float(q["admin_delta"])
         except (TypeError, ValueError):
             continue
         out.append(q)
