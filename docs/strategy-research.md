@@ -10631,6 +10631,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +4.25 / N3 +3.30 MDD−6.0；o25 R12 +4.44 / N3 +3.40 MDD−6.0 → **B 过**。
 - → **ADOPT**。上线（2026-11-03 03:11 CST）：`mid-art-sue-vol` orv **≥20→≥25**（dtp仍≥50）；`s887_onboard_metrics.py`；replay 强制覆盖 17批/33只（2026-08-01~11-02）；`safe_backend_restart`。解读：应收周转∩盈余上抬营收腿成立——镜像 QN/FAT_o25（dtp 轴已冻）。
 
+## §888 [中线·现役改进] 流动资产周转扩张∩盈余加速∩放量 orv硬抬≥25（CATSUEGVOL_o25_h20）— 预注册（2026-11-03 03:13 CST 写于跑任何收益之前）
+- 白话：现役 mid-cat-sue-vol（§886 已冻 dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；CAT/SUE/dtp/放量/排序不变。同进程 CATSUEGVOL_base(orv≥20)。
+- 想法：§886 d55 刚 ADOPT——续试 orv 轴（硬门槛；对照 ART_o25/QN/FAT_o25 刚过）。B 门对照 base。
+- 去重：CATSUEGVOL_d55；ARTSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：CAT∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_cat；K20/max_new5。B 对照 base。
+- 脚本：`catsuegvol_o25_s888.py` / `run_s888.sh`。
+
+## §889 [中线·文献] 利润总额同比加速∩盈余加速∩放量（EBTSUEGVOL_h20）— 预注册（2026-11-03 03:13 CST 写于跑任何收益之前）
+- 白话：EBT加速≥20（ebt_yoy≥20）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按加速（封顶100）排序；持20。
+- 想法 / 文献：CAT/ART∩SUEG 刚 ADOPT、单腿 EBT/EBTVOL 曾否——对称试 **利润总额加速∩盈余意外**（硬合取；≠扣非/营收加速现役）。对照 EBT/OPSUEGVOL/REVSUEGVOL。
+- 去重：EBT；EBTVOL；OPSUEGVOL；REVSUEGVOL。非仓位。不碰数据网关。
+- 规则：EBT∩SUEG∩vol；sc_ebt；K20/max_new5。新策略无 B。
+- 脚本：`ebtsuegvol_s889.py` / `run_s889.sh`。
+
+
 
 
 
