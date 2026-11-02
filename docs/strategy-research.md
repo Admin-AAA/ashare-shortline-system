@@ -10705,11 +10705,24 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：DTEPS∩SUEG∩vol；G.dtp≥55；sc_dteps；K20/max_new5。B 对照 base。
 - 脚本：`dtepsuegvol_d55_s894.py` / `run_s894.sh`。
 
+### §894 DTEPSUEGVOL_d55_h20 — REJECT（B 门否；冻 dtp≥50）
+- 每笔 P19 +1.33 / P20 +0.72 / P21 +7.24 / W0 −1.48 / W00 +0.35 / W1 +1.51 / W2 +3.31 / R12 +3.22（**正段 7/8**）
+- R12 70笔 +3.22% PF1.61 MDD−9.8；N3 161笔 +2.76 PF1.68 MDD−9.0；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +3.26 / N3 +2.85 MDD−9.2；d55 R12 +3.22 / N3 +2.76 MDD−9.0 → **B 否**（R12/N3 每笔均回落）。
+- → **REJECT**。现役 mid-dteps-sue-vol 维持 §893 口径（G dtp≥50/orv≥20）；**冻 dtp 轴**。解读：DTEPS∩SUEG 抬 dtp 无增量（≠EBT/FAT_d55）。
+
+
 ## §895 [中线·文献] 单季ROE扩张∩盈余加速∩放量（QROESUEGVOL_h20）— 预注册（2026-11-03 03:49 CST 写于跑任何收益之前）
 - 白话：QROE扩张≥2（q_roe≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δq_roe（封顶20）排序；持20。
 - 想法 / 文献：DTEPS∩SUEG 刚 ADOPT、QN∩SUEG（q_npta）已上线、ROE扩张∩SUEG 曾否——对称试 **单季ROE扩张∩盈余意外**（硬合取；≠全年 ROE/ROY）。对照 q_roe/QNSUEGVOL/ROESUEGVOL。
 - 去重：QNSUEGVOL；ROESUEGVOL；ROYSUEGVOL；DTEPSUEGVOL。非仓位。不碰数据网关。
 - 规则：QROE∩SUEG∩vol；sc_qroe；K20/max_new5。新策略无 B。
+
+### §895 QROESUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 +9.00 / P20 −0.88 / P21 +4.79 / W0 −1.17 / W00 +1.73 / W1 −1.77 / W2 +8.18 / R12 +1.09（**正段 5/8**）
+- R12 42笔 +1.09% PF1.25 MDD−5.4；N3 88笔 +2.20 PF1.52 MDD−6.3；彩票型
+- 判定 ✓✗✓✗✓ → **否决**（PF/正段/彩票）。解读：单季ROE∩SUEG 未过 A——对照 ROE/ROIC∩SUEG 曾否、QN∩SUEG（q_npta）已上线，ROE 差分腿不对称。
+
 - 脚本：`qroesuegvol_s895.py` / `run_s895.sh`。
 
 
@@ -10717,6 +10730,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 
 
 
+
+
+## §896 [中线·现役改进] 扣非每股收益同比高增∩盈余加速∩放量 orv硬抬≥25（DTEPSUEGVOL_o25_h20）— 预注册（2026-11-03 03:58 CST 写于跑任何收益之前）
+- 白话：现役 mid-dteps-sue-vol（§894 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；DTEPS/SUE/dtp/放量/排序不变。同进程 DTEPSUEGVOL_base(orv≥20)。
+- 想法：§894 d55 刚否——续试 orv 轴（硬门槛，非 −pct；对照 ART_o25 曾 ADOPT、EBT/CAT_o25 B 否）。B 门对照 base。
+- 去重：DTEPSUEGVOL_d55；QROESUEGVOL（刚否）。非仓位。不碰数据网关。
+- 规则：DTEPS∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_dteps；K20/max_new5。B 对照 base。
+- 脚本：`dtepsuegvol_o25_s896.py` / `run_s896.sh`。
+
+## §897 [中线·文献] 有息负债同比大降∩盈余加速∩放量（INTDSUEGVOL_h20）— 预注册（2026-11-03 03:58 CST 写于跑任何收益之前）
+- 白话：INTD（去年 interestdebt>0、本期≥0、降幅≥0.20）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按降幅（封顶1.0）排序；持20。
+- 想法 / 文献：QROE∩SUEG 刚否、INTDVOL/NCS∩SUEG 曾否或候补——对称试 **有息负债大降∩盈余意外**（硬合取；≠净负债切换/资产负债率）。对照 INTD/INTDVOL/NCSSUEGVOL。
+- 去重：INTDVOL；NCSSUEGVOL；DEBTVOL；DTEPSUEGVOL。非仓位。不碰数据网关。
+- 规则：INTD∩SUEG∩vol；sc_intd；K20/max_new5。新策略无 B。
+- 脚本：`intdsuegvol_s897.py` / `run_s897.sh`。
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
 - 白话：BEPS≥20（basic_eps_yoy 水平）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 basic_eps_yoy（封顶100）排序；持20。
