@@ -10384,6 +10384,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 判定 ✗✗✓✗✗ → **否决**。
 - → **REJECTED**。解读：TBA∩SUEG 未过 A 门——单腿 TBA/TBAVOL 曾测，合取未救。
 
+### §869 FCFESUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +1.35 / P20 −1.33 / P21 +5.40 / W0 −1.57 / W00 +6.31 / W1 +1.87 / W2 +1.58 / R12 +9.50（**正段 6/8**）
+- R12 42笔 +9.50% PF3.27 MDD−7.2；N3 93笔 +5.23 PF2.44 MDD−7.7；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 00:10 CST）：`mid-fcfe-sue-vol`（kind=`fcfe_sue_vol`）；`s869_onboard_metrics.py`；replay onboard 4批/6只（2026-08-01~11-02）；`safe_backend_restart`。解读：股权自由现金流每股改善∩盈余合取成立（单腿 FCFE 曾测；≠已上线 FCFF/CFPS∩SUEG）。
+
+## §870 [中线·现役改进] 每股股权自由现金流改善∩盈余加速∩放量 dtp硬抬≥55（FCFESUEGVOL_d55_h20）— 预注册（2026-11-03 00:12 CST 写于跑任何收益之前）
+- 白话：现役 mid-fcfe-sue-vol（FCFE∩G(dtp≥50)∩SUE≥2.2∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；FCFE/SUE/orv/放量/排序不变。同进程 FCFESUEGVOL_base(dtp≥50)。
+- 想法：§869 刚 ADOPT——续试 dtp 轴（镜像 FCFF/CFPS/UDP_d55）。B 门对照 base。
+- 去重：FCFESUEGVOL；FCFFSUEGVOL_d55；CFPSSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：FCFE∩SUEG(dtp≥55)∩vol；sc_fcfe；K20/max_new5。B 门。
+- 脚本：`fcfesuegvol_d55_s870.py` / `run_s870.sh`。
+
+## §871 [中线·文献] 固定资产周转改善∩盈余加速∩放量（FATSUEGVOL_h20）— 预注册（2026-11-03 00:12 CST 写于跑任何收益之前）
+- 白话：FAT升幅≥0.10（fa_turn 区间约束）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶2）排序；持20。
+- 想法 / 文献：TBA/CAS/ETD∩SUEG 刚否、FCFE∩SUEG 已上线——对称试 **固定资产周转改善∩盈余意外**（硬合取，非 −pct；FAT/FATVOL 曾测；≠SUEGFATVOL 主排序）。对照 FATVOL/SUEGFATVOL/FCFESUEGVOL。
+- 去重：FATVOL；SUEGFATVOL；FCFESUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：FAT∩SUEG∩vol；sc_fat；K20/max_new5。新策略无 B。
+- 脚本：`fatsuegvol_s871.py` / `run_s871.sh`。
+
 ## 晚间例行进度（2026-11-02 ~20:48→21:25 CST）
 - 健康：8765 `/api/health` 200；5174 200；HEAD 起点 81d94fd0 → 本轮提交后更新；swap used≈9–10G → 串行。
 - 选股：短线最近约 2026-10-30；中线 2026-11-02 ok=4 / data_error=4（预告系含 KeyError top_n）/ no_signal=8 / 周度 not_signal_day=5；长线 3/3 @2026-10-30 ok。
