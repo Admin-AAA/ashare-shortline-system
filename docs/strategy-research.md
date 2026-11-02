@@ -9637,3 +9637,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：SEXPSUEGVOL_d60；SEXPSUEGVOL_o45；ADMINSUEGVOL_d60；SUEGTDVOL_d60。非仓位。不碰数据网关。
 - 规则：(SEXP∩SUEG_dtp65_orv45∩vol) vs (SEXP∩SUEG_dtp60_orv45∩vol)；sc_sexp；K20/max_new5。B 门对照 base。
 - 脚本：`sexpsuegvol_d65_s813.py` / `run_s813.sh`。
+
+
+### §812 SEXPSUEGVOL_o50_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +8.85 / P20 −1.84 / P21 +2.73 / W0 +1.24 / W00 +1.86 / W1 −2.10 / W2 +2.78 / R12 +13.23（**正段 6/8**）
+- R12 34笔 +13.23% PF7.66 MDD−5.4；N3 74笔 +6.46 PF2.75 MDD−5.3；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥45∩dtp≥60)：R12 +14.17 / N3 +6.73 / MDD−4.2 → **B 否**（近一年/三年每笔均降；回撤更深）。
+- → **REJECTED**；线上 mid-sexp-sue-vol 仍 orv≥45。解读：再抬到 50 伤每笔与回撤——**停 SEXPSUEGVOL orv硬抬轴**（≥45 为终点）。
+
+### §813 SEXPSUEGVOL_d65_h20 — REJECT（A 过；B 空抬/零增量）
+- 每笔 P19 +7.45 / P20 −2.38 / P21 +2.46 / W0 +1.96 / W00 +1.16 / W1 −2.03 / W2 +2.63 / R12 +14.17（**正段 6/8**）
+- R12 35笔 +14.17% PF10.27 MDD−4.2；N3 78笔 +6.73 PF3.02 MDD−4.2；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥60∩orv≥45)：R12/N3 **n/avg/MDD 完全持平**（B 数值过）；但近窗零过滤、旧窗 P20/W0 更差 → **空抬/零增量，不 ADOPT**。
+- → **REJECTED**；线上 mid-sexp-sue-vol 仍 dtp≥60。解读：再抬到 65 无近窗增量——**停 SEXPSUEGVOL dtp硬抬轴**（≥60 为终点；接 orv≥45 终点）。费用∩盈余双合取门槛轴到站。
+
+## §814 [中线·文献] 管理费用∩营业周期∩放量（ADMINTDVOL_h20）— 预注册（2026-11-02 15:35 CST 写于跑任何收益之前）
+- 白话：ADMIN降幅≥1.0 ∩ TD缩短≥20 ∩ 放量≥1.5×amt20；按 ADMIN 降幅（封顶10）排序；持20。
+- 想法 / 文献：SEXPSUEG/ADMINSUEG 门槛轴刚终点——改试 **管理费用∩周期效率**（硬合取，非 −pct；ADMINVOL/TDVOL/ADMINSUEG 已测；≠FINATD/SEXPTD 暂缓）。对照 FINATDVOL/ADMINSUEGVOL/TDVOL。
+- 去重：FINATDVOL；SEXPTDVOL；ADMINSUEGVOL；ADMINVOL；TDVOL。非仓位。不碰数据网关。
+- 规则：ADMIN∩TD∩vol；sc_admin；K20/max_new5。新策略无 B。
+- 脚本：`admintdvol_s814.py` / `run_s814.sh`。
+
+## §815 [中线·文献] 管理费用∩固定资产周转∩放量（ADMFATVOL_h20）— 预注册（2026-11-02 15:35 CST 写于跑任何收益之前）
+- 白话：ADMIN降幅≥1.0 ∩ FAT升幅≥0.10 ∩ 放量≥1.5×amt20；按 ADMIN 降幅（封顶10）排序；持20。
+- 想法 / 文献：费用∩周期刚开跑——对称试 **管理费用∩周转**（硬合取，非 −pct；ADMINVOL/FATVOL/SUEGFAT 已上线；≠SEXPFAT 暂缓）。对照 ADMINTDVOL/SEXPFATVOL/SUEGFATVOL。
+- 去重：ADMINTDVOL；SEXPFATVOL；SUEGFATVOL；ADMINVOL；FATVOL。非仓位。不碰数据网关。
+- 规则：ADMIN∩FAT∩vol；sc_admin；K20/max_new5。新策略无 B。
+- 脚本：`admfatvol_s815.py` / `run_s815.sh`。
