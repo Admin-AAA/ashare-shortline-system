@@ -9983,3 +9983,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：GMEVOL；NPMVOL；NPMSUEGVOL；PTGVOL。非仓位。不碰数据网关。
 - 规则：GME∩SUEG∩vol；sc_gme；K20/max_new5。新策略无 B。
 - 脚本：`gmesuegvol_s839.py` / `run_s839.sh`。
+
+### §838 NPMSUEGVOL_d55_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +0.31 / P20 −0.33 / P21 +8.12 / W0 −1.57 / W00 +0.91 / W1 +1.90 / W2 +2.96 / R12 +2.71（**正段 6/8**）
+- R12 67笔 +2.71% PF1.58 MDD−8.3；N3 147笔 +2.58 PF1.65 MDD−7.8；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +2.71 / N3 +2.62 / MDD−7.9 → **B 否**（N3 每笔 2.58 < base 2.62）。
+- → **REJECTED**；线上 mid-npm-sue-vol 仍 dtp≥50。解读：再抬到 55 伤近三年每笔——**停 NPMSUEGVOL dtp硬抬轴**（≥50 为终点；orv 轴可续）。
+
+### §839 GMESUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 −2.59 / P20 −2.40 / P21 +8.22 / W0 −0.74 / W00 +1.63 / W1 +3.67 / W2 +4.97 / R12 +3.01（**正段 5/8**）
+- R12 52笔 +3.01% PF1.72 MDD−5.8；N3 108笔 +3.69 PF1.94 MDD−5.3；稳健型
+- 判定 ✓✓✓**✗**✓ → **否决**（正段不足）。解读：毛利率∩盈余合取未过正段门——对照单腿 GMEVOL 同病；**不接 GME∩SUEG 门槛轴**。
+
+## §840 [中线·现役改进] 净利率改善∩盈余加速∩放量 orv硬抬≥25（NPMSUEGVOL_o25_h20）— 预注册（2026-11-02 18:40 CST 写于跑任何收益之前）
+- 白话：现役 mid-npm-sue-vol（§838 d55 刚否，仍 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；NPM/SUE/dtp/放量/排序不变。同进程 NPMSUEGVOL_base(orv≥20)。
+- 想法：§838 d55 刚否——镜像 OCFS/OCSD 的 o25 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：NPMSUEGVOL_d55；OCFSSUEGVOL_o25；OCSDSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：NPM∩SUEG(dtp≥50∩orv≥25)∩vol；sc_npm；K20/max_new5。B 门。
+- 脚本：`npmsuegvol_o25_s840.py` / `run_s840.sh`。
+
+## §841 [中线·文献] EBIT/营收改善∩盈余加速∩放量（EBITSUEGVOL_h20）— 预注册（2026-11-02 18:40 CST 写于跑任何收益之前）
+- 白话：EBIT升幅≥2.0pp（本期 ebit_of_gr≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶20）排序；持20。
+- 想法 / 文献：NPM∩SUEG 已上线、GME∩SUEG 刚否——对称试 **EBIT利润率∩盈余意外**（硬合取，非 −pct；EBITVOL 曾否）。对照 EBITVOL/NPMSUEGVOL/GMEVOL。
+- 去重：EBITVOL；NPMSUEGVOL；GMESUEGVOL；PTGVOL。非仓位。不碰数据网关。
+- 规则：EBIT∩SUEG∩vol；sc_ebit；K20/max_new5。新策略无 B。
+- 脚本：`ebitsuegvol_s841.py` / `run_s841.sh`。
