@@ -9176,3 +9176,27 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：FZGETDVOL；FLZCASVOL；FLZFATVOL；FLZTDVOL；ETDFATVOL。非仓位。不碰数据网关。
 - 规则：FLZ∩ETD∩vol；sc_np；K20/max_new5。新策略无 B。
 - 脚本：`flzetdvol_s777.py` / `run_s777.sh`。
+
+### §776 EACASVOL_sc_cas_h20 — REJECT（A 否·正段）
+- 每笔 P19 −3.54 / P20 +1.57 / P21 +6.15 / W0 −3.23 / W00 −0.48 / W1 +3.41 / W2 +2.90 / R12 +2.41（**正段 5/8**）
+- R12 68笔 +2.41% PF1.50 MDD−7.3；N3 171笔 +2.87 PF1.73 MDD−11.4；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**。解读：改按 CAS 升幅排序伤正段——**停 EACASVOL CAS排序轴**（接硬门槛轴；EACAS 现役改进暂告一段落）。
+
+### §777 FLZETDVOL_h20 — REJECT（笔数不足·近一年空窗）
+- 每笔 P19 +2.31 / P20 −2.70 / P21 +10.63 / W0 −3.34 / W00 −2.24 / W1 n=0 / W2 n=0 / R12 n=0（**正段 2/8**）
+- R12 **0**笔；样本极稀
+- 判定（样本崩）→ **否决**。解读：略增∩股东权益杠杆同预增∩ETD——近一年空窗；**记候补，勿硬抬/软扩凑笔数**；**略增∩BS杠杆双合取∩放量暂缓**（接预告族∩BS）。
+
+## §778 [中线·现役改进] 盈余加速∩放量 SUE硬抬≥2.3（SUEGVOL_s23_h20）— 预注册（2026-11-02 11:17 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-accel-vol（SUE≥2.2∩G∩放量1.5×，按SUE排序）把 **SUE 硬抬** 到 **≥2.3**；G/放量/排序不变。同进程 SUEGVOL_base(≥2.2)。
+- 想法：EACAS 现役轴刚暂告一段落；SUEGVOL_s25 曾 B 否、s22 曾 ADOPT——试 **2.3 贴档**（硬门槛，非 −pct）。B 门对照 base。
+- 去重：SUEGVOL_s22；SUEGVOL_s25；SUEGVOL_v18；SUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：(SUE≥2.3∩G∩vol) vs (SUE≥2.2∩G∩vol)；sc_sue；K20/max_new5。B 门对照 base。
+- 脚本：`suegvol_s23_s778.py` / `run_s778.sh`。
+
+## §779 [中线·文献] 股利增加∩有形资产杠杆∩放量（DINCTADVOL_h20）— 预注册（2026-11-02 11:17 CST 写于跑任何收益之前）
+- 白话：股利增幅≥30% ∩ TAD升幅≥0.25 ∩ 放量≥1.5×amt20；按股利增幅排序；持20。
+- 想法 / 文献：股利∩CAS/ETD 刚候补；预告族∩BS 暂缓——改试 **股利∩有形资产杠杆** 末条 BS 腿（硬合取，非 −pct；DINCVOL/TADVOL/TADETD 已上线）。对照 DINCETDVOL/DINCCASVOL/DINCFATVOL/TADVOL。
+- 去重：DINCETDVOL；DINCCASVOL；DINCFATVOL；DINCTDVOL；TADETDVOL。非仓位。不碰数据网关。
+- 规则：DINC∩TAD∩vol；sc_inc；K20/max_new5。新策略无 B。
+- 脚本：`dinctadvol_s779.py` / `run_s779.sh`。
