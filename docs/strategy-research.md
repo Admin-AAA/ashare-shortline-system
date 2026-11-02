@@ -8752,3 +8752,27 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：BTFATVOL；BTVOL；RPUTDVOL；IOTDVOL。非仓位。不碰数据网关。
 - 规则：BT∩TD∩vol；sc_prem；K20/max_new5。新策略无 B。
 - 脚本：`bttdvol_s743.py` / `run_s743.sh`。例行约 8:47 冲突时串行让行。
+
+### §742 SUEGTDVOL_v18_h20 — REJECT（A 过；B 否）
+- 每笔 P19 n=0 / P20 +2.60 / P21 +3.00 / W0 +2.48 / W00 +2.71 / W1 +0.58 / W2 +1.52 / R12 +6.82（**正段 7/8**）
+- R12 33笔 +6.82% PF2.93 MDD−4.6；N3 81笔 +3.36 PF1.92 MDD−4.9；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base：R12 +8.79 / N3 +3.98 / MDD−8.2 → **B 否**（R12/N3 每笔均降；MDD 虽收窄不计）。
+- → **REJECTED**；线上 mid-sue-td-vol 仍放量≥1.5×。解读：量能硬抬收窄回撤却伤每笔——**停 SUEGTDVOL 放量硬抬轴**。
+
+### §743 BTTDVOL_h20 — REJECT（样本崩）
+- 每笔几乎空窗（仅 P21 n=1；其余段 n=0）
+- → **REJECTED**。解读：大宗∩周期合取同∩周转——近乎空窗；**大宗∩效率双合取∩放量暂缓**（FAT/TD 双否；记候补勿凑样）。
+
+## §744 [中线·现役改进] 盈余加速∩周转∩放量 放量硬抬≥1.8×（SUEGFATVOL_v18_h20）— 预注册（2026-11-02 08:16 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-fa-vol（SUE≥2.2∩G∩FAT≥0.12∩放量1.5×，按SUE排序）把 **放量硬抬** 到 **≥1.8×amt20**；SUEG/FAT/排序不变。同进程 SUEGFATVOL_base(1.5×)。
+- 想法：SUEGTD 量能硬抬刚否（A过B否）——对称试 **盈余∩周转双合取现役**（硬门槛，非 −pct）。B 门对照 base。
+- 去重：SUEGTDVOL_v18；FATTDVOL_v18；SUEGFATVOL_r015；SUEGFATVOL_r012。非仓位。不碰数据网关。
+- 规则：(SUEG∩FAT≥0.12∩vol1.8) vs (SUEG∩FAT≥0.12∩vol1.5)；sc_sue；K20/max_new5。B 门对照 base。
+- 脚本：`suegfatvol_v18_s744.py` / `run_s744.sh`。例行约 8:47 冲突时串行让行。
+
+## §745 [中线·文献] 净负债转净现金∩盈余加速∩放量（NCSSUEGVOL_h20）— 预注册（2026-11-02 08:16 CST 写于跑任何收益之前）
+- 白话：净负债→净现金 ∩ SUE≥2.2∩G ∩ 放量≥1.5×amt20；按 sc_ncs 排序；持20。
+- 想法 / 文献：净现金∩BS杠杆刚暂缓（仅∩TD成立）；大宗∩效率刚崩——改试 **净现金∩盈余加速**（硬合取，非 −pct；SUEGVOL/NCSTDVOL 已上线）。对照 NCSTDVOL/SUEGTDVOL/SUEGVOL/NCSVOL。
+- 去重：NCSTDVOL；NCSETDVOL；NCSTADVOL；NCSFATVOL；SUEGTADVOL。非仓位。不碰数据网关。
+- 规则：NCS∩SUEG∩vol；sc_ncs；K20/max_new5。新策略无 B。
+- 脚本：`ncssuegvol_s745.py` / `run_s745.sh`。例行约 8:47 冲突时串行让行。
