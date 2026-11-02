@@ -2,7 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
-另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol。
+另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol。
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -204,6 +204,76 @@ def adminsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         q["admin_prev"] = e.get("prev")
         try:
             q["score"] = float(q["admin_delta"])
+        except (TypeError, ValueError):
+            continue
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
+
+def opsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§816 OPSUEGVOL：OP加速≥20（op_yoy≥20且同比加速≥20）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 OP加速封顶100。"""
+    from app.services.midterm_fina_events import _fina_events
+
+    sg = suegvol_candidates(db, as_of)
+    if sg is None:
+        return None
+
+    def passes(cur: float, prev: float):
+        accel = cur - prev
+        ok = cur >= 20.0 and accel >= 20.0
+        return ok, min(accel, 100.0), {"op_yoy": cur, "prev_op_yoy": prev, "op_accel": accel}
+
+    op = _fina_events(db, as_of, "op_yoy", passes)
+    if op is None:
+        return None
+    op_by = {p["code"]: p for p in op}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = op_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["op_yoy"] = e.get("op_yoy", e.get("cur"))
+        q["prev_op_yoy"] = e.get("prev_op_yoy", e.get("prev"))
+        q["op_accel"] = e.get("op_accel", e.get("score"))
+        try:
+            q["score"] = float(q["op_accel"])
+        except (TypeError, ValueError):
+            continue
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
+
+def revsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§817 REVSUEGVOL：REV加速≥20（or_yoy≥20且同比加速≥20）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 REV加速封顶100。"""
+    from app.services.midterm_fina_events import _fina_events
+
+    sg = suegvol_candidates(db, as_of)
+    if sg is None:
+        return None
+
+    def passes(cur: float, prev: float):
+        accel = cur - prev
+        ok = cur >= 20.0 and accel >= 20.0
+        return ok, min(accel, 100.0), {"rev_or_yoy": cur, "prev_or_yoy": prev, "rev_accel": accel}
+
+    rv = _fina_events(db, as_of, "or_yoy", passes)
+    if rv is None:
+        return None
+    rv_by = {p["code"]: p for p in rv}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = rv_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["rev_or_yoy"] = e.get("rev_or_yoy", e.get("cur"))
+        q["prev_or_yoy"] = e.get("prev_or_yoy", e.get("prev"))
+        q["rev_accel"] = e.get("rev_accel", e.get("score"))
+        try:
+            q["score"] = float(q["rev_accel"])
         except (TypeError, ValueError):
             continue
         out.append(q)

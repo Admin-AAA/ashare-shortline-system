@@ -9689,3 +9689,31 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：REVVOL；OPSUEGVOL；SUEGVOL；EAVOL；SEXPSUEGVOL。非仓位。不碰数据网关。
 - 规则：REV∩SUEG∩vol；sc_rev；K20/max_new5。新策略无 B。
 - 脚本：`revsuegvol_s817.py` / `run_s817.sh`。
+
+
+### §816 OPSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +2.86 / P20 −0.10 / P21 +7.28 / W0 −1.75 / W00 +2.24 / W1 +4.06 / W2 +3.38 / R12 +3.03（**正段 6/8**）
+- R12 69笔 +3.03% PF1.56 MDD−8.9；N3 157笔 +3.42 PF1.82 MDD−8.6；彩票型（R12）/稳健型（N3）
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 16:05 CST）：`mid-op-sue-vol`（kind=`op_sue_vol`）；`s816_onboard_metrics.py`；replay onboard 21批/59只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：营业利润加速∩盈余合取成立（单腿 OPVOL 曾否）——镜像费用∩SUEG 非对称。
+
+### §817 REVSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +6.12 / P20 −0.42 / P21 +8.28 / W0 +0.34 / W00 +3.00 / W1 +3.82 / W2 +1.95 / R12 +4.50（**正段 7/8**）
+- R12 63笔 +4.50% PF1.94 MDD−6.8；N3 145笔 +3.59 PF1.86 MDD−8.7；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 16:05 CST）：`mid-rev-sue-vol`（kind=`rev_sue_vol`）；`s817_onboard_metrics.py`；replay onboard 18批/47只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：营收加速∩盈余合取成立（单腿 REVVOL 曾否）——与 OPSUEG 同向。
+
+
+## §818 [中线·现役改进] 营业利润加速∩盈余加速∩放量 dtp硬抬≥55（OPSUEGVOL_d55_h20）— 预注册（2026-11-02 16:00 CST 写于跑任何收益之前）
+- 白话：现役 mid-op-sue-vol（OP≥20∩G(dtp≥50)∩SUE≥2.2∩放量，按 OP加速排序）把 **G 内 dtp 硬抬** 到 **≥55**；OP/SUE/orv/放量/排序不变。同进程 OPSUEGVOL_base(dtp≥50)。
+- 想法：§816 刚 ADOPT——镜像 SEXPSUEG/ADMINSUEG/SUEGTD 的 d55 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：OPSUEGVOL；SEXPSUEGVOL_d55；ADMINSUEGVOL_d55；SUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：OP∩SUEG(dtp≥55)∩vol；sc_op；K20/max_new5。B 门：R12&N3 avg≥base，N3 MDD不更深。
+- 脚本：`opsuegvol_d55_s818.py` / `run_s818.sh`。
+
+## §819 [中线·现役改进] 营收加速∩盈余加速∩放量 dtp硬抬≥55（REVSUEGVOL_d55_h20）— 预注册（2026-11-02 16:00 CST 写于跑任何收益之前）
+- 白话：现役 mid-rev-sue-vol（REV≥20∩G(dtp≥50)∩SUE≥2.2∩放量，按 REV加速排序）把 **G 内 dtp 硬抬** 到 **≥55**；REV/SUE/orv/放量/排序不变。同进程 REVSUEGVOL_base(dtp≥50)。
+- 想法：§817 刚 ADOPT——镜像 OPSUEG/SEXPSUEG 的 d55 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：REVSUEGVOL；OPSUEGVOL_d55；SEXPSUEGVOL_d55；SUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：REV∩SUEG(dtp≥55)∩vol；sc_rev；K20/max_new5。B 门：R12&N3 avg≥base，N3 MDD不更深。
+- 脚本：`revsuegvol_d55_s819.py` / `run_s819.sh`。
