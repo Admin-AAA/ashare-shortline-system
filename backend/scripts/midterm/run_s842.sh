@@ -35,7 +35,7 @@ run_ph() {
   done
   free_mb=$(sysctl -n vm.swapusage | awk -F'free = ' '{print $2}' | awk '{print int($1)}')
   # wait for swap if too tight
-  while [ "$free_mb" -lt 800 ]; do
+  while [ "$free_mb" -lt 400 ]; do
     if evening_yield; then echo "EVENING_YIELD $(date)" | tee -a "$LOG"; return 99; fi
     echo "wait swap_free_mb=$free_mb $(date +%H:%M:%S)" >>"$LOG"; sleep 30
     free_mb=$(sysctl -n vm.swapusage | awk -F'free = ' '{print $2}' | awk '{print int($1)}')

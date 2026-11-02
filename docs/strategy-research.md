@@ -10033,3 +10033,27 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：GCVOL；GMESUEGVOL；PTGSUEGVOL；COGSVOL。非仓位。不碰数据网关。
 - 规则：GC∩SUEG∩vol；sc_gc；K20/max_new5。新策略无 B。
 - 脚本：`gcsuegvol_s843.py` / `run_s843.sh`。
+
+### §842 PTGSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 +2.06 / P20 −0.28 / P21 +7.12 / W0 −1.02 / W00 +0.86 / W1 +2.09 / W2 +2.99 / R12 +0.95（**正段 6/8**）
+- R12 67笔 +0.95% PF1.18 MDD−8.4；N3 146笔 +1.83 PF1.44 MDD−7.9；彩票型
+- 判定 ✓✗✓✓✓ → **否决**。解读：净利润/营收∩盈余近一年偏弱、质量门未过——对照 PTGVOL/EBIT∩SUEG；**不接 PTG∩SUEG 门槛轴**。
+
+### §843 GCSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 −0.23 / P20 −0.41 / P21 +6.00 / W0 −1.26 / W00 −1.20 / W1 +4.26 / W2 +5.31 / R12 +4.62（**正段 4/8**）
+- R12 56笔 +4.62% PF2.20 MDD−8.0；N3 132笔 +4.74 PF2.63 MDD−6.7；稳健型
+- 判定 ✓✓✓**✗**✓ → **否决**（正段不足）。解读：成本率下降∩盈余近一年好看但跨年正段不足——对照 GCVOL；**不接 GC∩SUEG 门槛轴**。
+
+## §844 [中线·文献] 单季营收加速∩盈余加速∩放量（QSSUEGVOL_h20）— 预注册（2026-11-02 19:00 CST 写于跑任何收益之前）
+- 白话：QS加速≥20（本期 q_sales_yoy≥20）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按加速（封顶100）排序；持20。
+- 想法 / 文献：利润率/成本率∩SUEG 刚否一批——改试 **单季营收加速∩盈余意外**（硬合取，非 −pct；QSVOL 曾否、≠累计 or_yoy）。对照 QSVOL/OPSUEGVOL/SUEGVOL。
+- 去重：QSVOL；OPSUEGVOL；REVSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：QS∩SUEG∩vol；sc_qs；K20/max_new5。新策略无 B。
+- 脚本：`qssuegvol_s844.py` / `run_s844.sh`。
+
+## §845 [中线·文献] ROIC扩张∩盈余加速∩放量（ROICSUEGVOL_h20）— 预注册（2026-11-02 19:00 CST 写于跑任何收益之前）
+- 白话：ROIC升幅≥3.0pp（本期 roic≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ΔROIC（封顶30）排序；持20。
+- 想法 / 文献：营收/利润率轴收口中——对称试 **投入资本回报∩盈余意外**（硬合取，非 −pct；ROICVOL 曾否）。对照 ROICVOL/ROEVOL/NPMSUEGVOL。
+- 去重：ROICVOL；ROEVOL；NPMSUEGVOL；EBITSUEGVOL。非仓位。不碰数据网关。
+- 规则：ROIC∩SUEG∩vol；sc_roic；K20/max_new5。新策略无 B。
+- 脚本：`roicsuegvol_s845.py` / `run_s845.sh`。
