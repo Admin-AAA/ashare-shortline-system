@@ -9877,3 +9877,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：QOPSUEGVOL_d55；OPSUEGVOL_o25；SEXPSUEGVOL_o25。非仓位。不碰数据网关。
 - 规则：QOP∩SUEG(dtp≥50∩orv≥25)∩vol；sc_qop；K20/max_new5。B 门。
 - 脚本：`qopsuegvol_o25_s831.py` / `run_s831.sh`。
+
+
+### §830 OCFSSUEGVOL_d55_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +0.05 / P20 +1.54 / P21 +6.84 / W0 +0.21 / W00 +3.09 / W1 +1.67 / W2 +2.33 / R12 +10.23（**正段 8/8**）
+- R12 52笔 +10.23% PF3.65 MDD−6.6；N3 110笔 +5.88 PF2.53 MDD−6.2；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +10.23 持平 / N3 +5.99 / MDD−6.2 → **B 否**（N3 每笔降；近窗近空抬）。
+- → **REJECTED**；线上 mid-ocfs-sue-vol 仍 dtp≥50。解读：再抬到 55 伤近三年——**停 OCFSSUEGVOL dtp硬抬轴**（≥50 为终点；orv 轴可续）。
+
+### §831 QOPSUEGVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +10.80 / P20 +1.03 / P21 +5.65 / W0 +0.40 / W00 −0.50 / W1 +3.83 / W2 −0.95 / R12 +2.30（**正段 6/8**）
+- R12 57笔 +2.30% PF1.43 MDD−6.7；N3 122笔 +1.98 PF1.42 MDD−9.4；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20)：R12 +1.78 / N3 +1.81 / MDD−8.9 → **B 否**（N3 MDD 更深 −9.4 vs −8.9；虽每笔抬）。
+- → **REJECTED**；线上 mid-qop-sue-vol 仍 orv≥20。解读：再抬到 25 伤近三年回撤——**停 QOPSUEGVOL orv硬抬轴**（≥20 为终点；接 dtp≥50 终点）。QOP∩SUEG 双轴到站。
+
+## §832 [中线·现役改进] 经营现金流/营收改善∩盈余加速∩放量 orv硬抬≥25（OCFSSUEGVOL_o25_h20）— 预注册（2026-11-02 17:35 CST 写于跑任何收益之前）
+- 白话：现役 mid-ocfs-sue-vol（§830 d55 刚否，仍 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；OCFS/SUE/dtp/放量/排序不变。同进程 OCFSSUEGVOL_base(orv≥20)。
+- 想法：dtp 轴刚停——改试营收腿（硬门槛，非 −pct；对照 QOPSUEG_o25 刚否、OPSUEG_o25 曾否）。B 门对照 base。
+- 去重：OCFSSUEGVOL_d55；QOPSUEGVOL_o25；OPSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：OCFS∩SUEG(dtp≥50∩orv≥25)∩vol；sc_ocfs；K20/max_new5。B 门。
+- 脚本：`ocfssuegvol_o25_s832.py` / `run_s832.sh`。
+
+## §833 [中线·文献] 经营现金流/短期债务改善∩盈余加速∩放量（OCSDSUEGVOL_h20）— 预注册（2026-11-02 17:35 CST 写于跑任何收益之前）
+- 白话：OCSD升幅≥0.05 ∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 OCSD 升幅（封顶0.40）排序；持20。
+- 想法 / 文献：OCFS∩SUEG 刚 ADOPT、QOP 门槛轴到站——对称试 **偿债现金流∩盈余意外**（硬合取，非 −pct；OCSDVOL 曾否、OCFSSUEG 已上线）。对照 OCSDVOL/OCFSSUEGVOL/SUEGVOL。
+- 去重：OCSDVOL；OCFSSUEGVOL；OCFSVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：OCSD∩SUEG∩vol；sc_ocsd；K20/max_new5。新策略无 B。
+- 脚本：`ocsdsuegvol_s833.py` / `run_s833.sh`。
