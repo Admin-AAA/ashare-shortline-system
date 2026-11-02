@@ -9931,3 +9931,29 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：OCSDSUEGVOL；OCFSSUEGVOL_d55；QOPSUEGVOL_d55。非仓位。不碰数据网关。
 - 规则：OCSD∩SUEG(dtp≥55)∩vol；sc_ocsd；K20/max_new5。B 门。
 - 脚本：`ocsdsuegvol_d55_s835.py` / `run_s835.sh`。
+
+### §834 OCFSSUEGVOL_o30_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +4.17 / P20 +2.96 / P21 +5.63 / W0 +0.53 / W00 +3.77 / W1 +2.20 / W2 +1.99 / R12 +12.67（**正段 8/8**）
+- R12 44笔 +12.67% PF5.38 MDD−7.2；N3 96笔 +6.95 PF3.07 MDD−6.9；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥25∩dtp≥50)：R12 +11.47 / N3 +6.35 / MDD−6.2 → **B 否**（N3 MDD −6.9 深于 base −6.2）。
+- → **REJECTED**；线上 mid-ocfs-sue-vol 仍 orv≥25。解读：再抬到 30 伤近三年回撤——**停 OCFSSUEGVOL orv硬抬轴**（≥25 为终点；接 dtp≥50 终点）。OCFS∩SUEG 双轴到站。
+
+### §835 OCSDSUEGVOL_d55_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +1.13 / P20 +1.85 / P21 +8.86 / W0 −0.20 / W00 +2.27 / W1 +0.57 / W2 +5.05 / R12 +2.20（**正段 7/8**）
+- R12 41笔 +2.20% PF1.52 MDD−8.4；N3 81笔 +2.33 PF1.66 MDD−8.1；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +1.89 / N3 +2.39 / MDD−8.3 → **B 否**（N3 每笔 2.33 < base 2.39）。
+- → **REJECTED**；线上 mid-ocsd-sue-vol 仍 dtp≥50。解读：再抬到 55 伤近三年每笔——**停 OCSDSUEGVOL dtp硬抬轴**（≥50 为终点；orv 轴可续）。
+
+## §836 [中线·现役改进] 经营现金流/短期债务改善∩盈余加速∩放量 orv硬抬≥25（OCSDSUEGVOL_o25_h20）— 预注册（2026-11-02 18:12 CST 写于跑任何收益之前）
+- 白话：现役 mid-ocsd-sue-vol（§835 d55 刚否，仍 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；OCSD/SUE/dtp/放量/排序不变。同进程 OCSDSUEGVOL_base(orv≥20)。
+- 想法：§835 d55 刚否——镜像 OCFSSUEG_o25 路径（硬门槛，非 −pct；对照 OCFS_o25 刚 ADOPT、o30 刚否）。B 门对照 base。
+- 去重：OCSDSUEGVOL_d55；OCFSSUEGVOL_o25；QOPSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：OCSD∩SUEG(dtp≥50∩orv≥25)∩vol；sc_ocsd；K20/max_new5。B 门。
+- 脚本：`ocsdsuegvol_o25_s836.py` / `run_s836.sh`。
+
+## §837 [中线·文献] 净利率改善∩盈余加速∩放量（NPMSUEGVOL_h20）— 预注册（2026-11-02 18:12 CST 写于跑任何收益之前）
+- 白话：NPM升幅≥2.0pp（本期 netprofit_margin≥3）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ΔNPM（封顶20）排序；持20。
+- 想法 / 文献：OCFS∩SUEG 双轴到站、OCSD∩SUEG 已上线——对称试 **净利率改善∩盈余意外**（硬合取，非 −pct；NPMVOL 曾否、SUEGVOL 已上线）。对照 NPMVOL/OCFSSUEGVOL/SUEGVOL。
+- 去重：NPMVOL；GMEVOL；PTGVOL；OCFSSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
+- 规则：NPM∩SUEG∩vol；sc_npm；K20/max_new5。新策略无 B。
+- 脚本：`npmsuegvol_s837.py` / `run_s837.sh`。
