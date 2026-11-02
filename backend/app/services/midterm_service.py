@@ -418,7 +418,7 @@ STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-sue-td-vol": {
         "name": "盈余加速∩营业周期∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足 SUE≥2.2 且业绩加速（G），与营业周期（turn_days）同比缩短≥20日，且信号日成交额≥1.5×前20日均额；按 SUE（封顶20）从高到低排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：盈余惊喜 × 周期效率 × 量能确认（§669）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足 SUE≥2.2 且业绩加速（G，扣非同比≥55%且加速、营收同比≥20%），与营业周期（turn_days）同比缩短≥20日，且信号日成交额≥1.5×前20日均额；按 SUE（封顶20）从高到低排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：盈余惊喜 × 周期效率 × 量能确认（§669/§762 dtp硬抬）。",
         "kind": "sue_td_vol",
         "hold_days": 20,
         "schedule": "daily",
@@ -438,6 +438,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "horizon": "mid",
         "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足业绩加速（G：扣非净利同比≥60%且加速、营收同比≥20%、扣非净利>0；§712：原 dtp≥55），与营业周期（turn_days）同比缩短≥25日（§702），且信号日成交额≥1.5×前20日均额；按营业周期缩短天数（封顶200，§700）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：业绩加速 × 周期效率 × 量能确认（§699）+ TD排序（§700）。",
         "kind": "ea_td_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
+    # §763 业绩加速∩流动资产占比∩放量（scripts/midterm/eacasvol_s763.py EACASVOL_h20；§282 达标；2026-11-02 上线）
+    "mid-ea-cas-vol": {
+        "name": "业绩加速∩流动资产占比∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足业绩加速（G：扣非净利同比≥50%且加速、营收同比≥20%、扣非净利>0），与流动资产占总资产比重升幅≥3.0个百分点，且信号日成交额≥1.5×前20日均额；按扣非净利同比（封顶300）从高到低排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：业绩加速 × 资产流动性结构 × 量能确认（§763）。",
+        "kind": "ea_cas_vol",
         "hold_days": 20,
         "schedule": "daily",
     },
@@ -1863,6 +1872,20 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
 
+        if meta.get("kind") == "ea_cas_vol":
+            from app.services.midterm_eavol import eacasvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = eacasvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
         if meta.get("kind") == "cas_vol":
             from app.services.midterm_fina_events import casvol_candidates
             held = _held_codes(db, sid, as_of)
@@ -2443,6 +2466,13 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             note = _RANK_CAP_NOTE
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：营业周期缩短 {_f(p.get('td_improve'), 1)} 日"
                       f"（§700 排序）∩ 扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
+                      f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%）、营收同比 {_f(p.get('or_yoy'), 1)}%；"
+                      f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "ea_cas_vol":
+            score, label, better = round(float(p["score"]), 1), "扣非净利同比(%)×CAS合取", "higher"
+            note = _RANK_CAP_NOTE
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：流动资产占比 {_f(p.get('cas_prev'), 2)}% → {_f(p.get('cas_cur'), 2)}%"
+                      f"（升幅 {_f(p.get('cas_delta'), 2)}pp）∩ 扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%）、营收同比 {_f(p.get('or_yoy'), 1)}%；"
                       f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "cas_vol":

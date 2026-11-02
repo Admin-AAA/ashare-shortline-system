@@ -9002,3 +9002,29 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：SEXPCASVOL；SUEGCASVOL；EAFATVOL；EATADVOL；EAETDVOL。非仓位。不碰数据网关。
 - 规则：G∩CAS∩vol；sc_g；K20/max_new5。新策略无 B。
 - 脚本：`eacasvol_s763.py` / `run_s763.sh`。
+
+### §762 SUEGTDVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 n=0 / P20 +0.74 / P21 +7.25 / W0 +3.82 / W00 +2.90 / W1 −0.41 / W2 +1.25 / R12 +10.06（**正段 6/8**）
+- R12 41笔 +10.06% PF4.41 MDD−4.3；N3 99笔 +4.36 PF2.26 MDD−8.0；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +8.79 / N3 +3.98 / MDD−8.2 → **B 过**（R12/N3 每笔抬、三年回撤不加深）。
+- → **ADOPT**。上线（2026-11-02 10:12 CST）：`mid-sue-td-vol` dtp **≥50→≥55**；`s762_onboard_metrics.py`；replay 强制覆盖 11批/20只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：盈余∩周期上抬 dtp 镜像 EATDVOL_d55——与单腿 SUEGVOL_d55 否决不对称。
+
+### §763 EACASVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 −3.54 / P20 +0.69 / P21 +4.68 / W0 −3.26 / W00 +0.07 / W1 +3.06 / W2 +2.84 / R12 +2.70（**正段 6/8**）
+- R12 68笔 +2.70% PF1.57 MDD−8.6；N3 171笔 +2.86 PF1.72 MDD−11.5；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 10:12 CST）：`mid-ea-cas-vol`（kind=`ea_cas_vol`）；`s763_onboard_metrics.py`；replay 21批/66只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：加速∩流动资产结构成立——费用∩CAS 双否、SUEG∩CAS 曾否，加速单腿∩CAS 可过。
+
+## §764 [中线·现役改进] 盈余加速∩周期∩放量 dtp硬抬≥60（SUEGTDVOL_d60_h20）— 预注册（2026-11-02 10:12 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-td-vol（§762 已抬至 G dtp≥55∩SUE≥2.2∩TD∩放量，按SUE排序）把 **G 内 dtp 再硬抬** 到 **≥60**；SUE/TD/orv/放量/排序不变。同进程 SUEGTDVOL_base(dtp≥55)。
+- 想法：§762 d55 刚 ADOPT——续试贴档（硬门槛，非 −pct；对照 EATDVOL_d60 曾 ADOPT）。B 门对照 base。
+- 去重：SUEGTDVOL_d55；EATDVOL_d60；SUEGVOL_d55；SUEGTDVOL_v18。非仓位。不碰数据网关。
+- 规则：(SUEG_dtp60∩TD∩vol) vs (SUEG_dtp55∩TD∩vol)；sc_sue；K20/max_new5。B 门对照 base。
+- 脚本：`suegtdvol_d60_s764.py` / `run_s764.sh`。
+
+## §765 [中线·文献] 激励期权∩流动资产占比∩放量（IOCASVOL_h20）— 预注册（2026-11-02 10:12 CST 写于跑任何收益之前）
+- 白话：首次含股票期权激励草案 ∩ CAS升幅≥3.0pp ∩ 放量≥1.5×amt20；按 −pct 排序（少堆；事件硬合取）；持20。
+- 想法 / 文献：加速∩CAS 刚 ADOPT；费用∩CAS 暂缓；激励∩效率曾候补——改试 **激励∩流动资产结构**（硬合取，非 −pct；IOVOL/CASVOL/EACAS 已上线）。对照 EACASVOL/IOTDVOL/IOFATVOL/CASVOL。
+- 去重：EACASVOL；IOTDVOL；IOFATVOL；IOUVOL；CASVOL。非仓位。不碰数据网关。
+- 规则：IO∩CAS∩vol；sc=−pct；K20/max_new5。新策略无 B。
+- 脚本：`iocasvol_s765.py` / `run_s765.sh`。

@@ -51,7 +51,7 @@ def suegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 
 def suegtdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§669：SUE≥2.2 ∩ G ∩ TD缩短 ∩ 放量≥1.5×amt20；排序 min(SUE,20)。"""
+    """§669/§762：SUE≥2.2 ∩ G(dtp≥55) ∩ TD缩短 ∩ 放量≥1.5×amt20（§762 dtp硬抬；suegvol 仍≥50）；排序 min(SUE,20)。"""
     from app.services.midterm_fina_events import td_candidates
 
     sg = suegvol_candidates(db, as_of)
@@ -63,6 +63,13 @@ def suegtdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     for p0 in sg:
         e = td_by.get(p0["code"])
         if e is None:
+            continue
+        # §762：在 suegvol(G dtp≥50) 基础上再硬抬 dtp≥55（不改动 mid-sue-accel-vol）
+        try:
+            dtp = float(p0.get("dt_netprofit_yoy"))
+        except (TypeError, ValueError):
+            continue
+        if dtp < 55.0:
             continue
         q = dict(p0)
         q["td_improve"] = e.get("improve")

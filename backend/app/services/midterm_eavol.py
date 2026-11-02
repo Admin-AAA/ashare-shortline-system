@@ -138,3 +138,26 @@ def eatdvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
     return out
 
+def eacasvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§763 EACASVOL_h20：G ∩ CAS升幅≥3.0pp ∩ 放量≥1.5×amt20；排序 dtp 封顶300。"""
+    from app.services.midterm_fina_events import cas_candidates
+
+    ea = eavol_candidates(db, as_of)
+    cas = cas_candidates(db, as_of)
+    if ea is None or cas is None:
+        return None
+    cas_by = {p["code"]: p for p in cas}
+    out: list[dict[str, Any]] = []
+    for p0 in ea:
+        e = cas_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["cas_delta"] = e.get("delta")
+        q["cas_cur"] = e.get("cur")
+        q["cas_prev"] = e.get("prev")
+        # 排序保持 sc_g（dtp 封顶300，eavol 已写入 score）
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
