@@ -10900,6 +10900,22 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 判定 ✓✗✓✓✓ → **否决**（R12 每笔≈0/PF=1）。解读：扣非ROE扩张∩SUEG 近一年无力——对照 QROE∩SUEG 曾否、ROY（roe_yoy）成立不外推到 roe_dt 水平差分。
 
 
+
+
+## §908 [中线·文献] 营业利润率改善∩盈余加速∩放量（OPGRSUEGVOL_h20）— 预注册（2026-11-03 05:17 CST 写于跑任何收益之前）
+- 白话：op_of_gr 改善≥1.0（本期≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δop_of_gr（封顶10）排序；持20。
+- 想法 / 文献：DEBT/ROEDT∩SUEG 刚否、NPM/EBIT/GME∩SUEG 曾否——改试 **营业利润/营收口径∩盈余意外**（硬合取；≠netprofit_margin/ebit_of_gr；单腿利润率链曾否）。对照 NPM/EBITSUEGVOL/PTGSUEGVOL。
+- 去重：NPMSUEGVOL；EBITSUEGVOL；PTGSUEGVOL；GMESUEGVOL。非仓位。不碰数据网关。
+- 规则：OPGR∩SUEG∩vol；sc_opgr；K20/max_new5。新策略无 B。
+- 脚本：`opgrsuegvol_s908.py` / `run_s908.sh`。
+
+## §909 [中线·文献] 权益/总资本升∩盈余加速∩放量（ETCSUEGVOL_h20）— 预注册（2026-11-03 05:17 CST 写于跑任何收益之前）
+- 白话：eqt_to_talcapital 升≥1.0（本期≥30）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶10）排序；持20。
+- 想法 / 文献：DEBT∩SUEG 刚暂缓、ITC∩SUEG 已上线——对称试 **权益占总资本抬升∩盈余意外**（硬合取；字段≠debt_to_assets/int_to_talcap；≠ETD 杠杆）。对照 ETD/DEBTSUEGVOL/ITCSUEGVOL。
+- 去重：ETDVOL；DEBTSUEGVOL；ITCSUEGVOL；EQTSUEGVOL。非仓位。不碰数据网关。去杠杆∩SUEG / 有息负债∩SUEG 仍暂缓。
+- 规则：ETC∩SUEG∩vol；sc_etc；K20/max_new5。新策略无 B。
+- 脚本：`etcsuegvol_s909.py` / `run_s909.sh`。
+
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
 - 白话：BEPS≥20（basic_eps_yoy 水平）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 basic_eps_yoy（封顶100）排序；持20。
 - 想法 / 文献：EBT∩SUEG 刚 ADOPT、EPS∩放量曾否、ROY∩SUEG 已上线——对称试 **基本每股收益同比水平∩盈余意外**（硬合取；≠扣非加速/EBT加速）。对照 EPS/EPSVOL/ROYSUEGVOL。
