@@ -10665,12 +10665,41 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：EBT∩SUEG∩vol；G.dtp≥55；sc_ebt；K20/max_new5。B 对照 base。
 - 脚本：`ebtsuegvol_d55_s890.py` / `run_s890.sh`。
 
+### §890 EBTSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 +1.10 / P20 −0.18 / P21 +7.43 / W0 −1.96 / W00 +2.24 / W1 +3.48 / W2 +3.61 / R12 +4.03（**正段 6/8**）
+- R12 69笔 +4.03% PF1.80 MDD−8.9；N3 156笔 +3.76 PF1.92 MDD−8.1；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +3.59 / N3 +3.55 MDD−8.4；d55 R12 +4.03 / N3 +3.76 MDD−8.1 → **B 过**。
+- → **ADOPT**。上线（2026-11-03 03:37 CST）：`mid-ebt-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s890_onboard_metrics.py`；replay 强制覆盖 22批/61只（2026-08-01~11-02）；`safe_backend_restart`。解读：利润总额加速∩盈余上抬扣非腿成立——镜像 FAT/QN/CAT_d55。
+
+## §892 [中线·现役改进] 利润总额同比加速∩盈余加速∩放量 orv硬抬≥25（EBTSUEGVOL_o25_h20）— 预注册（2026-11-03 03:37 CST 写于跑任何收益之前）
+- 白话：现役 mid-ebt-sue-vol（§890 已冻 dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；EBT/SUE/dtp/放量/排序不变。同进程 EBTSUEGVOL_base(orv≥20)。
+- 想法：§890 d55 刚 ADOPT——续试 orv 轴（硬门槛；对照 ART_o25 刚过、CAT_o25 曾否）。B 门对照 base。
+- 去重：EBTSUEGVOL_d55；BEPSUEGVOL（曾否）。非仓位。不碰数据网关。
+- 规则：EBT∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_ebt；K20/max_new5。B 对照 base。
+- 脚本：`ebtsuegvol_o25_s892.py` / `run_s892.sh`。
+
+## §893 [中线·文献] 扣非每股收益同比高增∩盈余加速∩放量（DTEPSUEGVOL_h20）— 预注册（2026-11-03 03:37 CST 写于跑任何收益之前）
+- 白话：DTEPS≥20（dt_eps_yoy 水平）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 dt_eps_yoy（封顶100）排序；持20。
+- 想法 / 文献：BEPS∩SUEG 刚否、DTEPSVOL 曾否——对称试 **扣非EPS同比水平∩盈余意外**（硬合取；字段≠basic_eps_yoy）。对照 DTEPS/DTEPSVOL/EBTSUEGVOL。
+- 去重：DTEPS；DTEPSVOL；BEPSUEGVOL；EBTSUEGVOL。非仓位。不碰数据网关。
+- 规则：DTEPS∩SUEG∩vol；sc_dteps；K20/max_new5。新策略无 B。
+- 脚本：`dtepsuegvol_s893.py` / `run_s893.sh`。
+
+
+
+
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
 - 白话：BEPS≥20（basic_eps_yoy 水平）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 basic_eps_yoy（封顶100）排序；持20。
 - 想法 / 文献：EBT∩SUEG 刚 ADOPT、EPS∩放量曾否、ROY∩SUEG 已上线——对称试 **基本每股收益同比水平∩盈余意外**（硬合取；≠扣非加速/EBT加速）。对照 EPS/EPSVOL/ROYSUEGVOL。
 - 去重：EPS；EPSVOL；ROYSUEGVOL；EBTSUEGVOL。非仓位。不碰数据网关。
 - 规则：BEPS∩SUEG∩vol；sc_beps；K20/max_new5。新策略无 B。
 - 脚本：`bepsuegvol_s891.py` / `run_s891.sh`。
+
+### §891 BEPSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 +3.37 / P20 −0.15 / P21 +5.75 / W0 −1.56 / W00 −0.04 / W1 +1.92 / W2 +3.19 / R12 +3.26（**正段 5/8**）
+- R12 70笔 +3.26% PF1.63 MDD−9.5；N3 163笔 +2.85 PF1.72 MDD−9.2；彩票型
+- 判定 ✓✓✓✗✓ → **否决**。解读：基本EPS同比∩SUEG 正段不足（W0/W00 负）——单腿 EPSVOL 曾否，合取未过 A；≠ ROY∩SUEG 成立路径。
+
 
 
 
