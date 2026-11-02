@@ -10558,12 +10558,41 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：AT∩SUEG∩vol；sc_at；K20/max_new5。新策略无 B。
 - 脚本：`atsuegvol_s882.py` / `run_s882.sh`。
 
+### §882 ATSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 +4.95 / P20 −0.07 / P21 +8.34 / W0 −0.36 / W00 −1.71 / W1 +1.66 / W2 +4.52 / R12 +5.39（**正段 5/8**）
+- R12 65笔 +5.39% PF2.26 MDD−9.2；N3 131笔 +4.19 PF2.04 MDD−8.4；稳健型
+- 判定 ✓✓✓✗✓ → **否决**。解读：总资产周转∩SUEG 正段不足（W00 负）——FAT∩SUEG 成立不外推到 AT；单腿 AT/ATVOL 曾否，合取未过 A。
+
+
 ## §883 [中线·文献] 应收周转扩张∩盈余加速∩放量（ARTSUEGVOL_h20）— 预注册（2026-11-03 02:35 CST 写于跑任何收益之前）
 - 白话：ART升幅≥0.30（ar_turn≥2.0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ΔART（封顶5）排序；持20。
 - 想法 / 文献：AT∩SUEG 同批；应收周转单腿/∩放量曾否——对称试 **应收周转∩盈余意外**（硬合取；≠FAT/AT）。对照 ART/ARTVOL/FATSUEGVOL。
 - 去重：ART；ARTVOL；ATSUEGVOL；FATSUEGVOL。非仓位。不碰数据网关。
 - 规则：ART∩SUEG∩vol；sc_art；K20/max_new5。新策略无 B。
 - 脚本：`artsuegvol_s883.py` / `run_s883.sh`。
+
+### §883 ARTSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +2.02 / P20 −2.12 / P21 +5.62 / W0 +1.28 / W00 +3.62 / W1 +2.51 / W2 +1.80 / R12 +4.25（**正段 7/8**）
+- R12 51笔 +4.25% PF1.97 MDD−5.9；N3 96笔 +3.30 PF1.79 MDD−6.0；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 02:47 CST）：`mid-art-sue-vol`（kind=`art_sue_vol`）；FINA_FIELDS 增 `ar_turn`；`s883_onboard_metrics.py`；replay onboard 18批/37只（2026-08-01~11-02）；`safe_backend_restart`。解读：应收周转∩盈余合取成立（单腿 ART/ARTVOL 曾否；≠FAT∩SUEG）。
+
+## §884 [中线·现役改进] 应收周转扩张∩盈余加速∩放量 dtp硬抬≥55（ARTSUEGVOL_d55_h20）— 预注册（2026-11-03 02:47 CST 写于跑任何收益之前）
+- 白话：现役 mid-art-sue-vol（§883：ART升幅≥0.30∩SUE≥2.2∩G∩放量≥1.5×，排序Δar_turn封顶5）把 **G 内 dtp 硬抬** 到 **≥55**；ART/SUE/orv/放量/排序不变。同进程 ARTSUEGVOL_base(dtp≥50)。
+- 想法：§883 刚 ADOPT——镜像 FAT/QN/QS_d55（硬门槛，非 −pct）。B 门对照 base。
+- 去重：ARTSUEGVOL；ATSUEGVOL（曾否）。非仓位。不碰数据网关。
+- 规则：ART∩SUEG∩vol；G.dtp≥55；sc_art；K20/max_new5。B 对照 base。
+- 脚本：`artsuegvol_d55_s884.py` / `run_s884.sh`。
+
+## §885 [中线·文献] 流动资产周转扩张∩盈余加速∩放量（CATSUEGVOL_h20）— 预注册（2026-11-03 02:47 CST 写于跑任何收益之前）
+- 白话：CAT升幅≥0.10（ca_turn≥0.50）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ΔCAT（封顶1.0）排序；持20。
+- 想法 / 文献：ART∩SUEG 刚 ADOPT、AT∩SUEG 刚否——对称试 **流动资产周转∩盈余意外**（硬合取；≠ART/FAT）。对照 CAT/CATVOL/ARTSUEGVOL。
+- 去重：CAT；CATVOL；ARTSUEGVOL；ATSUEGVOL。非仓位。不碰数据网关。
+- 规则：CAT∩SUEG∩vol；sc_cat；K20/max_new5。新策略无 B。
+- 脚本：`catsuegvol_s885.py` / `run_s885.sh`。
+
+
+
 
 
 

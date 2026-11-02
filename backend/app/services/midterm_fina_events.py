@@ -47,7 +47,7 @@ CG_MIN_YOY, CG_STREAK, CG_STREAK_CAP, CG_NPY_CAP = 5.0, 4, 12, 100.0
 DINC_INC_TH = 0.30
 
 FINA_FIELDS = ("ts_code,ann_date,end_date,currentdebt_to_debt,undist_profit_ps,netprofit_yoy,netdebt,interestdebt,profit_dedt,"
-               "or_yoy,dt_netprofit_yoy,op_yoy,q_op_qoq,q_ocf_to_sales,ocf_to_shortdebt,netprofit_margin,q_sales_yoy,fcff_ps,fcfe_ps,ocf_yoy,ocfps,cfps_yoy,saleexp_to_gr,finaexp_of_gr,adminexp_of_gr,turn_days,fa_turn,tangibleasset_to_debt,eqt_to_debt,ca_to_assets,q_npta,roe_yoy")
+               "or_yoy,dt_netprofit_yoy,op_yoy,q_op_qoq,q_ocf_to_sales,ocf_to_shortdebt,netprofit_margin,q_sales_yoy,fcff_ps,fcfe_ps,ocf_yoy,ocfps,cfps_yoy,saleexp_to_gr,finaexp_of_gr,adminexp_of_gr,turn_days,fa_turn,tangibleasset_to_debt,eqt_to_debt,ca_to_assets,q_npta,roe_yoy,ar_turn")
 _FINA_TTL = 1800.0
 _fina_cache: dict[str, tuple[float, pd.DataFrame]] = {}
 _div_local: dict[str, Any] = {}
@@ -103,7 +103,7 @@ def _fina_store(period: str, raw: pd.DataFrame) -> pd.DataFrame:
     for k in ("ts_code", "ann_date", "end_date"):
         f[k] = f[k].astype(str).str.strip()
     for k in ("currentdebt_to_debt", "undist_profit_ps", "netprofit_yoy", "netdebt", "interestdebt", "profit_dedt",
-              "or_yoy", "dt_netprofit_yoy", "op_yoy", "q_op_qoq", "q_ocf_to_sales", "ocf_to_shortdebt", "netprofit_margin", "q_sales_yoy", "fcff_ps", "fcfe_ps", "ocf_yoy", "ocfps", "cfps_yoy", "saleexp_to_gr", "finaexp_of_gr", "adminexp_of_gr", "turn_days", "fa_turn", "tangibleasset_to_debt", "eqt_to_debt", "ca_to_assets", "q_npta", "roe_yoy"):
+              "or_yoy", "dt_netprofit_yoy", "op_yoy", "q_op_qoq", "q_ocf_to_sales", "ocf_to_shortdebt", "netprofit_margin", "q_sales_yoy", "fcff_ps", "fcfe_ps", "ocf_yoy", "ocfps", "cfps_yoy", "saleexp_to_gr", "finaexp_of_gr", "adminexp_of_gr", "turn_days", "fa_turn", "tangibleasset_to_debt", "eqt_to_debt", "ca_to_assets", "q_npta", "roe_yoy", "ar_turn"):
         if k in f.columns:
             f[k] = pd.to_numeric(f[k], errors="coerce")
     f = f[(f["ann_date"].str.len() == 8) & (f["end_date"].str.len() == 8)]

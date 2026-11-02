@@ -603,6 +603,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §883 应收周转扩张∩盈余加速∩放量（scripts/midterm/artsuegvol_s883.py ARTSUEGVOL_h20；§282 达标；2026-11-03 上线）
+    "mid-art-sue-vol": {
+        "name": "应收周转扩张∩盈余加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足应收账款周转率（ar_turn）≥2.0且较去年同报告期升幅≥0.30，与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥20），且信号日成交额≥1.5×前20日均额；按升幅（封顶5）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：应收周转扩张 × 盈余惊喜加速 × 量能确认（§883；≠固定资产周转 FAT∩SUEG）。",
+        "kind": "art_sue_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §735 净负债转净现金∩营业周期∩放量（scripts/midterm/ncstdvol_s735.py NCSTDVOL_h20；§282 达标；2026-11-02 上线）
     "mid-ncs-td-vol": {
         "name": "净负债转净现金∩营业周期∩放量（持20日）",
@@ -2248,6 +2257,21 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+
+        if meta.get("kind") == "art_sue_vol":
+            from app.services.midterm_suegvol import artsuegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = artsuegvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
 
 
 
