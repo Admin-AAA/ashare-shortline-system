@@ -9664,3 +9664,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：ADMINTDVOL；SEXPFATVOL；SUEGFATVOL；ADMINVOL；FATVOL。非仓位。不碰数据网关。
 - 规则：ADMIN∩FAT∩vol；sc_admin；K20/max_new5。新策略无 B。
 - 脚本：`admfatvol_s815.py` / `run_s815.sh`。
+
+
+### §814 ADMINTDVOL_h20 — REJECT（A 否·PF/正段/彩票）
+- 每笔 P19 −1.88 / P20 +1.37 / P21 +0.73 / W0 −6.53 / W00 −0.01 / W1 +2.20 / W2 +2.71 / R12 +0.97（**正段 5/8**）
+- R12 74笔 +0.97% PF1.20 MDD−9.6；N3 208笔 +1.90 PF1.44 MDD−15.9；**彩票型**
+- 判定 ✓✗✓✗✓ → **否决**。解读：管理费用∩周期效率合取未过 A——单腿 ADMINVOL 曾否、ADMIN∩SUEG 已上线，效率腿不对称。
+
+### §815 ADMFATVOL_h20 — REJECT（A 否·正段）
+- 每笔 P19 +0.54 / P20 −1.32 / P21 +1.57 / W0 −7.30 / W00 −2.15 / W1 +1.55 / W2 +2.17 / R12 +2.87（**正段 5/8**）
+- R12 84笔 +2.87% PF1.83 MDD−7.9；N3 239笔 +2.19 PF1.58 MDD−19.7；稳健型
+- 判定 ✓✓✓✗✓ → **否决**。解读：管理费用∩周转合取未过 A（正段不足）——停 ADMIN∩效率（TD/FAT）双试；费用∩SUEG 轴已终点，改试 **利润/营收加速∩SUEG**。
+
+## §816 [中线·文献] 营业利润加速∩盈余加速∩放量（OPSUEGVOL_h20）— 预注册（2026-11-02 15:50 CST 写于跑任何收益之前）
+- 白话：OP加速≥20 ∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 OP 加速（封顶100）排序；持20。
+- 想法 / 文献：ADMIN∩TD/FAT 刚双否、费用∩SUEG 门槛轴到站——改试 **营业利润加速∩盈余意外**（硬合取，非 −pct；OPVOL 曾否、SEXPSUEG/ADMINSUEG 已上线；op vs 扣非相关≈0.26）。对照 OPVOL/SUEGVOL/SEXPSUEGVOL/EAVOL。
+- 去重：OPVOL；SUEGVOL；EAVOL；SEXPSUEGVOL；ADMINSUEGVOL；FINASUEGVOL。非仓位。不碰数据网关。
+- 规则：OP∩SUEG∩vol；sc_op；K20/max_new5。新策略无 B。
+- 脚本：`opsuegvol_s816.py` / `run_s816.sh`。
+
+## §817 [中线·文献] 营收加速∩盈余加速∩放量（REVSUEGVOL_h20）— 预注册（2026-11-02 15:50 CST 写于跑任何收益之前）
+- 白话：REV加速≥20 ∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 REV 加速（封顶100）排序；持20。
+- 想法 / 文献：利润加速∩SUEG 刚开跑——对称试 **营收加速∩盈余意外**（硬合取，非 −pct；REVVOL 曾否、SUEGVOL 已上线；营收腿≠扣非加速）。对照 REVVOL/OPSUEGVOL/SUEGVOL/EAVOL。
+- 去重：REVVOL；OPSUEGVOL；SUEGVOL；EAVOL；SEXPSUEGVOL。非仓位。不碰数据网关。
+- 规则：REV∩SUEG∩vol；sc_rev；K20/max_new5。新策略无 B。
+- 脚本：`revsuegvol_s817.py` / `run_s817.sh`。
