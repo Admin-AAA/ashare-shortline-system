@@ -10881,12 +10881,23 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：DEBT∩SUEG∩vol；sc_debt；K20/max_new5。新策略无 B。
 - 脚本：`debtsuegvol_s906.py` / `run_s906.sh`。
 
+### §906 DEBTSUEGVOL_h20 — REJECT（A 否·正段/样本）
+- 每笔 P19 +4.64 / P20 −1.21 / P21 +4.39 / W0 +2.18 / W00 −5.69 / W1 +6.73 / W2 −1.88 / R12 −1.69（**正段 4/8**）
+- R12 25笔 −1.69% PF0.76 MDD−6.3；N3 48笔 +0.55 PF1.11 MDD−6.1；彩票型
+- 判定 ✗✗✓✗✗ → **否决**（正段不足；R12 n<30；W00 <−5）。解读：资产负债率去杠杆∩SUEG 同单腿 DEBT/DEBTVOL——熊市段砸、近一年弱；**去杠杆∩SUEG 暂缓**（≠有息负债∩SUEG，但同族记暂缓）。
+
+
 ## §907 [中线·文献] 扣非ROE扩张∩盈余加速∩放量（ROEDTSUEGVOL_h20）— 预注册（2026-11-03 05:05 CST 写于跑任何收益之前）
 - 白话：roe_dt 扩张≥1.0（本期 roe_dt≥5）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δroe_dt（封顶10）排序；持20。
 - 想法 / 文献：ROA∩SUEG 刚 ADOPT、ROY（roe_yoy）已上线、QROE∩SUEG 曾否——对称试 **扣非ROE水平扩张∩盈余意外**（硬合取；字段≠roe_yoy/q_roe；≠全年ROA）。对照 ROY/QROESUEGVOL/ROASUEGVOL。
 - 去重：ROYVOL；QROESUEGVOL；ROASUEGVOL；ROICSUEGVOL。非仓位。不碰数据网关。
 - 规则：ROEDT∩SUEG∩vol；sc_roedt；K20/max_new5。新策略无 B。
 - 脚本：`roedtsuegvol_s907.py` / `run_s907.sh`。
+
+### §907 ROEDTSUEGVOL_h20 — REJECT（A 否·R12）
+- 每笔 P19 +0.40 / P20 −0.57 / P21 +6.80 / W0 −1.47 / W00 +0.70 / W1 +3.35 / W2 +7.34 / R12 +0.01（**正段 6/8**）
+- R12 68笔 +0.01% PF1.0 MDD−10.1；N3 140笔 +2.61 PF1.6 MDD−8.6；彩票型
+- 判定 ✓✗✓✓✓ → **否决**（R12 每笔≈0/PF=1）。解读：扣非ROE扩张∩SUEG 近一年无力——对照 QROE∩SUEG 曾否、ROY（roe_yoy）成立不外推到 roe_dt 水平差分。
 
 
 ## §891 [中线·文献] 每股收益同比高增∩盈余加速∩放量（BEPSUEGVOL_h20）— 预注册（2026-11-03 03:25 CST 写于跑任何收益之前）
