@@ -9529,3 +9529,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：ADMINSUEGVOL_d55；SEXPSUEGVOL_o25；SUEGTDVOL_o25；SUEGVOL_o25。非仓位。不碰数据网关。
 - 规则：(ADMIN∩SUEG_dtp55_orv25∩vol) vs (ADMIN∩SUEG_dtp55_orv20∩vol)；sc_admin；K20/max_new5。B 门对照 base。
 - 脚本：`adminsuegvol_o25_s805.py` / `run_s805.sh`。
+
+
+### §804 SEXPSUEGVOL_o30_h20 — ADOPT → 已上线（orv 25→30）
+- 每笔 P19 +2.19 / P20 −0.33 / P21 +4.23 / W0 +2.53 / W00 +1.97 / W1 −1.66 / W2 +2.25 / R12 +11.96（**正段 6/8**）
+- R12 40笔 +11.96% PF6.20 MDD−4.4；N3 94笔 +5.39 PF2.53 MDD−5.4；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥25∩dtp≥60)：R12 +10.85 / N3 +4.79 / MDD−6.2 → **B 过**（近一年/三年每笔均抬；回撤更浅）。
+- → **ADOPT**。上线（2026-11-02 14:25 CST）：`mid-sexp-sue-vol` orv **≥25→≥30**（dtp仍≥60）；`s804_onboard_metrics.py`；replay 强制覆盖 12批/25只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：费用∩盈余再抬营收腿成立——**对照 SUEGTD_o30 否决不对称**（续试更高 orv）。
+
+### §805 ADMINSUEGVOL_o25_h20 — ADOPT → 已上线（orv 20→25）
+- 每笔 P19 +1.97 / P20 +1.30 / P21 +6.79 / W0 −0.16 / W00 +1.47 / W1 −0.33 / W2 +3.34 / R12 +6.34（**正段 6/8**）
+- R12 55笔 +6.34% PF2.42 MDD−5.5；N3 126笔 +3.71 PF1.88 MDD−6.6；**彩票型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥55)：R12 +5.37 / N3 +3.56 / MDD−6.8 → **B 过**（近一年/三年每笔均抬；回撤更浅）。
+- → **ADOPT**。上线（2026-11-02 14:25 CST）：`mid-admin-sue-vol` orv **≥20→≥25**（dtp仍≥55）；`s805_onboard_metrics.py`；replay 强制覆盖 18批/39只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：管理费用∩盈余上抬营收腿镜像 SEXPSUEG/SUEGTD_o25。
+
+## §806 [中线·现役改进] 销售费用∩盈余加速∩放量 orv再抬≥35（SEXPSUEGVOL_o35_h20）— 预注册（2026-11-02 14:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-sexp-sue-vol（§804 已抬至 G dtp≥60∩orv≥30）把 **G 内 orv 再硬抬** 到 **≥35**；SEXP/SUE/dtp/放量/排序不变。同进程 SEXPSUEGVOL_base(orv≥30)。
+- 想法：§804 o30 刚 ADOPT（SUEGTD_o30 曾否）——续试贴档（硬门槛，非 −pct）。B 门对照 base。
+- 去重：SEXPSUEGVOL_o30；SEXPSUEGVOL_d60；SUEGTDVOL_o30；SUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：(SEXP∩SUEG_dtp60_orv35∩vol) vs (SEXP∩SUEG_dtp60_orv30∩vol)；sc_sexp；K20/max_new5。B 门对照 base。
+- 脚本：`sexpsuegvol_o35_s806.py` / `run_s806.sh`。
+
+## §807 [中线·现役改进] 管理费用∩盈余加速∩放量 dtp再抬≥60（ADMINSUEGVOL_d60_h20）— 预注册（2026-11-02 14:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-admin-sue-vol（§805 已抬至 G dtp≥55∩orv≥25）把 **G 内 dtp 再硬抬** 到 **≥60**；ADMIN/SUE/orv/放量/排序不变。同进程 ADMINSUEGVOL_base(dtp≥55)。
+- 想法：§803 d55 / §805 o25 连 ADOPT——镜像 SEXPSUEG_d60 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：ADMINSUEGVOL_d55；ADMINSUEGVOL_o25；SEXPSUEGVOL_d60；SUEGTDVOL_d60。非仓位。不碰数据网关。
+- 规则：(ADMIN∩SUEG_dtp60_orv25∩vol) vs (ADMIN∩SUEG_dtp55_orv25∩vol)；sc_admin；K20/max_new5。B 门对照 base。
+- 脚本：`adminsuegvol_d60_s807.py` / `run_s807.sh`。
