@@ -4,7 +4,7 @@ CD="$ROOT/scripts/midterm"; PY="$ROOT/.venv/bin/python"
 OUTD="$ROOT/output/research/s874"; OUT="$OUTD/res.json"; LOG="$OUTD/run.log"
 mkdir -p "$OUTD"; echo "START_S874 $(date)" | tee "$LOG"; rm -f "$OUT" "$OUTD"/trades_*.csv
 cd "$CD"
-busy() { pgrep -f '/\.venv/bin/python .*(fatsuegvol_d55_s874|qnsuegvol_s875)\.py' >/dev/null; }
+busy() { pgrep -f '/\.venv/bin/python .*(fatsuegvol_o25_s874|qnsuegvol_s875)\.py' >/dev/null; }
 routine_busy() {
   local pid etime mins
   pid=$(pgrep -f 'sync_xiaoshi_min_all\.py' | head -1) || return 1
@@ -39,7 +39,7 @@ run_ph() {
     free_mb=$(sysctl -n vm.swapusage | awk -F'free = ' '{print $2}' | awk '{print int($1)}')
   done
   echo "== $name $(date +%H:%M:%S) swap_free_mb=$free_mb" | tee -a "$LOG"
-  LT_START="$s" LT_END="$lend" /usr/bin/time -l env PYTHONPATH=../..:. "$PY" fatsuegvol_d55_s874.py "$name" "$OUT" >>"$LOG" 2>&1
+  LT_START="$s" LT_END="$lend" /usr/bin/time -l env PYTHONPATH=../..:. "$PY" fatsuegvol_o25_s874.py "$name" "$OUT" >>"$LOG" 2>&1
   echo "phase_exit=$?" | tee -a "$LOG"
 }
 for p in "P19 2019:2019-01-01:2020-04-29" "P20 2020:2020-01-01:2021-04-30" "P21 2021:2021-01-01:2022-04-30" "W0 2022-04~2023-03:2022-04-01:2023-07-29" "W00 2023-04~12:2023-04-01:2024-04-29" "W1 2024:2024-01-01:2025-04-30" "W2 2025-01~09:2025-01-01:2026-01-28" "R12 2025-10~2026-10:2025-10-01:2026-10-16" "N3 2024-01~2026-10:2024-01-01:2026-10-16"; do
