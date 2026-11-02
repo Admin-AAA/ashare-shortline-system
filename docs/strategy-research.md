@@ -9556,3 +9556,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：ADMINSUEGVOL_d55；ADMINSUEGVOL_o25；SEXPSUEGVOL_d60；SUEGTDVOL_d60。非仓位。不碰数据网关。
 - 规则：(ADMIN∩SUEG_dtp60_orv25∩vol) vs (ADMIN∩SUEG_dtp55_orv25∩vol)；sc_admin；K20/max_new5。B 门对照 base。
 - 脚本：`adminsuegvol_d60_s807.py` / `run_s807.sh`。
+
+
+### §806 SEXPSUEGVOL_o35_h20 — ADOPT → 已上线（orv 30→35）
+- 每笔 P19 +2.19 / P20 −0.35 / P21 +5.00 / W0 +2.61 / W00 +0.99 / W1 −1.72 / W2 +2.25 / R12 +13.11（**正段 6/8**）
+- R12 38笔 +13.11% PF7.52 MDD−3.7；N3 89笔 +5.95 PF2.71 MDD−5.0；**稳健型**
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥30∩dtp≥60)：R12 +11.96 / N3 +5.39 / MDD−5.4 → **B 过**（近一年/三年每笔均抬；回撤更浅）。
+- → **ADOPT**。上线（2026-11-02 14:45 CST）：`mid-sexp-sue-vol` orv **≥30→≥35**（dtp仍≥60）；`s806_onboard_metrics.py`；replay 强制覆盖 12批/24只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：费用∩盈余营收腿续抬成立。
+
+### §807 ADMINSUEGVOL_d60_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +3.46 / P20 +1.05 / P21 +6.79 / W0 +0.39 / W00 +1.32 / W1 +0.07 / W2 +3.66 / R12 +6.03（**正段 8/8**）
+- R12 55笔 +6.03% PF2.26 MDD−5.9；N3 123笔 +3.84 PF1.90 MDD−6.0；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥55∩orv≥25)：R12 +6.34 / N3 +3.71 / MDD−6.6 → **B 否**（近一年每笔 −0.31；三年抬、回撤更浅不够）。
+- → **REJECTED**；线上 mid-admin-sue-vol 仍 dtp≥55。解读：再抬到 60 伤近一年——**停 ADMINSUEGVOL dtp硬抬轴**（≥55 为终点；orv 轴可续）。
+
+## §808 [中线·现役改进] 销售费用∩盈余加速∩放量 orv再抬≥40（SEXPSUEGVOL_o40_h20）— 预注册（2026-11-02 14:45 CST 写于跑任何收益之前）
+- 白话：现役 mid-sexp-sue-vol（§806 已抬至 G dtp≥60∩orv≥35）把 **G 内 orv 再硬抬** 到 **≥40**；SEXP/SUE/dtp/放量/排序不变。同进程 SEXPSUEGVOL_base(orv≥35)。
+- 想法：§806 o35 刚 ADOPT——续试贴档（硬门槛，非 −pct）。B 门对照 base。
+- 去重：SEXPSUEGVOL_o35；SEXPSUEGVOL_d60；SUEGTDVOL_o30；SUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：(SEXP∩SUEG_dtp60_orv40∩vol) vs (SEXP∩SUEG_dtp60_orv35∩vol)；sc_sexp；K20/max_new5。B 门对照 base。
+- 脚本：`sexpsuegvol_o40_s808.py` / `run_s808.sh`。
+
+## §809 [中线·现役改进] 管理费用∩盈余加速∩放量 orv再抬≥30（ADMINSUEGVOL_o30_h20）— 预注册（2026-11-02 14:45 CST 写于跑任何收益之前）
+- 白话：现役 mid-admin-sue-vol（§805 已抬至 G dtp≥55∩orv≥25；§807 d60 刚否）把 **G 内 orv 再硬抬** 到 **≥30**；ADMIN/SUE/dtp/放量/排序不变。同进程 ADMINSUEGVOL_base(orv≥25)。
+- 想法：dtp 轴刚停——改试营收腿续抬（硬门槛，非 −pct；对照 SEXPSUEG_o30 ADOPT）。B 门对照 base。
+- 去重：ADMINSUEGVOL_o25；ADMINSUEGVOL_d60；SEXPSUEGVOL_o30；SUEGTDVOL_o30。非仓位。不碰数据网关。
+- 规则：(ADMIN∩SUEG_dtp55_orv30∩vol) vs (ADMIN∩SUEG_dtp55_orv25∩vol)；sc_admin；K20/max_new5。B 门对照 base。
+- 脚本：`adminsuegvol_o30_s809.py` / `run_s809.sh`。
