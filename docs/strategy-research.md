@@ -9226,3 +9226,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：IO∩TAD∩vol；sc −pct；K20/max_new5。新策略无 B。
 - 脚本：`iotadvol_s781.py` / `run_s781.sh`。
 
+### §780 SUEGVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +3.21 / P20 +0.60 / P21 +8.32 / W0 −1.25 / W00 +2.16 / W1 +2.97 / W2 +3.06 / R12 +4.72（**正段 7/8**）
+- R12 69笔 +4.72% PF2.10 MDD−8.9；N3 159笔 +3.75 PF2.05 MDD−8.5；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base：R12 +4.49 / N3 +3.94 / MDD−8.9 → **B 否**（近一年略升、三年每笔 −0.19；回撤虽收窄）。
+- → **REJECTED**；线上 mid-sue-accel-vol 仍 orv≥20。解读：单腿抬营收腿不镜像——同 EACAS/EATD orv；**停 SUEGVOL orv硬抬轴**（接 SUE/放量/dtp）。
+
+### §781 IOTADVOL_h20 — REJECT（笔数不足·近一年空窗）
+- 每笔 P19 n=0 / P20 +5.74 / P21 −5.93 / W0 +9.13 / W00 −5.60 / W1 n=0 / W2 +0.01 / R12 n=0（**正段 3/8**）
+- R12 **0**笔；N3 1笔；样本极稀
+- 判定（样本崩）→ **否决**。解读：激励∩有形资产同∩CAS——近一年空窗；**记候补，勿硬抬/软扩凑笔数**；**激励∩有形资产双合取∩放量暂缓**（接 IOCAS；末试 ETD 腿）。
+
+## §782 [中线·现役改进] 盈余∩周期∩放量 orv硬抬≥25（SUEGTDVOL_o25_h20）— 预注册（2026-11-02 11:34 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-td-vol（SUE≥2.2∩G(dtp≥55,orv≥20)∩TD∩放量1.5×，按SUE排序）把 **G 内 orv 硬抬** 到 **≥25**；SUE/dtp/TD/放量/排序不变。同进程 SUEGTDVOL_base(orv≥20)。
+- 想法：SUEG 单腿 orv 刚 B 否；SUEGTD_d55 曾 ADOPT——镜像试 **双合取现役的营收腿**（硬门槛，非 −pct；非对称可能）。B 门对照 base。
+- 去重：SUEGVOL_o25；EATDVOL_o25；SUEGTDVOL_d55；SUEGFATVOL_d55。非仓位。不碰数据网关。
+- 规则：(SUEG_orv25∩TD∩vol) vs (SUEG_orv20∩TD∩vol)；sc_sue；K20/max_new5。B 门对照 base。
+- 脚本：`suegtdvol_o25_s782.py` / `run_s782.sh`。
+
+## §783 [中线·文献] 激励期权∩股东权益杠杆∩放量（IOETDVOL_h20）— 预注册（2026-11-02 11:34 CST 写于跑任何收益之前）
+- 白话：激励期权事件 ∩ ETD升幅≥0.20 ∩ 放量≥1.5×amt20；按 −pct 排序；持20。
+- 想法 / 文献：激励∩CAS/TAD 刚候补——改试 **激励∩股东权益杠杆** 末条 BS 腿（硬合取，非 −pct；IOVOL/ETDVOL/ETDFAT 已上线）。对照 IOCASVOL/IOTADVOL/IOTDVOL/ETDVOL。
+- 去重：IOCASVOL；IOTADVOL；IOTDVOL；IOFATVOL；DINCETDVOL。非仓位。不碰数据网关。
+- 规则：IO∩ETD∩vol；sc −pct；K20/max_new5。新策略无 B。
+- 脚本：`ioetdvol_s783.py` / `run_s783.sh`。
+
