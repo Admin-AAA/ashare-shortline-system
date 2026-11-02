@@ -9053,3 +9053,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：IOCASVOL；DINCFATVOL；DINCTDVOL；EACASVOL；CASVOL。非仓位。不碰数据网关。
 - 规则：DINC∩CAS∩vol；sc_dinc；K20/max_new5。新策略无 B。
 - 脚本：`dinccasvol_s767.py` / `run_s767.sh`。
+
+### §766 EACASVOL_d55_h20 — REJECT（A 过；B 否）
+- 每笔 P19 −3.23 / P20 +0.21 / P21 +4.68 / W0 −2.97 / W00 +0.26 / W1 +3.57 / W2 +2.09 / R12 +2.59（**正段 6/8**）
+- R12 68笔 +2.59% PF1.54 MDD−8.7；N3 170笔 +2.78 PF1.68 MDD−12.7；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base：R12 +2.70 / N3 +2.86 / MDD−11.5 → **B 否**（每笔双降、三年回撤加深）。
+- → **REJECTED**；线上 mid-ea-cas-vol 仍 dtp≥50。解读：加速∩CAS 上抬 dtp 不镜像 EATD/SUEGTD——**停 EACASVOL dtp硬抬轴**。
+
+### §767 DINCCASVOL_h20 — REJECT（笔数不足）
+- 每笔 P19 +2.45 / P20 −3.00 / P21 −2.10 / W0 +10.05 / W00 +0.29 / W1 +4.29 / W2 +10.13 / R12 +13.19（**正段 6/8**）
+- R12 **18**笔 +13.19% PF4.48 MDD−3.3；N3 36笔 +10.36 PF4.75 MDD−3.1；稳健型
+- 判定 ✓✓✓✓**✗** → **否决**（R12 n=18<30）。解读：股利∩流动资产合取过稀——**记候补，勿硬抬/软扩凑笔数**；**股利∩流动资产双合取∩放量暂缓**（接激励∩CAS）。
+
+## §768 [中线·现役改进] 业绩加速∩流动资产∩放量 放量硬抬≥1.8×（EACASVOL_v18_h20）— 预注册（2026-11-02 10:31 CST 写于跑任何收益之前）
+- 白话：现役 mid-ea-cas-vol（G∩CAS∩放量1.5×，按dtp排序）把 **放量硬抬** 到 **≥1.8×amt20**；G/CAS/排序不变。同进程 EACASVOL_base(1.5×)。
+- 想法：EACAS dtp 硬抬刚否——改试量能硬抬（硬门槛，非 −pct；SEXPVOL/IOVOL/ETDFAT 的 v18 曾 ADOPT）。B 门对照 base。
+- 去重：EACASVOL_d55；EATDVOL_v18；EAVOL_v18；CASVOL_v18。非仓位。不碰数据网关。
+- 规则：(G∩CAS∩vol1.8) vs (G∩CAS∩vol1.5)；sc_g；K20/max_new5。B 门对照 base。
+- 脚本：`eacasvol_v18_s768.py` / `run_s768.sh`。
+
+## §769 [中线·文献] 预增∩流动资产占比∩放量（FZGCASVOL_h20）— 预注册（2026-11-02 10:31 CST 写于跑任何收益之前）
+- 白话：预增事件 ∩ CAS升幅≥3.0pp ∩ 放量≥1.5×amt20；按增幅封顶300排序；持20。
+- 想法 / 文献：股利/激励∩CAS 刚候补；加速∩CAS 已上线——改试 **预增∩流动资产结构**（硬合取，非 −pct；FZGVOL/CASVOL/EACAS 已上线）。对照 DINCCASVOL/IOCASVOL/EACASVOL/FZGVOL。
+- 去重：DINCCASVOL；IOCASVOL；EACASVOL；FZGTDVOL；CASVOL。非仓位。不碰数据网关。
+- 规则：FZG∩CAS∩vol；sc_fzg；K20/max_new5。新策略无 B。
+- 脚本：`fzgcasvol_s769.py` / `run_s769.sh`。
