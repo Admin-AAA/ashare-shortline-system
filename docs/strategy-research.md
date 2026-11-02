@@ -8826,3 +8826,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：CASVOL；NCSTDVOL；FATTDVOL；SUEGTDVOL；CASVOL_v18。非仓位。不碰数据网关。
 - 规则：CAS∩TD∩vol；sc_cas；K20/max_new5。新策略无 B。
 - 脚本：`castdvol_s749.py` / `run_s749.sh`。例行约 8:47 冲突时串行让行。
+
+### §748 TADETDVOL_v18_h20 — REJECT（A 否·PF；B 亦否）
+- 每笔 P19 +0.15 / P20 +1.82 / P21 +3.26 / W0 −2.26 / W00 −0.57 / W1 +4.02 / W2 +3.44 / R12 +1.17（**正段 6/8**）
+- R12 80笔 +1.17% **PF1.29** MDD−10.5；N3 221笔 +2.84 PF1.76 MDD−10.3；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**。同进程 base：R12 +2.02 / N3 +3.48 / MDD−8.8 → **B 亦否**。
+- → **REJECTED**；线上 mid-tad-etd-vol 仍放量≥1.5×。解读：量能硬抬稀释近一年——**停 TADETDVOL 放量硬抬轴**（接 TAD/ETD 单腿）。
+
+### §749 CASTDVOL_h20 — REJECT（A 否·正段）
+- 每笔 P19 −2.50 / P20 −0.86 / P21 +3.95 / W0 −2.92 / W00 +0.20 / W1 +6.23 / W2 +1.92 / R12 +2.84（**正段 5/8**）
+- R12 69笔 +2.84% PF1.74 MDD−6.7；N3 183笔 +3.82 PF2.08 MDD−10.1；彩票型
+- 判定 ✓✓✓**✗**✓ → **否决**。解读：流动资产∩周期不镜像净现金∩周期——正段不够；**流动资产∩周期效率双合取∩放量暂缓**。
+
+## §750 [中线·现役改进] ETD∩FAT∩放量 放量硬抬≥1.8×（ETDFATVOL_v18_h20）— 预注册（2026-11-02 08:45 CST 写于跑任何收益之前）
+- 白话：现役 mid-etd-fa-vol（ETD≥0.20∩FAT≥0.10∩放量1.5×，按ETD升幅排序）把 **放量硬抬** 到 **≥1.8×amt20**；ETD/FAT/排序不变。同进程 ETDFATVOL_base(1.5×)。
+- 想法：TADETD 量能硬抬刚否——对称试 **ETD∩FAT 跨族现役**（硬门槛，非 −pct；FAT/ETD 升幅轴已停）。B 门对照 base。
+- 去重：TADETDVOL_v18；FATTDVOL_v18；ETDVOL_v18；ETDFATVOL_r012。非仓位。不碰数据网关。
+- 规则：(ETD∩FAT∩vol1.8) vs (ETD∩FAT∩vol1.5)；sc_etd；K20/max_new5。B 门对照 base。
+- 脚本：`etdfatvol_v18_s750.py` / `run_s750.sh`。例行约 8:47 冲突时串行让行。
+
+## §751 [中线·文献] 有形资产/负债∩周期效率∩放量（TADTDVOL_h20）— 预注册（2026-11-02 08:45 CST 写于跑任何收益之前）
+- 白话：TAD升幅≥0.25 ∩ TD缩短≥20 ∩ 放量≥1.5×amt20；按 sc_tad 排序；持20。
+- 想法 / 文献：CAS∩TD 刚否；ETD∩TD 曾否；NCS∩TD/FAT∩TD 已上线——改试 **有形资产∩周期**（硬合取，非 −pct；TADVOL/TDVOL/FATTD 已上线）。对照 CASTDVOL/ETDTDVOL/NCSTDVOL/FATTDVOL。
+- 去重：CASTDVOL；ETDTDVOL；TADFATVOL；NCSTDVOL；TADVOL。非仓位。不碰数据网关。
+- 规则：TAD≥0.25∩TD∩vol；sc_tad；K20/max_new5。新策略无 B。
+- 脚本：`tadtdvol_s751.py` / `run_s751.sh`。例行约 8:47 冲突时串行让行。
