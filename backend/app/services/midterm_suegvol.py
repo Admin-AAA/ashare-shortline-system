@@ -212,7 +212,7 @@ def adminsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 
 def opsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§816 OPSUEGVOL：OP加速≥20（op_yoy≥20且同比加速≥20）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 OP加速封顶100。"""
+    """§816/§818 OPSUEGVOL：OP加速≥20 ∩ SUE≥2.2∩G(dtp≥55)∩放量≥1.5×amt20（§818 dtp硬抬；suegvol 仍≥50/≥20）；排序 OP加速封顶100。"""
     from app.services.midterm_fina_events import _fina_events
 
     sg = suegvol_candidates(db, as_of)
@@ -233,6 +233,13 @@ def opsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         e = op_by.get(p0["code"])
         if e is None:
             continue
+        # §818：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥55
+        try:
+            dtp = float(p0.get("dt_netprofit_yoy"))
+        except (TypeError, ValueError):
+            continue
+        if dtp < 55.0:
+            continue
         q = dict(p0)
         q["op_yoy"] = e.get("op_yoy", e.get("cur"))
         q["prev_op_yoy"] = e.get("prev_op_yoy", e.get("prev"))
@@ -247,7 +254,7 @@ def opsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 
 def revsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§817 REVSUEGVOL：REV加速≥20（or_yoy≥20且同比加速≥20）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 REV加速封顶100。"""
+    """§817/§819 REVSUEGVOL：REV加速≥20 ∩ SUE≥2.2∩G(dtp≥55)∩放量≥1.5×amt20（§819 dtp硬抬；suegvol 仍≥50/≥20）；排序 REV加速封顶100。"""
     from app.services.midterm_fina_events import _fina_events
 
     sg = suegvol_candidates(db, as_of)
@@ -267,6 +274,13 @@ def revsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     for p0 in sg:
         e = rv_by.get(p0["code"])
         if e is None:
+            continue
+        # §819：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥55
+        try:
+            dtp = float(p0.get("dt_netprofit_yoy"))
+        except (TypeError, ValueError):
+            continue
+        if dtp < 55.0:
             continue
         q = dict(p0)
         q["rev_or_yoy"] = e.get("rev_or_yoy", e.get("cur"))

@@ -9717,3 +9717,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：REVSUEGVOL；OPSUEGVOL_d55；SEXPSUEGVOL_d55；SUEGVOL_d55。非仓位。不碰数据网关。
 - 规则：REV∩SUEG(dtp≥55)∩vol；sc_rev；K20/max_new5。B 门：R12&N3 avg≥base，N3 MDD不更深。
 - 脚本：`revsuegvol_d55_s819.py` / `run_s819.sh`。
+
+
+### §818 OPSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 +2.86 / P20 −0.32 / P21 +7.43 / W0 −1.47 / W00 +2.24 / W1 +3.83 / W2 +3.55 / R12 +3.79（**正段 6/8**）
+- R12 69笔 +3.79% PF1.74 MDD−8.9；N3 155笔 +3.73 PF1.91 MDD−8.6；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +3.03 / N3 +3.42 / MDD−8.6 → **B 过**（每笔均抬、回撤不深）。
+- → **ADOPT**。上线（2026-11-02 16:15 CST）：`mid-op-sue-vol` dtp **≥50→≥55**；`s818_onboard_metrics.py`；replay 强制覆盖 21批/56只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：利润加速∩盈余上抬 dtp 镜像 SEXPSUEG/ADMINSUEG。
+
+### §819 REVSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 +6.12 / P20 −0.67 / P21 +8.28 / W0 +0.66 / W00 +3.00 / W1 +3.33 / W2 +2.10 / R12 +4.84（**正段 7/8**）
+- R12 63笔 +4.84% PF2.06 MDD−6.8；N3 142笔 +3.65 PF1.88 MDD−8.5；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +4.50 / N3 +3.59 / MDD−8.7 → **B 过**（每笔均抬、回撤改善）。
+- → **ADOPT**。上线（2026-11-02 16:15 CST）：`mid-rev-sue-vol` dtp **≥50→≥55**；`s819_onboard_metrics.py`；replay 强制覆盖 18批/44只（2026-07-29~10-30）；`safe_backend_restart` health ok。解读：营收加速∩盈余上抬 dtp 镜像 OPSUEG。
+
+## §820 [中线·现役改进] 营业利润加速∩盈余加速∩放量 orv硬抬≥25（OPSUEGVOL_o25_h20）— 预注册（2026-11-02 16:15 CST 写于跑任何收益之前）
+- 白话：现役 mid-op-sue-vol（§818 已抬至 G dtp≥55∩OP∩SUE∩放量）把 **G 内 orv 硬抬** 到 **≥25**；OP/SUE/dtp/放量/排序不变。同进程 OPSUEGVOL_base(orv≥20)。
+- 想法：§818 d55 刚 ADOPT——镜像 SEXPSUEG/ADMINSUEG/SUEGTD 的 o25 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：OPSUEGVOL_d55；SEXPSUEGVOL_o25；ADMINSUEGVOL_o25；SUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：OP∩SUEG(dtp≥55∩orv≥25)∩vol；sc_op；K20/max_new5。B 门。
+- 脚本：`opsuegvol_o25_s820.py` / `run_s820.sh`。
+
+## §821 [中线·现役改进] 营收加速∩盈余加速∩放量 orv硬抬≥25（REVSUEGVOL_o25_h20）— 预注册（2026-11-02 16:15 CST 写于跑任何收益之前）
+- 白话：现役 mid-rev-sue-vol（§819 已抬至 G dtp≥55∩REV∩SUE∩放量）把 **G 内 orv 硬抬** 到 **≥25**；REV/SUE/dtp/放量/排序不变。同进程 REVSUEGVOL_base(orv≥20)。
+- 想法：§819 d55 刚 ADOPT——镜像 OPSUEG o25 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：REVSUEGVOL_d55；OPSUEGVOL_o25；SEXPSUEGVOL_o25；SUEGTDVOL_o25。非仓位。不碰数据网关。
+- 规则：REV∩SUEG(dtp≥55∩orv≥25)∩vol；sc_rev；K20/max_new5。B 门。
+- 脚本：`revsuegvol_o25_s821.py` / `run_s821.sh`。
