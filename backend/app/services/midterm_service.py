@@ -531,12 +531,21 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §849 自由现金流每股改善∩盈余加速∩放量（scripts/midterm/fcffsuegvol_s849.py FCFFSUEGVOL_h20；§282 达标；2026-11-02 上线）
+    # §849/§850 自由现金流每股改善∩盈余加速∩放量（scripts/midterm/fcffsuegvol_d55_s850.py FCFFSUEGVOL_d55_h20；§282+B 达标；2026-11-02 上线/硬抬）
     "mid-fcff-sue-vol": {
         "name": "自由现金流每股改善∩盈余加速∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足自由现金流每股同比升幅≥0.5元（当期>0），与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥20），且信号日成交额≥1.5×前20日均额；按升幅（封顶5）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：自由现金流改善 × 盈余惊喜加速 × 量能确认（§849）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足自由现金流每股同比升幅≥0.5元（当期>0），与 SUE≥2.2 且业绩加速 G（扣非同比≥55、营收同比≥20；§850 dtp硬抬），且信号日成交额≥1.5×前20日均额；按升幅（封顶5）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：自由现金流改善 × 盈余惊喜加速 × 量能确认（§849/§850）。",
         "kind": "fcff_sue_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
+    # §851 经营现金流加速∩盈余加速∩放量（scripts/midterm/ocfsuegvol_s851.py OCFSUEGVOL_h20；§282 达标；2026-11-02 上线）
+    "mid-ocf-sue-vol": {
+        "name": "经营现金流加速∩盈余加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足经营现金流同比≥50%且较去年同报告期加速（ocfps>0），与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥20），且信号日成交额≥1.5×前20日均额；按经营现金流同比（封顶300）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：经营现金流加速 × 盈余惊喜加速 × 量能确认（§851；≠经营现金流/营收口径的 mid-ocfs-sue-vol）。",
+        "kind": "ocf_sue_vol",
         "hold_days": 20,
         "schedule": "daily",
     },
@@ -2088,6 +2097,20 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
 
+        if meta.get("kind") == "ocf_sue_vol":
+            from app.services.midterm_suegvol import ocfsuegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = ocfsuegvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
         if meta.get("kind") == "ea_td_vol":
             from app.services.midterm_eavol import eatdvol_candidates
             held = _held_codes(db, sid, as_of)
@@ -2749,6 +2772,12 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["score"]), 2), "自由现金流每股升幅(元,封顶5)×SUEG合取", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：FCFF/股 {_f(p.get('fcff_prev'), 2)} → {_f(p.get('fcff_cur'), 2)}"
                       f"（升幅 {_f(p.get('fcff_dq'), 2)}）∩ SUE {_f(p.get('sue'), 2)}；"
+                      f"业绩加速（扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%，上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，"
+                      f"营收同比 {_f(p.get('or_yoy'), 1)}%）；成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
+        elif kind == "ocf_sue_vol":
+            score, label, better = round(float(p["score"]), 1), "经营现金流同比(%,封顶300)×SUEG合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：经营现金流同比 {_f(p.get('prev_ocf_yoy'), 1)}% → {_f(p.get('ocf_yoy'), 1)}%"
+                      f"（加速 {_f(p.get('ocf_accel'), 1)}pp，ocfps {_f(p.get('ocfps'), 2)}）∩ SUE {_f(p.get('sue'), 2)}；"
                       f"业绩加速（扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%，上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，"
                       f"营收同比 {_f(p.get('or_yoy'), 1)}%）；成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
         elif kind == "ea_td_vol":

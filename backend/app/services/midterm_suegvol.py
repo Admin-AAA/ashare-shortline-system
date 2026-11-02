@@ -2,7 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
-另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844/§846 QSSUEGVOL→ mid-qs-sue-vol；§849 FCFFSUEGVOL→ mid-fcff-sue-vol。
+另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844/§846 QSSUEGVOL→ mid-qs-sue-vol；§849/§850 FCFFSUEGVOL→ mid-fcff-sue-vol；§851 OCFSUEGVOL→ mid-ocf-sue-vol。
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -484,7 +484,7 @@ def qssuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return out
 
 def fcffsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§849 FCFFSUEGVOL：FCFF升幅≥0.5（本期 fcff_ps>0）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 ΔFCFF封顶5。"""
+    """§849/§850 FCFFSUEGVOL：FCFF升幅≥0.5（本期 fcff_ps>0）∩ SUE≥2.2∩G(dtp≥55)∩放量≥1.5×amt20（§850 dtp硬抬；suegvol 仍≥50/≥20）；排序 ΔFCFF封顶5。"""
     from app.services.midterm_fina_events import _fina_events
 
     sg = suegvol_candidates(db, as_of)
@@ -505,6 +505,13 @@ def fcffsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         e = oc_by.get(p0["code"])
         if e is None:
             continue
+        # §850：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥55
+        try:
+            dtp = float(p0.get("dt_netprofit_yoy"))
+        except (TypeError, ValueError):
+            continue
+        if dtp < 55.0:
+            continue
         q = dict(p0)
         q["fcff_cur"] = e.get("fcff_cur", e.get("cur"))
         q["fcff_prev"] = e.get("fcff_prev", e.get("prev"))
@@ -512,6 +519,91 @@ def fcffsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         try:
             q["score"] = float(q["fcff_dq"])
         except (TypeError, ValueError):
+            continue
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
+
+def ocfsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§851 OCFSUEGVOL：OCF加速（ocfps>0、ocf_yoy≥50 且本期>去年同报告期）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序 min(ocf_yoy,300)。≠ OCFSSUEGVOL。"""
+    from app.services.midterm_fina_events import _fina_events
+
+    sg = suegvol_candidates(db, as_of)
+    if sg is None:
+        return None
+
+    def passes(cur: float, prev: float):
+        # 研究 lt_research50：ocf_yoy≥50 且本期>去年同口径；ocfps>0 在下方二次过滤
+        ok = cur >= 50.0 and cur > prev
+        return ok, min(cur, 300.0), {"ocf_yoy": cur, "prev_ocf_yoy": prev, "ocf_accel": cur - prev}
+
+    # 先按 ocf_yoy 取事件；再用 cur 行的 ocfps 过滤需要扩展 _fina_events，这里用 metric=ocf_yoy
+    # 并通过附带字段：_fina_events 只返回 metric，故再查一次当期 ocfps
+    from app.services.midterm_fina_events import _window, _fina_period, _first_ann, _tradable_code, _attach, _prev_period
+    from app.services import midterm_service as ms
+    import pandas as pd
+
+    w = _window(db, as_of)
+    if w is None:
+        return None
+    dates, start, end = w
+    raw: dict[str, dict[str, Any]] = {}
+    for period in ms._quarter_ends(as_of, 4):
+        cur_all = _fina_period(period)
+        if cur_all is None:
+            return None
+        need = [c for c in ("ocf_yoy", "ocfps") if c in cur_all.columns]
+        if len(need) < 2:
+            return None
+        cur = _first_ann(cur_all, ("ocf_yoy", "ocfps"))
+        today = cur[(cur["ann_date"] >= start) & (cur["ann_date"] <= end)]
+        today = today[today["ts_code"].map(_tradable_code)]
+        if today.empty:
+            continue
+        prev_all = _fina_period(_prev_period(period))
+        if prev_all is None:
+            return None
+        prev = _first_ann(prev_all, "ocf_yoy").set_index("ts_code")["ocf_yoy"]
+        for _, r in today.iterrows():
+            try:
+                ocfps = float(r["ocfps"])
+                cur_y = float(r["ocf_yoy"])
+            except (TypeError, ValueError):
+                continue
+            if not (ocfps > 0.0):
+                continue
+            pv = prev.get(r["ts_code"])
+            if pv is None or pd.isna(pv):
+                continue
+            ok, score, extra = passes(cur_y, float(pv))
+            if not ok:
+                continue
+            code = str(r["ts_code"])[:6]
+            npy = r.get("netprofit_yoy")
+            item = {"code": code, "ann_date": str(r["ann_date"]), "end_date": period,
+                    "cur": cur_y, "prev": float(pv), "ocfps": ocfps,
+                    "netprofit_yoy": None if pd.isna(npy) else float(npy),
+                    "score": score, **extra}
+            if code not in raw or item["score"] > raw[code]["score"]:
+                raw[code] = item
+    oc = _attach(db, as_of, dates, raw)
+    if oc is None:
+        return None
+    oc_by = {p["code"]: p for p in oc}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = oc_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["ocf_yoy"] = e.get("ocf_yoy", e.get("cur"))
+        q["prev_ocf_yoy"] = e.get("prev_ocf_yoy", e.get("prev"))
+        q["ocf_accel"] = e.get("ocf_accel")
+        q["ocfps"] = e.get("ocfps")
+        try:
+            q["score"] = float(e["score"])
+        except (TypeError, ValueError, KeyError):
             continue
         out.append(q)
     out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))

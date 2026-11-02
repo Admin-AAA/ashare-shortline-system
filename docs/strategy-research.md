@@ -10125,8 +10125,61 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 想法：§849 刚 ADOPT——镜像 QS/NPM 的 d55 路径（硬门槛，非 −pct）。B 门对照 base。
 - 去重：FCFFSUEGVOL；QSSUEGVOL_d55；NPMSUEGVOL_d55。非仓位。不碰数据网关。
 - 规则：FCFF∩SUEG(dtp≥55)∩vol；sc_fcff；K20/max_new5。B 门。
-- 脚本：待写 `fcffsuegvol_d55_s850.py` / `run_s850.sh`（例行后再开）。
+- 脚本：`fcffsuegvol_d55_s850.py` / `run_s850.sh`（晚间例行 20:48 开跑）。
 
-## §851 [中线·文献] 经营现金流加速∩盈余加速∩放量（OCFSUEGVOL_h20 / OCF∩SUEG）— 预注册占位（2026-11-02 19:50 CST；例行后再定稿开跑）
-- 白话：待例行后与 §850 一并开跑；候选方向 OCF加速∩SUEG（lt_research50）或对称文献腿。
-- 备注：**本轮 20:40 前不硬开新回测**，断点=§850/§851。
+## §851 [中线·文献] 经营现金流加速∩盈余加速∩放量（OCFSUEGVOL_h20）— 预注册（2026-11-02 20:48 CST 写于跑任何收益之前）
+- 白话：OCF加速（ocfps>0、ocf_yoy≥50 且本期>去年同口径上期；lt_research50）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ocf_yoy（封顶300）排序；持20。
+- 想法 / 文献：§849 FCFF∩SUEG 刚 ADOPT——对称试 **经营现金流同比加速∩盈余意外**（硬合取，非 −pct；≠已上线 OCFS∩SUEG 的 q_ocf_to_sales 口径）。对照 OCFVOL/OCFSSUEGVOL/FCFFSUEGVOL。
+- 去重：OCFVOL；OCFSSUEGVOL；FCFFSUEGVOL；OCFDVOL。非仓位。不碰数据网关。
+- 规则：OCF∩SUEG∩vol；sc_ocf；K20/max_new5。新策略无 B。
+- 脚本：`ocfsuegvol_s851.py` / `run_s851.sh`。
+
+### §850 FCFFSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 n=0 / P20 +1.28 / P21 +5.70 / W0 −0.40 / W00 +10.82 / W1 +3.88 / W2 +2.84 / R12 +4.94（**正段 6/8**）
+- R12 37笔 +4.94% PF2.18 MDD−8.2；N3 80笔 +4.07 PF2.15 MDD−7.7；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +4.26 / N3 +3.70 / MDD−8.1 → **B 过**（每笔均抬、回撤不深）。
+- → **ADOPT**。上线（2026-11-02 21:05 CST）：`mid-fcff-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s850_onboard_metrics.py`；replay 强制覆盖 3批/4只（2026-08-01~11-02）；`safe_backend_restart`（当时 scheduled_task/prefect 忙，脚本在等 idle）。解读：自由现金流∩盈余上抬扣非腿成立——镜像 QS_d55。
+
+### §851 OCFSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +2.92 / P20 +2.98 / P21 +8.39 / W0 −0.89 / W00 +3.70 / W1 +0.94 / W2 +4.30 / R12 +2.37（**正段 7/8**）
+- R12 52笔 +2.37% PF1.57 MDD−6.3；N3 110笔 +2.50 PF1.68 MDD−6.7；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 21:15 CST）：`mid-ocf-sue-vol`（kind=`ocf_sue_vol`）；`s851_onboard_metrics.py`；replay onboard 8批/13只（2026-08-01~11-02）；`safe_backend_restart`。解读：经营现金流同比加速∩盈余合取成立（≠已上线 OCFS∩SUEG）。
+
+## §852 [中线·现役改进] 自由现金流每股改善∩盈余加速∩放量 orv硬抬≥25（FCFFSUEGVOL_o25_h20）— 预注册（2026-11-02 21:15 CST 写于跑任何收益之前）
+- 白话：现役 mid-fcff-sue-vol（§850 已抬至 G dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；FCFF/SUE/dtp/放量/排序不变。同进程 FCFFSUEGVOL_base(orv≥20)。
+- 想法：§850 d55 刚 ADOPT——续试 orv 轴（硬门槛，非 −pct）。B 门对照 base。
+- 去重：FCFFSUEGVOL_d55；QSSUEGVOL_o25；OCFSSUEGVOL_o25。非仓位。不碰数据网关。
+- 规则：FCFF∩SUEG(dtp≥55∩orv≥25)∩vol；sc_fcff；K20/max_new5。B 门。
+- 脚本：`fcffsuegvol_o25_s852.py` / `run_s852.sh`。
+
+### §852 FCFFSUEGVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 n=0 / P20 +1.42 / P21 +6.54 / W0 +0.10 / W00 +10.98 / W1 +3.74 / W2 +2.23 / R12 +4.90（**正段 7/8**）
+- R12 37笔 +4.90% PF2.17 MDD−8.3；N3 77笔 +3.89 PF2.06 MDD−7.9；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥55)：R12 +4.94 / N3 +4.07 / MDD−7.7 → **B 否**（R12/N3 每笔均低于 base，且 N3 MDD −7.9 更深）。
+- → **REJECTED**；线上 mid-fcff-sue-vol 仍 orv≥20。解读：再抬到 25 伤近一年/三年——**停 FCFFSUEGVOL orv硬抬轴**（≥20 为终点；dtp 已停于 55）。FCFF∩SUEG 双轴到站。
+
+## §853 [中线·现役改进] 经营现金流加速∩盈余加速∩放量 dtp硬抬≥55（OCFSUEGVOL_d55_h20）— 预注册（2026-11-02 21:15 CST 写于跑任何收益之前）
+- 白话：现役 mid-ocf-sue-vol（OCF∩G(dtp≥50)∩SUE≥2.2∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；OCF/SUE/orv/放量/排序不变。同进程 OCFSUEGVOL_base(dtp≥50)。
+- 想法：§851 刚 ADOPT——镜像 FCFF/QS 的 d55 路径。B 门对照 base。
+- 去重：OCFSUEGVOL；FCFFSUEGVOL_d55；OCFSSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：OCF∩SUEG(dtp≥55)∩vol；sc_ocf；K20/max_new5。B 门。
+- 脚本：`ocfsuegvol_d55_s853.py` / `run_s853.sh`。
+
+### §853 OCFSUEGVOL_d55_h20 — REJECT（A 过；B 否）
+- 每笔 P19 −0.89 / P20 +2.29 / P21 +8.51 / W0 −1.13 / W00 +3.70 / W1 +0.93 / W2 +3.74 / R12 +2.63（**正段 6/8**）
+- R12 51笔 +2.63% PF1.65 MDD−6.3；N3 106笔 +2.49 PF1.68 MDD−6.8；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(dtp≥50)：R12 +2.37 / N3 +2.50 / MDD−6.7 → **B 否**（N3 每笔 2.49 < base 2.50，且 MDD −6.8 更深）。
+- → **REJECTED**；线上 mid-ocf-sue-vol 仍 dtp≥50。解读：抬到 55 伤近三年——**停 OCFSUEGVOL dtp硬抬轴**（≥50 为终点）。下一试 orv 轴（§854）。
+
+## §854 [中线·现役改进] 经营现金流加速∩盈余加速∩放量 orv硬抬≥25（OCFSUEGVOL_o25_h20）— 预注册占位（晚间例行断点）
+- 白话：现役 mid-ocf-sue-vol（G dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；OCF/SUE/dtp/放量/排序不变。
+- 备注：脚本待写；与 §855 文献腿配对开跑。
+
+## §855 [中线·文献] 下一因子∩SUEG — 预注册占位（晚间例行断点）
+- 备注：从队列取下一未试文献腿（常见 CFPS/BPS/EQ/CASH 等）；与 §854 配对。
+
+## 晚间例行进度（2026-11-02 ~20:48→21:25 CST）
+- 健康：8765 `/api/health` 200；5174 200；HEAD 起点 81d94fd0 → 本轮提交后更新；swap used≈9–10G → 串行。
+- 选股：短线最近约 2026-10-30；中线 2026-11-02 ok=4 / data_error=4（预告系含 KeyError top_n）/ no_signal=8 / 周度 not_signal_day=5；长线 3/3 @2026-10-30 ok。
+- 研究：§850 ADOPT；§851 ADOPT；§852 REJECT（FCFF 双轴到站）；§853 REJECT（冻 OCF dtp≥50）；断点 §854/§855。
