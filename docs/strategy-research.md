@@ -9957,3 +9957,29 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：NPMVOL；GMEVOL；PTGVOL；OCFSSUEGVOL；SUEGVOL。非仓位。不碰数据网关。
 - 规则：NPM∩SUEG∩vol；sc_npm；K20/max_new5。新策略无 B。
 - 脚本：`npmsuegvol_s837.py` / `run_s837.sh`。
+
+### §836 OCSDSUEGVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 +6.87 / P20 +2.11 / P21 +8.06 / W0 −0.22 / W00 +2.73 / W1 +0.30 / W2 +6.19 / R12 +1.81（**正段 7/8**）
+- R12 41笔 +1.81% PF1.42 MDD−8.1；N3 80笔 +2.32 PF1.64 MDD−7.8；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥50)：R12 +1.89 / N3 +2.39 / MDD−8.3 → **B 否**（R12/N3 每笔均低于 base）。
+- → **REJECTED**；线上 mid-ocsd-sue-vol 仍 orv≥20。解读：再抬到 25 伤近一年/三年每笔——**停 OCSDSUEGVOL orv硬抬轴**（≥20 为终点；接 dtp≥50 终点）。OCSD∩SUEG 双轴到站。
+
+### §837 NPMSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +2.06 / P20 −0.13 / P21 +7.57 / W0 −1.57 / W00 +0.91 / W1 +2.14 / W2 +2.89 / R12 +2.71（**正段 6/8**）
+- R12 67笔 +2.71% PF1.58 MDD−8.3；N3 147笔 +2.62 PF1.66 MDD−7.9；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 18:25 CST）：`mid-npm-sue-vol`（kind=`npm_sue_vol`）；`s837_onboard_metrics.py`；replay onboard 21批/49只（2026-08-03~11-02）；`safe_backend_restart`。解读：净利率∩盈余合取成立（单腿 NPMVOL 曾否）——镜像 OCFS/OCSD∩SUEG。
+
+## §838 [中线·现役改进] 净利率改善∩盈余加速∩放量 dtp硬抬≥55（NPMSUEGVOL_d55_h20）— 预注册（2026-11-02 18:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-npm-sue-vol（NPM≥2.0pp∩G(dtp≥50)∩SUE≥2.2∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；NPM/SUE/orv/放量/排序不变。同进程 NPMSUEGVOL_base(dtp≥50)。
+- 想法：§837 刚 ADOPT——镜像 OCFS/OCSD/SEXP 的 d55 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：NPMSUEGVOL；OCFSSUEGVOL_d55；OCSDSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：NPM∩SUEG(dtp≥55)∩vol；sc_npm；K20/max_new5。B 门。
+- 脚本：`npmsuegvol_d55_s838.py` / `run_s838.sh`。
+
+## §839 [中线·文献] 毛利率改善∩盈余加速∩放量（GMESUEGVOL_h20）— 预注册（2026-11-02 18:25 CST 写于跑任何收益之前）
+- 白话：GME升幅≥3.0pp（本期 grossprofit_margin≥10）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ΔGM（封顶30）排序；持20。
+- 想法 / 文献：NPM∩SUEG 刚 ADOPT、OCSD∩SUEG 双轴到站——对称试 **毛利率改善∩盈余意外**（硬合取，非 −pct；GMEVOL 曾否、NPMSUEG 已上线）。对照 GMEVOL/NPMSUEGVOL/SUEGVOL。
+- 去重：GMEVOL；NPMVOL；NPMSUEGVOL；PTGVOL。非仓位。不碰数据网关。
+- 规则：GME∩SUEG∩vol；sc_gme；K20/max_new5。新策略无 B。
+- 脚本：`gmesuegvol_s839.py` / `run_s839.sh`。
