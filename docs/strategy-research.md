@@ -9151,3 +9151,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：DINCETDVOL；FZGCASVOL；FZGTDVOL；FZGFATVOL；ETDFATVOL。非仓位。不碰数据网关。
 - 规则：FZG∩ETD∩vol；sc_fzg；K20/max_new5。新策略无 B。
 - 脚本：`fzgetdvol_s775.py` / `run_s775.sh`。
+
+### §774 EACASVOL_o25_h20 — REJECT（A 过；B 否）
+- 每笔 P19 −3.54 / P20 +0.35 / P21 +4.79 / W0 −2.97 / W00 +0.52 / W1 +3.78 / W2 +2.61 / R12 +2.22（**正段 6/8**）
+- R12 66笔 +2.22% PF1.46 MDD−8.1；N3 160笔 +2.81 PF1.67 MDD−9.6；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base：R12 +2.70 / N3 +2.86 / MDD−11.5 → **B 否**（近一年/三年每笔均略逊；回撤虽收窄但不抵每笔）。
+- → **REJECTED**；线上 mid-ea-cas-vol 仍 orv≥20。解读：抬营收腿不镜像——**停 EACASVOL orv硬抬轴**（接 dtp/量能/CAS升幅；EACAS 硬门槛轴暂告一段落）。
+
+### §775 FZGETDVOL_h20 — REJECT（A 否·样本稀）
+- 每笔 P19 +0.28 / P20 +2.38 / P21 +7.76 / W0 −14.64 / W00 +0.56 / W1 n=0 / W2 +7.98 / R12 −5.14（**正段 5/8**）
+- R12 **1**笔 −5.14%；N3 **3**笔 +3.61；W0 −14.64
+- 判定 **✗✗**✓**✗✗** → **否决**。解读：预增∩股东权益杠杆合取过稀——**记候补，勿硬抬/软扩凑笔数**；**预增∩BS杠杆双合取∩放量暂缓**（接 FZGCAS/股利∩ETD）。
+
+## §776 [中线·现役改进] 业绩加速∩流动资产∩放量 改按CAS升幅排序（EACASVOL_sc_cas_h20）— 预注册（2026-11-02 11:08 CST 写于跑任何收益之前）
+- 白话：现役 mid-ea-cas-vol（G∩CAS∩放量）**事件一字不改**，只把同日排序从 dtp 封顶300换成 **CAS 升幅**（封顶25）。同进程 EACASVOL_base(按dtp)。
+- 想法：EACAS 硬门槛轴刚终点——改试事件内另一键排序（增量排序，非 −pct；ETDFAT/SUEG 的跨腿排序多否，CAS 键未试）。B 门对照 base。
+- 去重：EACASVOL_o25；EACASVOL_cas40；ETDFATVOL_sc_fat；SUEGFATVOL_sc_fat。非仓位。不碰数据网关。
+- 规则：同样本 EACASVOL；sc_cas vs sc_g；K20/max_new5。B 门对照 base。
+- 脚本：`eacasvol_sc_cas_s776.py` / `run_s776.sh`。
+
+## §777 [中线·文献] 略增∩股东权益杠杆∩放量（FLZETDVOL_h20）— 预注册（2026-11-02 11:08 CST 写于跑任何收益之前）
+- 白话：略增事件 ∩ ETD升幅≥0.20 ∩ 放量≥1.5×amt20；按净利下限排序；持20。
+- 想法 / 文献：预增∩ETD 刚候补；略增∩CAS 空窗；略增∩效率曾暂缓——改试 **略增∩股东权益杠杆**（硬合取，非 −pct；FLZVOL/ETDVOL/ETDFAT 已上线）。对照 FZGETDVOL/FLZCASVOL/DINCETDVOL/FLZVOL。
+- 去重：FZGETDVOL；FLZCASVOL；FLZFATVOL；FLZTDVOL；ETDFATVOL。非仓位。不碰数据网关。
+- 规则：FLZ∩ETD∩vol；sc_np；K20/max_new5。新策略无 B。
+- 脚本：`flzetdvol_s777.py` / `run_s777.sh`。
