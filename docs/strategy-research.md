@@ -10489,6 +10489,13 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：ROY∩SUEG∩vol；sc_roy；K20/max_new5。新策略无 B。
 - 脚本：`roysuegvol_s877.py` / `run_s877.sh`。
 
+### §877 ROYSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +1.47 / P20 +0.52 / P21 +6.61 / W0 −1.63 / W00 +0.23 / W1 +2.86 / W2 +3.65 / R12 +3.29（**正段 7/8**）
+- R12 70笔 +3.29% PF1.63 MDD−9.4；N3 162笔 +3.27 PF1.83 MDD−8.6；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 02:02 CST）：`mid-roy-sue-vol`（kind=`roy_sue_vol`）；FINA_FIELDS 增 `roe_yoy`；`s877_onboard_metrics.py`；replay onboard 15批/34只（2026-08-01~11-02）；`safe_backend_restart`。解读：roe_yoy 水平∩盈余合取成立（≠§847 ΔROE∩SUEG 曾否）。
+
+
 
 
 
