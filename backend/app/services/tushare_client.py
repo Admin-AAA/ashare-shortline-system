@@ -371,7 +371,9 @@ class _TushareSession:
                 logger.warning("fina_indicator_vip unavailable, using fallback: %s", exc)
                 from app.services.datasource.fina_fallback import fina_period_fallback
 
-                return fina_period_fallback(self, str(params["period"]), fields)
+                cats = {getattr(getattr(f, "category", None), "value", "") for f in getattr(exc, "failures", ())}
+                allow_delta = "circuit_open" not in cats
+                return fina_period_fallback(self, str(params["period"]), fields, allow_delta=allow_delta)
         elif api_name in _akshare_backup_apis():
             return self._call_with_akshare_backup(api_name, fields=fields, params=params)
         else:

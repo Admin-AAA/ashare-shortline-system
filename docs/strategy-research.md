@@ -10502,12 +10502,26 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：QN∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_qn；K20/max_new5。B 对照 base。
 - 脚本：`qnsuegvol_o25_s878.py` / `run_s878.sh`。
 
+### §878 QNSUEGVOL_o25_h20 — ADOPT → 已上线（orv 20→25）
+- 每笔 P19 +4.78 / P20 +0.22 / P21 +5.99 / W0 −0.23 / W00 +1.29 / W1 +2.41 / W2 +3.42 / R12 +4.99（**正段 7/8**）
+- R12 63笔 +4.99% PF2.12 MDD−7.0；N3 147笔 +3.81 PF1.98 MDD−7.2；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +3.38 / N3 +3.31 MDD−7.7；o25 R12 +4.99 / N3 +3.81 MDD−7.2 → **B 过**。
+- → **ADOPT**。上线（2026-11-03 02:23 CST）：`mid-qn-sue-vol` orv **≥20→≥25**（dtp仍≥55）；`s878_onboard_metrics.py`；replay onboard 14批/22只（2026-08-01~11-02；VIP 熔断走本地 fina 基线；修 fat/qn generate 成功后缺 continue 跌入周线 `_universe`）；`safe_backend_restart`。解读：单季ROA∩盈余上抬营收腿成立——镜像 FAT_o25；QN∩SUEG 双轴到站。
+
+
 ## §879 [中线·现役改进] ROE同比高增∩盈余加速∩放量 dtp硬抬≥55（ROYSUEGVOL_d55_h20）— 预注册（2026-11-03 02:05 CST 写于跑任何收益之前）
 - 白话：现役 mid-roy-sue-vol（§877：ROY≥20∩SUE≥2.2∩G∩放量≥1.5×，排序 roe_yoy封顶100）把 **G 内 dtp 硬抬** 到 **≥55**；ROY/SUE/orv/放量/排序不变。同进程 ROYSUEGVOL_base(dtp≥50)。
 - 想法：§877 刚 ADOPT——镜像 QN/FAT/QS_d55（硬门槛，非 −pct）。B 门对照 base。
 - 去重：ROYSUEGVOL；ROESUEGVOL（ΔROE 曾否）。非仓位。不碰数据网关。
 - 规则：ROY∩SUEG∩vol；G.dtp≥55；sc_roy；K20/max_new5。B 对照 base。
 - 脚本：`roysuegvol_d55_s879.py` / `run_s879.sh`。
+
+### §879 ROYSUEGVOL_d55_h20 — REJECT（B 门否；冻 dtp≥50）
+- 每笔 P19 +1.64 / P20 +0.04 / P21 +6.29 / W0 −1.62 / W00 +1.14 / W1 +2.49 / W2 +3.24 / R12 +3.29（**正段 7/8**）
+- R12 70笔 +3.29% PF1.63 MDD−9.4；N3 160笔 +3.05 PF1.76 MDD−8.4；彩票型（R12 中位−0.53）
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base: R12 +3.29 / N3 +3.27 MDD−8.6；d55 R12 +3.29 / N3 +3.05 MDD−8.4 → **B 否**（N3 未抬，几乎同口径）。
+- → **REJECT**。现役 mid-roy-sue-vol 维持 §877 口径（G dtp≥50/orv≥20）；**冻 dtp 轴**。解读：ROY水平∩SUEG 抬 dtp 无增量（≠QN/FAT 的 d55 路径）。
+
 
 
 

@@ -127,19 +127,21 @@ def fina_period_fallback(
     today: date | None = None,
     baseline_loader=load_baseline,
     announcer_loader=recent_periodic_announcers,
+    allow_delta: bool = True,
 ) -> pd.DataFrame:
     today = today or date.today()
-    key = (period, today.isoformat())
+    key = (period, today.isoformat(), bool(allow_delta))
     if key not in _cache:
         base = baseline_loader(period)
         have = set(base["ts_code"].astype(str).str[:6]) if "ts_code" in base.columns else set()
         try:
-            announcers = announcer_loader(today)
+            announcers = announcer_loader(today) if allow_delta else []
         except Exception as exc:  # noqa: BLE001
             logger.warning("fina fallback: announcer lookup failed: %s", exc)
             announcers = []
         missing = [c for c in announcers if c not in have]
-        delta = fetch_delta(pro, missing, period) if missing else pd.DataFrame()
+        # VIP 熔断时上游同期熔断，逐股 delta 徒增噪音；allow_delta=False 只用本地基线
+        delta = fetch_delta(pro, missing, period) if (allow_delta and missing) else pd.DataFrame()
         merged = pd.concat([f for f in (base, delta) if not f.empty], ignore_index=True) if (not base.empty or not delta.empty) else pd.DataFrame()
         if not merged.empty and "ts_code" in merged.columns:
             sort_cols = [c for c in ("ts_code", "ann_date") if c in merged.columns]
