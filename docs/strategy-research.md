@@ -8727,3 +8727,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：NCSTADVOL；NCSFATVOL；NCSTDVOL；SUEGETDVOL；EAETDVOL。非仓位。不碰数据网关。
 - 规则：NCS∩ETD∩vol；sc_ncs；K20/max_new5。新策略无 B。
 - 脚本：`ncsetdvol_s741.py` / `run_s741.sh`。
+
+### §740 TADVOL_v18_h20 — REJECT（A 否·PF；B 亦否）
+- 每笔 P19 +1.14 / P20 +1.97 / P21 +3.38 / W0 −2.04 / W00 −0.66 / W1 +4.16 / W2 +3.81 / R12 +1.17（**正段 6/8**）
+- R12 83笔 +1.17% **PF1.28** MDD−9.9；N3 225笔 +2.97 PF1.78 MDD−10.6；彩票型
+- 判定 ✓**✗**✓✓✓ → **否决**。同进程 base：R12 +2.18 / N3 +3.64 / MDD−8.7 → **B 亦否**。
+- → **REJECTED**；线上 mid-tad-vol 仍放量≥1.5×。解读：量能硬抬稀释近一年并加深三年回撤——**停 TADVOL 放量硬抬轴**（接 ETD/CAS/TD/FAT）。
+
+### §741 NCSETDVOL_h20 — REJECT（A 否·正段/R12/PF）
+- 每笔 P19 −2.61 / P20 +0.65 / P21 +6.08 / W0 −0.54 / W00 −1.74 / W1 +8.48 / W2 +0.85 / R12 −0.93（**正段 4/8**）
+- R12 56笔 −0.93% **PF0.80** MDD−10.2；N3 148笔 +2.91 PF1.78 MDD−8.3；彩票型
+- 判定 **✗✗**✓**✗**✓ → **否决**。解读：净现金∩股东权益杠杆同∩有形资产/周转——近一年为负；**净现金∩BS杠杆双合取∩放量暂缓**（FAT/TAD/ETD 三否；仅∩TD 成立）。
+
+## §742 [中线·现役改进] 盈余加速∩周期∩放量 放量硬抬≥1.8×（SUEGTDVOL_v18_h20）— 预注册（2026-11-02 08:08 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-td-vol（SUE≥2.2∩G∩TD∩放量1.5×，按SUE排序）把 **放量硬抬** 到 **≥1.8×amt20**；SUEG/TD/排序不变。同进程 SUEGTDVOL_base(1.5×)。
+- 想法：TAD/ETD/CAS/TD/FAT 单腿量能硬抬刚否——改试 **盈余∩周期双合取现役**（硬门槛，非 −pct；SUE/TD 腿硬抬曾试）。B 门对照 base。
+- 去重：EATDVOL_v18；FATTDVOL_v18；SUEGTDVOL_s25；SUEGTDVOL_i25。非仓位。不碰数据网关。
+- 规则：(SUEG∩TD∩vol1.8) vs (SUEG∩TD∩vol1.5)；sc_sue；K20/max_new5。B 门对照 base。
+- 脚本：`suegtdvol_v18_s742.py` / `run_s742.sh`。例行约 8:47 冲突时串行让行。
+
+## §743 [中线·文献] 大宗溢价∩周期效率∩放量（BTTDVOL_h20）— 预注册（2026-11-02 08:08 CST 写于跑任何收益之前）
+- 白话：大宗 ratio≥0.45%∩prem≥1.35% ∩ TD缩短≥20 ∩ 放量≥1.5×amt20；按溢价排序；持20。
+- 想法 / 文献：大宗∩周转刚崩；NCS∩TD 成立而∩BS 否——改试 **大宗∩周期**（硬合取，非 −pct；BT/TDVOL 已上线）。对照 BTFATVOL/BTVOL/NCSTDVOL/SUEGTDVOL。
+- 去重：BTFATVOL；BTVOL；RPUTDVOL；IOTDVOL。非仓位。不碰数据网关。
+- 规则：BT∩TD∩vol；sc_prem；K20/max_new5。新策略无 B。
+- 脚本：`bttdvol_s743.py` / `run_s743.sh`。例行约 8:47 冲突时串行让行。
