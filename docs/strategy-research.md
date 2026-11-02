@@ -10057,3 +10057,28 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：ROICVOL；ROEVOL；NPMSUEGVOL；EBITSUEGVOL。非仓位。不碰数据网关。
 - 规则：ROIC∩SUEG∩vol；sc_roic；K20/max_new5。新策略无 B。
 - 脚本：`roicsuegvol_s845.py` / `run_s845.sh`。
+
+### §844 QSSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +1.86 / P20 +1.02 / P21 +9.02 / W0 −2.25 / W00 +2.53 / W1 +4.72 / W2 +1.88 / R12 +5.89（**正段 7/8**）
+- R12 65笔 +5.89% PF2.35 MDD−7.0；N3 147笔 +4.43 PF2.22 MDD−7.9；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 19:10 CST）：`mid-qs-sue-vol`（kind=`qs_sue_vol`）；`s844_onboard_metrics.py`；replay onboard 20批/59只（2026-08-03~11-02）；`safe_backend_restart`。解读：单季营收加速∩盈余合取成立（单腿 QSVOL 曾否）——近一年/三年每笔显著。
+
+### §845 ROICSUEGVOL_h20 — REJECT（A 否）
+- 每笔 P19 +0.45 / P20 −1.50 / P21 +7.47 / W0 −1.29 / W00 −0.64 / W1 −0.58 / W2 +4.71 / R12 +6.07（**正段 4/8**）
+- R12 46笔 +6.07% PF2.50 MDD−6.8；N3 89笔 +4.16 PF1.99 MDD−7.0；稳健型
+- 判定 ✓✓✓**✗**✓ → **否决**（正段不足）。解读：ROIC∩盈余近一年好看但跨年正段不足——对照 ROICVOL；**不接 ROIC∩SUEG 门槛轴**。
+
+## §846 [中线·现役改进] 单季营收加速∩盈余加速∩放量 dtp硬抬≥55（QSSUEGVOL_d55_h20）— 预注册（2026-11-02 19:10 CST 写于跑任何收益之前）
+- 白话：现役 mid-qs-sue-vol（QS≥20∩G(dtp≥50)∩SUE≥2.2∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；QS/SUE/orv/放量/排序不变。同进程 QSSUEGVOL_base(dtp≥50)。
+- 想法：§844 刚 ADOPT——镜像 NPM/OCFS 的 d55 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：QSSUEGVOL；NPMSUEGVOL_d55；OCFSSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：QS∩SUEG(dtp≥55)∩vol；sc_qs；K20/max_new5。B 门。
+- 脚本：`qssuegvol_d55_s846.py` / `run_s846.sh`。
+
+## §847 [中线·文献] ROE扩张∩盈余加速∩放量（ROESUEGVOL_h20）— 预注册（2026-11-02 19:10 CST 写于跑任何收益之前）
+- 白话：ROE升幅≥3.0pp（本期 roe≥5 口径同 ROEVOL）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 ΔROE（封顶30）排序；持20。
+- 想法 / 文献：ROIC∩SUEG 刚否、QS∩SUEG 刚 ADOPT——对称试 **净资产收益率扩张∩盈余意外**（硬合取，非 −pct；ROEVOL 曾否）。对照 ROEVOL/ROICSUEGVOL/NPMSUEGVOL。
+- 去重：ROEVOL；ROICSUEGVOL；NPMSUEGVOL；QSSUEGVOL。非仓位。不碰数据网关。
+- 规则：ROE∩SUEG∩vol；sc_roe；K20/max_new5。新策略无 B。
+- 脚本：`roesuegvol_s847.py` / `run_s847.sh`。

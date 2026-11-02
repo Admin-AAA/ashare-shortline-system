@@ -2,7 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
-另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol。
+另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844 QSSUEGVOL→ mid-qs-sue-vol。
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -441,3 +441,38 @@ def npmsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         out.append(q)
     out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
     return out
+
+def qssuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§844 QSSUEGVOL：QS加速≥20（q_sales_yoy≥20且同比加速≥20）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序加速封顶100。"""
+    from app.services.midterm_fina_events import _fina_events
+
+    sg = suegvol_candidates(db, as_of)
+    if sg is None:
+        return None
+
+    def passes(cur: float, prev: float):
+        accel = cur - prev
+        ok = cur >= 20.0 and accel >= 20.0
+        return ok, min(accel, 100.0), {"q_sales_yoy": cur, "prev_q_sales_yoy": prev, "qs_accel": accel}
+
+    qs = _fina_events(db, as_of, "q_sales_yoy", passes)
+    if qs is None:
+        return None
+    qs_by = {p["code"]: p for p in qs}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = qs_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["q_sales_yoy"] = e.get("q_sales_yoy", e.get("cur"))
+        q["prev_q_sales_yoy"] = e.get("prev_q_sales_yoy", e.get("prev"))
+        q["qs_accel"] = e.get("qs_accel", e.get("score"))
+        try:
+            q["score"] = float(q["qs_accel"])
+        except (TypeError, ValueError):
+            continue
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
