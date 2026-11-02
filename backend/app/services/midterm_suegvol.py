@@ -2,7 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
-另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829 OCFSSUEGVOL→ mid-ocfs-sue-vol。
+另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol。
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -331,7 +331,7 @@ def qopsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
 
 
 def ocfssuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§829 OCFSSUEGVOL：OCFS升幅≥3.0（q_ocf_to_sales∈[-20,80]、去年∈[-50,120]）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序升幅封顶30。"""
+    """§829/§832 OCFSSUEGVOL：OCFS升幅≥3.0 ∩ SUE≥2.2∩G(orv≥25)∩放量≥1.5×amt20（§832 orv硬抬；suegvol 仍≥50/≥20）；排序升幅封顶30。"""
     from app.services.midterm_fina_events import _fina_events
 
     sg = suegvol_candidates(db, as_of)
@@ -352,12 +352,54 @@ def ocfssuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         e = oc_by.get(p0["code"])
         if e is None:
             continue
+        # §832：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 orv≥25
+        try:
+            orv = float(p0.get("or_yoy"))
+        except (TypeError, ValueError):
+            continue
+        if orv < 25.0:
+            continue
         q = dict(p0)
         q["ocfs_cur"] = e.get("ocfs_cur", e.get("cur"))
         q["ocfs_prev"] = e.get("ocfs_prev", e.get("prev"))
         q["ocfs_dq"] = e.get("ocfs_dq", e.get("score"))
         try:
             q["score"] = float(q["ocfs_dq"])
+        except (TypeError, ValueError):
+            continue
+        out.append(q)
+    out.sort(key=lambda x: (-float(x["score"]), str(x.get("code") or "")))
+    return out
+
+
+def ocsdsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§833 OCSDSUEGVOL：OCSD升幅≥0.05（ocf_to_shortdebt∈[-0.20,0.60]、去年∈[-0.50,1.20]）∩ SUE≥2.2∩G∩放量≥1.5×amt20；排序升幅封顶0.40。"""
+    from app.services.midterm_fina_events import _fina_events
+
+    sg = suegvol_candidates(db, as_of)
+    if sg is None:
+        return None
+
+    def passes(cur: float, prev: float):
+        dq = cur - prev
+        ok = (-0.20 <= cur <= 0.60 and -0.50 <= prev <= 1.20 and dq >= 0.05)
+        return ok, min(dq, 0.40), {"ocsd_cur": cur, "ocsd_prev": prev, "ocsd_dq": dq}
+
+    oc = _fina_events(db, as_of, "ocf_to_shortdebt", passes)
+    if oc is None:
+        return None
+    oc_by = {p["code"]: p for p in oc}
+    out: list[dict[str, Any]] = []
+    for p0 in sg:
+        e = oc_by.get(p0["code"])
+        if e is None:
+            continue
+        q = dict(p0)
+        q["ocsd_cur"] = e.get("ocsd_cur", e.get("cur"))
+        q["ocsd_prev"] = e.get("ocsd_prev", e.get("prev"))
+        q["ocsd_dq"] = e.get("ocsd_dq", e.get("score"))
+        try:
+            q["score"] = float(q["ocsd_dq"])
         except (TypeError, ValueError):
             continue
         out.append(q)

@@ -9904,3 +9904,30 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：OCSDVOL；OCFSSUEGVOL；OCFSVOL；SUEGVOL。非仓位。不碰数据网关。
 - 规则：OCSD∩SUEG∩vol；sc_ocsd；K20/max_new5。新策略无 B。
 - 脚本：`ocsdsuegvol_s833.py` / `run_s833.sh`。
+
+
+### §832 OCFSSUEGVOL_o25_h20 — ADOPT → 已上线（orv 20→25）
+- 每笔 P19 +3.19 / P20 +2.98 / P21 +5.50 / W0 +0.96 / W00 +2.44 / W1 +2.16 / W2 +1.72 / R12 +11.47（**正段 8/8**）
+- R12 49笔 +11.47% PF4.29 MDD−5.6；N3 106笔 +6.35 PF2.76 MDD−6.2；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。同进程 base(orv≥20∩dtp≥50)：R12 +10.23 / N3 +5.99 / MDD−6.2 → **B 过**（每笔均抬、回撤不深）。
+- → **ADOPT**。上线（2026-11-02 17:45 CST）：`mid-ocfs-sue-vol` orv **≥20→≥25**（dtp仍≥50）；`s832_onboard_metrics.py`；replay 强制覆盖 14批/22只（2026-08-03~10-30）；`safe_backend_restart`。解读：现金流∩盈余上抬营收腿成立——**对照 QOPSUEG/OPSUEG_o25 否决不对称**（dtp 轴已停于 50）。
+
+### §833 OCSDSUEGVOL_h20 — ADOPT → 已上线（新策略）
+- 每笔 P19 +3.34 / P20 +2.02 / P21 +8.84 / W0 −0.44 / W00 +1.74 / W1 +0.57 / W2 +5.87 / R12 +1.89（**正段 7/8**）
+- R12 42笔 +1.89% PF1.43 MDD−8.8；N3 83笔 +2.39 PF1.67 MDD−8.3；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
+- → **ADOPT**。上线（2026-11-02 17:45 CST）：`mid-ocsd-sue-vol`（kind=`ocsd_sue_vol`）；`s833_onboard_metrics.py`；replay onboard 13批/17只（2026-08-03~10-30）；`safe_backend_restart`。解读：偿债现金流∩盈余合取成立（单腿 OCSDVOL 曾否）——镜像 OCFSSUEG。
+
+## §834 [中线·现役改进] 经营现金流/营收改善∩盈余加速∩放量 orv再抬≥30（OCFSSUEGVOL_o30_h20）— 预注册（2026-11-02 17:45 CST 写于跑任何收益之前）
+- 白话：现役 mid-ocfs-sue-vol（§832 已抬至 G orv≥25∩dtp≥50）把 **G 内 orv 再硬抬** 到 **≥30**；OCFS/SUE/dtp/放量/排序不变。同进程 OCFSSUEGVOL_base(orv≥25)。
+- 想法：§832 o25 刚 ADOPT（对照 QOP/OP o25 否）——续试贴档（硬门槛，非 −pct）。B 门对照 base。
+- 去重：OCFSSUEGVOL_o25；SEXPSUEGVOL_o30；ADMINSUEGVOL_o30。非仓位。不碰数据网关。
+- 规则：OCFS∩SUEG(dtp≥50∩orv≥30)∩vol；sc_ocfs；K20/max_new5。B 门。
+- 脚本：`ocfssuegvol_o30_s834.py` / `run_s834.sh`。
+
+## §835 [中线·现役改进] 经营现金流/短期债务改善∩盈余加速∩放量 dtp硬抬≥55（OCSDSUEGVOL_d55_h20）— 预注册（2026-11-02 17:45 CST 写于跑任何收益之前）
+- 白话：现役 mid-ocsd-sue-vol（OCSD≥0.05∩G(dtp≥50)∩SUE≥2.2∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；OCSD/SUE/orv/放量/排序不变。同进程 OCSDSUEGVOL_base(dtp≥50)。
+- 想法：§833 刚 ADOPT——镜像 OCFSSUEG/SEXPSUEG 的 d55 路径（硬门槛，非 −pct；对照 OCFS_d55 刚否）。B 门对照 base。
+- 去重：OCSDSUEGVOL；OCFSSUEGVOL_d55；QOPSUEGVOL_d55。非仓位。不碰数据网关。
+- 规则：OCSD∩SUEG(dtp≥55)∩vol；sc_ocsd；K20/max_new5。B 门。
+- 脚本：`ocsdsuegvol_d55_s835.py` / `run_s835.sh`。
