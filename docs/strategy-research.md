@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§953 TRPS∩SUEG → **ADOPT 已上线**。§954 TRPS_d55 + §955 EPS_o25 已预注册待 SERIAL。
+- 断点：§954 TRPS_d55 → **ADOPT 已上线**（dtp≥55）。§955 EPS_o25 待 SERIAL。
 
 
 
@@ -11588,6 +11588,14 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：TRPSSUEGVOL；REVPSSUEGVOL_d55；EPSSUEGVOL_d55。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；REVPS/NPTA/QN/EPS dtp 已冻。
 - 规则：TRPS∩SUEG∩vol；G.dtp≥55；sc_trps；K20/max_new5。B 对照 base。
 - 脚本：`trpssuegvol_d55_s954.py` / `run_s954.sh`。
+
+### §954 TRPSSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 +0.14 / P20 −0.84 / P21 +7.33 / W0 −0.42 / W00 +2.61 / W1 +2.36 / W2 +4.35 / R12 +7.24（**正段 6/8**）
+- R12 62笔 +7.24% PF2.65 MDD−7.4；N3 145笔 +5.01 PF2.30 MDD−7.9；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base(dtp≥50): R12 +6.55 PF2.40 / N3 +4.91 PF2.28 MDD−8.1；d55 R12 +7.24 PF2.65 / N3 +5.01 PF2.30 MDD−7.9 → **B 过**（近一年/三年每笔均抬；N3 MDD 更浅）。
+- → **ADOPT**。上线（2026-11-03 14:28 CST）：`mid-trps-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s954_onboard_metrics.py`；replay 强制覆盖 21批/61只（2026-08-01~11-02）；`safe_backend_restart`。解读：total_revenue_ps∩盈余上抬扣非腿成立——镜像 REVPS_d55。
+
+
 
 ## §955 [中线·现役改进] 每股收益扩张∩盈余加速∩放量 orv硬抬≥25（EPSSUEGVOL_o25_h20）— 预注册（2026-11-03 14:17 CST 写于跑任何收益之前）
 - 白话：现役 mid-eps-sue-vol（§951；§952 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；EPS/SUE/dtp/放量/排序不变。同进程 EPSSUEGVOL_base(orv≥20)。
