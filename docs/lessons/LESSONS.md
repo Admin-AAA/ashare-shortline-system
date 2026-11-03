@@ -2017,3 +2017,11 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 证据：重建路径曾默认 `apply_daily_cap=False`，同一策略同一天可以落出几十只（如 2026-10-30 `mid-turn-days-vol` 43 只）；实盘 17:35 / 手动补跑才截到默认 5 只（同分顺延）。画像条把该策略全部已平仓混在一格，和「近12个月」的展示意图不一致。
 - 永久规则：中线与长线的历史回放重建默认套 `settings.max_daily_picks_per_strategy`（同分顺延、`daily_cap` 审计），与实盘同一套；这只限制当天新推荐数，不是持仓上限。短线回测回放仍不套。回放落盘必须能覆盖已过 D+1 09:15 的 staging 文件，实盘批次过截止时间仍不覆盖。已落盘的旧 replay 文件不会因代码更新自动变少，要在生产机按 `docs/ops/daily-pick-cap-20261026.md` 重跑 `--execute`。画像条「回放已平仓」只统计信号日近 365 个自然日，由 `portrait_realized_12m` 返回；不要把它说成与研究 `quality.R12` 数字相同。
 - 吸收位置：`docs/ops/daily-pick-cap-20261026.md`，`backend/scripts/rebuild_replay_picks.py`，`backend/app/services/horizon_analytics.py`。
+
+## L-197 SUE∩质量轴是参数，不是新的 strategy_id
+
+- 状态：encoded
+- 适用：中线「SUE≥2.2 ∩ 业绩加速 ∩ 放量」再叠一条财务质量轴的研究与上线
+- 证据：`midterm_backtest_metrics.json` 的 recent_12m 里名称含 sue 的中线策略 41 条，骨架相同、只换过滤字段。2026-08-14～2026-11-02 选股文件上家族两两 Jaccard 约 0.57，被点到的代码几乎都会被至少两条族内策略同时命中（主人侧 picks；本环境无该批文件）。日频因此只留 6 个分簇冠军。
+- 永久规则：新的财务质量轴做成现有冠军的参数或过滤器，不得再 ADOPT 成新 `strategy_id`。日频名单以 `midterm_service.SUE_LADDER_CHAMPIONS` 为准；其余同骨架策略放在 `RETIRED_STRATEGIES`，不出新票、不进 /mid 现役列表，定义、回测指标和历史选股保留。这不是仓位管理，系统仍然只荐股。
+- 吸收位置：`docs/strategy-research.md`「SUE∩质量家族日频收敛」，`backend/app/services/midterm_service.py`，`backend/docs/strategy_onboarding_replay.md`。
