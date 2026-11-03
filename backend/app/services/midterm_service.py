@@ -887,6 +887,95 @@ for _m in STRATEGIES.values():
         _m["summary"] = f"{_m['summary']} {_DAILY_CAP_NOTE}"
 
 
+# 2026-11-03 SUE∩质量家族日频收敛。上面 STRATEGIES 字面量仍保留全部定义（候选函数、
+# 历史 picks、回测指标都不删）；加载后把非冠军挪进 RETIRED_STRATEGIES。
+# 17:35 generate_picks 与 /mid 现役列表只遍历 STRATEGIES。
+# 新的财务质量轴是过滤器或参数，不得再新增 strategy_id。
+# 近 12 个月数字来自 midterm_backtest_metrics.json 的 recent_12m；
+# 日推重叠来自 2026-08-14～2026-11-02 选股文件的两两 Jaccard（主人侧实盘/回放票）。
+SUE_LADDER_CHAMPIONS: tuple[str, ...] = (
+    "mid-sexp-sue-vol",    # 费用率：累计销售费用率
+    "mid-ocfs-sue-vol",    # 现金流：经营现金流/营收
+    "mid-sue-td-vol",      # 骨架变体：盈余加速∩营业周期
+    "mid-qn-sue-vol",      # 盈利质量：单季总资产净利率
+    "mid-curr-sue-vol",    # 营运流动性：流动比率
+    "mid-sue-accel-vol",   # 无额外质量轴的 SUEG∩放量基线
+)
+SUE_LADDER_DEMOTE_REASONS: dict[str, str] = {
+    "mid-qsexp-sue-vol": "与冠军 mid-sexp-sue-vol 同为销售费用率轴，日推 Jaccard≈0.91，近窗几乎同票。R12 +12.68/PF5.72/n36 仍高，单季口径阶段更稳，但同轴只留累计版。",
+    "mid-fcfe-sue-vol": "股权自由现金流近亲。R12 +9.50/PF3.27/n42，但 2022-04~2023-03 段为负、回撤 −7.2，日推窗口极稀且常与现金比率/销售费用完全重合。现金流边已由 mid-ocfs-sue-vol 代表。",
+    "mid-cashr-sue-vol": "现金比率与冠军 mid-curr-sue-vol 日推 Jaccard≈0.79。R12 +7.39/PF3.06/n50，2019 与 2020 段为负。流动性只留流动比率。",
+    "mid-trps-sue-vol": "每股营业总收入与 mid-revps-sue-vol 日推 Jaccard≈0.95，且与 mid-qn-sue-vol Jaccard≈0.73。R12 中位数仅 +0.21，不是独立子簇。",
+    "mid-admin-sue-vol": "管理费用率下降，与 mid-sexp-sue-vol Jaccard≈0.63。R12 +7.08/PF2.75/n53，总标签彩票型，2022-04~2023-03 与 2024 段为负。",
+    "mid-revps-sue-vol": "每股营收与 mid-trps-sue-vol 几乎同票（Jaccard≈0.95）。R12 +6.97/PF2.56/n63，中位数 +0.21。",
+    "mid-udp-sue-vol": "每股未分配利润。R12 +6.73/PF2.84/n43、N3 尚可，但与营业周期冠军重叠高，不是相对 mid-ocfs-sue-vol / mid-sue-td-vol 的新边。",
+    "mid-qs-sue-vol": "单季营收加速。R12 +6.42/PF2.58/n64，中位数 −0.10、彩票型，与盈利/营收簇高重叠。",
+    "mid-equity-sue-vol": "净资产同比。R12 +6.17/PF2.18/n30，近窗与近三年都是彩票型，样本偏瘦。",
+    "mid-fat-sue-vol": "固定资产周转与 mid-qn-sue-vol 日推 Jaccard≈0.89。R12 +5.77/PF2.34/n60，2022-04~2023-03 段为负。",
+    "mid-cat-sue-vol": "流动资产周转。R12 +5.14/PF2.26/n47，近三年不稳健，弱于流动比率冠军。",
+    "mid-cfps-sue-vol": "每股现金流加速。R12 +5.05/PF2.24/n53，同簇低于经营现金流/营收冠军（八段全正、R12 +11.47）。",
+    "mid-opinc-sue-vol": "营业利润额扩张，与扣非每股/EBIT 日推 Jaccard≈0.90+。R12 +4.98/PF1.97/n66，中位数 −0.10、不稳健。",
+    "mid-fcff-sue-vol": "企业自由现金流。R12 +4.94/PF2.18/n37，中位数 −0.69、彩票型，与经营现金流口径高度重合。",
+    "mid-rev-sue-vol": "营收同比加速。R12 +4.84/PF2.06/n63，中位数 −0.65、不稳健，弱于每股营收近亲，仍非独立子簇。",
+    "mid-sue-fa-vol": "盈余加速∩固定资产周转（按 SUE 排序），与 mid-fat-sue-vol 同一轴。R12 +4.81/PF2.06/n65，远低于营业周期冠军 +10.80。",
+    "mid-quick-sue-vol": "速动比率。R12 +4.78/PF2.27/n34，中位数 +0.05，样本偏瘦，流动性已留流动比率。",
+    "mid-retp-sue-vol": "每股留存收益水平。本库 R12 +3.71/PF1.76/n68、回撤 −13.1、彩票型，与盈利簇高重叠。停止再把 RETP 门槛扩成新 strategy_id。",
+    "mid-art-sue-vol": "应收账款周转。R12 +4.44/PF1.98/n47，营运子簇弱于流动比率冠军。",
+    "mid-itc-sue-vol": "利息负担/总资本下降（不是存货周转）。R12 +4.32/PF1.86/n37，中位数 −0.29、不稳健。",
+    "mid-op-sue-vol": "营业利润同比加速，与利润总额加速日推 Jaccard≈0.97。R12 +4.25/PF1.89/n68，中位数 −1.03。",
+    "mid-roa2-sue-vol": "年化 ROA，与累计 npta / 每股营收高重叠。R12 +4.05/PF1.87/n69，弱于单季 ROA 冠军 +8.50。",
+    "mid-ebt-sue-vol": "利润总额同比加速，与营业利润加速几乎同票（Jaccard≈0.97）。R12 +4.03/PF1.80/n69，不稳健。",
+    "mid-sue-accel": "无放量的 SUE∩业绩加速母集。R12 +4.01/PF1.91/n86、回撤 −11.6，近三年回撤 −19.2。基线只留放量版 mid-sue-accel-vol。",
+    "mid-ebit-sue-vol": "EBIT 绝对额，与营业利润额/扣非每股高重叠。R12 +3.78/PF1.71/n67，不稳健。",
+    "mid-npta-sue-vol": "累计总资产净利率，与年化 ROA / 每股收益高重叠。R12 +3.52/PF1.74/n70，弱于单季 q_npta 冠军。",
+    "mid-opgr-sue-vol": "营业利润率。R12 +3.37/PF1.77/n69，中位数 −0.65，弱于单季 ROA 冠军。",
+    "mid-dteps-sue-vol": "扣非每股收益同比，与 EBIT/营业利润额 Jaccard≈0.90+。R12 +3.35/PF1.62/n69，不稳健。",
+    "mid-roy-sue-vol": "ROE 同比高增，与每股收益/留存收益高重叠。R12 +3.29/PF1.63/n70，不稳健。",
+    "mid-roa-sue-vol": "全年 ROA，与单季 ROA 同簇且更弱。R12 +3.06/PF1.68/n59。",
+    "mid-eps-sue-vol": "每股收益绝对扩张。R12 +2.77/PF1.54/n68、胜率 39.7%、回撤 −10.9，与留存/npta 高重叠。",
+    "mid-npm-sue-vol": "净利率改善。R12 +2.71/PF1.58/n67，盈利簇下游。",
+    "mid-ocf-sue-vol": "经营现金流同比加速，与经营现金流/营收不是同一字段但选票同质。R12 +2.37/PF1.57/n52、彩票型，弱于 mid-ocfs-sue-vol。",
+    "mid-ocsd-sue-vol": "经营现金流/短期债务。R12 +1.89/PF1.43/n42、回撤 −8.8，现金流簇垫底档。",
+    "mid-qop-sue-vol": "单季营业利润环比加速。R12 +1.78/PF1.35/n62，本库 SUE 家族 recent_12m 每笔最低。",
+}
+SUE_LADDER_DEMOTED: tuple[str, ...] = tuple(SUE_LADDER_DEMOTE_REASONS)
+
+
+def sue_ladder_rejected_rows() -> list[dict[str, str]]:
+    """/mid 淘汰清单顶部：家族收敛说明 + 每条已退出日频的策略。"""
+    champs = "、".join(SUE_LADDER_CHAMPIONS)
+    rows = [{
+        "name": "SUE∩质量家族日频收敛（41→6）",
+        "reason": (
+            f"日频只留 {champs}。"
+            "其余同骨架策略（SUE≥2.2∩业绩加速∩放量，再叠一条财务轴）退出 17:35 出票与 /mid 现役列表；"
+            "定义、回测指标与历史选股保留，按策略 id 仍可查旧批次。"
+            "以后新增财务质量轴改为参数或过滤器，不再新开 strategy_id。"
+        ),
+    }]
+    for sid in SUE_LADDER_DEMOTED:
+        meta = RETIRED_STRATEGIES[sid]
+        rows.append({"name": f"{meta['name']}（{sid}）", "reason": SUE_LADDER_DEMOTE_REASONS[sid]})
+    return rows
+
+
+def _retire_sue_ladder() -> None:
+    overlap = set(SUE_LADDER_DEMOTED) & set(SUE_LADDER_CHAMPIONS)
+    missing = [sid for sid in (*SUE_LADDER_DEMOTED, *SUE_LADDER_CHAMPIONS) if sid not in STRATEGIES]
+    live_sue = [sid for sid in STRATEGIES if "sue" in sid]
+    unlisted = [sid for sid in live_sue if sid not in SUE_LADDER_CHAMPIONS and sid not in SUE_LADDER_DEMOTED]
+    if overlap or missing or unlisted or len(SUE_LADDER_CHAMPIONS) + len(SUE_LADDER_DEMOTED) != len(set(live_sue)):
+        raise RuntimeError(
+            "SUE 家族注册不一致："
+            f"overlap={sorted(overlap)} missing={missing} unlisted={unlisted} live={len(live_sue)}"
+        )
+    for sid in SUE_LADDER_DEMOTED:
+        RETIRED_STRATEGIES[sid] = STRATEGIES.pop(sid)
+
+
+_retire_sue_ladder()
+
+
 def _formal_entry(fn):
     """正式链路入口：函数内经数据网关的请求一律拒绝旧缓存（stale）数据。"""
     import functools
@@ -3117,7 +3206,7 @@ def _shown_pct(raw: Any, fallback: Any) -> float:
 
 
 def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[str, Any]:
-    kind = STRATEGIES.get(sid, {}).get("kind", "small_cap" if sid == "mid-small-cap-weekly" else None)
+    kind = _strategy_meta(sid).get("kind") or ("small_cap" if sid == "mid-small-cap-weekly" else None)
     score = label = better = reason = note = None
     try:
         if kind == "small_cap":

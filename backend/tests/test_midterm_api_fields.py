@@ -110,11 +110,45 @@ def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
 
 def test_retired_strategies_not_live():
     """§278/§282：新标准重评仍不达标的 /long 策略已下线（long-net-cash-switch 已于 §282 恢复上线），不在现役 STRATEGIES，也不出票。
-    §338：long-lowturn-lowvol 近12个月满期卖出每笔为负，下线。"""
-    retired = {"long-repurchase-big", "long-current-debt-down", "long-dividend-increase",
-               "long-undist-profit-growth", "long-lowturn-lowvol"}
-    assert set(ms.RETIRED_STRATEGIES) == retired
-    assert not retired & set(ms.STRATEGIES)
+    §338：long-lowturn-lowvol 近12个月满期卖出每笔为负，下线。
+    2026-11-03：SUE∩质量家族非冠军一并退出日频，定义留在 RETIRED_STRATEGIES。"""
+    long_retired = {"long-repurchase-big", "long-current-debt-down", "long-dividend-increase",
+                    "long-undist-profit-growth", "long-lowturn-lowvol"}
+    sue_demoted = set(ms.SUE_LADDER_DEMOTED)
+    assert long_retired <= set(ms.RETIRED_STRATEGIES)
+    assert not long_retired & set(ms.STRATEGIES)
+    assert set(ms.RETIRED_STRATEGIES) == long_retired | sue_demoted
+
+
+def test_sue_ladder_daily_pool_is_six_champions(tmp_path, monkeypatch):
+    """日频只留 6 个 SUE 冠军；其余 35 条不进 STRATEGIES / generate_picks / /mid 列表。历史标注仍走 RETIRED。"""
+    champs = set(ms.SUE_LADDER_CHAMPIONS)
+    demoted = set(ms.SUE_LADDER_DEMOTED)
+    assert len(champs) == 6 and len(demoted) == 35
+    assert not champs & demoted
+    live_sue = {sid for sid in ms.STRATEGIES if "sue" in sid}
+    assert live_sue == champs
+    assert demoted <= set(ms.RETIRED_STRATEGIES)
+    assert set(ms.SUE_LADDER_DEMOTE_REASONS) == demoted
+    for sid in ("mid-forecast-beat", "mid-repurchase-plan", "mid-earnings-accel",
+                "mid-ea-td-vol", "mid-ncs-td-vol"):
+        assert sid in ms.STRATEGIES
+    overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
+    assert champs <= overview and not demoted & overview
+    monkeypatch.setattr(ms, "OUT_DIR", tmp_path / "picks")
+    assert ms.generate_picks(None, "2026-10-30", strategy_ids=["mid-qsexp-sue-vol"]) == {}
+    ann = ms.annotate_pick("mid-sue-accel", {
+        "code": "000001", "score": 3.0, "sue": 2.4, "q_sq": 1e8,
+        "dt_netprofit_yoy": 60, "prev_dt_netprofit_yoy": 40, "or_yoy": 25,
+        "ann_date": "20261030", "end_date": "20260930",
+    }, 1)
+    assert ann["rule_score_label"] == "SUE(封顶20)"
+    assert "SUE 2.40" in ann["selection_reason"]
+    rows = ms.sue_ladder_rejected_rows()
+    assert rows[0]["name"].startswith("SUE∩质量家族")
+    assert {r["name"] for r in rows[1:]} == {
+        f"{ms.RETIRED_STRATEGIES[sid]['name']}（{sid}）" for sid in demoted
+    }
 
 
 def test_next_batch_note(tmp_path, monkeypatch):
