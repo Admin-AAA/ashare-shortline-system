@@ -58,14 +58,14 @@ def test_session_routes_vip_failure_to_fallback(monkeypatch):
 
     seen = {}
 
-    def fake(pro, period, fields):
-        seen["args"] = (period, fields)
+    def fake(pro, period, fields, allow_delta=True):
+        seen["args"] = (period, fields, allow_delta)
         return pd.DataFrame({"ts_code": ["000001.SZ"]})
 
     monkeypatch.setattr(ff, "fina_period_fallback", fake)
     sess = tc._TushareSession(_Router(), http_url="")
     out = sess.fina_indicator_vip(period="20260930", fields="ts_code")
-    assert seen["args"] == ("20260930", "ts_code") and len(out) == 1
+    assert seen["args"] == ("20260930", "ts_code", True) and len(out) == 1
 
 
 def test_quota_reads_dotenv(monkeypatch):

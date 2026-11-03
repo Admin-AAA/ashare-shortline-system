@@ -94,7 +94,7 @@ def _close_and_fmv(db, as_of: str, codes: list[str]) -> dict[str, tuple[float, f
 
 
 def events(agg: dict[str, dict[str, float]], px: dict[str, tuple[float, float]]) -> dict[str, dict[str, Any]]:
-    """汇总 + 收盘/流通市值 -> 达标事件 {code: {...}}（premium ≥ 0 且 ratio ≥ 0.45%）。"""
+    """汇总 + 收盘/流通市值 -> 达标事件 {code: {...}}（premium ≥ 1.35% 且 ratio ≥ 0.45%）。"""
     out = {}
     for code, a in agg.items():
         if code not in px:

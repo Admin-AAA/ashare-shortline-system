@@ -54,21 +54,21 @@ def test_events_premium_and_ratio():
     agg = {"600001": {"amt": 2100.0, "vol": 200.0, "n": 2},   # vwp 10.5
            "600002": {"amt": 2100.0, "vol": 200.0, "n": 2},
            "600003": {"amt": 100.0, "vol": 10.0, "n": 1}}     # vwp 10.0
-    px = {"600001": (10.5, 400000.0),   # 平价、2100/400000=0.525% -> 入选
+    px = {"600001": (10.0, 400000.0),   # 溢价 5% ≥ 1.35%，2100/400000=0.525% ≥ 0.45% -> 入选
           "600002": (10.6, 400000.0),   # 折价 -> 不选
-          "600003": (9.0, 400000.0)}    # 溢价但 100/400000=0.025% -> 不选
+          "600003": (9.0, 400000.0)}    # 溢价 11% 但 100/400000=0.025% < 0.45% -> 不选
     ev = mb.events(agg, px)
     assert sorted(ev) == ["600001"]
-    assert ev["600001"]["premium"] == 0.0 and abs(ev["600001"]["ratio"] - 0.00525) < 1e-9
+    assert ev["600001"]["premium"] == 0.05 and abs(ev["600001"]["ratio"] - 0.00525) < 1e-9
 
 
 def test_candidates_sorted_by_premium(monkeypatch):
     rows = [_bt("600001.SH", 10.0, 100, 1000), _bt("300001.SZ", 20.0, 100, 2000), _bt("000001.SZ", 8.0, 100, 800)]
     monkeypatch.setattr(mb, "_close_and_fmv", lambda db, as_of, codes: {
-        "600001": (9.9, 100000.0), "300001": (19.0, 100000.0), "000001": (8.5, 100000.0)})
+        "600001": (9.8, 100000.0), "300001": (19.0, 100000.0), "000001": (8.5, 100000.0)})
     monkeypatch.setattr(ms, "_liq_ok", lambda db, as_of, dates, codes: {c: {"total_mv": 1.0, "amt20": 1e8} for c in codes})
     res = mb.block_trade_candidates(_FakeDB(_dates()), "2026-10-16", rows=rows)
-    assert [r["code"] for r in res] == ["300001", "600001"]  # 000001 折价成交不选；按溢价率降序（§388）
+    assert [r["code"] for r in res] == ["300001", "600001"]  # 000001 折价不选；600001 溢价 2.04% 过 1.35% 门槛；按溢价率降序（§388/§514）
     assert res[0]["premium"] == 0.0526 and res[0]["score"] == 0.0526  # events() round(prem,4)
 
 

@@ -35,7 +35,9 @@ def test_cards_match_quality_block():
 
 def test_notes_use_corrected_numbers():
     m = _load()
-    assert "381 笔" in m["mid-block-trade-premium"]["note"] and "−21.0%" in m["mid-block-trade-premium"]["note"]
+    # §514 把溢价门槛抬到 1.35% 后，样本与回撤已不是 §306 当时的 381 笔 / −21.0%。
+    note = m["mid-block-trade-premium"]["note"]
+    assert "31 笔" in note and "−9.4%" in note and "1.35%" in note
     assert "+3.09%" in m["mid-earnings-accel"]["note"] and "−24.2%" in m["mid-earnings-accel"]["note"]
     assert "−4.84%" in m["mid-forecast-beat"]["note"]
     assert "实盘推荐不设该上限" in m["mid-small-cap-weekly"]["note"]
