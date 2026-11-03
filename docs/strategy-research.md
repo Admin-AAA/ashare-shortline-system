@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§969 CASHR_o25 ADOPT 已上线（orv≥25，replay 15/28）；§968 冻 CURR dtp；§970 OPINC_o25 预注册待 SERIAL。
+- 断点：§970 OPINC_o25 ADOPT 已上线（orv≥25，replay 23/60）；§969 CASHR_o25 已上线；§968 冻 CURR dtp；§971 EBIT_o25 预注册待 SERIAL。
 
 
 
@@ -11789,6 +11789,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：OPINCSUEGVOL_d55；EQUITYSUEGVOL_o25；CASHRSUEGVOL_o25；EBITSUEGVOL2。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；CURR dtp/EBIT dtp/PTG 已否。
 - 规则：OPINC∩SUEG∩vol；G.orv≥25（dtp≥55）；sc_opinc；K20/max_new5。B 对照 base。
 - 脚本：`opincsuegvol_o25_s970.py` / `run_s970.sh`。
+
+
+### §970 OPINCSUEGVOL_o25_h20 — ADOPT → 已上线 mid-opinc-sue-vol（orv≥25）
+- 结果：正段 7/8；R12 +4.98 PF1.97 n66（彩票）；N3 +3.76 PF1.94 n153 MDD-7.7（稳健）。B门对照 base(R12+3.55/N3+3.39 MDD-8.4)：**过**。
+- → **ADOPT**。上线（2026-11-03 18:37 CST）：`mid-opinc-sue-vol` orv **≥20→≥25**（dtp仍≥55）；`s970_onboard_metrics.py`；replay 强制覆盖 23批/60只（2026-08-01~11-02；`--execute`）；`safe_backend_restart` 已成功（API 营收≥25）。解读：营业利润额∩盈余上抬营收腿成立——镜像 CASHR/EQUITY_o25。
+
+
+## §971 [中线·现役改进] EBIT额扩张∩盈余加速∩放量 orv硬抬≥25（EBITSUEGVOL2_o25_h20）— 预注册（2026-11-03 18:37 CST 写于跑任何收益之前）
+- 白话：现役 mid-ebit-sue-vol（§959：ebit扩张≥20%∩SUEG dtp≥50/orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；EBIT/SUE/dtp/放量/排序不变。同进程 EBITSUEGVOL2_base(orv≥20)。
+- 想法：OPINC_o25 刚 ADOPT；EBIT dtp 已冻≥50——改试 **orv 轴**（≠dtp）。B 门对照 base。
+- 去重：EBITSUEGVOL2；EBITSUEGVOL2_d55（已冻）；OPINCSUEGVOL_o25；EQUITYSUEGVOL_o25。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；CURR dtp 已冻。
+- 规则：EBIT∩SUEG∩vol；G.orv≥25（dtp≥50）；sc_ebit；K20/max_new5。B 对照 base。
+- 脚本：`ebitsuegvol2_o25_s971.py` / `run_s971.sh`。
+
+
 
 
 
