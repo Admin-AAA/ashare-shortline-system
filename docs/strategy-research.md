@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§966 CASHR_d55 ADOPT 已 commit；replay 15/32 完成；restart 卡 prefect grateful-fennec（17:35 formal）。§967 CURRSUEGVOL SERIAL 开跑。
+- 断点：§967 CURR ADOPT 已上线代码+replay 19/44；restart 仍卡 formal；§968 CURR_d55 预注册待 SERIAL。
 
 
 
@@ -11750,3 +11750,18 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：CASHRSUEGVOL；QUICKSUEGVOL；CRSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
 - 规则：CURR∩SUEG∩vol；sc_curr；K20/max_new5。新策略无 B。
 - 脚本：`currsuegvol_s967.py` / `run_s967.sh`。
+
+
+### §967 CURRSUEGVOL_h20 — ADOPT → 已上线 mid-curr-sue-vol
+- 结果：正段 6/8；R12 +5.31 PF2.18 n63；N3 +3.57 PF1.94 n144 MDD-8.4；质量双稳健。新策略无 B。判定 ✓✓✓✓✓。
+- → **ADOPT**。上线（2026-11-03 18:16 CST）：`mid-curr-sue-vol`（kind=`curr_sue_vol`）；FINA_FIELDS 增 `current_ratio`；`s967_onboard_metrics.py`；replay onboard 19批/44只（2026-08-01~11-02；`--execute`）；`safe_backend_restart`（仍等 formal grateful-fennec）。解读：流动比率水平∩盈余合取成立（≠已上线 cash_ratio/quick_ratio）。
+
+
+## §968 [中线·现役改进] 流动比率∩盈余加速∩放量 dtp硬抬≥55（CURRSUEGVOL_d55_h20）— 预注册（2026-11-03 18:19 CST 写于跑任何收益之前）
+- 白话：现役 mid-curr-sue-vol（§967：current_ratio≥1.5∩SUE≥2.2∩G∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；CURR/SUE/orv/放量/排序不变。同进程 CURRSUEGVOL_base(dtp≥50)。
+- 想法：新策略刚 ADOPT——镜像 CASHR/EQUITY/OPINC_d55 路径。B 门对照 base。
+- 去重：CURRSUEGVOL；CASHRSUEGVOL_d55；QUICKSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；PTG/EBIT_d55 已否。
+- 规则：CURR∩SUEG∩vol；G.dtp≥55；sc_curr；K20/max_new5。B 对照 base。
+- 脚本：`currsuegvol_d55_s968.py` / `run_s968.sh`。
+
+
