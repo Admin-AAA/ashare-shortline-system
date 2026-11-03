@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§936 QSEXP_o45 + §937 DTEPS_o30 已预注册；§936 待 swap≥800 后 SERIAL。
+- 断点：§936 QSEXP_o45 → **REJECT**（B否；冻 orv≥40，双轴到站）；§937 DTEPS_o30 已预注册待 SERIAL。
 
 
 
@@ -11344,6 +11344,12 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：QSEXPSUEGVOL_o40；ARTSUEGVOL_o30；GPMSUEGVOL。非仓位。不碰数据网关。毛利率∩SUEG / ART orv / 有息/去杠杆∩SUEG 仍暂缓或已冻。
 - 规则：QSEXP∩SUEG∩vol；G.orv≥45（dtp仍≥55）；sc_qsexp；K20/max_new5。B 对照 base。
 - 脚本：`qsexpsuegvol_o45_s936.py` / `run_s936.sh`。
+
+### §936 QSEXPSUEGVOL_o45_h20 — REJECT（B 门否；冻 orv≥40）
+- 每笔 P19 +9.58 / P20 −1.46 / P21 +3.81 / W0 +0.21 / W00 +2.72 / W1 −0.78 / W2 +1.91 / R12 +11.88（**正段 6/8**）
+- R12 34笔 +11.88% PF5.60 MDD−5.3；N3 68笔 +6.26 PF2.80 MDD−5.3；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base(orv≥40): R12 +12.68 PF5.72 / N3 +6.86 PF3.09 MDD−4.2；o45 R12 +11.88 PF5.60 / N3 +6.26 PF2.80 MDD−5.3 → **B 否**（近一年/三年每笔均降；MDD 更深）。
+- → **REJECT**。现役 mid-qsexp-sue-vol 维持 §934 口径（G dtp≥55/orv≥40）；**冻 orv 轴**。解读：单季销售费用率∩盈余再抬营收腿无增量——**QSEXP∩SUEG 双轴到站**（dtp≥55 / orv冻≥40）。
 
 ## §937 [中线·现役改进] 扣非每股收益同比高增∩盈余加速∩放量 orv再抬≥30（DTEPSUEGVOL_o30_h20）— 预注册（2026-11-03 09:12 CST 写于跑任何收益之前）
 - 白话：现役 mid-dteps-sue-vol（§896 已抬至 G dtp≥50∩orv≥25；dtp轴已冻）把 **G 内 orv 再硬抬** 到 **≥30**；DTEPS/SUE/dtp/放量/排序不变。同进程 DTEPSSUEGVOL_base(orv≥25)。
