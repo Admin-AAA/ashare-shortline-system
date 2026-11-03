@@ -15,7 +15,7 @@ def main(dry=False):
     res = json.loads((SRC / "res.json").read_text())[NAME]
     phases = {k: {x: v[x] for x in KEYS if x in v} for k, v in res.items()}
     ix = load_hs300()
-    q = {"standard": "§282", "basis": "§961 现役改进：equity_yoy≥20∩SUEG(dtp≥55)∩vol；排序封顶100；真实成交；接 §961；§962 dtp硬抬"}
+    q = {"standard": "§282", "basis": "§961 现役改进：equity_yoy>=20∩SUEG(dtp>=55)∩vol；排序封顶100；真实成交；接 §961；§962 dtp硬抬"}
     for w, pk in (("R12", "R12 2025-10~2026-10"), ("N3", "N3 2024-01~2026-10")):
         d = pd.read_csv(SRC / f"trades_{NAME}_{w}.csv", dtype={"code": str})
         T.mkdir(parents=True, exist_ok=True)
@@ -40,8 +40,7 @@ def main(dry=False):
     r12, n3 = res["R12 2025-10~2026-10"], res["N3 2024-01~2026-10"]
     entry = {
         "recent_12m": phases["R12 2025-10~2026-10"], "phases": phases,
-        "config": ("scripts/midterm/equitysuegvol_d55_s962.py EQUITYSUEGVOL_d55_h20（§961：equity_yoy≥20∩SUEG(dtp≥55)∩vol≥1.5×，排序=封顶100）"
-                   "realistic、回测 k_slots=20 max_new=5（实盘推荐不设此上限），次日开盘买持20日")∩vol≥1.5×，排序=Δ封顶10）"
+        "config": ("scripts/midterm/equitysuegvol_d55_s962.py EQUITYSUEGVOL_d55_h20（§961：equity_yoy>=20∩SUEG(dtp>=55)∩vol>=1.5x，排序=封顶100）"
                    "realistic、回测 k_slots=20 max_new=5（实盘推荐不设此上限），次日开盘买持20日"),
         "window": "2019-01~2026-10-16 分阶段（P19~R12/N3）",
         "generated": "2026-11-03",
