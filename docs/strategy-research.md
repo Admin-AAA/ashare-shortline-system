@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§936 QSEXP_o45 → **REJECT**（B否；冻 orv≥40，双轴到站）；§937 DTEPS_o30 已预注册待 SERIAL。
+- 断点：§936 QSEXP_o45 → **REJECT**（冻 orv≥40）；§937 DTEPS_o30 → **REJECT**（冻 orv≥25，双轴到站）。下一：OCFS_o30 / 文献腿。
 
 
 
@@ -11357,4 +11357,11 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：DTEPSUEGVOL_o25；DTEPSUEGVOL_d55；QSEXPSUEGVOL_o45；ARTSUEGVOL_o30。非仓位。不碰数据网关。
 - 规则：DTEPS∩SUEG∩vol；G.orv≥30（dtp仍≥50）；sc_dteps；K20/max_new5。B 对照 base。
 - 脚本：`dtepsuegvol_o30_s937.py` / `run_s937.sh`。
+
+### §937 DTEPSUEGVOL_o30_h20 — REJECT（B 门否；冻 orv≥25）
+- 每笔 P19 +4.02 / P20 +0.68 / P21 +6.95 / W0 −0.43 / W00 +3.06 / W1 +1.80 / W2 +2.99 / R12 +3.15（**正段 7/8**）
+- R12 66笔 +3.15% PF1.62 MDD−7.4；N3 154笔 +2.72 PF1.66 MDD−8.2；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base(orv≥25): R12 +3.35 PF1.62 / N3 +2.87 PF1.69 MDD−8.7；o30 R12 +3.15 PF1.62 / N3 +2.72 PF1.66 MDD−8.2 → **B 否**（近一年/三年每笔均降；虽 MDD 略浅）。
+- → **REJECT**。现役 mid-dteps-sue-vol 维持 §896 口径（G dtp≥50/orv≥25）；**冻 orv 轴**。解读：扣非EPS∩盈余再抬营收腿无增量——**DTEPS∩SUEG 双轴到站**（dtp冻≥50 / orv冻≥25）。
+
 
