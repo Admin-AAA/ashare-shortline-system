@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§964 EQUITY_o25 → **ADOPT 已上线** mid-equity-sue-vol orv≥25（14批/23只）。§965 cash_ratio∩SUEG 已预注册待 SERIAL。
+- 断点：§965 cash_ratio∩SUEG → **ADOPT 上线中** mid-cashr-sue-vol。下一条待预注册。
 
 
 
@@ -11727,3 +11727,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：QUICKSUEGVOL；CRSUEGVOL；EQUITYSUEGVOL；PTGSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
 - 规则：CASHR∩SUEG∩vol；sc_cash；K20/max_new5。新策略无 B。
 - 脚本：`cashrsuegvol_s965.py` / `run_s965.sh`。
+
+### §965 CASHRSUEGVOL_h20 — ADOPT → 已上线 mid-cashr-sue-vol
+- 结果：正段 7/8；R12 +4.85 PF2.05 n58；N3 +2.98 PF1.78 n138 MDD-8.4；质量双稳健。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 17:38 CST）：`mid-cashr-sue-vol`（kind=`cashr_sue_vol`）；FINA_FIELDS 增 `cash_ratio`；`s965_onboard_metrics.py`；replay onboard（`--execute`）；`safe_backend_restart`。解读：现金比率∩盈余合取成立（≠已上线 quick_ratio）。
