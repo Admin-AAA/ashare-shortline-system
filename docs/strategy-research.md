@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§960 EBIT_d55 → **REJECT**（B否；冻 dtp≥50）。§961 equity_yoy∩SUEG 已预注册待 SERIAL。
+- 断点：§961 equity_yoy∩SUEG → **ADOPT 上线中** mid-equity-sue-vol。下一条待预注册。
 
 
 
@@ -11681,3 +11681,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：ROYSUEGVOL；ROESUEGVOL；EBITSUEGVOL2；OPINCSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
 - 规则：EQUITY∩SUEG∩vol；sc_equity；K20/max_new5。新策略无 B。
 - 脚本：`equitysuegvol_s961.py` / `run_s961.sh`。
+
+### §961 EQUITYSUEGVOL_h20 — ADOPT → 已上线 mid-equity-sue-vol
+- 结果：正段 6/8；R12 +3.30 PF1.55 n36；N3 +3.59 PF1.80 n73 MDD-6.4；质量双彩票。新策略无 B。
+- → **ADOPT**。上线（2026-11-03 16:27 CST）：`mid-equity-sue-vol`（kind=`equity_sue_vol`）；FINA_FIELDS 增 `equity_yoy`；`s961_onboard_metrics.py`；replay onboard（`--execute`）；`safe_backend_restart`。解读：净资产同比∩盈余合取成立（≠已上线 roe_yoy/ROY）。
