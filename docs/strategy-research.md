@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§964 EQUITY_o25 → **ADOPT 上线中**（orv≥20→≥25）。§965 cash_ratio∩SUEG 已预注册待 SERIAL。
+- 断点：§964 EQUITY_o25 → **ADOPT 已上线** mid-equity-sue-vol orv≥25（14批/23只）。§965 cash_ratio∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11719,7 +11719,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 
 ### §964 EQUITYSUEGVOL_o25_h20 — ADOPT → 已上线 mid-equity-sue-vol（orv≥25）
 - 结果：正段 6/8；R12 +6.17 PF2.18 n30；N3 +4.77 PF2.17 n66 MDD-5.1。B门对照 base(R12+4.06/N3+3.96 MDD-6.2)：**过**。
-- → **ADOPT**。上线（2026-11-03 17:13 CST）：`mid-equity-sue-vol` orv **≥20→≥25**（dtp仍≥55）；`s964_onboard_metrics.py`；replay 强制覆盖（`--execute`）；`safe_backend_restart`。解读：净资产同比∩盈余上抬营收腿成立——镜像 QN/FAT_o25。
+- → **ADOPT**。上线（2026-11-03 17:13 CST）：`mid-equity-sue-vol` orv **≥20→≥25**（dtp仍≥55）；`s964_onboard_metrics.py`；replay 强制覆盖 14批/23只（2026-08-01~11-02；`--execute`）；`safe_backend_restart`。解读：净资产同比∩盈余上抬营收腿成立——镜像 QN/FAT_o25。
 
 ## §965 [中线·文献] 现金比率∩盈余加速∩放量（CASHRSUEGVOL_h20）— 预注册（2026-11-03 16:55 CST 写于跑任何收益之前）
 - 白话：cash_ratio≥1.0 ∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 cash_ratio（封顶5）排序；持20。
