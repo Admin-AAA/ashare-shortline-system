@@ -1968,6 +1968,12 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             if fb is None:
                 result[sid] = "no_data"
                 continue
+            picks = [p for p in fb if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
         if meta.get("kind") == "forecast_slight_vol":
             from app.services.midterm_forecast import forecast_slight_vol_candidates
             held = _held_codes(db, sid, as_of)
@@ -1975,12 +1981,6 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             if fb is None:
                 result[sid] = "no_data"
                 continue
-            picks = [p for p in fb if p["code"] not in held]
-            if not picks:
-                result[sid] = 0
-                continue
-            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
-            continue
             picks = [p for p in fb if p["code"] not in held]
             if not picks:
                 result[sid] = 0
