@@ -55,7 +55,7 @@ def prep():
     return df.with_columns(
         (cr & sue & g50 & vol).fill_null(False).alias("CURRSUEGVOL_base"),
         (cr & sue & g55 & vol).fill_null(False).alias("CURRSUEGVOL_d55"),
-        (c("sc_curr").fill_null(0) - tie).alias("sc_currrsuegvol"),
+        (c("sc_curr").fill_null(0) - tie).alias("sc_currsuegvol"),
     ).sort("code", "trade_date")
 
 
@@ -85,8 +85,8 @@ if __name__ == "__main__":
     res = json.load(open(out)) if os.path.exists(out) else {}
     for ph in phases:
         s, e = PH[ph]
-        one(df, "CURRSUEGVOL_base", "sc_currrsuegvol", "CURRSUEGVOL_base", ph, s, e, out, res)
-        one(df, "CURRSUEGVOL_d55", "sc_currrsuegvol", "CURRSUEGVOL_d55_h20", ph, s, e, out, res)
+        one(df, "CURRSUEGVOL_base", "sc_currsuegvol", "CURRSUEGVOL_base", ph, s, e, out, res)
+        one(df, "CURRSUEGVOL_d55", "sc_currsuegvol", "CURRSUEGVOL_d55_h20", ph, s, e, out, res)
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
         json.dump(res, open(out, "w"), indent=1, ensure_ascii=False)
     print("done", flush=True)

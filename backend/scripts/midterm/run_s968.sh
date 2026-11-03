@@ -46,11 +46,11 @@ for p in "P19 2019:2019-01-01:2020-04-29" "P20 2020:2020-01-01:2021-04-30" "P21 
   run_ph "$n" "$a" "$b" || { ec=$?; [ "$ec" = "99" ] && echo "STOPPED_FOR_MORNING_S968" | tee -a "$LOG"; exit 0; }
 done
 echo "DONE_S968 $(date)" | tee -a "$LOG"
-"$PY" s286_287_eval.py "$OUT" CASHRSUEGVOL_d55_h20 25 | tee "$OUTD/eval.txt"
+"$PY" s286_287_eval.py "$OUT" CURRSUEGVOL_d55_h20 25 | tee "$OUTD/eval.txt"
 "$PY" - <<'PY' | tee -a "$OUTD/eval.txt"
 import json
 r=json.load(open("/Users/wangao/Desktop/ashare-shortline-system/backend/output/research/s968/res.json"))
-b,d=r["CASHRSUEGVOL_base"], r["CASHRSUEGVOL_d55_h20"]
+b,d=r["CURRSUEGVOL_base"], r["CURRSUEGVOL_d55_h20"]
 R,N="R12 2025-10~2026-10","N3 2024-01~2026-10"
 print("B门对照 base:", {k: (b[k].get("avg"), b[k].get("pf"), b[k].get("mdd"), b[k].get("n")) for k in (R,N)})
 print("d55:", {k: (d[k].get("avg"), d[k].get("pf"), d[k].get("mdd"), d[k].get("n")) for k in (R,N)})
