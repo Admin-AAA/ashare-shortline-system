@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§953 TRPS∩SUEG → **ADOPT 已上线** mid-trps-sue-vol。下一条待预注册。
+- 断点：§953 TRPS∩SUEG → **ADOPT 已上线**。§954 TRPS_d55 + §955 EPS_o25 已预注册待 SERIAL。
 
 
 
@@ -11579,6 +11579,19 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 每笔 P19 +1.28 / P20 −1.08 / P21 +6.97 / W0 −0.26 / W00 +2.61 / W1 +2.92 / W2 +4.51 / R12 +6.55（**正段 6/8**）
 - R12 64笔 +6.55% PF2.40 MDD−8.6；N3 151笔 +4.91 PF2.28 MDD−8.1；彩票型（R12）/稳健型（N3）
 - 判定 ✓✓✓✓✓ → **A 过**（新策略无 B）。
-- → **ADOPT**。上线（2026-11-03 14:13 CST）：`mid-trps-sue-vol`（kind=`trps_sue_vol`）；FINA_FIELDS 增 `total_revenue_ps`；`s953_onboard_metrics.py`；replay onboard；`safe_backend_restart`。解读：total_revenue_ps∩盈余合取成立（≠已上线 revenue_ps；近一年/三年接近 REVPS）。
+- → **ADOPT**。上线（2026-11-03 14:13 CST）：`mid-trps-sue-vol`（kind=`trps_sue_vol`）；FINA_FIELDS 增 `total_revenue_ps`；`s953_onboard_metrics.py`；replay onboard 21批/66只（2026-08-01~11-02）；`safe_backend_restart`。解读：total_revenue_ps∩盈余合取成立（≠已上线 revenue_ps；近一年/三年接近 REVPS）。
 
 
+## §954 [中线·现役改进] 每股营业总收入改善∩盈余加速∩放量 dtp硬抬≥55（TRPSSUEGVOL_d55_h20）— 预注册（2026-11-03 14:17 CST 写于跑任何收益之前）
+- 白话：现役 mid-trps-sue-vol（§953：total_revenue_ps改善≥0.5∩SUE≥2.2∩G∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；TRPS/SUE/orv/放量/排序不变。同进程 TRPSSUEGVOL_base(dtp≥50)。
+- 想法：新策略刚 ADOPT——镜像 REVPS_d55 路径。B 门对照 base。
+- 去重：TRPSSUEGVOL；REVPSSUEGVOL_d55；EPSSUEGVOL_d55。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；REVPS/NPTA/QN/EPS dtp 已冻。
+- 规则：TRPS∩SUEG∩vol；G.dtp≥55；sc_trps；K20/max_new5。B 对照 base。
+- 脚本：`trpssuegvol_d55_s954.py` / `run_s954.sh`。
+
+## §955 [中线·现役改进] 每股收益扩张∩盈余加速∩放量 orv硬抬≥25（EPSSUEGVOL_o25_h20）— 预注册（2026-11-03 14:17 CST 写于跑任何收益之前）
+- 白话：现役 mid-eps-sue-vol（§951；§952 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；EPS/SUE/dtp/放量/排序不变。同进程 EPSSUEGVOL_base(orv≥20)。
+- 想法：dtp 轴刚 B 否——改试营收腿 orv≥25。B 门对照 base。
+- 去重：EPSSUEGVOL；EPSSUEGVOL_d55；REVPSSUEGVOL_o25。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
+- 规则：EPS∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_eps；K20/max_new5。B 对照 base。
+- 脚本：`epssuegvol_o25_s955.py` / `run_s955.sh`。
