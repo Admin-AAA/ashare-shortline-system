@@ -730,10 +730,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "schedule": "daily",
     },
     # §957 营业利润额扩张∩盈余加速∩放量（scripts/midterm/opincsuegvol_s957.py OPINCSUEGVOL_h20；§282 达标；2026-11-03 上线；≠ mid-op-sue-vol）
+    # §957/§958 营业利润额扩张∩盈余加速∩放量（scripts/midterm/opincsuegvol_d55_s958.py OPINCSUEGVOL_d55_h20；§282+B 达标；dtp≥55；2026-11-03 上线；≠ mid-op-sue-vol / mid-opgr-sue-vol）
     "mid-opinc-sue-vol": {
         "name": "营业利润额扩张∩盈余加速∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足营业利润（op_income）>0且较去年同报告期扩张≥20%，与 SUE≥2.2 且业绩加速 G，且信号日成交额≥1.5×前20日均额；按扩张率（封顶100）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：营业利润绝对额扩张 × 盈余惊喜加速 × 量能确认（§957；≠op_yoy 的 mid-op-sue-vol；≠op_of_gr 的 mid-opgr-sue-vol）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足营业利润（op_income）>0且较去年同报告期扩张≥20%，与 SUE≥2.2 且业绩加速 G（扣非同比≥55、营收同比≥20），且信号日成交额≥1.5×前20日均额；按扩张率（封顶100）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：营业利润绝对额扩张 × 盈余惊喜加速 × 量能确认（§957/§958 dtp≥55；≠op_yoy 的 mid-op-sue-vol；≠op_of_gr 的 mid-opgr-sue-vol）。",
         "kind": "opinc_sue_vol",
         "hold_days": 20,
         "schedule": "daily",
