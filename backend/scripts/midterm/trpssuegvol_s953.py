@@ -1,4 +1,4 @@
-"""§953 TRPSSUEGVOL_h20：total_total_revenue_ps 改善≥0.5（本期>0）∩ SUEG ∩ 放量；排序 Δ封顶10。预注册 docs §953。≠total_revenue_ps/or_yoy。"""
+"""§953 TRPSSUEGVOL_h20：total_revenue_ps 改善≥0.5（本期>0）∩ SUEG ∩ 放量；排序 Δ封顶10。预注册 docs §953。≠revenue_ps/or_yoy。"""
 import sys, json, os, glob
 import polars as pl
 from lt_research import fixed
