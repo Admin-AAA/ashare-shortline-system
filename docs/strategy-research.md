@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§972 CURR_o25 ADOPT 已上线（orv≥25，replay 19/39）；§971/§970/§969 已上线；§968 冻 CURR dtp；§973 RETP 预注册待 SERIAL。
+- 断点：§973 RETP ADOPT 已上线（replay 23/63）；§972/§971/§970/§969 orv≥25 已上线；§968 冻 CURR dtp；**下一对 §974 RETP_d55**（已预注册，未跑；晚间例行后 SERIAL）。
 
 
 
@@ -11828,6 +11828,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：UDPSUEGVOL；BPSSUEGVOL；CURRSUEGVOL；CASHRSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；多数 o25 已否。
 - 规则：RETP∩SUEG∩vol；sc_retp；K20/max_new5。新策略无 B。
 - 脚本：`retpsuegvol_s973.py` / `run_s973.sh`。
+
+
+### §973 RETPSUEGVOL_h20 — ADOPT → 已上线 mid-retp-sue-vol
+- 结果：正段 7/8；R12 +3.71 PF1.76 n68（彩票）；N3 +3.75 PF2.00 n155 MDD-11.3（稳健）。新策略无 B。判定 ✓✓✓✓✓。
+- → **ADOPT**。上线（2026-11-03 19:16 CST）：`mid-retp-sue-vol`（kind=`retp_sue_vol`）；FINA_FIELDS 增 `retainedps`；`s973_onboard_metrics.py`；replay onboard 23批/63只（2026-08-01~11-02；`--execute`）；`safe_backend_restart` 已成功（API 已见 mid-retp）。解读：每股留存收益水平∩盈余合取成立（≠已上线 UDP/BPS）。
+
+
+## §974 [中线·现役改进] 每股留存收益∩盈余加速∩放量 dtp硬抬≥55（RETPSUEGVOL_d55_h20）— 预注册（2026-11-03 19:16 CST 写于跑任何收益之前）
+- 白话：现役 mid-retp-sue-vol（§973：retainedps≥1.0∩SUEG）把 **G 内 dtp 硬抬** 到 **≥55**；RETP/SUE/orv/放量/排序不变。同进程 RETPSUEGVOL_base(dtp≥50)。
+- 想法：新策略刚 ADOPT——镜像 CASHR/OPINC_d55。B 门对照 base。**本轮收口不新开回测；留给晚间后/次轮 SERIAL。**
+- 去重：RETPSUEGVOL；UDPSUEGVOL_d55；CASHRSUEGVOL_d55。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；CURR/EBIT dtp 已冻。
+- 规则：RETP∩SUEG∩vol；G.dtp≥55；sc_retp；K20/max_new5。B 对照 base。
+- 脚本：`retpsuegvol_d55_s974.py` / `run_s974.sh`（未跑）。
+
+
 
 
 
