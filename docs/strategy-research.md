@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§958 OPINC_d55 → **ADOPT 上线中**（dtp≥50→≥55）。§959 EBIT∩SUEG 已预注册待 SERIAL。
+- 断点：§958 OPINC_d55 → **ADOPT 已上线** mid-opinc-sue-vol dtp≥55（23批/68只）。§959 EBIT∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11649,7 +11649,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 
 ### §958 OPINCSUEGVOL_d55_h20 — ADOPT → 已上线 mid-opinc-sue-vol（dtp≥55）
 - 结果：正段 7/8；R12 +3.55 PF1.70 n70；N3 +3.39 PF1.89 n161 MDD-8.4；质量 R12彩票/N3稳健。B门对照 base(R12+3.28/N3+3.30 MDD-8.6)：**过**（R12/N3均优且N3回撤不差）。
-- → **ADOPT**。上线（2026-11-03 15:50 CST）：`mid-opinc-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s958_onboard_metrics.py`；replay 强制覆盖（2026-08-01~11-02）；`safe_backend_restart`。解读：营业利润额∩盈余上抬扣非腿成立——镜像 TRPS/REVPS_d55。
+- → **ADOPT**。上线（2026-11-03 15:50 CST）：`mid-opinc-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s958_onboard_metrics.py`；replay 强制覆盖 23批/68只（2026-08-01~11-02；`--execute`）；`safe_backend_restart`。解读：营业利润额∩盈余上抬扣非腿成立——镜像 TRPS/REVPS_d55。
 
 
 ## §959 [中线·文献] EBIT 绝对额扩张∩盈余加速∩放量（EBITSUEGVOL2_h20）— 预注册（2026-11-03 15:07 CST 写于跑任何收益之前）
