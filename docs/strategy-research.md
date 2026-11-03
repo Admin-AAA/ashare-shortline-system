@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§946 QN_o45 → **REJECT 冻orv≥40**。§947 NPTA_d55 待 SERIAL。
+- 断点：§947 NPTA_d55 → **REJECT 冻dtp≥50**。§948 NPTA_o25 + §949 REVPS_d55 已预注册待 SERIAL。
 
 
 
@@ -11489,3 +11489,23 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：NPTASUEGVOL；QNSUEGVOL_d55；ROASUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
 - 规则：NPTA∩SUEG∩vol；G.dtp≥55；sc_npta；K20/max_new5。B 对照 base。
 - 脚本：`nptasuegvol_d55_s947.py` / `run_s947.sh`。
+
+### §947 NPTASUEGVOL_d55_h20 — REJECT（B 门否；冻 dtp≥50）
+- 每笔 P19 +2.05 / P20 −0.30 / P21 +6.73 / W0 −0.90 / W00 +1.31 / W1 +2.21 / W2 +4.09 / R12 +3.53（**正段 6/8**）
+- R12 70笔 +3.53% PF1.75 MDD−9.2；N3 158笔 +3.30 PF1.87 MDD−8.1；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base(dtp≥50): R12 +3.52 / N3 +3.51 MDD−8.3；d55 R12 +3.53 / N3 +3.30 MDD−8.1 → **B 否**（近三年每笔降）。
+- → **REJECT**。现役 mid-npta-sue-vol 维持 §945 口径（G dtp≥50/orv≥20）；**冻 dtp 轴**。解读：累计 npta∩盈余抬扣非腿无增量（≠QN/FAT 的 d55 路径）。
+
+## §948 [中线·现役改进] 总资产净利率扩张∩盈余加速∩放量 orv硬抬≥25（NPTASUEGVOL_o25_h20）— 预注册（2026-11-03 13:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-npta-sue-vol（§945；§947 已冻 dtp≥50∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；NPTA/SUE/dtp/放量/排序不变。同进程 NPTASUEGVOL_base(orv≥20)。
+- 想法：dtp 轴刚 B 否——镜像 ROY/CAT 路径改试营收腿 orv≥25。B 门对照 base。
+- 去重：NPTASUEGVOL；NPTASUEGVOL_d55；QNSUEGVOL_o25。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；QN orv 已冻≥40。
+- 规则：NPTA∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_npta；K20/max_new5。B 对照 base。
+- 脚本：`nptasuegvol_o25_s948.py` / `run_s948.sh`。
+
+## §949 [中线·现役改进] 每股营收改善∩盈余加速∩放量 dtp硬抬≥55（REVPSSUEGVOL_d55_h20）— 预注册（2026-11-03 13:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-revps-sue-vol（§941：revenue_ps改善≥0.5∩SUE≥2.2∩G∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；REVPS/SUE/orv/放量/排序不变。同进程 REVPSSUEGVOL_base(dtp≥50)。
+- 想法：§941 新策略上线后尚未抬轴——镜像 QN/FAT/EBT_d55 路径。B 门对照 base。
+- 去重：REVPSSUEGVOL；NPTASUEGVOL_d55；QNSUEGVOL_d55。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
+- 规则：REVPS∩SUEG∩vol；G.dtp≥55；sc_revps；K20/max_new5。B 对照 base。
+- 脚本：`revpssuegvol_d55_s949.py` / `run_s949.sh`。
