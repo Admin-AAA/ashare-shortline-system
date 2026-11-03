@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§940 QN_o30 → **ADOPT**（orv≥30）；§941 REVPS∩SUEG → **ADOPT 已上线** `mid-revps-sue-vol`。下一：QN_o35 / 文献腿。
+- 断点：§940/941 ADOPT。§942 QN_o35 + §943 ROAY∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11415,4 +11415,16 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 判定 ✓✓✓✓✓ → **A 过**。新策略无 B。
 - → **ADOPT**。上线（2026-11-03 10:25 CST）：`mid-revps-sue-vol`（kind=`revps_sue_vol`）；FINA_FIELDS 增 `revenue_ps`；`s941_onboard_metrics.py`；replay onboard 21批/66只（2026-08-01~11-02）；`safe_backend_restart`。解读：每股营收改善∩盈余合取成立（≠or_yoy 的 mid-rev-sue-vol；EBITPS∩SUEG 曾否不对称）。
 
+## §942 [中线·现役改进] 单季ROA扩张∩盈余加速∩放量 orv再抬≥35（QNSUEGVOL_o35_h20）— 预注册（2026-11-03 10:38 CST 写于跑任何收益之前）
+- 白话：现役 mid-qn-sue-vol（§940 已抬至 G dtp≥55∩orv≥30）把 **G 内 orv 再硬抬** 到 **≥35**；QN/SUE/dtp/放量/排序不变。同进程 QNSUEGVOL_base(orv≥30)。
+- 想法：§940 o30 刚 ADOPT、QSEXP 曾续抬至40——镜像 QN 营收腿续抬（硬门槛，非 −pct）。B 门对照 base。
+- 去重：QNSUEGVOL_o30；REVPSSUEGVOL；FATSUEGVOL_o30；QSEXPSUEGVOL_o45。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；FAT/ART/DTEPS/QSEXP orv 已冻。
+- 规则：QN∩SUEG∩vol；G.orv≥35（dtp仍≥55）；sc_qn；K20/max_new5。B 对照 base。
+- 脚本：`qnsuegvol_o35_s942.py` / `run_s942.sh`。
 
+## §943 [中线·文献] 年化ROA（roa_yearly）扩张∩盈余加速∩放量（ROAYSUEGVOL_h20）— 预注册（2026-11-03 10:38 CST 写于跑任何收益之前）
+- 白话：roa_yearly 较去年同报告期扩张≥1.0（本期≥3）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δroa_yearly（封顶10）排序；持20。
+- 想法 / 文献：REVPS∩SUEG 刚 ADOPT、ROA/ROA2∩SUEG 已上线——对称试 **roa_yearly 口径∩盈余意外**（硬合取；≠roa/roa2_yearly；字段年化累计）。对照 ROASUEGVOL/ROA2SUEGVOL/QNSUEGVOL。
+- 去重：ROASUEGVOL；ROA2SUEGVOL；QNSUEGVOL；REVPSSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
+- 规则：ROAY∩SUEG∩vol；sc_roay；K20/max_new5。新策略无 B。
+- 脚本：`roaysuegvol_s943.py` / `run_s943.sh`。
