@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§951 EPS∩SUEG → **ADOPT 已上线** mid-eps-sue-vol。下一条待预注册。
+- 断点：§951 EPS∩SUEG → **ADOPT 已上线**。§952 EPS_d55 + §953 TRPS∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11553,3 +11553,16 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - → **ADOPT**。上线（2026-11-03 13:55 CST）：`mid-eps-sue-vol`（kind=`eps_sue_vol`）；FINA_FIELDS 增 `eps`；`s951_onboard_metrics.py`；replay onboard 22批/69只（2026-08-01~11-02）；`safe_backend_restart`。解读：绝对 eps 扩张∩盈余合取成立（≠BEPS/DTEPS 同比口径；彩票型但门过）。
 
 
+## §952 [中线·现役改进] 每股收益扩张∩盈余加速∩放量 dtp硬抬≥55（EPSSUEGVOL_d55_h20）— 预注册（2026-11-03 14:05 CST 写于跑任何收益之前）
+- 白话：现役 mid-eps-sue-vol（§951：eps扩张≥0.10∩SUE≥2.2∩G∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；EPS/SUE/orv/放量/排序不变。同进程 EPSSUEGVOL_base(dtp≥50)。
+- 想法：新策略刚 ADOPT——镜像 REVPS/QN/FAT_d55 路径。B 门对照 base。
+- 去重：EPSSUEGVOL；REVPSSUEGVOL_d55；DTEPSUEGVOL_d55。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；REVPS/NPTA/QN orv 已冻。
+- 规则：EPS∩SUEG∩vol；G.dtp≥55；sc_eps；K20/max_new5。B 对照 base。
+- 脚本：`epssuegvol_d55_s952.py` / `run_s952.sh`。
+
+## §953 [中线·文献] 每股营业总收入（total_revenue_ps）改善∩盈余加速∩放量（TRPSSUEGVOL_h20）— 预注册（2026-11-03 14:05 CST 写于跑任何收益之前）
+- 白话：total_revenue_ps 较去年同报告期改善≥0.5（本期>0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δ（封顶10）排序；持20。
+- 想法 / 文献：REVPS（revenue_ps）刚双轴到站——对称试 **total_revenue_ps 口径∩盈余意外**（硬合取；≠revenue_ps/or_yoy）。对照 REVPSSUEGVOL/REVSUEGVOL。
+- 去重：REVPSSUEGVOL；REVSUEGVOL；EPSSUEGVOL；QSSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
+- 规则：TRPS∩SUEG∩vol；sc_trps；K20/max_new5。新策略无 B。
+- 脚本：`trpssuegvol_s953.py` / `run_s953.sh`。
