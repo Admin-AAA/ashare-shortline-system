@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§942 QN_o35 → **ADOPT 已上线**（orv≥35）。§943 ROAY∩SUEG 已预注册待 SERIAL。
+- 断点：§943 ROAY∩SUEG → **REJECT**（R12 PF）。§944 QN_o40 + §945 NPTA∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11434,3 +11434,22 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：ROASUEGVOL；ROA2SUEGVOL；QNSUEGVOL；REVPSSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
 - 规则：ROAY∩SUEG∩vol；sc_roay；K20/max_new5。新策略无 B。
 - 脚本：`roaysuegvol_s943.py` / `run_s943.sh`。
+
+### §943 ROAYSUEGVOL_h20 — REJECT（A 否·R12 PF）
+- 每笔 P19 +1.18 / P20 +0.04 / P21 +6.86 / W0 −1.08 / W00 +0.02 / W1 +2.77 / W2 +4.45 / R12 +1.55（**正段 7/8**）
+- R12 67笔 +1.55% PF1.28 MDD−8.3；N3 155笔 +2.71 PF1.67 MDD−8.0；彩票型
+- 判定 ✓✗✓✓✓ → **否决**（R12 PF<1.3）。解读：roa_yearly∩SUEG 正段可看但近一年 PF 不足——对照 ROA/ROA2/QN∩SUEG 成立不外推到 roa_yearly。
+
+## §944 [中线·现役改进] 单季ROA扩张∩盈余加速∩放量 orv再抬≥40（QNSUEGVOL_o40_h20）— 预注册（2026-11-03 10:56 CST 写于跑任何收益之前）
+- 白话：现役 mid-qn-sue-vol（§942 已抬至 G dtp≥55∩orv≥35）把 **G 内 orv 再硬抬** 到 **≥40**；QN/SUE/dtp/放量/排序不变。同进程 QNSUEGVOL_base(orv≥35)。
+- 想法：§942 o35 刚 ADOPT——镜像 QSEXP_o40 路径（硬门槛，非 −pct）。B 门对照 base。
+- 去重：QNSUEGVOL_o35；REVPSSUEGVOL；ROAYSUEGVOL；QSEXPSUEGVOL_o40。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；FAT/ART/DTEPS/QSEXP orv 已冻。
+- 规则：QN∩SUEG∩vol；G.orv≥40（dtp仍≥55）；sc_qn；K20/max_new5。B 对照 base。
+- 脚本：`qnsuegvol_o40_s944.py` / `run_s944.sh`。
+
+## §945 [中线·文献] 总资产净利率（npta）扩张∩盈余加速∩放量（NPTASUEGVOL_h20）— 预注册（2026-11-03 10:56 CST 写于跑任何收益之前）
+- 白话：npta 较去年同报告期扩张≥0.5（本期≥1.0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δnpta（封顶5）排序；持20。
+- 想法 / 文献：ROAY∩SUEG 刚因近一年 PF 否、QN（q_npta）已上线并抬 orv——对称试 **累计 npta 口径∩盈余意外**（硬合取；≠q_npta/roa/roa_yearly）。对照 QNSUEGVOL/ROASUEGVOL/ROAYSUEGVOL。
+- 去重：QNSUEGVOL；ROASUEGVOL；ROAYSUEGVOL；ROA2SUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
+- 规则：NPTA∩SUEG∩vol；sc_npta；K20/max_new5。新策略无 B。
+- 脚本：`nptasuegvol_s945.py` / `run_s945.sh`。
