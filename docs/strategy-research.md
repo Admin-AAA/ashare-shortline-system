@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§954 TRPS_d55 → **ADOPT 已上线**（dtp≥55）。§955 EPS_o25 待 SERIAL。
+- 断点：§955 EPS_o25 → **REJECT 冻orv≥20**（EPS 双轴到站）。§956 TRPS_o25 + §957 OPINC∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11603,3 +11603,24 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：EPSSUEGVOL；EPSSUEGVOL_d55；REVPSSUEGVOL_o25。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
 - 规则：EPS∩SUEG∩vol；G.orv≥25（dtp仍≥50）；sc_eps；K20/max_new5。B 对照 base。
 - 脚本：`epssuegvol_o25_s955.py` / `run_s955.sh`。
+
+### §955 EPSSUEGVOL_o25_h20 — REJECT（B 门否；冻 orv≥20）
+- 每笔 P19 +2.70 / P20 −0.46 / P21 +7.25 / W0 +0.47 / W00 +3.14 / W1 +1.16 / W2 +3.51 / R12 +2.64（**正段 7/8**）
+- R12 66笔 +2.64% PF1.50 MDD−9.9；N3 148笔 +2.50 PF1.58 MDD−10.4；彩票型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base(orv≥20): R12 +2.77 / N3 +2.77 MDD−9.8；o25 R12 +2.64 / N3 +2.50 MDD−10.4 → **B 否**（近一年/三年每笔均降；N3 MDD 更深）。
+- → **REJECT**。现役 mid-eps-sue-vol 维持 §951 口径（G dtp≥50/orv≥20）；**冻 orv 轴**。解读：绝对 eps∩盈余抬营收腿无增量——**EPS∩SUEG 双轴到站**（dtp冻≥50 / orv冻≥20）。
+
+
+## §956 [中线·现役改进] 每股营业总收入改善∩盈余加速∩放量 orv硬抬≥25（TRPSSUEGVOL_o25_h20）— 预注册（2026-11-03 14:49 CST 写于跑任何收益之前）
+- 白话：现役 mid-trps-sue-vol（§954 已抬至 G dtp≥55∩orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；TRPS/SUE/dtp/放量/排序不变。同进程 TRPSSUEGVOL_base(orv≥20)。
+- 想法：§954 d55 刚 ADOPT——镜像 REVPS 路径试营收腿。B 门对照 base。
+- 去重：TRPSSUEGVOL_d55；REVPSSUEGVOL_o25；EPSSUEGVOL_o25。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；EPS/REVPS/NPTA/QN orv 已冻。
+- 规则：TRPS∩SUEG∩vol；G.orv≥25（dtp仍≥55）；sc_trps；K20/max_new5。B 对照 base。
+- 脚本：`trpssuegvol_o25_s956.py` / `run_s956.sh`。
+
+## §957 [中线·文献] 营业利润（op_income）扩张∩盈余加速∩放量（OPINCSUEGVOL_h20）— 预注册（2026-11-03 14:49 CST 写于跑任何收益之前）
+- 白话：op_income 较去年同报告期扩张≥20%（本期>0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按扩张率（封顶100）排序；持20。
+- 想法 / 文献：OPSUEG（op_yoy）已上线——对称试 **营业利润绝对额扩张∩盈余意外**（硬合取；≠op_yoy/op_of_gr）。对照 OPSUEGVOL/OPGRSUEGVOL/EBTSUEGVOL。
+- 去重：OPSUEGVOL；OPGRSUEGVOL；EBTSUEGVOL；TRPSSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
+- 规则：OPINC∩SUEG∩vol；sc_opinc；K20/max_new5。新策略无 B。
+- 脚本：`opincsuegvol_s957.py` / `run_s957.sh`。
