@@ -4,7 +4,7 @@ CD="$ROOT/scripts/midterm"; PY="$ROOT/.venv/bin/python"
 OUTD="$ROOT/output/research/s951"; OUT="$OUTD/res.json"; LOG="$OUTD/run.log"
 mkdir -p "$OUTD"; echo "START_S951 $(date)" | tee "$LOG"; rm -f "$OUT" "$OUTD"/trades_*.csv "$OUTD"/eval.txt
 cd "$CD"
-busy() { pgrep -f '/\.venv/bin/python .*(qnsuegvol_o40_s944|nptasuegvol_s951)\.py' >/dev/null; }
+busy() { pgrep -f '/\.venv/bin/python .*(revpssuegvol_o25_s950|epssuegvol_s951)\.py' >/dev/null; }
 routine_busy() {
   local pid etime mins
   pid=$(pgrep -f 'sync_xiaoshi_min_all\.py' | head -1) || return 1
