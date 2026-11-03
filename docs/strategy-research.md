@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§961 equity_yoy∩SUEG → **ADOPT 上线中** mid-equity-sue-vol。下一条待预注册。
+- 断点：§961 equity_yoy∩SUEG → **ADOPT 已上线** mid-equity-sue-vol（15批/27只）。§962 EQUITY_d55 + §963 profit_to_gr∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11684,4 +11684,18 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 
 ### §961 EQUITYSUEGVOL_h20 — ADOPT → 已上线 mid-equity-sue-vol
 - 结果：正段 6/8；R12 +3.30 PF1.55 n36；N3 +3.59 PF1.80 n73 MDD-6.4；质量双彩票。新策略无 B。
-- → **ADOPT**。上线（2026-11-03 16:27 CST）：`mid-equity-sue-vol`（kind=`equity_sue_vol`）；FINA_FIELDS 增 `equity_yoy`；`s961_onboard_metrics.py`；replay onboard（`--execute`）；`safe_backend_restart`。解读：净资产同比∩盈余合取成立（≠已上线 roe_yoy/ROY）。
+- → **ADOPT**。上线（2026-11-03 16:27 CST）：`mid-equity-sue-vol`（kind=`equity_sue_vol`）；FINA_FIELDS 增 `equity_yoy`；`s961_onboard_metrics.py`；replay onboard 15批/27只（2026-08-01~11-02；`--execute`）；`safe_backend_restart`。解读：净资产同比∩盈余合取成立（≠已上线 roe_yoy/ROY）。
+
+## §962 [中线·现役改进] 净资产同比∩盈余加速∩放量 dtp硬抬≥55（EQUITYSUEGVOL_d55_h20）— 预注册（2026-11-03 16:36 CST 写于跑任何收益之前）
+- 白话：现役 mid-equity-sue-vol（§961：equity_yoy≥20∩SUE≥2.2∩G∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；EQUITY/SUE/orv/放量/排序不变。同进程 EQUITYSUEGVOL_base(dtp≥50)。
+- 想法：新策略刚 ADOPT——镜像 OPINC_d55 路径（EBIT_d55 刚 B 否不外推）。B 门对照 base。
+- 去重：EQUITYSUEGVOL；ROYSUEGVOL_d55；OPINCSUEGVOL_d55；EBITSUEGVOL2_d55。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；EBIT dtp 已冻≥50。
+- 规则：EQUITY∩SUEG∩vol；G.dtp≥55；sc_equity；K20/max_new5。B 对照 base。
+- 脚本：`equitysuegvol_d55_s962.py` / `run_s962.sh`。
+
+## §963 [中线·文献] 利润总额/营收∩盈余加速∩放量（PTGSUEGVOL_h20）— 预注册（2026-11-03 16:36 CST 写于跑任何收益之前）
+- 白话：profit_to_gr 较去年同报告期升幅≥1.0pp（本期∈[0,40]）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶10）排序；持20。
+- 想法 / 文献：equity_yoy∩SUEG 刚 ADOPT、OPGR（op_of_gr）已上线——对称试 **利润总额/营收改善∩盈余意外**（硬合取；≠op_of_gr/ebit_of_gr）。对照 OPGRSUEGVOL/NPMSUEGVOL/EBTSUEGVOL。
+- 去重：OPGRSUEGVOL；NPMSUEGVOL；EBTSUEGVOL；EBITSUEGVOL2。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
+- 规则：PTG∩SUEG∩vol；sc_ptg；K20/max_new5。新策略无 B。
+- 脚本：`ptgsuegvol_s963.py` / `run_s963.sh`。
