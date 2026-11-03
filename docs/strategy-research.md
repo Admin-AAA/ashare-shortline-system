@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§952 EPS_d55 → **REJECT 冻dtp≥50**。§953 TRPS∩SUEG 待 SERIAL。
+- 断点：§953 TRPS∩SUEG → **ADOPT 已上线** mid-trps-sue-vol。下一条待预注册。
 
 
 
@@ -11574,3 +11574,11 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：REVPSSUEGVOL；REVSUEGVOL；EPSSUEGVOL；QSSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
 - 规则：TRPS∩SUEG∩vol；sc_trps；K20/max_new5。新策略无 B。
 - 脚本：`trpssuegvol_s953.py` / `run_s953.sh`。
+
+### §953 TRPSSUEGVOL_h20 — ADOPT → 已上线 mid-trps-sue-vol
+- 每笔 P19 +1.28 / P20 −1.08 / P21 +6.97 / W0 −0.26 / W00 +2.61 / W1 +2.92 / W2 +4.51 / R12 +6.55（**正段 6/8**）
+- R12 64笔 +6.55% PF2.40 MDD−8.6；N3 151笔 +4.91 PF2.28 MDD−8.1；彩票型（R12）/稳健型（N3）
+- 判定 ✓✓✓✓✓ → **A 过**（新策略无 B）。
+- → **ADOPT**。上线（2026-11-03 14:13 CST）：`mid-trps-sue-vol`（kind=`trps_sue_vol`）；FINA_FIELDS 增 `total_revenue_ps`；`s953_onboard_metrics.py`；replay onboard；`safe_backend_restart`。解读：total_revenue_ps∩盈余合取成立（≠已上线 revenue_ps；近一年/三年接近 REVPS）。
+
+

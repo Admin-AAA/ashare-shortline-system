@@ -720,6 +720,15 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §953 每股营业总收入改善∩盈余加速∩放量（scripts/midterm/trpssuegvol_s953.py TRPSSUEGVOL_h20；§282 达标；2026-11-03 上线；≠ mid-revps-sue-vol）
+    "mid-trps-sue-vol": {
+        "name": "每股营业总收入改善∩盈余加速∩放量（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足每股营业总收入（total_revenue_ps）较去年同报告期改善≥0.5元（本期>0），与 SUE≥2.2 且业绩加速 G，且信号日成交额≥1.5×前20日均额；按改善额（封顶10）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：每股营业总收入改善 × 盈余惊喜加速 × 量能确认（§953；≠revenue_ps 的 mid-revps-sue-vol；≠or_yoy 的 mid-rev-sue-vol）。",
+        "kind": "trps_sue_vol",
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §735 净负债转净现金∩营业周期∩放量（scripts/midterm/ncstdvol_s735.py NCSTDVOL_h20；§282 达标；2026-11-02 上线）
     "mid-ncs-td-vol": {
         "name": "净负债转净现金∩营业周期∩放量（持20日）",
@@ -2533,6 +2542,20 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
 
+        if meta.get("kind") == "trps_sue_vol":
+            from app.services.midterm_suegvol import trpssuegvol_candidates
+            held = _held_codes(db, sid, as_of)
+            cands = trpssuegvol_candidates(db, as_of)
+            if cands is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in cands if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
+
         if meta.get("kind") == "roa2_sue_vol":
             from app.services.midterm_suegvol import roa2suegvol_candidates
             held = _held_codes(db, sid, as_of)
@@ -3307,6 +3330,11 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p["score"]), 2), "eps扩张(封顶2)×SUEG合取", "higher"
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：eps {_f(p.get('eps_prev'), 2)} → {_f(p.get('eps_cur'), 2)}"
                       f"（扩张 {_f(p.get('eps_dq'), 2)}）∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
+
+        elif kind == "trps_sue_vol":
+            score, label, better = round(float(p["score"]), 2), "每股营业总收入改善(封顶10)×SUEG合取", "higher"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：total_revenue_ps {_f(p.get('trps_prev'), 2)} → {_f(p.get('trps_cur'), 2)}"
+                      f"（改善 {_f(p.get('trps_dq'), 2)}）∩ SUE {_f(p.get('sue'), 2)}；放量 {_f(p.get('vol_ratio'), 2)}×")
 
         elif kind == "roa2_sue_vol":
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')}：roa2_yearly {_f(p.get('roa2_prev'), 2)} → {_f(p.get('roa2_cur'), 2)}"
