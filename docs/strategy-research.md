@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§944 QN_o40 → **ADOPT 已上线**（orv≥40）。§945 NPTA∩SUEG 待 SERIAL。
+- 断点：§945 NPTA∩SUEG → **ADOPT 已上线** mid-npta-sue-vol。下一条待预注册。
 
 
 
@@ -11461,3 +11461,11 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：QNSUEGVOL；ROASUEGVOL；ROAYSUEGVOL；ROA2SUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
 - 规则：NPTA∩SUEG∩vol；sc_npta；K20/max_new5。新策略无 B。
 - 脚本：`nptasuegvol_s945.py` / `run_s945.sh`。
+
+### §945 NPTASUEGVOL_h20 — ADOPT → 已上线 mid-npta-sue-vol
+- 每笔 P19 +2.87 / P20 +0.70 / P21 +7.08 / W0 −0.77 / W00 +0.24 / W1 +2.67 / W2 +4.42 / R12 +3.52（**正段 7/8**）
+- R12 70笔 +3.52% PF1.74 MDD−9.3；N3 160笔 +3.51 PF1.94 MDD−8.3；彩票型（R12 中位负）
+- 判定 ✓✓✓✓✓ → **A 过**（新策略无 B）。
+- → **ADOPT**。上线（2026-11-03 12:13 CST）：`mid-npta-sue-vol`（kind=`npta_sue_vol`）；FINA_FIELDS 增 `npta`；`s945_onboard_metrics.py`；replay onboard 23批/65只（2026-08-01~11-02）；`safe_backend_restart`。解读：累计 npta∩盈余合取成立（≠已上线 QN 单季 / ROA 全年；ROAY 曾因 PF 否不对称）。
+
+
