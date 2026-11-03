@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§968 CURR_d55 REJECT（正段5/8；B过）；冻 CURR dtp。§967 go-live 待 restart。下一对待定。
+- 断点：§969 CASHR_o25 SERIAL 开跑；§968 冻 CURR dtp；§967/§966 restart 仍卡 formal。
 
 
 
@@ -11768,6 +11768,15 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 ### §968 CURRSUEGVOL_d55_h20 — REJECT（A 否·正段）
 - 结果：正段 **5/8**；R12 +5.84 PF2.30 n60；N3 +3.58 PF1.92 n137 MDD-7.0；质量双稳健。B门对照 base(R12+5.31/N3+3.57 MDD-8.4)：**过**（avg↑且N3 MDD不更深）。
 - → **否决**（A 正段不足 5/8）。解读：流动比率∩盈余 dtp 硬抬近窗更好但旧窗 P19/P20 转负——**冻结 CURR 轴 dtp 再抬**（orv 未测；≠已冻 EBIT dtp）。
+
+
+## §969 [中线·现役改进] 现金比率∩盈余加速∩放量 orv硬抬≥25（CASHRSUEGVOL_o25_h20）— 预注册（2026-11-03 18:25 CST 写于跑任何收益之前）
+- 白话：现役 mid-cashr-sue-vol（§966：cash_ratio≥1.0∩SUEG dtp≥55/orv≥20）把 **G 内 orv 硬抬** 到 **≥25**；CASHR/SUE/dtp/放量/排序不变。同进程 CASHRSUEGVOL_base(orv≥20)。
+- 想法：dtp 刚 ADOPT——镜像 EQUITY/QN/FAT_o25 路径。B 门对照 base。
+- 去重：CASHRSUEGVOL_d55；EQUITYSUEGVOL_o25；QUICKSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；CURR dtp/PTG/EBIT dtp 已否。
+- 规则：CASHR∩SUEG∩vol；G.orv≥25（dtp≥55）；sc_cash；K20/max_new5。B 对照 base。
+- 脚本：`cashrsuegvol_o25_s969.py` / `run_s969.sh`。
+
 
 
 
