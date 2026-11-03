@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§961 equity_yoy∩SUEG → **ADOPT 已上线** mid-equity-sue-vol（15批/27只）。§962 EQUITY_d55 + §963 profit_to_gr∩SUEG 已预注册待 SERIAL。
+- 断点：§962 EQUITY_d55 → **ADOPT 上线中**（dtp≥50→≥55）。§963 PTG∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11692,6 +11692,11 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：EQUITYSUEGVOL；ROYSUEGVOL_d55；OPINCSUEGVOL_d55；EBITSUEGVOL2_d55。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；EBIT dtp 已冻≥50。
 - 规则：EQUITY∩SUEG∩vol；G.dtp≥55；sc_equity；K20/max_new5。B 对照 base。
 - 脚本：`equitysuegvol_d55_s962.py` / `run_s962.sh`。
+
+
+### §962 EQUITYSUEGVOL_d55_h20 — ADOPT → 已上线 mid-equity-sue-vol（dtp≥55）
+- 结果：正段 6/8；R12 +4.06 PF1.71 n34；N3 +3.96 PF1.92 n71 MDD-6.2。B门对照 base(R12+3.30/N3+3.59 MDD-6.4)：**过**。
+- → **ADOPT**。上线（2026-11-03 16:40 CST）：`mid-equity-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s962_onboard_metrics.py`；replay 强制覆盖（`--execute`）；`safe_backend_restart`。解读：净资产同比∩盈余上抬扣非腿成立——镜像 OPINC_d55（≠EBIT_d55 B否）。
 
 ## §963 [中线·文献] 利润总额/营收∩盈余加速∩放量（PTGSUEGVOL_h20）— 预注册（2026-11-03 16:36 CST 写于跑任何收益之前）
 - 白话：profit_to_gr 较去年同报告期升幅≥1.0pp（本期∈[0,40]）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按升幅（封顶10）排序；持20。

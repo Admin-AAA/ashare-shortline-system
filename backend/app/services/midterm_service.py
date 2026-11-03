@@ -748,11 +748,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §961 净资产同比∩盈余加速∩放量（scripts/midterm/equitysuegvol_s961.py EQUITYSUEGVOL_h20；§282 达标；2026-11-03 上线；≠ mid-roy-sue-vol）
+    # §961/§962 净资产同比∩盈余加速∩放量（scripts/midterm/equitysuegvol_d55_s962.py EQUITYSUEGVOL_d55_h20；§282+B 达标；dtp≥55；2026-11-03 上线；≠ mid-roy-sue-vol）
     "mid-equity-sue-vol": {
         "name": "净资产同比∩盈余加速∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足净资产同比（equity_yoy）≥20%，与 SUE≥2.2 且业绩加速 G，且信号日成交额≥1.5×前20日均额；按 equity_yoy（封顶100）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：净资产扩张 × 盈余惊喜加速 × 量能确认（§961；≠roe_yoy 的 mid-roy-sue-vol）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足净资产同比（equity_yoy）≥20%，与 SUE≥2.2 且业绩加速 G（扣非同比≥55、营收同比≥20），且信号日成交额≥1.5×前20日均额；按 equity_yoy（封顶100）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：净资产扩张 × 盈余惊喜加速 × 量能确认（§961/§962 dtp≥55；≠roe_yoy 的 mid-roy-sue-vol）。",
         "kind": "equity_sue_vol",
         "hold_days": 20,
         "schedule": "daily",
