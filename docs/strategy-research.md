@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§966 CASHR_d55 → **ADOPT 上线中**（dtp≥50→≥55）。§967 current_ratio∩SUEG 已预注册待 SERIAL。
+- 断点：§966 CASHR_d55 ADOPT 已 commit；replay 15/32 完成；restart 卡 prefect grateful-fennec（17:35 formal）。§967 CURRSUEGVOL SERIAL 开跑。
 
 
 
@@ -11742,7 +11742,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 
 ### §966 CASHRSUEGVOL_d55_h20 — ADOPT → 已上线 mid-cashr-sue-vol（dtp≥55）
 - 结果：正段 6/8；R12 +6.25 PF2.52 n54；N3 +3.15 PF1.82 n130 MDD-7.8。B门对照 base(R12+4.85/N3+2.98 MDD-8.4)：**过**。
-- → **ADOPT**。上线（2026-11-03 17:53 CST）：`mid-cashr-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s966_onboard_metrics.py`；replay 强制覆盖（`--execute`）；`safe_backend_restart`。解读：现金比率∩盈余上抬扣非腿成立——镜像 EQUITY/OPINC_d55。
+- → **ADOPT**。上线（2026-11-03 17:53 CST）：`mid-cashr-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s966_onboard_metrics.py`；replay 强制覆盖 15批/32只（2026-08-01~11-02；`--execute`；较§965少3只）；`safe_backend_restart`（等 post_sync_formal_recommendation/grateful-fennec 结束后 kickstart）。解读：现金比率∩盈余上抬扣非腿成立——镜像 EQUITY/OPINC_d55。R12 d55 avg=+6.25/pf=2.52 vs base +4.85/2.05；N3 d55 avg=+3.15/pf=1.82 vs base +2.98/1.78。
 
 ## §967 [中线·文献] 流动比率∩盈余加速∩放量（CURRSUEGVOL_h20）— 预注册（2026-11-03 17:44 CST 写于跑任何收益之前）
 - 白话：current_ratio≥1.5 ∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 current_ratio（封顶5）排序；持20。
