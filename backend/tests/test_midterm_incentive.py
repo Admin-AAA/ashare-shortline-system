@@ -1,4 +1,4 @@
-"""§109 mid-incentive-option 实盘候选：草案标题过滤 / 180 天首次 / 含期权 / r20 升序（不连库、不联网）。"""
+"""§109 mid-incentive-option 实盘候选：草案标题过滤 / 180 天首次 / 含期权 / 信号日涨跌升序（不连库、不联网）。"""
 import datetime as dt
 
 from app.services import midterm_incentive as mi
@@ -17,15 +17,19 @@ class _Res:
 
 
 class _FakeDB:
-    def __init__(self, dates):
+    def __init__(self, dates, pct=None):
         self.dates = dates
+        self.pct = pct or {}
 
     def execute(self, stmt, params=None):
         sql = str(stmt)
+        params = params or {}
         if "DISTINCT trade_date" in sql:
             return _Res([(d,) for d in self.dates])
         if "FROM stocks" in sql:
-            return _Res([(c, f"N{c}") for c in (params or {}).get("codes", [])])
+            return _Res([(c, f"N{c}") for c in params.get("codes", [])])
+        if "pct_chg" in sql:
+            return _Res([(c, self.pct.get(c)) for c in params.get("codes", [])])
         raise AssertionError(sql)
 
 
@@ -64,7 +68,7 @@ def test_first_events_180_days_and_opt():
     assert ev["000001"]["opt"] and ev["000003"]["opt"]
 
 
-def test_candidates_opt_only_sorted_by_r20(monkeypatch):
+def test_candidates_opt_only_sorted_by_signal_pct(monkeypatch):
     rows = [
         _row("000001", "20261016", "2026年股票期权激励计划（草案）", 1),
         _row("300001", "20261016", "2026年股票期权激励计划（草案）", 2),
@@ -74,10 +78,12 @@ def test_candidates_opt_only_sorted_by_r20(monkeypatch):
     monkeypatch.setattr(mi, "fetch_range", lambda s, e: rows)
     monkeypatch.setattr(mi, "_history_dates", lambda codes, before: {})
     monkeypatch.setattr(ms, "_liq_ok", lambda db, as_of, dates, codes: {c: {"total_mv": 1.0, "amt20": 1e8} for c in codes})
-    monkeypatch.setattr(mi, "_r20", lambda db, as_of, dates, codes: {"000001": 0.12, "300001": -0.05})
-    res = mi.incentive_candidates(_FakeDB(_dates()), "2026-10-16", store=False)
+    # §402：排序看信号日涨跌（越弱越优先）；r20 仍附带，不参与排序。
+    monkeypatch.setattr(mi, "_r20", lambda db, as_of, dates, codes: {"000001": -0.20, "300001": 0.12})
+    res = mi.incentive_candidates(_FakeDB(_dates(), pct={"000001": 2.5, "300001": -1.2}), "2026-10-16", store=False)
     assert [r["code"] for r in res] == ["300001", "000001"]
-    assert res[0]["r20"] == -0.05 and res[0]["opt"]
+    assert res[0]["signal_pct"] == -1.2 and res[0]["opt"]
+    assert res[0]["r20"] == 0.12 and res[1]["r20"] == -0.20
 
 
 def test_fetch_failure_returns_none(monkeypatch):

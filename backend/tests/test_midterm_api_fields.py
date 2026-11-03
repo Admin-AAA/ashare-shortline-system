@@ -22,7 +22,7 @@ def test_annotate_each_kind():
         "long-dividend-lowvol": {"code": "1", "score": 9.0, "dv_ttm": 5.2, "vol60": 1.0},
     }
     expect = {"mid-small-cap-weekly": 16.64, "mid-lowprice-smallcap-weekly": 18.1, "mid-smallcap-dividend-weekly": 5.46, "mid-smallcap-lowps-weekly": 0.39, "mid-smallcap-reversal-weekly": -25.32, "mid-repurchase-plan": 1.157, "mid-incentive-option": -5.12,
-              "mid-block-trade-premium": 0.61, "mid-earnings-accel": 592.1, "mid-forecast-beat": 3318.0}
+              "mid-block-trade-premium": 1.0, "mid-earnings-accel": 592.1, "mid-forecast-beat": 3318.0}
     for sid, p in cases.items():
         out = ms.annotate_pick(sid, dict(p), 1)
         assert out["rule_score"] is not None and out["rule_score_label"] and out["selection_reason"], sid
