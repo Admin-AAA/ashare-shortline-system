@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§938 FAT_o30 → **REJECT**（正段5/8；冻 orv≥25）。§939 EBITPS∩SUEG 已预注册待 SERIAL。
+- 断点：§938/939 REJECT（FAT orv冻≥25；EBITPS A否）。§940 QN_o30 + §941 REVPS∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11384,5 +11384,21 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 规则：EBITPS∩SUEG∩vol；sc_ebitps；K20/max_new5。新策略无 B。
 - 脚本：`ebitpssuegvol_s939.py` / `run_s939.sh`。
 
+### §939 EBITPSSUEGVOL_h20 — REJECT（A 否·R12 PF）
+- 每笔 P19 +3.00 / P20 −1.29 / P21 +7.21 / W0 −0.80 / W00 +2.32 / W1 +2.16 / W2 +4.93 / R12 +1.38（**正段 6/8**）
+- R12 64笔 +1.38% PF1.24 MDD−9.4；N3 145笔 +2.60 PF1.57 MDD−9.0；彩票型
+- 判定 ✓✗✓✓✓ → **否决**（R12 PF<1.3）。解读：每股EBIT∩SUEG 跨年正段可看但近一年 PF 不足——对照 FCFE/OPGR∩SUEG 成立不外推到 ebit_ps。
 
+## §940 [中线·现役改进] 单季ROA扩张∩盈余加速∩放量 orv再抬≥30（QNSUEGVOL_o30_h20）— 预注册（2026-11-03 10:03 CST 写于跑任何收益之前）
+- 白话：现役 mid-qn-sue-vol（§878 已抬至 G dtp≥55∩orv≥25）把 **G 内 orv 再硬抬** 到 **≥30**；QN/SUE/dtp/放量/排序不变。同进程 QNSUEGVOL_base(orv≥25)。
+- 想法：FAT_o30 刚因正段否、DTEPS/ART orv 到站——镜像 QN 营收腿续抬（硬门槛，非 −pct；§878 o25 ADOPT）。B 门对照 base。
+- 去重：QNSUEGVOL_o25；FATSUEGVOL_o30；DTEPSUEGVOL_o30；EBITPSSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；FAT/QSEXP/DTEPS/ART orv 已冻。
+- 规则：QN∩SUEG∩vol；G.orv≥30（dtp仍≥55）；sc_qn；K20/max_new5。B 对照 base。
+- 脚本：`qnsuegvol_o30_s940.py` / `run_s940.sh`。
 
+## §941 [中线·文献] 每股营收改善∩盈余加速∩放量（REVPSSUEGVOL_h20）— 预注册（2026-11-03 10:03 CST 写于跑任何收益之前）
+- 白话：revenue_ps 较去年同报告期改善≥0.5（本期>0）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δrevenue_ps（封顶10）排序；持20。
+- 想法 / 文献：EBITPS∩SUEG 刚因近一年 PF 否、REV∩SUEG（or_yoy加速）已上线——对称试 **每股营收改善∩盈余意外**（硬合取；≠or_yoy/REVSUEG；字段水平差分）。对照 REVSUEGVOL/EBITPSSUEGVOL/FCFESUEGVOL。
+- 去重：REVSUEGVOL；EBITPSSUEGVOL；QSSUEGVOL；OPSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
+- 规则：REVPS∩SUEG∩vol；sc_revps；K20/max_new5。新策略无 B。
+- 脚本：`revpssuegvol_s941.py` / `run_s941.sh`。
