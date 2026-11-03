@@ -46,7 +46,7 @@ for p in "P19 2019:2019-01-01:2020-04-29" "P20 2020:2020-01-01:2021-04-30" "P21 
   run_ph "$n" "$a" "$b" || { ec=$?; [ "$ec" = "99" ] && echo "STOPPED_FOR_MORNING_S960" | tee -a "$LOG"; exit 0; }
 done
 echo "DONE_S960 $(date)" | tee -a "$LOG"
-"$PY" ebitsuegvol_d55_s960.py "$OUT" EBITSUEGVOL2_d55_h20 25 | tee "$OUTD/eval.txt"
+"$PY" s286_287_eval.py "$OUT" EBITSUEGVOL2_d55_h20 25 | tee "$OUTD/eval.txt"
 "$PY" - <<'PY' | tee -a "$OUTD/eval.txt"
 import json
 r=json.load(open("/Users/wangao/Desktop/ashare-shortline-system/backend/output/research/s960/res.json"))

@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§959 EBIT∩SUEG → **ADOPT 已上线** mid-ebit-sue-vol（23批/68只）。§960 EBIT_d55 + §961 equity_yoy∩SUEG 已预注册待 SERIAL。
+- 断点：§960 EBIT_d55 → **REJECT**（B否；冻 dtp≥50）。§961 equity_yoy∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11669,6 +11669,11 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：EBITSUEGVOL2；EBITPSSUEGVOL；OPINCSUEGVOL_d55；EBTSUEGVOL_d55。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；TRPS/EPS/REVPS/NPTA/QN orv 已冻。
 - 规则：EBIT∩SUEG∩vol；G.dtp≥55；sc_ebit；K20/max_new5。B 对照 base。
 - 脚本：`ebitsuegvol_d55_s960.py` / `run_s960.sh`。
+
+
+### §960 EBITSUEGVOL2_d55_h20 — REJECT（B 门否；冻 dtp≥50）
+- 结果：正段 6/8；R12 +3.52 PF1.69 n70；N3 +3.75 PF1.97 n159 MDD-8.0。B门对照 base(R12+3.64/N3+3.51 MDD-8.0)：**否**（R12 均值退步）。
+- → **REJECT**。现役 mid-ebit-sue-vol 维持 §959 口径（G dtp≥50/orv≥20）；**冻 dtp 轴**。解读：EBIT额∩盈余抬扣非腿无增量（≠OPINC/TRPS_d55 路径）。
 
 ## §961 [中线·文献] 净资产同比∩盈余加速∩放量（EQUITYSUEGVOL_h20）— 预注册（2026-11-03 16:18 CST 写于跑任何收益之前）
 - 白话：equity_yoy≥20 ∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 equity_yoy（封顶100）排序；持20。
