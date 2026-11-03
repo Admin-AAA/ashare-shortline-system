@@ -693,11 +693,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §941 每股营收改善∩盈余加速∩放量（scripts/midterm/revpssuegvol_s941.py REVPSSUEGVOL_h20；§282 达标；2026-11-03 上线；≠ mid-rev-sue-vol）
+    # §941/§949 每股营收改善∩盈余加速∩放量（scripts/midterm/revpssuegvol_d55_s949.py REVPSSUEGVOL_d55_h20；§282+B 达标；dtp≥55；2026-11-03 上线；≠ mid-rev-sue-vol）
     "mid-revps-sue-vol": {
         "name": "每股营收改善∩盈余加速∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足每股营业收入（revenue_ps）较去年同报告期改善≥0.5元（本期>0），与 SUE≥2.2 且业绩加速 G，且信号日成交额≥1.5×前20日均额；按改善额（封顶10）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：每股营收改善 × 盈余惊喜加速 × 量能确认（§941；≠ or_yoy 加速的 mid-rev-sue-vol）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足每股营业收入（revenue_ps）较去年同报告期改善≥0.5元（本期>0），与 SUE≥2.2 且业绩加速 G（扣非同比≥55、营收同比≥20；§949 dtp硬抬），且信号日成交额≥1.5×前20日均额；按改善额（封顶10）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：每股营收改善 × 盈余惊喜加速 × 量能确认（§941/§949；≠ or_yoy 加速的 mid-rev-sue-vol）。",
         "kind": "revps_sue_vol",
         "hold_days": 20,
         "schedule": "daily",

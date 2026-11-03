@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§948 NPTA_o25 → **REJECT 冻orv≥20**（NPTA 双轴到站）。§949 REVPS_d55 待 SERIAL。
+- 断点：§949 REVPS_d55 → **ADOPT 已上线**（dtp≥55）。下一条待预注册。
 
 
 
@@ -11517,3 +11517,11 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：REVPSSUEGVOL；NPTASUEGVOL_d55；QNSUEGVOL_d55。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
 - 规则：REVPS∩SUEG∩vol；G.dtp≥55；sc_revps；K20/max_new5。B 对照 base。
 - 脚本：`revpssuegvol_d55_s949.py` / `run_s949.sh`。
+
+### §949 REVPSSUEGVOL_d55_h20 — ADOPT → 已上线（dtp 50→55）
+- 每笔 P19 +0.14 / P20 −0.84 / P21 +7.33 / W0 −0.42 / W00 +2.61 / W1 +2.36 / W2 +4.35 / R12 +6.97（**正段 6/8**）
+- R12 63笔 +6.97% PF2.56 MDD−7.8；N3 146笔 +4.91 PF2.26 MDD−7.9；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base(dtp≥50): R12 +6.30 PF2.32 / N3 +4.82 PF2.24 MDD−8.1；d55 R12 +6.97 PF2.56 / N3 +4.91 PF2.26 MDD−7.9 → **B 过**（近一年/三年每笔均抬；N3 MDD 更浅）。
+- → **ADOPT**。上线（2026-11-03 13:34 CST）：`mid-revps-sue-vol` dtp **≥50→≥55**（orv仍≥20）；`s949_onboard_metrics.py`；replay 强制覆盖 21批/61只（2026-08-01~11-02）；`safe_backend_restart`。解读：每股营收∩盈余上抬扣非腿成立——镜像 QN/FAT/CAT_d55。
+
+
