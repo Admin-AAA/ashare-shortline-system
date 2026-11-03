@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§940/941 ADOPT。§942 QN_o35 + §943 ROAY∩SUEG 已预注册待 SERIAL。
+- 断点：§942 QN_o35 → **ADOPT 已上线**（orv≥35）。§943 ROAY∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11421,6 +11421,12 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：QNSUEGVOL_o30；REVPSSUEGVOL；FATSUEGVOL_o30；QSEXPSUEGVOL_o45。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；FAT/ART/DTEPS/QSEXP orv 已冻。
 - 规则：QN∩SUEG∩vol；G.orv≥35（dtp仍≥55）；sc_qn；K20/max_new5。B 对照 base。
 - 脚本：`qnsuegvol_o35_s942.py` / `run_s942.sh`。
+
+### §942 QNSUEGVOL_o35_h20 — ADOPT → 已上线（orv 30→35）
+- 每笔 P19 +4.78 / P20 +0.58 / P21 +6.30 / W0 −0.48 / W00 +1.38 / W1 +0.69 / W2 +3.73 / R12 +7.39（**正段 7/8**）
+- R12 53笔 +7.39% PF3.24 MDD−5.5；N3 130笔 +4.33 PF2.24 MDD−6.0；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base(orv≥30): R12 +6.26 PF2.56 / N3 +3.93 PF2.05 MDD−7.1；o35 R12 +7.39 PF3.24 / N3 +4.33 PF2.24 MDD−6.0 → **B 过**（近一年/三年每笔与 PF 均抬；N3 MDD 更浅）。
+- → **ADOPT**。上线（2026-11-03 10:44 CST）：`mid-qn-sue-vol` orv **≥30→≥35**（dtp仍≥55）；`s942_onboard_metrics.py`；replay 强制覆盖 19批/41只（2026-08-01~11-02）；`safe_backend_restart`。解读：单季ROA∩盈余营收腿续抬成立——镜像 QSEXP 续抬路径。
 
 ## §943 [中线·文献] 年化ROA（roa_yearly）扩张∩盈余加速∩放量（ROAYSUEGVOL_h20）— 预注册（2026-11-03 10:38 CST 写于跑任何收益之前）
 - 白话：roa_yearly 较去年同报告期扩张≥1.0（本期≥3）∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 Δroa_yearly（封顶10）排序；持20。
