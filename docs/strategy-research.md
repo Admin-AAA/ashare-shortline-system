@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§965 cash_ratio∩SUEG → **ADOPT 上线中** mid-cashr-sue-vol。下一条待预注册。
+- 断点：§965 cash_ratio∩SUEG → **ADOPT 已上线** mid-cashr-sue-vol（15批/35只；restart 待 idle）。§966 CASHR_d55 + §967 current_ratio∩SUEG 已预注册待 SERIAL。
 
 
 
@@ -11730,4 +11730,18 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 
 ### §965 CASHRSUEGVOL_h20 — ADOPT → 已上线 mid-cashr-sue-vol
 - 结果：正段 7/8；R12 +4.85 PF2.05 n58；N3 +2.98 PF1.78 n138 MDD-8.4；质量双稳健。新策略无 B。
-- → **ADOPT**。上线（2026-11-03 17:38 CST）：`mid-cashr-sue-vol`（kind=`cashr_sue_vol`）；FINA_FIELDS 增 `cash_ratio`；`s965_onboard_metrics.py`；replay onboard（`--execute`）；`safe_backend_restart`。解读：现金比率∩盈余合取成立（≠已上线 quick_ratio）。
+- → **ADOPT**。上线（2026-11-03 17:38 CST）：`mid-cashr-sue-vol`（kind=`cashr_sue_vol`）；FINA_FIELDS 增 `cash_ratio`；`s965_onboard_metrics.py`；replay onboard 15批/35只（2026-08-01~11-02；`--execute`）；`safe_backend_restart`。解读：现金比率∩盈余合取成立（≠已上线 quick_ratio）。
+
+## §966 [中线·现役改进] 现金比率∩盈余加速∩放量 dtp硬抬≥55（CASHRSUEGVOL_d55_h20）— 预注册（2026-11-03 17:44 CST 写于跑任何收益之前）
+- 白话：现役 mid-cashr-sue-vol（§965：cash_ratio≥1.0∩SUE≥2.2∩G∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；CASHR/SUE/orv/放量/排序不变。同进程 CASHRSUEGVOL_base(dtp≥50)。
+- 想法：新策略刚 ADOPT——镜像 EQUITY/OPINC_d55 路径。B 门对照 base。
+- 去重：CASHRSUEGVOL；QUICKSUEGVOL_d55；EQUITYSUEGVOL_d55。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；PTG 已否。
+- 规则：CASHR∩SUEG∩vol；G.dtp≥55；sc_cash；K20/max_new5。B 对照 base。
+- 脚本：`cashrsuegvol_d55_s966.py` / `run_s966.sh`。
+
+## §967 [中线·文献] 流动比率∩盈余加速∩放量（CURRSUEGVOL_h20）— 预注册（2026-11-03 17:44 CST 写于跑任何收益之前）
+- 白话：current_ratio≥1.5 ∩ SUE≥2.2∩G∩q_sq>0 ∩ 放量≥1.5×amt20；按 current_ratio（封顶5）排序；持20。
+- 想法 / 文献：cash_ratio∩SUEG 刚 ADOPT、QUICK∩SUEG 已上线——对称试 **流动比率水平∩盈余意外**（硬合取；≠cash_ratio/quick_ratio）。对照 CASHRSUEGVOL/QUICKSUEGVOL。
+- 去重：CASHRSUEGVOL；QUICKSUEGVOL；CRSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
+- 规则：CURR∩SUEG∩vol；sc_curr；K20/max_new5。新策略无 B。
+- 脚本：`currsuegvol_s967.py` / `run_s967.sh`。
