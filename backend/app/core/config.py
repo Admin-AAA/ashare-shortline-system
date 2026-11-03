@@ -161,10 +161,11 @@ class Settings(BaseSettings):
     agent_temperature: float = 0.3
     agent_max_tokens: int = 40000
     agent_skill_weight: float = 0.50
-    # 每个策略（短/中/长线各策略独立计）每个交易日最多「新推荐」的股票数；仅作用于实盘每日出票路径
-    # （formal live run、中长线 generate_picks(apply_daily_cap=True)），不作用于历史/回放/回测。
+    # 每个策略（短/中/长线各策略独立计）每个交易日最多「新推荐」的股票数。
+    # 短线仅 formal live run；中长线实盘 generate_picks(apply_daily_cap=True)，
+    # 中长线历史回放重建（rebuild_replay_picks.replay_midlong）默认也套用。短线回测回放不套。
     # 超出时按该策略自身既有排序取前 N 只，与第 N 名同分的一起顺延，其余记入审计。0 = 不限制。环境变量 ASHARE_MAX_DAILY_PICKS_PER_STRATEGY。
-    # 注意：这不是持仓上限——中长线 20 仓位等持仓口径与本项无关。
+    # 注意：这不是持仓上限——中长线 20 仓位等持仓口径与本项无关。已落盘的旧 replay 文件不会自动变少。
     max_daily_picks_per_strategy: int = 5
     # 正式推荐覆盖全 A 股；"20cm" 仅保留为显式研究实验选项。
     formal_board_universe: str = "all"

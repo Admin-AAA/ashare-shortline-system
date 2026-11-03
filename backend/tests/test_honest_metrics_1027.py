@@ -90,6 +90,19 @@ def test_replay_path_still_overwrites(monkeypatch, tmp_path):
     assert json.loads((tmp_path / "2026-10-26_mid-x.json").read_text())["picks"][0]["code"] == "000002"
 
 
+def test_replay_with_daily_cap_still_overwrites_after_entry(monkeypatch, tmp_path):
+    """回放套上每日上限后，过了入场截止时间仍要能覆盖 staging；实盘路径继续锁死。"""
+    from app.services import midterm_service as ms
+
+    after_open = dt.datetime(2026, 10, 28, 20, 0, tzinfo=CN)
+    with ms.replay_pick_writes():
+        assert _save(ms, monkeypatch, tmp_path, after_open, [{"code": "000001"}], cap=True) == 1
+        assert _save(ms, monkeypatch, tmp_path, after_open, [{"code": "000002"}], cap=True) == 1
+    assert json.loads((tmp_path / "2026-10-26_mid-x.json").read_text())["picks"][0]["code"] == "000002"
+    assert _save(ms, monkeypatch, tmp_path, after_open, [{"code": "600000"}], cap=True) == 1
+    assert json.loads((tmp_path / "2026-10-26_mid-x.json").read_text())["picks"][0]["code"] == "000002"
+
+
 def test_run_summary_does_not_spread_unexecuted_as_zero():
     from app.services.workbench_pure import _summarize_replay_analysis_rows
 

@@ -23,6 +23,10 @@ _PICK_FIELDS = (
 )
 TOP_K = (1, 3, 5, 10)
 ORIGINS = ("live", "late", "replay", "legacy")
+# 策略画像「回放已平仓」：信号日 >= 锚点往前 365 个自然日（含锚点当天）。
+# 与 rolling_r12.month_manifest 的 window_start = cutoff - 365 天同一长度，按信号日而不是平仓日。
+# 研究回测 quality.R12 是上线快照里的固定阶段，样本和名额不同，数字不必相等。
+PORTRAIT_CLOSED_WINDOW_DAYS = 365
 
 
 def _live_runs() -> set[tuple[str, str]]:
@@ -102,13 +106,55 @@ def stats(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def portrait_realized_12m(rows: Iterable[dict[str, Any]], horizon: str, *, today: _dt.date) -> dict[str, Any]:
+    """画像条用的近 12 个月已平仓。按信号日截取，不受调用方 window_days 影响。
+
+    回放格用 by_strategy（窗口内全部来源）。窗口内已有真实前瞻平仓时，前端改读 by_strategy_live，避免把回放算进「前瞻已结算」。
+    已平仓才进入 n/avg/median（见 stats）。前端直接读本块，不再自己算窗口。"""
+    start = (today - _dt.timedelta(days=PORTRAIT_CLOSED_WINDOW_DAYS)).isoformat()
+    windowed = [r for r in rows if str(r.get("signal_date") or "") >= start]
+    live_rows = [r for r in windowed if r.get("origin") == "live"]
+
+    def _by_strategy(pool: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out = []
+        for sid, meta in ms.STRATEGIES.items():
+            if meta.get("horizon") != horizon:
+                continue
+            sr = [r for r in pool if r["strategy_id"] == sid]
+            out.append({"strategy_id": sid, "strategy_name": meta.get("name", sid), "hold_days": ms._hold(sid),
+                        "first_signal": min((r["signal_date"] for r in sr), default=None),
+                        "last_signal": max((r["signal_date"] for r in sr), default=None), **stats(sr)})
+        return out
+
+    return {
+        "window_days": PORTRAIT_CLOSED_WINDOW_DAYS,
+        "window_basis": "signal_date",
+        "window_start": start,
+        "window_end": today.isoformat(),
+        "note": (
+            "策略画像「回放已平仓」用 by_strategy：信号日落在锚点往前 365 个自然日内（含锚点当天）的已平仓，含回放/旧文件。"
+            "该窗口内 by_origin.live.n>0 时，画像改读 by_strategy_live（只含实盘）。"
+            "锚点是本次请求的 today（缺省为当天自然日）。与 rolling_r12 的 window_start=cutoff-365 天同一长度，按信号日。"
+            "研究回测 quality.R12 是上线时的固定阶段快照，引擎名额和重建路径不同，数字不必相等。"
+        ),
+        "by_origin": {o: stats(r for r in windowed if r["origin"] == o) for o in ORIGINS},
+        "by_strategy": _by_strategy(windowed),
+        "by_strategy_live": _by_strategy(live_rows),
+    }
+
+
 def metrics(db, horizon: str, *, origin: str = "all", window_days: int | None = None,
             today: _dt.date | None = None, rows: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """诊断页：总览 KPI + 按策略 + 批内排名 Top-K + 按信号月 + 实盘/回放对照。window_days 按信号日（自然日）截取。"""
-    all_rows = rows if rows is not None else trades(db, horizon)
+    """诊断页：总览 KPI + 按策略 + 批内排名 Top-K + 按信号月 + 实盘/回放对照。window_days 按信号日（自然日）截取。
+
+    portrait_realized_12m 始终按信号日近 365 天另算一份，给策略画像条用，不随 window_days 缩小。"""
+    raw_rows = list(rows) if rows is not None else trades(db, horizon)
+    anchor = today or _dt.date.today()
+    portrait = portrait_realized_12m(raw_rows, horizon, today=anchor)
+    all_rows = raw_rows
     start = None
     if window_days:
-        start = ((today or _dt.date.today()) - _dt.timedelta(days=window_days)).isoformat()
+        start = (anchor - _dt.timedelta(days=window_days)).isoformat()
         all_rows = [r for r in all_rows if r["signal_date"] >= start]
     by_origin = {o: stats(r for r in all_rows if r["origin"] == o) for o in ORIGINS}
     sel = all_rows if origin in (None, "all") else [r for r in all_rows if r["origin"] == origin]
@@ -134,7 +180,7 @@ def metrics(db, horizon: str, *, origin: str = "all", window_days: int | None = 
         "horizon": horizon, "origin": origin or "all", "window_days": window_days, "window_start": start,
         "date_range": {"first_signal": min(dates, default=None), "last_signal": max(dates, default=None)},
         "overview": stats(sel), "by_origin": by_origin, "by_strategy": by_strategy, "top_k": top_k,
-        "by_month": by_month,
+        "by_month": by_month, "portrait_realized_12m": portrait,
     }
 
 

@@ -446,7 +446,9 @@ def horizon_trades(horizon: str, origin: str = _ORIGIN, strategy_id: str | None 
 @router.get("/{horizon}/metrics")
 def horizon_metrics(horizon: str, origin: str = _ORIGIN, window_days: int | None = Query(None, ge=1, le=3650),
                     db: Session = Depends(get_db)):
-    """诊断 / 研究：总览 KPI、按策略、批内排名 Top-K、按信号月、实盘 vs 回放。"""
+    """诊断 / 研究：总览 KPI、按策略、批内排名 Top-K、按信号月、实盘 vs 回放。
+
+    portrait_realized_12m 另给策略画像「回放已平仓」：按信号日近 365 天，不随 window_days 改变。"""
     _check_horizon(horizon)
     return analytics.metrics(db, horizon, origin=origin, window_days=window_days)
 

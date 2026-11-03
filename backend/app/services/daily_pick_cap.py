@@ -1,9 +1,11 @@
-"""每个策略每日新推荐数量上限（用户 2026-10-26 决策：每策略每天最多推荐 5 只，历史不动）。
+"""每个策略每日新推荐数量上限（用户 2026-10-26：每策略每天最多推荐 5 只；2026-11-03：中长线历史回放同样套用）。
 
 - 上限来自 settings.max_daily_picks_per_strategy（默认 5，0 = 不限制），不在各处硬编码。
-- 只作用于**新产生的实盘推荐**：短线走 ProductionRecommendationAssembly（仅 live formal run），
-  中长线走 midterm_service.generate_picks(apply_daily_cap=True)（仅定时任务 / 手动补跑 API / 晚间大宗任务）。
-  回放、回测、历史重建、单股分析不经此处，行为不变。
+- 短线只作用于新产生的实盘推荐：ProductionRecommendationAssembly（仅 live formal run）。
+  短线回测回放、单股分析不经此处。
+- 中长线实盘走 generate_picks(apply_daily_cap=True)（定时任务 / 手动补跑 API / 晚间大宗任务）；
+  中长线历史回放重建走 scripts/rebuild_replay_picks.replay_midlong（默认 apply_daily_cap=True），同一套切片与同分顺延。
+  已落盘的旧 replay 文件不会自动改写。
 - 取前 N 的依据永远是该策略**自己已有的排序**（本模块不重排，只切片）：
   短线 = 选股政策输出顺序（portfolio_rank_score 降序，即 final_score 扣行业分散惩罚后）；中长线 = 各策略 candidates 函数返回顺序（见 midterm 各 meta 的排序键）。
 - 同分顺延（用户 2026-10-27）：先取前 N 只，再把和第 N 名同分的票一起带上；其后更低分的不要。

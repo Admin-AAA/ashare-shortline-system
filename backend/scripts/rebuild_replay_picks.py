@@ -11,6 +11,11 @@
 - 中线/长线：调用生产 midterm_service.generate_picks（同一套选股代码），OUT_DIR 临时重定向到
   staging 目录逐日顺序生成（持仓去重 _held_codes 与实盘一致），每个批次 JSON 加
   "origin": "replay"；收益由 _realize 按日K实时计算（与实盘相同）。无 origin 字段 = live。
+  默认套与实盘相同的每日新推荐上限（settings.max_daily_picks_per_strategy，默认 5，同分顺延），
+  截断写入批次 daily_cap。这不是持仓上限。已落盘的旧 replay 文件不会因代码更新自动变少，
+  需要 --execute 换盘，见 docs/ops/daily-pick-cap-20261026.md。
+  回放在 replay_pick_writes() 内落盘：历史日已过 D+1 09:15，仍允许覆盖 staging 里的旧文件。
+  短线历史重建（replay_all_days.py）不走这条上限。
 
 用法：
   python scripts/rebuild_replay_picks.py --dry-run --date-range 2026-10-12:2026-10-16
@@ -122,9 +127,12 @@ MID_RETRY_WAITS = (120, 300, 600, 900)  # 同一天 no_data/error 的策略按�
 
 
 def replay_midlong(db, start: str, end: str, strategies: list[str] | None, staging: Path,
-                   stop_at: dt.time | None = None, *, apply_daily_cap: bool = False,
+                   stop_at: dt.time | None = None, *, apply_daily_cap: bool = True,
                    retry_waits: tuple[int, ...] | None = None) -> dict:
     """在 staging 目录里逐交易日顺序跑生产 generate_picks；返回统计。不碰生产 OUT_DIR。
+
+    apply_daily_cap 默认 True：与实盘同一套每日新推荐上限（含同分顺延）。中线和长线都走本函数。
+    传 False 只用于对照，正式重建、onboard、dry-run、滚动 R12 都不要关。
 
     可续跑：staging 旁的 progress.json 记录已完成到哪一天，同一 staging 再跑从下一天接着做
     （_held_codes 只看 staging 里 as_of 之前的批次，顺序不被打乱）。某天有策略 no_data/error 时
@@ -148,32 +156,33 @@ def replay_midlong(db, start: str, end: str, strategies: list[str] | None, stagi
     mf._store_live = lambda new: None
     t0 = time.time()
     try:
-        for d in _trade_dates(db, start, end):
-            if d <= prog.get("done_through", ""):
-                continue
-            if stop_at and dt.datetime.now().time() >= stop_at and dt.datetime.now().time() < dt.time(16, 0):
-                stats["stopped"] = True
-                break
-            pending, waits = strategies, list(MID_RETRY_WAITS if retry_waits is None else retry_waits)
-            while True:
-                res = ms.generate_picks(db, d, strategy_ids=pending, apply_daily_cap=apply_daily_cap)
-                bad = [sid for sid, raw in res.items()
-                       if raw == "no_data" or (isinstance(raw, dict) and "error" in raw)]
-                if not bad or not waits:
+        with ms.replay_pick_writes():
+            for d in _trade_dates(db, start, end):
+                if d <= prog.get("done_through", ""):
+                    continue
+                if stop_at and dt.datetime.now().time() >= stop_at and dt.datetime.now().time() < dt.time(16, 0):
+                    stats["stopped"] = True
                     break
-                w = waits.pop(0)
-                print(f"[midlong] {d} retry {bad} in {w}s", flush=True)
-                time.sleep(w)
-                pending = bad
-            for sid, raw in res.items():
-                if isinstance(raw, dict) and "error" in raw:
-                    stats["errors"].setdefault(sid, []).append(d)
-                elif raw == "no_data":  # 多为数据源限流/缺数，必须为 0 才算干净重建
-                    stats["no_data"].setdefault(sid, []).append(d)
-            stats["days"] += 1
-            prog = {"done_through": d, "errors": stats["errors"], "no_data": stats["no_data"]}
-            prog_f.write_text(json.dumps(prog, ensure_ascii=False))
-            print(f"[midlong] done {d} bad={bad}", flush=True)
+                pending, waits = strategies, list(MID_RETRY_WAITS if retry_waits is None else retry_waits)
+                while True:
+                    res = ms.generate_picks(db, d, strategy_ids=pending, apply_daily_cap=apply_daily_cap)
+                    bad = [sid for sid, raw in res.items()
+                           if raw == "no_data" or (isinstance(raw, dict) and "error" in raw)]
+                    if not bad or not waits:
+                        break
+                    w = waits.pop(0)
+                    print(f"[midlong] {d} retry {bad} in {w}s", flush=True)
+                    time.sleep(w)
+                    pending = bad
+                for sid, raw in res.items():
+                    if isinstance(raw, dict) and "error" in raw:
+                        stats["errors"].setdefault(sid, []).append(d)
+                    elif raw == "no_data":  # 多为数据源限流/缺数，必须为 0 才算干净重建
+                        stats["no_data"].setdefault(sid, []).append(d)
+                stats["days"] += 1
+                prog = {"done_through": d, "errors": stats["errors"], "no_data": stats["no_data"]}
+                prog_f.write_text(json.dumps(prog, ensure_ascii=False))
+                print(f"[midlong] done {d} bad={bad}", flush=True)
     finally:
         ms.OUT_DIR, ms._store_repurchase_events = orig_out, orig_store
         mf._fetch_forecast_day, mf._store_live = orig_fc_fetch, orig_fc_store

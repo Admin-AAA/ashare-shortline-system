@@ -6,6 +6,8 @@
 from __future__ import annotations
 
 import bisect
+import contextlib
+import contextvars
 import datetime as _dt
 import json
 import logging
@@ -1686,20 +1688,40 @@ def check_daily_basic_staleness(db, as_of: str, max_lag: int = 1) -> dict[str, A
     return info
 
 
+# 历史回放落盘时为 True：仍可套每日上限，但不再用实盘封签挡住覆盖。
+# 默认 False。实盘 generate_picks(apply_daily_cap=True) 不进 replay_pick_writes，过了入场截止时间不覆盖。
+_REPLAY_OVERWRITE: contextvars.ContextVar[bool] = contextvars.ContextVar("midterm_replay_overwrite", default=False)
+
+
+@contextlib.contextmanager
+def replay_pick_writes():
+    """历史回放/重建写 picks：允许覆盖已过入场截止时间的文件。
+
+    回放 staging 里的历史日必然已过 D+1 09:15。若和实盘共用「过截止时间不覆盖」，
+    重跑无法把旧的无帽批次换成加帽后的文件。本上下文只放开覆盖，不改变上限本身。"""
+    token = _REPLAY_OVERWRITE.set(True)
+    try:
+        yield
+    finally:
+        _REPLAY_OVERWRITE.reset(token)
+
+
 def _save_picks(sid: str, as_of: str, picks: list[dict[str, Any]], apply_daily_cap: bool = False) -> int:
     """落盘一个策略当日新选股文件，返回实际入选只数。
 
-    apply_daily_cap=True（仅实盘出票路径）：picks 已是该策略自身排序（各 *_candidates 的排序键）并剔除已持有，
+    apply_daily_cap=True：picks 已是该策略自身排序（各 *_candidates 的排序键）并剔除已持有，
     这里只切前 N 只，与第 N 名同分的顺延（settings.max_daily_picks_per_strategy，默认 5，0=不限），被截断的数量与代码写入文件 daily_cap 审计字段。
-    不是持仓上限：20 仓位（回测口径）、持有 20/60 日与此无关。
+    实盘（17:35 / 手动补跑 / 晚间大宗）和中长线历史回放重建（scripts/rebuild_replay_picks.py）都传 True。
+    直接调用且不传时不截断，便于单测构造候选。不是持仓上限：20 仓位（回测口径）、持有 20/60 日与此无关。
 
-    封签（midterm_live_seal）：每个批次写入 generated_at / entry_deadline（D+1 09:15）。实盘路径（apply_daily_cap=True）
-    过了 D+1 09:15 后不再覆盖已落盘的批次——开盘后重跑不能改写已生效的实盘记录；没有旧文件时照常落盘，但
-    generated_at 晚于 entry_deadline，统计时记为「补跑」（late），不算实盘。"""
+    封签（midterm_live_seal）：每个批次写入 generated_at / entry_deadline（D+1 09:15）。
+    实盘路径（apply_daily_cap=True 且不在 replay_pick_writes 内）过了 D+1 09:15 后不再覆盖已落盘的批次——
+    开盘后重跑不能改写已生效的实盘记录；没有旧文件时照常落盘，但 generated_at 晚于 entry_deadline，统计时记为「补跑」（late），不算实盘。
+    回放重建在 replay_pick_writes 内，过了截止时间也覆盖。"""
     from app.services import midterm_live_seal as seal
 
     path = OUT_DIR / f"{as_of}_{sid}.json"
-    if apply_daily_cap and path.exists() and seal.past_deadline(as_of):
+    if apply_daily_cap and not _REPLAY_OVERWRITE.get() and path.exists() and seal.past_deadline(as_of):
         try:
             kept = len(json.loads(path.read_text()).get("picks") or [])
         except Exception:  # noqa: BLE001 - 读不出旧文件也不覆盖，宁可少一批也不改写实盘记录
@@ -1730,8 +1752,9 @@ def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = No
     horizon / strategy_ids 只用于手动补跑（POST /api/horizons/{mid,long}/run），默认 None = 17:35 全部策略。
     幂等：同一 as_of 重跑覆盖同一文件；_held_codes 只看 as_of 之前的批次。
 
-    apply_daily_cap：每策略每日新推荐上限（settings.max_daily_picks_per_strategy，默认 5）。仅实盘调用方
-    （17:35 定时任务 / 手动补跑 API）传 True；默认 False，历史重建/回放（scripts/rebuild_replay_picks.py）与既有测试不受影响。"""
+    apply_daily_cap：每策略每日新推荐上限（settings.max_daily_picks_per_strategy，默认 5，同分顺延）。
+    实盘（17:35 定时任务 / 手动补跑 API）与历史回放重建（scripts/rebuild_replay_picks.replay_midlong，默认 True）都传 True。
+    本函数默认仍是 False：不带开关的直接调用和既有单测不截断。回放必须包在 replay_pick_writes() 里，否则过了入场截止时间不会覆盖旧文件。"""
     d = _dt.date.fromisoformat(as_of)
     try:
         check_daily_basic_staleness(db, as_of)

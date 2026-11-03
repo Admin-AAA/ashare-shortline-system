@@ -25,7 +25,8 @@
 
 - 每个策略每天最多取 **前 5 只**（`ASHARE_MAX_DAILY_PICKS_PER_STRATEGY`，默认 5，0 = 不限）。
 - 同分顺延：和第 5 名同分的一起出。例：100,100,90,90,90,80 → 5 只；10 只全满分 → 10 只。
-- 只作用于新生成的实盘推荐，回放、回测、历史数据不受影响。
+- 中长线的实盘出票和历史回放重建都套这个上限；短线只套在实盘 formal run，短线回测回放不受影响。
+- 这是当天新推荐数，不是持仓上限。已经落盘的旧回放文件不会自动变少，重跑步骤见 `docs/ops/daily-pick-cap-20261026.md`。
 - 短线还有一道更早的出票上限：每个策略每次 run 最多 3 张（`DEFAULT_OUTPUT_COUNT`，高潮日减半）。
 - 详见 `docs/ops/daily-pick-cap-20261026.md`，实现在 `backend/app/services/daily_pick_cap.py`。
 
