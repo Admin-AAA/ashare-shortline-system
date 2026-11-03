@@ -739,11 +739,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §959 EBIT绝对额扩张∩盈余加速∩放量（scripts/midterm/ebitsuegvol2_s959.py EBITSUEGVOL2_h20；§282 达标；2026-11-03 上线；≠ mid-ebt-sue-vol / ebit_ps）
+    # §959/§971 EBIT绝对额扩张∩盈余加速∩放量（scripts/midterm/ebitsuegvol2_o25_s971.py EBITSUEGVOL2_o25_h20；§282+B 达标；orv≥25，dtp冻≥50；2026-11-03 上线；≠ mid-ebt-sue-vol / ebit_ps）
     "mid-ebit-sue-vol": {
         "name": "EBIT额扩张∩盈余加速∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足 EBIT>0 且较去年同报告期扩张≥20%，与 SUE≥2.2 且业绩加速 G，且信号日成交额≥1.5×前20日均额；按扩张率（封顶100）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：EBIT绝对额扩张 × 盈余惊喜加速 × 量能确认（§959；≠ebit_ps；≠ebt_yoy 的 mid-ebt-sue-vol；≠op_income 的 mid-opinc-sue-vol）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足 EBIT>0 且较去年同报告期扩张≥20%，与 SUE≥2.2 且业绩加速 G（扣非同比≥50、营收同比≥25），且信号日成交额≥1.5×前20日均额；按扩张率（封顶100）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：EBIT绝对额扩张 × 盈余惊喜加速 × 量能确认（§959/§971 orv≥25，dtp冻≥50；≠ebit_ps；≠ebt_yoy 的 mid-ebt-sue-vol；≠op_income 的 mid-opinc-sue-vol）。",
         "kind": "ebit_sue_vol",
         "hold_days": 20,
         "schedule": "daily",
