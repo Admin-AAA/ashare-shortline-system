@@ -11261,12 +11261,13 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - R12 55笔 +3.87% PF1.90 MDD−5.1；N3 126笔 +4.18 PF2.21 MDD−5.6；稳健型
 - 判定 ✓✓✓✗✓ → **否决**（正段不足）。解读：累计毛利率∩SUEG 正段不够——对照 QGC∩SUEG 样本稀、QSEXP∩SUEG 成立不外推；**grossprofit_margin∩SUEG 暂缓**（与 q_gc_to_gr∩SUEG 同族记暂缓；勿硬抬凑正段）。
 
-## 早间例行进度（2026-11-03 ~08:58 CST）
-- 健康：8765 /api/health 200；swap 高（~10G used）→ 研究 SERIAL。
-- 选股核：MID 2026-11-02 — ok 4 / no_signal 12 / not_signal_day 5 / data_error 1（`mid-forecast-slight-underreact` KeyError: 'top_n'）；另 2026-10-30 data_error：`mid-dividend-increase`、`mid-dividend-increase-vol`、`mid-forecast-slight-vol`。LONG 3/3 ok（2026-10-30）。短线 skills 正常（无独立 horizons/short）。
-- §932 QSEXPSUEGVOL_o35 → **ADOPT 已上线**：R12 +10.55 PF4.65 MDD−4.1 n=38；N3 +5.31 PF2.49 MDD−4.8 n=81；`mid-qsexp-sue-vol` orv≥35；replay 11批/23只（2026-08-01~11-02）。HEAD `c10f3983`。
+## 早间例行进度（2026-11-03 ~09:06 CST）
+- 健康：8765 /api/health 200；swap 高 → 研究 SERIAL。
+- 选股核：MID 2026-11-02 — ok 4 / no_signal 12 / not_signal_day 5 / data_error 1（`mid-forecast-slight-underreact` KeyError: 'top_n'）；另 2026-10-30 data_error：`mid-dividend-increase`、`mid-dividend-increase-vol`、`mid-forecast-slight-vol`。LONG 3/3 ok（2026-10-30）。短线 skills 正常。
+- §932 QSEXPSUEGVOL_o35 → **ADOPT 已上线**（orv≥35）。
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
-- 断点：§934 QSEXP_o40 + §935 ART_o30 已预注册；§934 SERIAL 开跑中。
+- §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**：R12 +12.68 PF5.72 MDD−4.3 n=36；N3 +6.86 PF3.09 MDD−4.2 n=75；B门对照 base(orv≥35) 过；`mid-qsexp-sue-vol` orv≥40；replay 11批/23只。
+- 断点：§935 ART_o30 SERIAL 开跑中。
 
 
 
@@ -11316,6 +11317,12 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：QSEXPSUEGVOL_o35；QGCSUEGVOL；GPMSUEGVOL。非仓位。不碰数据网关。毛利率∩SUEG / 有息/去杠杆∩SUEG 仍暂缓。
 - 规则：QSEXP∩SUEG∩vol；G.orv≥40（dtp仍≥55）；sc_qsexp；K20/max_new5。B 对照 base。
 - 脚本：`qsexpsuegvol_o40_s934.py` / `run_s934.sh`。
+
+### §934 QSEXPSUEGVOL_o40_h20 — ADOPT → 已上线（orv 35→40）
+- 每笔 P19 +4.36 / P20 −0.95 / P21 +5.13 / W0 +0.88 / W00 +2.38 / W1 +1.05 / W2 +1.90 / R12 +12.68（**正段 7/8**）
+- R12 36笔 +12.68% PF5.72 MDD−4.3；N3 75笔 +6.86 PF3.09 MDD−4.2；稳健型
+- 判定 ✓✓✓✓✓ → **A 过**。B门对照 base(orv≥35): R12 +10.55 PF4.65 / N3 +5.31 PF2.49 MDD−4.8；o40 R12 +12.68 PF5.72 / N3 +6.86 PF3.09 MDD−4.2 → **B 过**（近一年/三年每笔均抬；N3 MDD 更浅）。
+- → **ADOPT**。上线（2026-11-03 09:06 CST）：`mid-qsexp-sue-vol` orv **≥35→≥40**（dtp仍≥55）；`s934_onboard_metrics.py`；replay 强制覆盖 11批/23只（2026-08-01~11-02）；`safe_backend_restart`。解读：单季销售费用率∩盈余营收腿续抬成立——镜像 SEXPSUEG_o40。
 
 ## §935 [中线·现役改进] 应收周转扩张∩盈余加速∩放量 orv再抬≥30（ARTSUEGVOL_o30_h20）— 预注册（2026-11-03 08:58 CST 写于跑任何收益之前）
 - 白话：现役 mid-art-sue-vol（§887 已抬至 G dtp≥50∩orv≥25；dtp轴已冻）把 **G 内 orv 再硬抬** 到 **≥30**；ART/SUE/dtp/放量/排序不变。同进程 ARTSUEGVOL_base(orv≥25)。
