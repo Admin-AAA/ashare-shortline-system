@@ -273,10 +273,19 @@ export type HorizonTradesResponse = { horizon: string; origin: string; total: nu
 export type HorizonStats = { n: number; win_rate: number | null; avg_ret: number | null; median_ret: number | null; total_ret: number | null;
   pl_ratio: number | null; profit_factor: number | null; avg_win: number | null; avg_loss: number | null; max_gain: number | null; max_loss: number | null;
   avg_days: number | null; delayed_exit: number; holding: number; pending: number; skipped: number; total_picks: number };
+export type HorizonStrategyStats = HorizonStats & { strategy_id: string; strategy_name: string; hold_days: number; first_signal: string | null; last_signal: string | null };
+/** 策略画像「回放已平仓」：后端按信号日截近 365 天，不随诊断页 window_days 改变。 */
+export type HorizonPortraitRealized = {
+  window_days: number; window_basis: string; window_start: string; window_end: string; note?: string;
+  by_origin: Record<HorizonOrigin, HorizonStats>; by_strategy: HorizonStrategyStats[];
+  /** 窗口内只有实盘已平仓。live.n>0 时画像条改读这份，避免把回放算进「前瞻已结算」。 */
+  by_strategy_live?: HorizonStrategyStats[];
+};
 export type HorizonMetricsResponse = { horizon: string; origin: string; window_days: number | null; window_start: string | null;
   date_range: { first_signal: string | null; last_signal: string | null }; overview: HorizonStats; by_origin: Record<HorizonOrigin, HorizonStats>;
-  by_strategy: (HorizonStats & { strategy_id: string; strategy_name: string; hold_days: number; first_signal: string | null; last_signal: string | null })[];
-  top_k: (HorizonStats & { k: number })[]; by_month: (HorizonStats & { month: string })[] };
+  by_strategy: HorizonStrategyStats[];
+  top_k: (HorizonStats & { k: number })[]; by_month: (HorizonStats & { month: string })[];
+  portrait_realized_12m?: HorizonPortraitRealized };
 export type HorizonRunItem = { strategy_id: string; strategy_name: string; status: string; recorded_at?: string | null; picks: number | null; detail: string | null };
 export type HorizonRunsResponse = { horizon: string; days: { date: string; items: HorizonRunItem[] }[] };
 export type HorizonPickDetail = { horizon: string; strategy_id: string; strategy_name: string; strategy_summary?: string; hold_days?: number; signal_date: string; code: string; name: string;

@@ -8,7 +8,8 @@ cd backend
 REPLAY_AUTO_BACKFILL_ENABLED=1 .venv/bin/python scripts/rebuild_replay_picks.py --onboard <strategy_id> --execute
 ```
 - 复用生产 `generate_picks`，只跑该策略，最近 3 个月逐交易日顺序生成（持仓去重与实盘一致）。
-- 批次 JSON 带 `"origin": "replay"`、`replayed_at`；无 origin = 实盘。已存在的同名文件不覆盖。
+- 默认套每策略每日新推荐上限（`max_daily_picks_per_strategy`，默认 5，同分顺延），截断写入 `daily_cap`。这不是持仓上限。
+- 批次 JSON 带 `"origin": "replay"`、`replayed_at`；无 origin = 实盘。已存在的同名文件不覆盖，所以已经落盘的无帽批次不会被 `--onboard` 改少；要换旧文件见 `docs/ops/daily-pick-cap-20261026.md` 的 `--execute`。
 - 不带 `--execute` 为试跑（临时目录，不写生产）。输出里 `no_data` 必须为空，否则多半是数据源限流，换时段重跑。
 - 避开 16:35–18:35；不与全量 pytest / 其他大回测同时跑。
 

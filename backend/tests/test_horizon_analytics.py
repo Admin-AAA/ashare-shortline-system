@@ -83,6 +83,58 @@ def test_metrics_breakdowns(tmp_path, monkeypatch):
     assert w["window_start"] == "2026-09-21" and w["overview"]["n"] == 0 and w["overview"]["holding"] == 1
 
 
+def test_portrait_realized_12m_drops_older_signal_dates(tmp_path, monkeypatch):
+    """画像条窗口按信号日近 365 天；全历史 overview 仍含更早的已平仓。调用方 window_days 不缩小这一块。"""
+    _setup(tmp_path, monkeypatch, REALIZED)
+    _write(ms.OUT_DIR, "2024-01-02_mid-repurchase-plan.json", {
+        "strategy_id": "mid-repurchase-plan", "signal_date": "2024-01-02", "origin": "replay",
+        "picks": [{"code": "OLD", "ratio": 0.01}],
+    })
+    realized = {**REALIZED, "OLD": {"status": "closed", "ret": 99.0, "days": 20}}
+    monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: dict(realized[c]))
+    today = dt.date(2026, 10, 21)
+    m = ha.metrics(None, "mid", today=today)
+    assert m["overview"]["n"] == 4  # A B C OLD 已平仓；D 持有、E 取消不计入
+    full = {s["strategy_id"]: s for s in m["by_strategy"]}
+    assert full["mid-repurchase-plan"]["n"] == 3  # A B + OLD
+
+    p = m["portrait_realized_12m"]
+    assert p["window_days"] == 365 and p["window_basis"] == "signal_date"
+    assert p["window_start"] == "2025-10-21" and p["window_end"] == "2026-10-21"
+    assert "信号日" in p["note"]
+    by = {s["strategy_id"]: s for s in p["by_strategy"]}
+    assert by["mid-repurchase-plan"]["n"] == 2  # 2026-09-01 的 A、B；2024-01-02 的 OLD 在窗口外
+    assert by["mid-repurchase-plan"]["avg_ret"] == 2.5
+    assert p["by_origin"]["replay"]["n"] == 2 and p["by_origin"]["live"]["n"] == 0
+
+    narrowed = ha.metrics(None, "mid", window_days=30, today=today)
+    assert narrowed["overview"]["n"] == 0 and narrowed["window_start"] == "2026-09-21"
+    still = {s["strategy_id"]: s for s in narrowed["portrait_realized_12m"]["by_strategy"]}
+    assert still["mid-repurchase-plan"]["n"] == 2
+    assert narrowed["portrait_realized_12m"]["window_start"] == "2025-10-21"
+    live_only = {s["strategy_id"]: s for s in p["by_strategy_live"]}
+    assert live_only["mid-repurchase-plan"]["n"] == 0
+
+
+def test_portrait_live_series_excludes_replay(tmp_path, monkeypatch):
+    _setup(tmp_path, monkeypatch, REALIZED)
+    _write(ms.OUT_DIR, "2026-10-02_mid-repurchase-plan.json", {
+        "strategy_id": "mid-repurchase-plan", "signal_date": "2026-10-02",
+        "picks": [{"code": "LIV", "ratio": 0.01}],
+    })
+    _write(ms.OUT_DIR.parent / "status", "2026-10-02.json", {
+        "mid-repurchase-plan": {"status": "ok", "raw": 1, "recorded_at": "2026-10-02T10:00:00Z"},
+    })
+    realized = {**REALIZED, "LIV": {"status": "closed", "ret": 1.0, "days": 20}}
+    monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: dict(realized[c]))
+    p = ha.metrics(None, "mid", today=dt.date(2026, 10, 21))["portrait_realized_12m"]
+    by = {s["strategy_id"]: s for s in p["by_strategy"]}
+    live = {s["strategy_id"]: s for s in p["by_strategy_live"]}
+    assert p["by_origin"]["live"]["n"] == 1
+    assert by["mid-repurchase-plan"]["n"] == 3  # 回放 A/B + 实盘 LIV
+    assert live["mid-repurchase-plan"]["n"] == 1 and live["mid-repurchase-plan"]["avg_ret"] == 1.0
+
+
 def test_runs(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch, REALIZED)
     days = ha.runs("mid")

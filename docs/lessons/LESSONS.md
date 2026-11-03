@@ -2009,3 +2009,11 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 证据：`news_announcement` 只有标题和最多 500 字摘要；旧关键词几乎只判利空，且会把「解除ST风险警示」「减持计划完成」判成利空。`feature_builder` 的 `news_risk_count` 在实盘/回测路径上被写成 0，这些标签没有进入现有策略。
 - 永久规则：`text_event` / `text_event_label` 只供展示和研究超额收益。不得写入 `feature_builder`、`research_runner`、推荐排序、回测成交或结算。LLM 默认关闭（`ASHARE_TEXT_EVENT_LLM_ENABLED`）。提示词不得包含股价或后续走势；只有日期的公告按盘后处理。
 - 吸收位置：`docs/text-event-labels.md`，`backend/tests/test_text_event_labels.py`。
+
+## L-196 中长线历史回放与实盘共用每日新推荐上限
+
+- 状态：encoded
+- 适用：中线/长线 `rebuild_replay_picks.replay_midlong`、策略画像条「回放已平仓」
+- 证据：重建路径曾默认 `apply_daily_cap=False`，同一策略同一天可以落出几十只（如 2026-10-30 `mid-turn-days-vol` 43 只）；实盘 17:35 / 手动补跑才截到默认 5 只（同分顺延）。画像条把该策略全部已平仓混在一格，和「近12个月」的展示意图不一致。
+- 永久规则：中线与长线的历史回放重建默认套 `settings.max_daily_picks_per_strategy`（同分顺延、`daily_cap` 审计），与实盘同一套；这只限制当天新推荐数，不是持仓上限。短线回测回放仍不套。回放落盘必须能覆盖已过 D+1 09:15 的 staging 文件，实盘批次过截止时间仍不覆盖。已落盘的旧 replay 文件不会因代码更新自动变少，要在生产机按 `docs/ops/daily-pick-cap-20261026.md` 重跑 `--execute`。画像条「回放已平仓」只统计信号日近 365 个自然日，由 `portrait_realized_12m` 返回；不要把它说成与研究 `quality.R12` 数字相同。
+- 吸收位置：`docs/ops/daily-pick-cap-20261026.md`，`backend/scripts/rebuild_replay_picks.py`，`backend/app/services/horizon_analytics.py`。

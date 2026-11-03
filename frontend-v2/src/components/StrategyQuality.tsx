@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
+import { realizedStripCopy, type RealizedWindow } from "../utils/realizedStrip";
 import "../styles/quality.css";
 
 /** 后端 quality 块（短线 GET /api/strategies、中长线 GET /api/horizons/{h}/strategies 的 metrics.quality）。 */
@@ -40,25 +41,30 @@ function Pair({ label, tip, avg, median, extra, n, low }: { label: string; tip: 
   );
 }
 
-/** 策略画像条：标签 + 近12个月 / 2024-01至今 / 已结算（前瞻或回放）。放在策略行或策略卡上，全部为后端字段，前端不计算标签。
- * realizedKind：前瞻 = 真实前瞻已结算；回放 = 历史回放（中长线目前真实前瞻 0 笔）。 */
-export function QualityStrip({ quality, realized, realizedKind = "前瞻", style }: { quality?: StrategyQuality | null; realized?: RealizedStats | null; realizedKind?: "前瞻" | "回放"; style?: React.CSSProperties }) {
+/** 策略画像条：标签 + 近12个月 / 2024-01至今 / 已结算（前瞻或回放）。放在策略行或策略卡上，全部为后端字段，前端不计算标签、也不自己截窗口。
+ * realizedKind：前瞻 = 真实前瞻已结算；回放 = 历史回放（中长线目前真实前瞻 0 笔）。
+ * realizedWindow：中长线画像用后端 portrait_realized_12m 的起止；短线不传，前瞻文案保持原样。 */
+export function QualityStrip({ quality, realized, realizedKind = "前瞻", realizedWindow, style }: { quality?: StrategyQuality | null; realized?: RealizedStats | null; realizedKind?: "前瞻" | "回放"; realizedWindow?: RealizedWindow | null; style?: React.CSSProperties }) {
   const a = quality?.R12, b = quality?.N3;
   if (!quality && !realized) return <div className="qs" style={style}><QualityChip quality={null} /><span className="qs__none">暂无回测画像</span></div>;
   const rn = realized?.n ?? 0;
   const low = rn < MIN_SAMPLE;
-  const realizedTip = realizedKind === "回放"
-    ? `回放已平仓：用当前规则回放历史行情得到，不代表实盘前瞻表现（真实前瞻已平仓 0 笔）。${low ? `n=${rn} < ${MIN_SAMPLE}，样本不足` : ""}`
-    : `前瞻已结算（仅实盘）。${low ? `n=${rn} < ${MIN_SAMPLE}：平均 ${fmt(realized?.avg)}，中位数 ${fmt(realized?.median)}，样本太少仅供参考` : ""}`;
+  const lowNote = !low ? "" : realizedKind === "回放"
+    ? ` n=${rn} < ${MIN_SAMPLE}，样本不足`
+    : ` n=${rn} < ${MIN_SAMPLE}：平均 ${fmt(realized?.avg)}，中位数 ${fmt(realized?.median)}，样本太少仅供参考`;
+  const copy = realizedStripCopy(realizedKind, realizedWindow, lowNote);
   const warn = !!quality?.label?.startsWith("稳健") && !low && (realized?.median ?? 0) < 0;
+  const warnTitle = realizedKind === "回放"
+    ? "标签来自回测，但近12个月回放已平仓的中位数为负，请留意两者不一致。与研究「近12个月」的数字不必相同。"
+    : "标签来自回测，但回放已平仓的中位数为负，请留意两者不一致。";
   return (
     <div className="qs" style={style}>
       <div className="qs__chipcol"><QualityChip quality={quality} /></div>
       <Pair label="近12个月" tip={`回测，已扣 0.3% 成本，每笔平均 / 中位数 / 笔数\n两头各去5%后的均值 ${fmt(a?.trim_both5)}`} avg={a?.avg} median={a?.median} n={a?.n} />
       <Pair label="2024-01 至今" tip={`2024-01 至今（约2.8年）回测，已扣 0.3% 成本，每笔平均 / 中位数 / 笔数`} avg={b?.avg} median={b?.median} n={b?.n}
         extra={<i title="两头各去 5% 后的平均">去极值 <span className={cls(b?.trim_both5)}>{fmt(b?.trim_both5)}</span></i>} />
-      <Pair label={realizedKind === "回放" ? "回放已平仓" : "前瞻已结算"} tip={realizedTip} avg={realized?.avg} median={realized?.median} n={realized?.n ?? 0} low={low} />
-      {warn && <span className="qchip qchip--lottery qs__warn" title="标签来自回测，但回放已平仓的中位数为负，请留意两者不一致。">回放中位数 {fmt(realized?.median)}</span>}
+      <Pair label={copy.label} tip={copy.tip} avg={realized?.avg} median={realized?.median} n={realized?.n ?? 0} low={low} />
+      {warn && <span className="qchip qchip--lottery qs__warn" title={warnTitle}>回放中位数 {fmt(realized?.median)}</span>}
     </div>
   );
 }

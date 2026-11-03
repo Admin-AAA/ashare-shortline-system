@@ -67,13 +67,26 @@ export function HorizonPage({ horizon, view = "strategies" }: { horizon: H; view
   );
 }
 
-/** 各策略已结算每笔收益（/api/horizons/{h}/metrics，只读）：真实前瞻 0 笔时全部是历史回放，标注「回放」。 */
-type Realized = { liveN: number | null; of: (id: string) => RealizedStats | null; kind: "前瞻" | "回放" };
+/** 各策略已结算每笔收益（/api/horizons/{h}/metrics 的 portrait_realized_12m，只读）。
+ * 窗口由后端按信号日截近 12 个月；真实前瞻 0 笔时标注「回放」。前端不自己算起止日。 */
+type Realized = {
+  liveN: number | null;
+  of: (id: string) => RealizedStats | null;
+  kind: "前瞻" | "回放";
+  window: { start: string | null; end: string | null; basis: string | null } | null;
+};
 function useHorizonRealized(horizon: H): Realized {
   const mt = useApi<HorizonMetricsResponse>(() => api.horizonMetrics(horizon, "all"), [horizon]);
-  const by = new Map((mt.data?.by_strategy ?? []).map((x) => [x.strategy_id, x]));
-  const liveN = mt.data?.by_origin?.live?.n ?? null;
-  return { liveN, kind: liveN === 0 ? "回放" : "前瞻", of: (id) => { const x = by.get(id); return x ? { n: x.n, avg: x.avg_ret, median: x.median_ret } : null; } };
+  const block = mt.data?.portrait_realized_12m;
+  const liveN = block ? (block.by_origin?.live?.n ?? 0) : null;
+  const series = liveN != null && liveN > 0 ? (block?.by_strategy_live ?? block?.by_strategy) : block?.by_strategy;
+  const by = new Map((series ?? []).map((x) => [x.strategy_id, x]));
+  return {
+    liveN,
+    kind: liveN === 0 ? "回放" : "前瞻",
+    window: block ? { start: block.window_start, end: block.window_end, basis: block.window_basis } : null,
+    of: (id) => { const x = by.get(id); return x ? { n: x.n, avg: x.avg_ret, median: x.median_ret } : null; },
+  };
 }
 
 /* ---------- 公共 ---------- */
@@ -168,7 +181,7 @@ function StrategyCard({ s, rz }: { s: HorizonStrategy; rz: Realized }) {
           <span className="hz-tag">持有 {s.hold_days} 交易日</span>
         </div>
       </header>
-      <QualityStrip quality={s.metrics.quality} realized={rz.of(s.id)} realizedKind={rz.kind} />
+      <QualityStrip quality={s.metrics.quality} realized={rz.of(s.id)} realizedKind={rz.kind} realizedWindow={rz.window} />
       <p className="hz-summary">{s.summary}</p>
       <div className="hz-card__sec">最近 12 个月{s.metrics.window ? <span className="hz-muted"> · {s.metrics.window}</span> : null}</div>
       <div className="hz-metrics">
@@ -325,8 +338,8 @@ function ReviewView({ horizon, list, rz, onPick }: { horizon: H; list: HorizonSt
             </select>
           </div>
         </div>
-        {sid !== "all" && <QualityStrip quality={list.find((x) => x.id === sid)?.metrics.quality} realized={rz.of(sid)} realizedKind={rz.kind} style={{ marginTop: 0 }} />}
-        <div className="qs__hint">{rz.liveN === 0 ? "真实前瞻已平仓 0 笔，已平仓数据均为历史回放（批次标「回放」）。" : ""}每个批次展开后可看该策略的彩票型/稳健型标签与每笔收益。</div>
+        {sid !== "all" && <QualityStrip quality={list.find((x) => x.id === sid)?.metrics.quality} realized={rz.of(sid)} realizedKind={rz.kind} realizedWindow={rz.window} style={{ marginTop: 0 }} />}
+        <div className="qs__hint">{rz.liveN === 0 ? `真实前瞻已平仓 0 笔。画像条「回放已平仓」只统计近12个月（按信号日${rz.window?.start ? `，自 ${rz.window.start}` : ""}）；下方批次列表仍是全部已落盘回放。` : ""}每个批次展开后可看该策略的彩票型/稳健型标签与每笔收益。</div>
         <div className="hz-muted" style={{ marginBottom: 8 }}>以下统计仅针对本页{filtered ? "筛选后" : ""}的 {shown.length} 个批次；已平仓收益含 0.3% 成本。</div>
         <div className="hz-metrics">
           <Kpi label="已平仓批次" value={String(closed.length)} />
@@ -382,7 +395,7 @@ function BatchCard({ b, defaultOpen, list, highlight, rz, onPick }: { b: Horizon
         <span className={`hz-batch__ret hz-num ${pnl(b.avg_ret)}`}>{b.avg_ret == null ? "—" : `${b.status === "closed" ? "平均" : "浮动平均"} ${pct(b.avg_ret)}`}</span>
       </button>
       {open && (<>
-        {rz && <div style={{ padding: "0 14px" }}><QualityStrip quality={list.find((x) => x.id === b.strategy_id)?.metrics.quality} realized={rz.of(b.strategy_id)} realizedKind={rz.kind} /></div>}
+        {rz && <div style={{ padding: "0 14px" }}><QualityStrip quality={list.find((x) => x.id === b.strategy_id)?.metrics.quality} realized={rz.of(b.strategy_id)} realizedKind={rz.kind} realizedWindow={rz.window} /></div>}
         <div className="hz-tablewrap">
           <table className="hz-table">
             <thead><tr><th className="r">排名</th><th>代码</th><th>名称</th><th className="r" title={first?.rule_score_note || undefined}>{first ? <>{`${first.rule_score_label}（${better(first.rule_score_better)}）`}{first.rule_score_note ? <span className="hz-score-note">{first.rule_score_note}</span> : null}</> : "规则分"}</th><th>状态</th><th>买入</th><th>卖出 / 估值</th><th className="r">天数</th><th className="r">{retHead}</th><th>入选原因</th></tr></thead>

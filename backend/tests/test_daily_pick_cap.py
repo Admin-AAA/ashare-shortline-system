@@ -97,7 +97,7 @@ def test_cap_comes_from_config_and_zero_disables(monkeypatch):
 def test_save_picks_only_caps_when_live_flag_on(monkeypatch, tmp_path):
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     _set_cap(monkeypatch, 5)
-    assert ms._save_picks("mid-x", "2026-10-26", _picks(8)) == 8  # 默认（回放/历史口径）不截断
+    assert ms._save_picks("mid-x", "2026-10-26", _picks(8)) == 8  # 直接调用默认不截断；回放脚本会显式打开上限
     doc = json.loads((tmp_path / "2026-10-26_mid-x.json").read_text())
     assert len(doc["picks"]) == 8 and "daily_cap" not in doc
     assert ms._save_picks("mid-x", "2026-10-27", _picks(8), True) == 5
@@ -114,7 +114,7 @@ def test_generate_picks_end_to_end_cap_only_when_flagged(monkeypatch, tmp_path):
     monkeypatch.setattr(ms, "_held_codes", lambda db, sid, d: {"000001"})  # 已持有的先剔除，再取前 5
     monkeypatch.setattr(ms, "earnings_accel_candidates", lambda db, d: _picks(9))
     res = ms.generate_picks(None, "2026-10-26", force=True, strategy_ids=["mid-earnings-accel"])
-    assert res == {"mid-earnings-accel": 8}  # 不带开关：不截断（rebuild_replay_picks 即此口径）
+    assert res == {"mid-earnings-accel": 8}  # generate_picks 默认不截断；rebuild_replay_picks 会传 apply_daily_cap=True
     res = ms.generate_picks(None, "2026-10-26", force=True, strategy_ids=["mid-earnings-accel"], apply_daily_cap=True)
     assert res == {"mid-earnings-accel": 5}
     doc = json.loads((tmp_path / "2026-10-26_mid-earnings-accel.json").read_text())
