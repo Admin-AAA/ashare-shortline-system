@@ -2,7 +2,7 @@
 
 研究：scripts/midterm/suegvol_s22_s604.py（§604：SUE≥2.2 ∩ G ∩ amount≥1.5·amt20，排序 min(SUE,20)；由 §515 硬抬）。
 复用 midterm_sueg.sueg_candidates 事件池，再按信号日成交额过滤；不另改数据网关。
-另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844/§846 QSSUEGVOL→ mid-qs-sue-vol；§849/§850 FCFFSUEGVOL→ mid-fcff-sue-vol；§851 OCFSUEGVOL→ mid-ocf-sue-vol；§855/§856 CFPSSUEGVOL→ mid-cfps-sue-vol；§861/§862 UDPSUEGVOL→ mid-udp-sue-vol；§869 FCFESUEGVOL→ mid-fcfe-sue-vol；§871/§872/§874 FATSUEGVOL→ mid-fat-sue-vol（dtp≥55,orv≥25）；§875/§876/§878/§940/§942/§944 QNSUEGVOL→ mid-qn-sue-vol（dtp≥55,orv≥40）；§877 ROYSUEGVOL→ mid-roy-sue-vol；§883/§887 ARTSUEGVOL→ mid-art-sue-vol（orv≥25）；§885/§886 CATSUEGVOL→ mid-cat-sue-vol（dtp≥55）；§889/§890 EBTSUEGVOL→ mid-ebt-sue-vol（dtp≥55）；§893/§896 DTEPSUEGVOL→ mid-dteps-sue-vol（orv≥25）；§900/§904 ROASUEGVOL→ mid-roa-sue-vol（orv≥25）；§901/§903/§905 ITCSUEGVOL→ mid-itc-sue-vol（dtp≥55,orv≥25）；§908 OPGRSUEGVOL→ mid-opgr-sue-vol；§911 QUICKSUEGVOL→ mid-quick-sue-vol；§924/§926 ROA2SUEGVOL→ mid-roa2-sue-vol（dtp≥55；§928 orv冻≥20）；§925/§927/§929/§930/§932/§934 QSEXPSUEGVOL→ mid-qsexp-sue-vol（dtp≥55,orv≥40）；§941/§949 REVPSSUEGVOL→ mid-revps-sue-vol（dtp≥55）；§945 NPTASUEGVOL→ mid-npta-sue-vol；§951 EPSSUEGVOL→ mid-eps-sue-vol；§953/§954 TRPSSUEGVOL→ mid-trps-sue-vol（dtp≥55）；§957/§958 OPINCSUEGVOL→ mid-opinc-sue-vol（dtp≥55）；§959 EBITSUEGVOL2→ mid-ebit-sue-vol；§961/§962/§964 EQUITYSUEGVOL→ mid-equity-sue-vol（dtp≥55,orv≥25）；§965/§966 CASHRSUEGVOL→ mid-cashr-sue-vol（dtp≥55）；§967 CURRSUEGVOL→ mid-curr-sue-vol；
+另：§669 SUEGTDVOL→ mid-sue-td-vol；§671 SUEGFATVOL→ mid-sue-fa-vol；§793 SEXPSUEGVOL→ mid-sexp-sue-vol；§801 ADMINSUEGVOL→ mid-admin-sue-vol；§816 OPSUEGVOL→ mid-op-sue-vol；§817 REVSUEGVOL→ mid-rev-sue-vol；§827 QOPSUEGVOL→ mid-qop-sue-vol；§829/§832 OCFSSUEGVOL→ mid-ocfs-sue-vol；§833 OCSDSUEGVOL→ mid-ocsd-sue-vol；§837 NPMSUEGVOL→ mid-npm-sue-vol；§844/§846 QSSUEGVOL→ mid-qs-sue-vol；§849/§850 FCFFSUEGVOL→ mid-fcff-sue-vol；§851 OCFSUEGVOL→ mid-ocf-sue-vol；§855/§856 CFPSSUEGVOL→ mid-cfps-sue-vol；§861/§862 UDPSUEGVOL→ mid-udp-sue-vol；§869 FCFESUEGVOL→ mid-fcfe-sue-vol；§871/§872/§874 FATSUEGVOL→ mid-fat-sue-vol（dtp≥55,orv≥25）；§875/§876/§878/§940/§942/§944 QNSUEGVOL→ mid-qn-sue-vol（dtp≥55,orv≥40）；§877 ROYSUEGVOL→ mid-roy-sue-vol；§883/§887 ARTSUEGVOL→ mid-art-sue-vol（orv≥25）；§885/§886 CATSUEGVOL→ mid-cat-sue-vol（dtp≥55）；§889/§890 EBTSUEGVOL→ mid-ebt-sue-vol（dtp≥55）；§893/§896 DTEPSUEGVOL→ mid-dteps-sue-vol（orv≥25）；§900/§904 ROASUEGVOL→ mid-roa-sue-vol（orv≥25）；§901/§903/§905 ITCSUEGVOL→ mid-itc-sue-vol（dtp≥55,orv≥25）；§908 OPGRSUEGVOL→ mid-opgr-sue-vol；§911 QUICKSUEGVOL→ mid-quick-sue-vol；§924/§926 ROA2SUEGVOL→ mid-roa2-sue-vol（dtp≥55；§928 orv冻≥20）；§925/§927/§929/§930/§932/§934 QSEXPSUEGVOL→ mid-qsexp-sue-vol（dtp≥55,orv≥40）；§941/§949 REVPSSUEGVOL→ mid-revps-sue-vol（dtp≥55）；§945 NPTASUEGVOL→ mid-npta-sue-vol；§951 EPSSUEGVOL→ mid-eps-sue-vol；§953/§954 TRPSSUEGVOL→ mid-trps-sue-vol（dtp≥55）；§957/§958 OPINCSUEGVOL→ mid-opinc-sue-vol（dtp≥55）；§959 EBITSUEGVOL2→ mid-ebit-sue-vol；§961/§962/§964 EQUITYSUEGVOL→ mid-equity-sue-vol（dtp≥55,orv≥25）；§965/§966/§969 CASHRSUEGVOL→ mid-cashr-sue-vol（dtp≥55,orv≥25）；§967 CURRSUEGVOL→ mid-curr-sue-vol；
 实盘推荐不设仓位上限。
 """
 from __future__ import annotations
@@ -1516,7 +1516,7 @@ def equitysuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return out
 
 def cashrsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
-    """§965/§966 CASHRSUEGVOL：cash_ratio≥1.0 ∩ SUE≥2.2∩G(dtp≥55)∩放量≥1.5×amt20（§966 dtp硬抬；suegvol 仍≥50/≥20）；排序 cash_ratio封顶5。≠quick_ratio。"""
+    """§965/§966/§969 CASHRSUEGVOL：cash_ratio≥1.0 ∩ SUE≥2.2∩G(dtp≥55,orv≥25)∩放量≥1.5×amt20（§966 dtp；§969 orv硬抬；suegvol 仍≥50/≥20）；排序 cash_ratio封顶5。≠quick_ratio。"""
     from app.services.midterm_fina_events import _fina_events
 
     sg = suegvol_candidates(db, as_of)
@@ -1536,12 +1536,13 @@ def cashrsuegvol_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
         e = by.get(p0["code"])
         if e is None:
             continue
-        # §966：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥55
+        # §966/§969：在 suegvol(G dtp≥50/orv≥20) 基础上再硬抬 dtp≥55、orv≥25
         try:
             dtp = float(p0.get("dt_netprofit_yoy"))
+            orv = float(p0.get("or_yoy"))
         except (TypeError, ValueError):
             continue
-        if dtp < 55.0:
+        if dtp < 55.0 or orv < 25.0:
             continue
         q = dict(p0)
         q["cash_ratio"] = e.get("cash_ratio", e.get("cur"))

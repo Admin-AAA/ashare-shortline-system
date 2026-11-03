@@ -757,11 +757,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
-    # §965/§966 现金比率∩盈余加速∩放量（scripts/midterm/cashrsuegvol_d55_s966.py CASHRSUEGVOL_d55_h20；§282+B 达标；dtp≥55；2026-11-03 上线；≠ mid-quick-sue-vol）
+    # §965/§966/§969 现金比率∩盈余加速∩放量（scripts/midterm/cashrsuegvol_o25_s969.py CASHRSUEGVOL_o25_h20；§282+B 达标；dtp≥55,orv≥25；2026-11-03 上线；≠ mid-quick-sue-vol）
     "mid-cashr-sue-vol": {
         "name": "现金比率∩盈余加速∩放量（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足现金比率（cash_ratio）≥1.0，与 SUE≥2.2 且业绩加速 G（扣非同比≥55、营收同比≥20），且信号日成交额≥1.5×前20日均额；按 cash_ratio（封顶5）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：现金比率水平 × 盈余惊喜加速 × 量能确认（§965/§966 dtp≥55；≠quick_ratio 的 mid-quick-sue-vol）。",
+        "summary": "每个交易日盘后，扫描首次披露的定期报告：同日满足现金比率（cash_ratio）≥1.0，与 SUE≥2.2 且业绩加速 G（扣非同比≥55、营收同比≥25），且信号日成交额≥1.5×前20日均额；按 cash_ratio（封顶5）从大到小排序，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：现金比率水平 × 盈余惊喜加速 × 量能确认（§965/§966/§969 dtp≥55,orv≥25；≠quick_ratio 的 mid-quick-sue-vol）。",
         "kind": "cashr_sue_vol",
         "hold_days": 20,
         "schedule": "daily",
