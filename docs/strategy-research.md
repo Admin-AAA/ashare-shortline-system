@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§956 TRPS_o25 → **REJECT 冻orv≥20**（TRPS 双轴到站）。§957 OPINC∩SUEG 待 SERIAL。
+- 断点：§957 OPINC∩SUEG → **ADOPT 已上线** mid-opinc-sue-vol。下一条待预注册。
 
 
 
@@ -11632,3 +11632,11 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 去重：OPSUEGVOL；OPGRSUEGVOL；EBTSUEGVOL；TRPSSUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
 - 规则：OPINC∩SUEG∩vol；sc_opinc；K20/max_new5。新策略无 B。
 - 脚本：`opincsuegvol_s957.py` / `run_s957.sh`。
+
+### §957 OPINCSUEGVOL_h20 — ADOPT → 已上线 mid-opinc-sue-vol
+- 每笔 P19 +1.65 / P20 +0.65 / P21 +7.18 / W0 −2.24 / W00 −0.14 / W1 +3.15 / W2 +3.47 / R12 +3.28（**正段 6/8**）
+- R12 70笔 +3.28% PF1.63 MDD−9.9；N3 163笔 +3.30 PF1.85 MDD−8.6；彩票型（R12）/稳健型（N3）
+- 判定 ✓✓✓✓✓ → **A 过**（新策略无 B）。
+- → **ADOPT**。上线（2026-11-03 14:57 CST）：`mid-opinc-sue-vol`（kind=`opinc_sue_vol`）；FINA_FIELDS 增 `op_income`；`s957_onboard_metrics.py`；replay onboard；`safe_backend_restart`。解读：营业利润绝对额扩张∩盈余合取成立（≠已上线 op_yoy/OPGR）。
+
+
