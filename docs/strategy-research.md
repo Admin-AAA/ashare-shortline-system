@@ -11268,7 +11268,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - §933 GPMSUEGVOL → **REJECT**（正段 5/8）；**grossprofit_margin∩SUEG 暂缓**。
 - §934 QSEXPSUEGVOL_o40 → **ADOPT 已上线**（orv≥40）：R12 +12.68 PF5.72；N3 +6.86 PF3.09。
 - §935 ARTSUEGVOL_o30 → **REJECT**（B 否）；**冻 ART orv≥25**（双轴到站）。
-- 断点：§945 NPTA∩SUEG → **ADOPT 已上线** mid-npta-sue-vol。下一条待预注册。
+- 断点：§945 NPTA∩SUEG → **ADOPT 已上线**。§946 QN_o45 + §947 NPTA_d55 已预注册待 SERIAL。
 
 
 
@@ -11468,4 +11468,16 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 判定 ✓✓✓✓✓ → **A 过**（新策略无 B）。
 - → **ADOPT**。上线（2026-11-03 12:13 CST）：`mid-npta-sue-vol`（kind=`npta_sue_vol`）；FINA_FIELDS 增 `npta`；`s945_onboard_metrics.py`；replay onboard 23批/65只（2026-08-01~11-02）；`safe_backend_restart`。解读：累计 npta∩盈余合取成立（≠已上线 QN 单季 / ROA 全年；ROAY 曾因 PF 否不对称）。
 
+## §946 [中线·现役改进] 单季ROA扩张∩盈余加速∩放量 orv再抬≥45（QNSUEGVOL_o45_h20）— 预注册（2026-11-03 12:24 CST 写于跑任何收益之前）
+- 白话：现役 mid-qn-sue-vol（§944 已抬至 G dtp≥55∩orv≥40）把 **G 内 orv 再硬抬** 到 **≥45**；QN/SUE/dtp/放量/排序不变。同进程 QNSUEGVOL_base(orv≥40)。
+- 想法：§944 o40 刚 ADOPT——镜像 QSEXP_o45 路径（硬门槛）。B 门对照 base。
+- 去重：QNSUEGVOL_o40；NPTASUEGVOL；QSEXPSUEGVOL_o45（已冻≥40）。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓；FAT/ART/DTEPS/QSEXP orv 已冻。
+- 规则：QN∩SUEG∩vol；G.orv≥45（dtp仍≥55）；sc_qn；K20/max_new5。B 对照 base。
+- 脚本：`qnsuegvol_o45_s946.py` / `run_s946.sh`。
 
+## §947 [中线·现役改进] 总资产净利率扩张∩盈余加速∩放量 dtp硬抬≥55（NPTASUEGVOL_d55_h20）— 预注册（2026-11-03 12:24 CST 写于跑任何收益之前）
+- 白话：现役 mid-npta-sue-vol（§945：npta扩张≥0.5∩SUE≥2.2∩G∩放量）把 **G 内 dtp 硬抬** 到 **≥55**；NPTA/SUE/orv/放量/排序不变。同进程 NPTASUEGVOL_base(dtp≥50)。
+- 想法：新策略刚 ADOPT——镜像 QN/FAT/EBT_d55 路径上抬扣非腿。B 门对照 base。
+- 去重：NPTASUEGVOL；QNSUEGVOL_d55；ROASUEGVOL。非仓位。不碰数据网关。毛利率/有息/去杠杆∩SUEG 仍暂缓。
+- 规则：NPTA∩SUEG∩vol；G.dtp≥55；sc_npta；K20/max_new5。B 对照 base。
+- 脚本：`nptasuegvol_d55_s947.py` / `run_s947.sh`。
