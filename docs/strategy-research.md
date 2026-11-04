@@ -11976,3 +11976,18 @@ L-198。同一事件源只改持有期、弱反应带或放量门槛，是家族
 - → **ADOPT**。上线（2026-11-04 08:48 CST）：`mid-earnings-accel-vol` 排序 **dtp→EA_combo**（事件/放量≥1.5×不变）；`s975_onboard_metrics.py`；replay onboard 近3月；`safe_backend_restart`。解读：放量子集接上无放量 EA 已成立的 combo 排序，抬近一年/三年选股质量——非 SUE 梯子。
 
 
+
+
+## §976 [中线·现役改进] 分红增加∩放量同样本改按 EA_combo 排序（DINCVOL_combo_h20）— 预注册（2026-11-04 11:45 CST 写于跑任何收益之前）
+- 白话：现役 mid-dividend-increase-vol（DINCVOL：分红增幅≥30% ∩ amount≥1.5×amt20，按增幅 sc_inc 排序）**事件一字不改**，只把同日排序换成与 §975 EAVOL 相同的 **EA_combo**（当日 DINCVOL 候选内「信号日 pct_chg 百分位」+「总市值升序百分位」等权；缺一记 0）。持 20。同进程 DINCVOL_base(sc_inc)。
+- 想法：非 SUE∩质量梯子；非同事件新 strategy_id（L-198）。骨架差异在**排序逻辑**。现役 DINCVOL 是日频弱尾（R12 +2.27/PF1.36/n163/MDD−18.2），增幅硬抬/软扩/放量硬抬/−pct/派现单键均已否或冻；本题把 §975 已在 EAVOL 成立的 combo 接到分红放量子集，测是否抬选股质量（非仓位）。
+- 去重：DINC_sc_dps / DINC_sc_pct / DINCVOL_i* / DINCVOL_v18 / DINCU 已否；DINCVOL_combo 未测。不新开 strategy_id。不碰数据网关。
+- 规则：DINCVOL 信号不变；sc_combo = rank_pct(pct_chg|DINCVOL) + rank_pct(−total_mv|DINCVOL)；K20/max_new5；成本 0.3%；真实成交。B 对照同进程 DINCVOL_base。
+- 判定：A §282 中线（s286_287_eval 回撤 −25）；B 相对 base：R12 与 N3 每笔均 ≥ base，且 N3 回撤不更深。A+B → 建议上线改排序（改 mid-dividend-increase-vol 排序键，不上新 id）；否则 REJECT，线上仍 sc_inc。
+- 脚本：`dincvol_combo_s976.py` / `run_s976.sh`；输出 `backend/output/research/s976/`。
+
+
+### §976 DINCVOL_combo_h20 — REJECT（A 过；B 否）
+- 结果：正段 7/8；R12 +2.28 PF1.36 n163 MDD−17.8（稳健型）；N3 +4.30 PF1.91 n391 MDD−12.9。判定 A ✓✓✓✓✓。
+- B门对照 DINCVOL_base(sc_inc：R12+2.27/N3+4.53 MDD−12.2)：**否**（R12 每笔几乎打平 +0.01；N3 每笔 −0.23 且回撤更深 −12.9 vs −12.2）。
+- → **REJECTED**；线上 mid-dividend-increase-vol 仍按增幅 sc_inc 排序。解读：§975 在 EAVOL 成立的 EA_combo 不外推到分红放量子集——近三年伤选股质量；**停 DINCVOL combo 排序轴**（增幅/−pct/派现/放量硬抬已否或冻）。
