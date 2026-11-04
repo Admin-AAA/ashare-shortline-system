@@ -36,6 +36,11 @@ class _DB:
 
 @pytest.fixture
 def isolated(monkeypatch, tmp_path):
+    # 略增两只已退出日频。出票回归仍把定义临时并回现役，防止分支再次落穿通用选股池。
+    restored = dict(ms.STRATEGIES)
+    restored[UNDER] = ms.RETIRED_STRATEGIES[UNDER]
+    restored[VOL] = ms.RETIRED_STRATEGIES[VOL]
+    monkeypatch.setattr(ms, "STRATEGIES", restored)
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     monkeypatch.setattr(ms, "_held_codes", lambda db, sid, d: set())
     monkeypatch.setattr(ms, "check_daily_basic_staleness", lambda *a, **k: {"stale": False})
@@ -62,10 +67,11 @@ def _run(strategy_ids: list[str]) -> dict:
 
 
 def test_strategies_have_no_top_n():
-    assert "top_n" not in ms.STRATEGIES[UNDER]
-    assert "top_n" not in ms.STRATEGIES[VOL]
-    assert ms.STRATEGIES[UNDER]["kind"] == "forecast_slight_underreact"
-    assert ms.STRATEGIES[VOL]["kind"] == "forecast_slight_vol"
+    assert UNDER not in ms.STRATEGIES and VOL not in ms.STRATEGIES
+    assert "top_n" not in ms.RETIRED_STRATEGIES[UNDER]
+    assert "top_n" not in ms.RETIRED_STRATEGIES[VOL]
+    assert ms.RETIRED_STRATEGIES[UNDER]["kind"] == "forecast_slight_underreact"
+    assert ms.RETIRED_STRATEGIES[VOL]["kind"] == "forecast_slight_vol"
 
 
 def test_underreact_with_candidates_saves_without_top_n(monkeypatch, isolated, tmp_path):

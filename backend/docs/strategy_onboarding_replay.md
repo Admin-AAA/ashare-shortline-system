@@ -23,3 +23,4 @@ REPLAY_AUTO_BACKFILL_ENABLED=1 .venv/bin/python scripts/rebuild_replay_picks.py 
 ## 上线检查单（追加）
 1. 回测达标 → 2. 加入 STRATEGIES / preset → 3. import 检查 + 定向测试 → 4. **运行上面的回填** → 5. push + 安全重启。
 - SUE∩质量家族不再为一条新的财务轴单独开 `strategy_id`。日频只留 `midterm_service.SUE_LADDER_CHAMPIONS`；新轴做成现有冠军的参数或过滤器。见 `docs/strategy-research.md`「SUE∩质量家族日频收敛」。
+- 同一事件源不再为持有期、弱反应带或放量门槛单独开 `strategy_id`。回购、预告、激励、资产负债表的日频冠军见 `midterm_service.NON_SUE_NEAR_DUP_CHAMPIONS`。见 `docs/strategy-research.md`「非 SUE 近重复日频收敛」。

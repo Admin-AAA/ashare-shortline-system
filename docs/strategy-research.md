@@ -11849,7 +11849,7 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 
 本轮只做优胜劣汰，不改选股公式、不删回测指标、不删历史 picks、不删候选函数。非冠军从 `STRATEGIES` 挪到 `RETIRED_STRATEGIES`：17:35 `generate_picks` 与 `/mid` 现役列表不再走到它们；按策略 id 查旧批次仍可读。`/mid` 淘汰清单顶部列出退出原因。短线 skill registry 不是中线日频来源，本轮未改。
 
-**新规则：** 再增加一条财务质量轴，做成现有冠军的参数或过滤器，不得新开 `strategy_id`。§974 一类「再硬抬门槛并准备新上线」的扩编停止。非 SUE 家族（预告、回购、业绩加速本体、小市值周度等）不动。
+**新规则：** 再增加一条财务质量轴，做成现有冠军的参数或过滤器，不得新开 `strategy_id`。§974 一类「再硬抬门槛并准备新上线」的扩编停止。11-03 这一轮没有动非 SUE 家族；2026-11-04 把同一条规则扩到回购、预告、激励和资产负债表近重复，见下一节。
 
 近 12 个月数字取自本库 `backend/app/services/midterm_backtest_metrics.json` 的 `recent_12m`（avg / pf / n / tot / mdd）。重叠数字来自主人侧同一窗口的 picks，本环境没有那批选股文件，未重算 Jaccard。
 
@@ -11907,6 +11907,52 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 | `mid-qop-sue-vol` | +1.78 | 1.35 | 62 | +5.5 | −7.3 | 单季营业利润环比，族内每笔最低 |
 
 退出集合与 `SUE_LADDER_DEMOTED` 一致，共 35 条，按本库 recent_12m 每笔从高到低。
+
+
+## 治理 · 非 SUE 近重复日频收敛（2026-11-04）
+
+L-198。同一事件源只改持有期、弱反应带或放量门槛，是家族内部的参数或过滤器，不得再 ADOPT 成新 `strategy_id`。日频每个事件家族只留少数冠军。这不是仓位管理，不设持仓上限，不改选股公式，不删回测指标、历史 picks 和候选函数。退出的 id 从 `STRATEGIES` 挪到 `RETIRED_STRATEGIES`：17:35 `generate_picks` 与 `/mid` 现役列表不再走到它们；按策略 id 查旧批次仍可读。`/mid` 淘汰清单在 SUE 说明之后列出本轮原因。SUE 六冠军不动。短线 skill 与 long-* 不动。
+
+近 12 个月数字取自本库 `backend/app/services/midterm_backtest_metrics.json` 的 `recent_12m`（及 quality.R12 的中位数、标签、近三年回撤）。中线现役 **47→30**。
+
+### 各簇保留
+
+| 簇 | 保留 | R12 avg | PF | n | 为什么留 |
+|---|---|---:|---:|---:|---|
+| 回购 | `mid-repurchase-plan-underreact` | +2.98 | 1.80 | 118 | 弱反应持 20。全量母集 +1.35、持 5 的弱反应 +1.20 都退出 |
+| 预增 | `mid-forecast-preincrease-underreact-vol` | +5.90 | 3.31 | 62 | 预增弱反应∩放量，本簇每笔最高 |
+| 预增 | `mid-forecast-preincrease-underreact` | +5.31 | 2.61 | 101 | 稳健、n=101。不是弱母集：它是弱反应宽池，放量版是子集。两只都留；再叠第三道过滤不再新开 id |
+| 预喜 | `mid-forecast-beat-underreact` | +4.44 | 2.26 | 112 | 预增/扭亏/略增合集的弱反应 |
+| 预喜 | `mid-forecast-beat` | +3.70 | 1.85 | 138 | 略增、扭亏单拆退出后，这是还覆盖「已经反应过的预喜」的宽池。不是持有期孪生 |
+| 激励 | `mid-incentive-vol` | +6.96 | 2.65 | 37 | 期权∩放量 |
+| 激励 | `mid-incentive-option` | +4.53 | 1.95 | 123 | 宽事件源，n 约为放量版 3 倍，近窗仍强 |
+| 效率 | `mid-turn-days-vol` | +4.62 | 2.30 | 84 | 有形资产/负债与股东权益/负债三只都在 +2 附近，整簇退出后用营业周期代表 |
+
+明确不退出：`mid-sales-exp-vol`、`mid-earnings-accel`、`mid-earnings-accel-vol`、`mid-ea-td-vol`、`mid-small-cap-weekly`、`mid-smallcap-reversal-weekly`，以及全部 long-* 和短线 skill。`mid-earnings-accel-vol` 近窗每笔只有 +1.56，仍按「没有强理由不动」留下。
+
+### 退出日频（17）
+
+| strategy_id | R12 avg | PF | n | 为什么退出 |
+|---|---:|---:|---:|---|
+| `mid-repurchase-plan` | +1.35 | 1.32 | 194 | 回购全量弱母集，回撤 −14.0 |
+| `mid-repurchase-underreact` | +1.20 | 1.56 | 127 | 与持 20 弱反应同一候选池，只差持有期 |
+| `mid-forecast-preincrease` | +1.73 | 1.36 | 122 | 预增全量，彩票型 |
+| `mid-forecast-preincrease-vol` | +1.63 | 1.42 | 104 | 预增只加放量，近窗仍弱 |
+| `mid-forecast-turnaround` | +1.82 | 1.40 | 71 | 扭亏单拆，彩票型，近三年回撤 −25.0 |
+| `mid-forecast-slight` | +1.97 | 1.65 | 79 | 略增全量，家族整簇偏弱 |
+| `mid-forecast-slight-vol` | +2.30 | 2.04 | 37 | 略增∩放量，n 偏瘦 |
+| `mid-forecast-slight-underreact` | +1.48 | 1.37 | 51 | 略增∩弱反应，家族最弱 |
+| `mid-incentive-underreact` | +2.24 | 1.51 | 37 | 期权弱反应子集，低于已按 −pct 排序的宽池 |
+| `mid-tad-vol` | +2.18 | 1.65 | 84 | 有形资产/负债。三只 n 同为 84、每笔约 +2，一起退出 |
+| `mid-etd-vol` | +2.05 | 1.61 | 84 | 股东权益/负债，与上一只同档 |
+| `mid-tad-etd-vol` | +2.02 | 1.63 | 84 | 两只的合取，每笔没有更高 |
+| `mid-fa-td-vol` | +1.93 | 1.49 | 83 | 固定资产周转∩营业周期，没有抬过 turn-days |
+| `mid-ncs-td-vol` | +1.89 | 1.42 | 31 | 净现金切换∩营业周期，胜率 38.7%，样本瘦 |
+| `mid-etd-fa-vol` | +1.63 | 1.50 | 70 | 权益/负债∩固定资产周转，同簇弱 |
+| `mid-fa-turn-vol` | +1.35 | 1.40 | 88 | 固定资产周转单轴，近窗垫底 |
+| `mid-smallcap-dividend-weekly` | +1.15 | 1.45 | 81 | 小盘高股息，小市值周度家族里最弱 |
+
+退出集合与 `NON_SUE_NEAR_DUP_DEMOTED` 一致，共 17 条。资产负债表三只的 Jaccard 约 0.8–0.9 来自主人侧观察，本环境没有那批选股文件，未重算；近窗同 n、同档每笔与「几乎同票」一致，所以不是三只里留最强的一只，而是三只都退出。
 
 
 
