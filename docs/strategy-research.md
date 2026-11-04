@@ -12037,3 +12037,11 @@ L-198。同一事件源只改持有期、弱反应带或放量门槛，是家族
 - 白话：现役 mid-sue-accel-vol 事件不变，同日排序从 min(SUE,20) 换成 **EA_combo**（候选内 pct_chg 百分位 + 总市值升序百分位）。同进程 SUEGVOL_base。
 - 想法：§975 在骨架最近的 EAVOL 上成立；SUEGVOL 已否 sc_orv，combo 未测。不新开 id。
 - 判定：同 §980。输出 `backend/output/research/s981/`。
+
+
+## §982 [中线·文献·正交新骨架] 正式财报「超出业绩预告上限」（FAB_h20，forecast-to-actual beat）— 预注册（2026-11-04 12:15 CST 写于跑任何收益之前）
+- 白话：某报告期**先**有业绩预告（类型 预增/略增，给出 p_change_max），**后**首次披露正式定期报告时，归母净利同比 netprofit_yoy **≥ 预告上限 p_change_max + 10 个百分点**，且净利为正方向（netprofit_yoy>0）→ 报告披露首个交易日收盘出信号，次日开盘买，持 20 日。按超出幅度（netprofit_yoy − p_change_max，封顶 100）降序；liq；K20/max_new5；0.3% 成本；真实成交。
+- 想法 / 文献：管理层预告天然保守，「兑现超上限」是对**自己预告**的意外（≠ SUE 对历史波动的意外；≠ 预告事件本身；≠ 业绩加速阈值）。事件源 = 预告→正式报告的差值，骨架（事件源）与现役全部不同。日志 grep「超预告/预告上限/p_change_max」0 条。
+- 去重：§103 预告族 / §319 SUE / §93 业绩加速 / §471 快报 均不同口径。非仓位。不碰数据网关（只用本地 forecast/fina 缓存）。
+- 判定：新策略只看 A（§282 中线，回撤 −25）。A 过 → 新 strategy_id `mid-forecast-beat-actual`（新事件源，非近亲，L-197/198 合规）上线并 onboard replay；否则 REJECT 写入 MID_REJECTED。仅此一版，不扫阈值。
+- 脚本：`fab_s982.py` / `run_s982.sh`；输出 `backend/output/research/s982/`。
