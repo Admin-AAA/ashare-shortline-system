@@ -976,6 +976,87 @@ def _retire_sue_ladder() -> None:
 _retire_sue_ladder()
 
 
+# 2026-11-04 非 SUE 近重复日频收敛。定义仍留在上面的 STRATEGIES 字面量里
+# （候选函数、历史 picks、回测指标都不删）；加载后把近重复和弱尾挪进 RETIRED_STRATEGIES。
+# 同一事件源只改持有期、弱反应带或放量门槛，是家族内部的参数或过滤器，不得再新开 strategy_id。
+# 这不是仓位管理，也不改选股公式。SUE 六冠军不在这张表里。
+# 近 12 个月数字来自 midterm_backtest_metrics.json 的 recent_12m / quality.R12。
+NON_SUE_NEAR_DUP_CHAMPIONS: tuple[str, ...] = (
+    "mid-repurchase-plan-underreact",           # 回购：弱反应持 20
+    "mid-forecast-preincrease-underreact-vol",  # 预增：弱反应∩放量
+    "mid-forecast-preincrease-underreact",      # 预增：弱反应宽池（R12 仍强，不是弱母集）
+    "mid-forecast-beat-underreact",             # 预喜合集：弱反应
+    "mid-forecast-beat",                        # 预喜合集宽池（略增/扭亏单拆退出后仍要覆盖已反应的预喜）
+    "mid-incentive-vol",                        # 激励：期权∩放量
+    "mid-incentive-option",                     # 激励：期权草案宽池（n 约为放量版 3 倍，R12 仍强）
+    "mid-turn-days-vol",                        # 资产负债表三兄弟全退后的效率轴
+)
+# 明确不因本轮近重复退出的策略。不在冠军元组里，但退役函数必须看见它们仍在 STRATEGIES。
+NON_SUE_CULL_PROTECTED: tuple[str, ...] = (
+    "mid-sales-exp-vol",
+    "mid-earnings-accel",
+    "mid-earnings-accel-vol",
+    "mid-ea-td-vol",
+    "mid-small-cap-weekly",
+    "mid-smallcap-reversal-weekly",
+)
+NON_SUE_NEAR_DUP_DEMOTE_REASONS: dict[str, str] = {
+    "mid-repurchase-plan": "回购预案全量母集（金额/市值≥0.5%，持20，按比例排序）。R12 +1.35/PF1.32/n194、回撤 −14.0，中位数 +0.05。同事件弱反应持20（mid-repurchase-plan-underreact）R12 +2.98/PF1.80/n118。全量预案是弱母集，日频只留弱反应持20。",
+    "mid-repurchase-underreact": "与冠军 mid-repurchase-plan-underreact 同一预案池、同一弱反应带（信号日 −1%~+2%、未涨停）、同一信号日涨跌排序，只把持有期改成 5 日。R12 +1.20/PF1.56/n127，低于持20的 +2.98。2026-11-03 日推持5的三只（神开股份、无锡振华、紫光国微）也出现在同日全量预案里。持有期是参数，不是第二条日频策略。",
+    "mid-forecast-preincrease": "预增全量母集。R12 +1.73/PF1.36/n122、中位数 −0.65、彩票型。弱反应∩放量冠军 mid-forecast-preincrease-underreact-vol 为 R12 +5.90/PF3.31。全量预增退出日频。",
+    "mid-forecast-preincrease-vol": "预增只加放量、没有弱反应。R12 +1.63/PF1.42/n104、彩票型，与全量母集同档。放量单独不够，日频不留这一档。",
+    "mid-forecast-turnaround": "扭亏单拆。R12 +1.82/PF1.40/n71、彩票型、回撤 −16.2，近三年回撤 −25.0。弱于预喜弱反应冠军 mid-forecast-beat-underreact（R12 +4.44）。类型单拆不再单独出票。",
+    "mid-forecast-slight": "略增全量。R12 +1.97/PF1.65/n79。略增家族整簇近窗都在 +1.5～+2.3，低于预增/预喜冠军。类型单拆退出。",
+    "mid-forecast-slight-vol": "略增∩放量。R12 +2.30/PF2.04/n37，样本偏瘦，仍是略增家族的过滤变体。",
+    "mid-forecast-slight-underreact": "略增∩弱反应。R12 +1.48/PF1.37/n51，略增家族里最弱的一档。",
+    "mid-incentive-underreact": "期权激励再套弱反应硬过滤。R12 +2.24/PF1.51/n37。宽池 mid-incentive-option 已经按信号日涨跌排序（R12 +4.53/n123），放量冠军 mid-incentive-vol R12 +6.96。弱反应子集重叠高且更弱，退出。",
+    "mid-tad-vol": "有形资产/负债∩放量。R12 +2.18/PF1.65/n84、彩票型。与 mid-etd-vol、mid-tad-etd-vol 近窗 n 同为 84、每笔都在 +2.0～+2.2（主人侧 Jaccard 约 0.8–0.9，本环境未重算）。三只一起退出，效率轴改由 mid-turn-days-vol（R12 +4.62/PF2.30/n84）代表。",
+    "mid-etd-vol": "股东权益/负债∩放量。R12 +2.05/PF1.61/n84。与有形资产/负债、双改善合取同档，不是独立边。",
+    "mid-tad-etd-vol": "有形资产/负债∩股东权益/负债合取。R12 +2.02/PF1.63/n84，是前两只的交集变体，每笔没有更高。",
+    "mid-fa-td-vol": "固定资产周转∩营业周期∩放量。R12 +1.93/PF1.49/n83、彩票型。营业周期已有 mid-turn-days-vol（R12 +4.62）和 SUE 冠军 mid-sue-td-vol，这条合取没有抬近窗。",
+    "mid-ncs-td-vol": "净负债转净现金∩营业周期∩放量。R12 +1.89/PF1.42/n31、胜率 38.7%、彩票型。样本瘦、每笔弱。",
+    "mid-etd-fa-vol": "股东权益/负债∩固定资产周转∩放量。R12 +1.63/PF1.50/n70。权益/负债轴整簇已退出，这条合取同样弱。",
+    "mid-fa-turn-vol": "固定资产周转扩张∩放量。R12 +1.35/PF1.40/n88、彩票型。单轴近窗垫底档。",
+    "mid-smallcap-dividend-weekly": "小盘高股息周度。R12 +1.15/PF1.45/n81、彩票型，小市值周度家族里最弱。小市值本体 mid-small-cap-weekly（R12 +4.64）和小盘反转（R12 +4.21）仍留。",
+}
+NON_SUE_NEAR_DUP_DEMOTED: tuple[str, ...] = tuple(NON_SUE_NEAR_DUP_DEMOTE_REASONS)
+
+
+def non_sue_near_dup_rejected_rows() -> list[dict[str, str]]:
+    """/mid 淘汰清单：非 SUE 近重复收敛说明 + 每条已退出日频的策略。"""
+    champs = "、".join(NON_SUE_NEAR_DUP_CHAMPIONS)
+    rows = [{
+        "name": "非 SUE 近重复日频收敛（中线现役 47→30）",
+        "reason": (
+            f"回购、预告、激励和资产负债表近重复退出 17:35 出票与 /mid 现役列表。各簇保留 {champs}。"
+            "同一事件源只改持有期、弱反应带或放量门槛，做成参数或过滤器，不再新开 strategy_id。"
+            "定义、回测指标与历史选股保留，按策略 id 仍可查旧批次。这不是仓位管理。"
+        ),
+    }]
+    for sid in NON_SUE_NEAR_DUP_DEMOTED:
+        meta = RETIRED_STRATEGIES[sid]
+        rows.append({"name": f"{meta['name']}（{sid}）", "reason": NON_SUE_NEAR_DUP_DEMOTE_REASONS[sid]})
+    return rows
+
+
+def _retire_non_sue_near_dups() -> None:
+    reasons = NON_SUE_NEAR_DUP_DEMOTE_REASONS
+    missing = [sid for sid in (*reasons, *NON_SUE_NEAR_DUP_CHAMPIONS, *NON_SUE_CULL_PROTECTED) if sid not in STRATEGIES]
+    overlap = sorted(set(reasons) & (set(NON_SUE_NEAR_DUP_CHAMPIONS) | set(NON_SUE_CULL_PROTECTED) | set(SUE_LADDER_CHAMPIONS)))
+    sue_hit = sorted(sid for sid in reasons if "sue" in sid)
+    long_hit = sorted(sid for sid in reasons if sid.startswith("long-") or STRATEGIES.get(sid, {}).get("horizon") == "long")
+    if missing or overlap or sue_hit or long_hit or len(reasons) != len(set(reasons)):
+        raise RuntimeError(
+            "非 SUE 近重复注册不一致："
+            f"missing={missing} overlap={overlap} sue={sue_hit} long={long_hit}"
+        )
+    for sid in reasons:
+        RETIRED_STRATEGIES[sid] = STRATEGIES.pop(sid)
+
+
+_retire_non_sue_near_dups()
+
+
 def _formal_entry(fn):
     """正式链路入口：函数内经数据网关的请求一律拒绝旧缓存（stale）数据。"""
     import functools

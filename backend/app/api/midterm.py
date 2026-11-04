@@ -395,7 +395,7 @@ def _detail(db, horizon, strategy_id, signal_date, code, before, after):
 def mid_strategies(db: Session = Depends(get_db)):
     # 默认按综合分降序（周期内排序，沉底的在后）；rank_* 字段见 services/strategy_rank.py
     return {"horizon": "mid", "strategies": rank_horizon_strategies(svc.strategies_overview("mid", db)),
-            "rejected": svc.sue_ladder_rejected_rows() + MID_REJECTED}
+            "rejected": svc.sue_ladder_rejected_rows() + svc.non_sue_near_dup_rejected_rows() + MID_REJECTED}
 
 
 @router.get("/mid/picks")
