@@ -26,8 +26,23 @@ def fina_first():
     return d.sort("ann_date").unique(["ts_code", "end_date"], keep="first", maintain_order=True)
 
 
+def forecast_first():
+    cols = ["ts_code", "ann_date", "end_date", "type", "p_change_max"]
+    parts = []
+    for f in sorted(glob.glob(str(L.D / "forecast" / "*.parquet"))):
+        try:
+            x = pl.read_parquet(f)
+        except Exception:
+            continue
+        if not set(cols) <= set(x.columns) or x.height == 0: continue
+        parts.append(x.select([c(k).cast(pl.Utf8) if k != "p_change_max" else c(k).cast(pl.Float64, strict=False) for k in cols]))
+    d = pl.concat(parts, how="vertical_relaxed").drop_nulls(["ann_date", "end_date"])
+    d = d.with_columns(c("ann_date").str.strip_chars()).filter(c("ann_date").str.len_chars() == 8)
+    return d.sort("ann_date").unique(["ts_code", "end_date"], keep="first", maintain_order=True)
+
+
 def fab_events(td):
-    fc = R20.forecast_first().filter(c("type").is_in(["预增", "略增"]) & c("p_change_max").is_not_null()) \
+    fc = forecast_first().filter(c("type").is_in(["预增", "略增"]) & c("p_change_max").is_not_null()) \
         .select("ts_code", "end_date", c("ann_date").alias("fc_ann"), "p_change_max")
     fi = fina_first().join(fc, on=["ts_code", "end_date"], how="inner").filter(c("fc_ann") < c("ann_date"))
     fi = fi.with_columns((c("netprofit_yoy") - c("p_change_max")).alias("beat")) \

@@ -12045,3 +12045,18 @@ L-198。同一事件源只改持有期、弱反应带或放量门槛，是家族
 - 去重：§103 预告族 / §319 SUE / §93 业绩加速 / §471 快报 均不同口径。非仓位。不碰数据网关（只用本地 forecast/fina 缓存）。
 - 判定：新策略只看 A（§282 中线，回撤 −25）。A 过 → 新 strategy_id `mid-forecast-beat-actual`（新事件源，非近亲，L-197/198 合规）上线并 onboard replay；否则 REJECT 写入 MID_REJECTED。仅此一版，不扫阈值。
 - 脚本：`fab_s982.py` / `run_s982.sh`；输出 `backend/output/research/s982/`。
+
+
+### §980 SUEGVOL_r20c_h20 — REJECT（A 过·彩票；B 否）
+- 结果：正段 7/8；R12 +2.45 PF1.56 n68 MDD−9.5（中位 −1.49）；N3 +3.04 PF1.85 n149 MDD−8.5。
+- B门对照 SUEGVOL_base(R12 +4.49 PF2.05 n70 中位 −0.67 / N3 +3.94；base 与线上 metrics 一致)：**否**（R12/N3 每笔均降，中位数更负）。
+- → **REJECTED**；线上不加 r20 过滤。解读：SUEG∩放量的赚钱票多是公告前已在涨的强势股——剔除过热反而砍掉右尾。**停 SUEGVOL 过热过滤轴**。（预注册行内时间写 12:08，实际 commit 2b0360e2 为 12:02，以 commit 为准。）
+
+### §981 SUEGVOL_combo_h20 — REJECT（A 过·彩票；B 否）
+- 结果：正段 7/8；R12 +1.97 PF1.39 n70 MDD−10.3（中位 −1.49）；N3 +3.07 PF1.81 MDD−8.8。
+- B门对照 base（R12 +4.49 / N3 +3.94）：**否**。→ **REJECTED**；线上仍 min(SUE,20)。解读：EA_combo 只在 EAVOL 成立，在 SUEGVOL/DINCVOL/FINAVOL/EACASVOL 均不外推——**combo 排序轴整体到站**。
+
+### §982 FAB_h20 — REJECT（A 否·正段/R12/样本）
+- 首跑因脚本 bug（复用 R20.forecast_first 的 COLS 不含 p_change_max）9 段全报错；改为本脚本自带 forecast loader 后重跑，**规则未改**。
+- 结果：每笔 P19 −2.62 / P20 −1.15 / P21 +3.89 / W0 +4.61 / W00 +0.09 / W1 −0.13 / W2 +4.06 / R12 −0.12（**正段 4/8**）；R12 20笔 −0.12% PF0.98 中位 −1.82；N3 57笔 +1.42 PF1.34 MDD−5.0。判定 ✗✗✓✗✗。
+- → **REJECTED**，写入 MID_REJECTED。解读：超预告上限事件 2022 后每年仅约 20 个（预增/略增后正式报告大幅超上限本来就少），样本过稀且近一年不赚。**不再扩该骨架的阈值**。
