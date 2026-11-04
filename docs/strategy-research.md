@@ -12010,3 +12010,30 @@ L-198。同一事件源只改持有期、弱反应带或放量门槛，是家族
 - 去重：RPU_sc_pct（§398 已上线 −pct）、RPUVOL/RPUTDVOL/RPUFATVOL 已否；小市值 combo 未测。不新开 strategy_id。
 - 判定：同 §977。A+B → 改 mid-repurchase-plan-underreact 排序键上线；否则 REJECT。
 - 输出 `backend/output/research/s979/`。
+
+
+### §977 FINAVOL_combo_h20 — REJECT（A 过·彩票型；B 否）
+- 结果：正段 6/8；R12 +1.99 PF1.43 n82 MDD−6.8（彩票型，中位 −0.14）；N3 +4.39 PF2.10 n238 MDD−10.3。
+- B门对照 FINAVOL_base(dq：R12 +2.33 PF1.51 / N3 +2.76 MDD−11.0；base R12 与线上 metrics 一致)：**否**（R12 每笔 −0.34；N3 虽 +1.63 且回撤更浅，但预注册要求 R12 与 N3 同时 ≥ base）。
+- → **REJECTED**；线上仍按 dq。备注：N3 抬幅显著，近一年反向——不放宽规则，**停 FINAVOL combo 轴**。
+
+### §978 EACASVOL_combo_h20 — REJECT（A 否·R12 PF；B 否）
+- 结果：正段 5/8；R12 +1.23 PF1.25 n68 MDD−9.7（彩票，中位 −3.26）；N3 +2.21 PF1.53。判定 ✓✗✓✓✓。
+- B门对照 EACASVOL_base(sc_g：R12 +2.70 / N3 +2.86)：**否**（两段每笔均降）。→ **REJECTED**；线上仍 sc_g。**停 EACASVOL combo 轴**。
+
+### §979 RPU20_combo_h20 — REJECT（A 过；B 否·N3 回撤更深）
+- 结果：正段 7/8；R12 +3.15 PF1.85 n118 MDD−9.2（稳健）；N3 +3.68 PF2.21 n290 MDD−12.7。A ✓✓✓✓✓。
+- B门对照 RPU20_base(−pct：R12 +2.98 PF1.80 MDD−9.2 / N3 +3.56 MDD−11.8)：R12/N3 每笔均抬（+0.17/+0.12），但 **N3 回撤 −12.7 深于 −11.8** → 按预注册 **B 否**。
+- → **REJECTED**；线上仍 −pct。备注：边际正向但触回撤条款，不放宽。
+
+
+## §980 [中线·现役改进] 盈余加速∩放量 同 id 加「信号前未过热」过滤（SUEGVOL_r20c_h20）— 预注册（2026-11-04 12:08 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-accel-vol（SUE≥2.2∩G∩放量1.5×，按 min(SUE,20)）**同 id** 再要求信号日 **近20日累计涨幅 r20 ≤ 30%**（剔除公告前已大涨、利好多已计价的票）；排序/持有不变。同进程 SUEGVOL_base。
+- 想法：基线 R12 中位数 −0.67（彩票尾）；SUE/dtp/orv/放量/排序轴均已冻。过热剔除是价格侧新过滤轴（非质量近亲、不新开 id；L-197 合规）。门槛 30% 为整数预设，不扫参。
+- 判定：A §282 中线；B：R12 与 N3 每笔均 ≥ base 且 N3 回撤不更深；**额外目标** R12 中位数 >0（不作为硬门，仅报告）。A+B → 线上 mid-sue-accel-vol 加过滤；否则 REJECT。
+- 脚本：`suegvol_w2_s980_981.py r20c`；输出 `backend/output/research/s980/`。
+
+## §981 [中线·现役改进] 盈余加速∩放量 同样本改按 EA_combo 排序（SUEGVOL_combo_h20）— 预注册（2026-11-04 12:08 CST 写于跑任何收益之前）
+- 白话：现役 mid-sue-accel-vol 事件不变，同日排序从 min(SUE,20) 换成 **EA_combo**（候选内 pct_chg 百分位 + 总市值升序百分位）。同进程 SUEGVOL_base。
+- 想法：§975 在骨架最近的 EAVOL 上成立；SUEGVOL 已否 sc_orv，combo 未测。不新开 id。
+- 判定：同 §980。输出 `backend/output/research/s981/`。
