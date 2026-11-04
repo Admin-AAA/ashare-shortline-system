@@ -11909,15 +11909,17 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 退出集合与 `SUE_LADDER_DEMOTED` 一致，共 35 条，按本库 recent_12m 每笔从高到低。
 
 
+### §974 RETPSUEGVOL_d55_h20 — CANCELLED（治理·不得扩编；磁盘有跑数但不采纳）
+- 磁盘 `backend/output/research/s974/` 已有完整 8+ N3 段结果（非本轮新开）：正段 6/8；R12 +4.58 PF2.04 n67 MDD−11.1（彩票）；N3 +3.79 PF2.02 n152 MDD−10.4（稳健）。同进程 base R12 约见 trades_RETPSUEGVOL_base_*。
+- **不 ADOPT、不上线、不新开 strategy_id**。依据：用户 2026-11-03 收敛令 + 治理节「§974 一类扩编停止」；`mid-retp-sue-vol` 已在 35 条退出日频名单（R12 彩票且回撤深）。本条仅作归档，停止 RETP∩SUEG 一切门槛硬抬。
 
 
-
-
-
-
-
-
-
-
+## §975 [中线·现役改进] 业绩加速∩放量同样本改按 EA_combo 排序（EAVOL_combo_h20）— 预注册（2026-11-04 08:46 CST 写于跑任何收益之前）
+- 白话：现役 mid-earnings-accel-vol（EAVOL：G ∩ amount≥1.5×amt20，按 sc_g=dtp 排序）**事件一字不改**，只把同日排序换成与现役 mid-earnings-accel 相同的 **EA_combo**（当日 EAVOL 候选内「信号日 pct_chg 百分位」+「总市值升序百分位」等权；缺一记 0）。持 20。同进程 EAVOL_base(sc_g)。
+- 想法：非 SUE∩质量梯子。骨架差异在**排序逻辑**。现役 EAVOL R12 仅 +1.56/PF1.30，远弱于无放量的 mid-earnings-accel（EA_combo，R12 +5.78）；EAVOL 已冻放量硬抬/加速幅度/orv/amtr 排序轴；本题把已在 G 上成立的 combo 排序接到放量子集，测是否抬选股质量（非仓位）。
+- 去重：EAVOL_sc_acc / sc_orv / sc_amtr / v18 / v20 / EAU / EA_sc_pct 已否；EAVOL_combo 未测。非 SUE 新 strategy_id。不碰数据网关。
+- 规则：EAVOL 信号不变；sc_combo = rank_pct(pct_chg|EAVOL) + rank_pct(−total_mv|EAVOL)；K20/max_new5；成本 0.3%；真实成交。B 对照同进程 EAVOL_base。
+- 判定：A §282 中线（s286_287_eval 回撤 −25）；B 相对 base：R12 与 N3 每笔均 ≥ base，且 N3 回撤不更深。A+B → 建议上线改排序（待用户确认）；否则 REJECT，线上仍 sc_g。
+- 脚本：`eavol_combo_s975.py` / `run_s975.sh`；输出 `backend/output/research/s975/`。
 
 
