@@ -11991,3 +11991,22 @@ L-198。同一事件源只改持有期、弱反应带或放量门槛，是家族
 - 结果：正段 7/8；R12 +2.28 PF1.36 n163 MDD−17.8（稳健型）；N3 +4.30 PF1.91 n391 MDD−12.9。判定 A ✓✓✓✓✓。
 - B门对照 DINCVOL_base(sc_inc：R12+2.27/N3+4.53 MDD−12.2)：**否**（R12 每笔几乎打平 +0.01；N3 每笔 −0.23 且回撤更深 −12.9 vs −12.2）。
 - → **REJECTED**；线上 mid-dividend-increase-vol 仍按增幅 sc_inc 排序。解读：§975 在 EAVOL 成立的 EA_combo 不外推到分红放量子集——近三年伤选股质量；**停 DINCVOL combo 排序轴**（增幅/−pct/派现/放量硬抬已否或冻）。
+
+
+## §977 [中线·现役改进] 财务费用率下降∩放量同样本改按 EA_combo 排序（FINAVOL_combo_h20）— 预注册（2026-11-04 11:55 CST 写于跑任何收益之前）
+- 白话：现役 mid-fina-exp-vol（FINA 降幅≥0.5pp ∩ amount≥1.5×amt20，按原始降幅 dq 排序）**事件一字不改**，只把同日排序换成 **EA_combo**（当日 FINAVOL 候选内 pct_chg 百分位 + 总市值升序百分位等权）。持 20。同进程 FINAVOL_base(dq)。
+- 去重：FINAVOL_sc_amtr / sc_rel / v18 / 降幅软扩硬抬已否；combo 未测。不新开 strategy_id。
+- 判定：A §282 中线（回撤 −25）；B：R12 与 N3 每笔均 ≥ base 且 N3 回撤不更深。A+B → 改 mid-fina-exp-vol 排序键上线；否则 REJECT。
+- 脚本：`combo_wave2_s977_979.py FINAVOL` / `run_wave2.sh`；输出 `backend/output/research/s977/`。
+
+## §978 [中线·现役改进] 业绩加速∩流动资产∩放量同样本改按 EA_combo 排序（EACASVOL_combo_h20）— 预注册（2026-11-04 11:55 CST 写于跑任何收益之前）
+- 白话：现役 mid-ea-cas-vol（G ∩ CAS升幅≥3pp ∩ 放量1.5×，按 sc_g=dtp 封顶300 排序）**事件一字不改**，只把同日排序换成 **EA_combo**（同 §975）。持 20。同进程 EACASVOL_base(sc_g)。
+- 去重：EACASVOL_sc_cas / d55 / o25 / v18 / cas40 已否；combo 未测（§975 在 EAVOL 成立，§976 在 DINCVOL 不成立）。不新开 strategy_id。
+- 判定：同 §977。A+B → 改 mid-ea-cas-vol 排序键上线；否则 REJECT。
+- 输出 `backend/output/research/s978/`。
+
+## §979 [中线·现役改进] 回购弱反应持20 同样本改按 弱反应+小市值 combo 排序（RPU20_combo_h20）— 预注册（2026-11-04 11:55 CST 写于跑任何收益之前）
+- 白话：现役 mid-repurchase-plan-underreact（RP_r05 ∩ 信号日涨跌 −1%~+2% 且未封板，按 −pct 排序）**事件一字不改**，只把同日排序换成 **rank_pct(−pct_chg|RPU20) + rank_pct(−total_mv|RPU20)** 等权（保留弱反应方向，叠小市值）。持 20。同进程 RPU20_base(−pct)。
+- 去重：RPU_sc_pct（§398 已上线 −pct）、RPUVOL/RPUTDVOL/RPUFATVOL 已否；小市值 combo 未测。不新开 strategy_id。
+- 判定：同 §977。A+B → 改 mid-repurchase-plan-underreact 排序键上线；否则 REJECT。
+- 输出 `backend/output/research/s979/`。
