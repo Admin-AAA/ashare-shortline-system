@@ -2025,3 +2025,11 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 证据：`midterm_backtest_metrics.json` 的 recent_12m 里名称含 sue 的中线策略 41 条，骨架相同、只换过滤字段。2026-08-14～2026-11-02 选股文件上家族两两 Jaccard 约 0.57，被点到的代码几乎都会被至少两条族内策略同时命中（主人侧 picks；本环境无该批文件）。日频因此只留 6 个分簇冠军。
 - 永久规则：新的财务质量轴做成现有冠军的参数或过滤器，不得再 ADOPT 成新 `strategy_id`。日频名单以 `midterm_service.SUE_LADDER_CHAMPIONS` 为准；其余同骨架策略放在 `RETIRED_STRATEGIES`，不出新票、不进 /mid 现役列表，定义、回测指标和历史选股保留。这不是仓位管理，系统仍然只荐股。
 - 吸收位置：`docs/strategy-research.md`「SUE∩质量家族日频收敛」，`backend/app/services/midterm_service.py`，`backend/docs/strategy_onboarding_replay.md`。
+
+## L-198 同一事件源的持有期、弱反应或放量是参数，不是新的 strategy_id
+
+- 状态：encoded
+- 适用：中线日频。回购、业绩预告、股权激励、资产负债表比率，以及以后同一事件源只改持有期、弱反应带或放量门槛的研究
+- 证据：2026-11-03 日推同时出现三张回购预案卡（全量持 20、弱反应持 5、弱反应持 20），持 5 的三只也出现在同日全量预案里。`midterm_backtest_metrics.json` 的 recent_12m 里，回购全量母集 +1.35、持 5 弱反应 +1.20，都弱于持 20 弱反应 +2.98；有形资产/负债、股东权益/负债、二者合取 n 同为 84、每笔都在 +2.0～+2.2。中线现役因此从 47 收到 30。SUE 六冠军不在这次名单里。
+- 永久规则：同一事件源只改持有期、弱反应带或放量门槛，做成现有冠军的参数或过滤器，不得再 ADOPT 成新 `strategy_id`。日频名单以各簇冠军为准（`NON_SUE_NEAR_DUP_CHAMPIONS` 加上仍在 `STRATEGIES` 里的其余中线策略）；近重复和弱尾放在 `RETIRED_STRATEGIES`，不出新票、不进 /mid 现役列表，定义、回测指标和历史选股保留。这不是仓位管理，系统仍然只荐股。SUE∩质量轴继续另按 L-197。
+- 吸收位置：`docs/strategy-research.md`「非 SUE 近重复日频收敛」，`backend/app/services/midterm_service.py`，`backend/docs/strategy_onboarding_replay.md`。

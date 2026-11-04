@@ -14,18 +14,18 @@ def _setup(tmp_path, monkeypatch, realized):
     picks = tmp_path / "picks"
     picks.mkdir()
     monkeypatch.setattr(ms, "OUT_DIR", picks)
-    _write(picks, "2026-09-01_mid-repurchase-plan.json", {"strategy_id": "mid-repurchase-plan", "signal_date": "2026-09-01",
+    _write(picks, "2026-09-01_mid-repurchase-plan-underreact.json", {"strategy_id": "mid-repurchase-plan-underreact", "signal_date": "2026-09-01",
            "origin": "replay", "picks": [{"code": "A", "ratio": 0.01}, {"code": "B", "ratio": 0.01}]})
     _write(picks, "2026-09-04_mid-small-cap-weekly.json", {"strategy_id": "mid-small-cap-weekly", "signal_date": "2026-09-04",
            "picks": [{"code": "C", "total_mv": 1e5}]})
-    _write(picks, "2026-10-16_mid-repurchase-plan.json", {"strategy_id": "mid-repurchase-plan", "signal_date": "2026-10-16",
+    _write(picks, "2026-10-16_mid-repurchase-plan-underreact.json", {"strategy_id": "mid-repurchase-plan-underreact", "signal_date": "2026-10-16",
            "picks": [{"code": "D", "ratio": 0.01}, {"code": "E", "ratio": 0.01}]})
     _write(picks, "2026-10-16_long-dividend-lowvol.json", {"strategy_id": "long-dividend-lowvol", "signal_date": "2026-10-16",
            "picks": [{"code": "F", "ratio": 0.02}]})
     status = tmp_path / "status"
     status.mkdir()
     _write(status, "2026-10-16.json", {
-        "mid-repurchase-plan": {"status": "ok", "raw": 2, "recorded_at": "2026-10-16T10:00:00Z"},
+        "mid-repurchase-plan-underreact": {"status": "ok", "raw": 2, "recorded_at": "2026-10-16T10:00:00Z"},
         "mid-forecast-beat": {"status": "slots_full", "raw": {"skipped": "slots_full", "held": 25}},
         "long-dividend-lowvol": {"status": "ok", "raw": 1},
     })
@@ -74,7 +74,7 @@ def test_metrics_breakdowns(tmp_path, monkeypatch):
     assert m["by_origin"]["replay"]["n"] == 2 and m["by_origin"]["legacy"]["n"] == 1 and m["by_origin"]["live"]["n"] == 0
     by = {s["strategy_id"]: s for s in m["by_strategy"]}
     assert set(by) == {k for k, v in ms.STRATEGIES.items() if v["horizon"] == "mid"}
-    assert by["mid-repurchase-plan"]["n"] == 2 and by["mid-earnings-accel"]["n"] == 0
+    assert by["mid-repurchase-plan-underreact"]["n"] == 2 and by["mid-earnings-accel"]["n"] == 0
     top = {x["k"]: x for x in m["top_k"]}
     assert top[1]["n"] == 2 and top[10]["n"] == 3    # A(排名1) C(排名1)；B 排名2
     assert [x["month"] for x in m["by_month"]] == ["2026-10", "2026-09"]
@@ -86,8 +86,8 @@ def test_metrics_breakdowns(tmp_path, monkeypatch):
 def test_portrait_realized_12m_drops_older_signal_dates(tmp_path, monkeypatch):
     """画像条窗口按信号日近 365 天；全历史 overview 仍含更早的已平仓。调用方 window_days 不缩小这一块。"""
     _setup(tmp_path, monkeypatch, REALIZED)
-    _write(ms.OUT_DIR, "2024-01-02_mid-repurchase-plan.json", {
-        "strategy_id": "mid-repurchase-plan", "signal_date": "2024-01-02", "origin": "replay",
+    _write(ms.OUT_DIR, "2024-01-02_mid-repurchase-plan-underreact.json", {
+        "strategy_id": "mid-repurchase-plan-underreact", "signal_date": "2024-01-02", "origin": "replay",
         "picks": [{"code": "OLD", "ratio": 0.01}],
     })
     realized = {**REALIZED, "OLD": {"status": "closed", "ret": 99.0, "days": 20}}
@@ -96,34 +96,34 @@ def test_portrait_realized_12m_drops_older_signal_dates(tmp_path, monkeypatch):
     m = ha.metrics(None, "mid", today=today)
     assert m["overview"]["n"] == 4  # A B C OLD 已平仓；D 持有、E 取消不计入
     full = {s["strategy_id"]: s for s in m["by_strategy"]}
-    assert full["mid-repurchase-plan"]["n"] == 3  # A B + OLD
+    assert full["mid-repurchase-plan-underreact"]["n"] == 3  # A B + OLD
 
     p = m["portrait_realized_12m"]
     assert p["window_days"] == 365 and p["window_basis"] == "signal_date"
     assert p["window_start"] == "2025-10-21" and p["window_end"] == "2026-10-21"
     assert "信号日" in p["note"]
     by = {s["strategy_id"]: s for s in p["by_strategy"]}
-    assert by["mid-repurchase-plan"]["n"] == 2  # 2026-09-01 的 A、B；2024-01-02 的 OLD 在窗口外
-    assert by["mid-repurchase-plan"]["avg_ret"] == 2.5
+    assert by["mid-repurchase-plan-underreact"]["n"] == 2  # 2026-09-01 的 A、B；2024-01-02 的 OLD 在窗口外
+    assert by["mid-repurchase-plan-underreact"]["avg_ret"] == 2.5
     assert p["by_origin"]["replay"]["n"] == 2 and p["by_origin"]["live"]["n"] == 0
 
     narrowed = ha.metrics(None, "mid", window_days=30, today=today)
     assert narrowed["overview"]["n"] == 0 and narrowed["window_start"] == "2026-09-21"
     still = {s["strategy_id"]: s for s in narrowed["portrait_realized_12m"]["by_strategy"]}
-    assert still["mid-repurchase-plan"]["n"] == 2
+    assert still["mid-repurchase-plan-underreact"]["n"] == 2
     assert narrowed["portrait_realized_12m"]["window_start"] == "2025-10-21"
     live_only = {s["strategy_id"]: s for s in p["by_strategy_live"]}
-    assert live_only["mid-repurchase-plan"]["n"] == 0
+    assert live_only["mid-repurchase-plan-underreact"]["n"] == 0
 
 
 def test_portrait_live_series_excludes_replay(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch, REALIZED)
-    _write(ms.OUT_DIR, "2026-10-02_mid-repurchase-plan.json", {
-        "strategy_id": "mid-repurchase-plan", "signal_date": "2026-10-02",
+    _write(ms.OUT_DIR, "2026-10-02_mid-repurchase-plan-underreact.json", {
+        "strategy_id": "mid-repurchase-plan-underreact", "signal_date": "2026-10-02",
         "picks": [{"code": "LIV", "ratio": 0.01}],
     })
     _write(ms.OUT_DIR.parent / "status", "2026-10-02.json", {
-        "mid-repurchase-plan": {"status": "ok", "raw": 1, "recorded_at": "2026-10-02T10:00:00Z"},
+        "mid-repurchase-plan-underreact": {"status": "ok", "raw": 1, "recorded_at": "2026-10-02T10:00:00Z"},
     })
     realized = {**REALIZED, "LIV": {"status": "closed", "ret": 1.0, "days": 20}}
     monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: dict(realized[c]))
@@ -131,8 +131,8 @@ def test_portrait_live_series_excludes_replay(tmp_path, monkeypatch):
     by = {s["strategy_id"]: s for s in p["by_strategy"]}
     live = {s["strategy_id"]: s for s in p["by_strategy_live"]}
     assert p["by_origin"]["live"]["n"] == 1
-    assert by["mid-repurchase-plan"]["n"] == 3  # 回放 A/B + 实盘 LIV
-    assert live["mid-repurchase-plan"]["n"] == 1 and live["mid-repurchase-plan"]["avg_ret"] == 1.0
+    assert by["mid-repurchase-plan-underreact"]["n"] == 3  # 回放 A/B + 实盘 LIV
+    assert live["mid-repurchase-plan-underreact"]["n"] == 1 and live["mid-repurchase-plan-underreact"]["avg_ret"] == 1.0
 
 
 def test_runs(tmp_path, monkeypatch):
@@ -140,6 +140,6 @@ def test_runs(tmp_path, monkeypatch):
     days = ha.runs("mid")
     assert len(days) == 1 and days[0]["date"] == "2026-10-16"
     items = {i["strategy_id"]: i for i in days[0]["items"]}
-    assert items["mid-repurchase-plan"]["picks"] == 2 and items["mid-forecast-beat"]["detail"] == "slots_full"
+    assert items["mid-repurchase-plan-underreact"]["picks"] == 2 and items["mid-forecast-beat"]["detail"] == "slots_full"
     assert "long-dividend-lowvol" not in items
     assert [i["strategy_id"] for i in ha.runs("long")[0]["items"]] == ["long-dividend-lowvol"]

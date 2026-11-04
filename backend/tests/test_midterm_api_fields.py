@@ -75,7 +75,7 @@ def test_cancel_fields():
 def test_pagination_and_horizon(tmp_path, monkeypatch):
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     for d in ("2026-10-12", "2026-10-13", "2026-10-14"):
-        for sid in ("mid-repurchase-plan", "long-dividend-lowvol"):
+        for sid in ("mid-earnings-accel", "long-dividend-lowvol"):
             (tmp_path / f"{d}_{sid}.json").write_text(json.dumps(
                 {"strategy_id": sid, "signal_date": d, "picks": [{"code": "000001", "ratio": 0.02}]}))
     monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: {"status": "pending"})
@@ -115,9 +115,10 @@ def test_retired_strategies_not_live():
     long_retired = {"long-repurchase-big", "long-current-debt-down", "long-dividend-increase",
                     "long-undist-profit-growth", "long-lowturn-lowvol"}
     sue_demoted = set(ms.SUE_LADDER_DEMOTED)
+    near_dup = set(ms.NON_SUE_NEAR_DUP_DEMOTED)
     assert long_retired <= set(ms.RETIRED_STRATEGIES)
     assert not long_retired & set(ms.STRATEGIES)
-    assert set(ms.RETIRED_STRATEGIES) == long_retired | sue_demoted
+    assert set(ms.RETIRED_STRATEGIES) == long_retired | sue_demoted | near_dup
 
 
 def test_sue_ladder_daily_pool_is_six_champions(tmp_path, monkeypatch):
@@ -130,9 +131,11 @@ def test_sue_ladder_daily_pool_is_six_champions(tmp_path, monkeypatch):
     assert live_sue == champs
     assert demoted <= set(ms.RETIRED_STRATEGIES)
     assert set(ms.SUE_LADDER_DEMOTE_REASONS) == demoted
-    for sid in ("mid-forecast-beat", "mid-repurchase-plan", "mid-earnings-accel",
-                "mid-ea-td-vol", "mid-ncs-td-vol"):
+    for sid in ("mid-forecast-beat", "mid-repurchase-plan-underreact", "mid-earnings-accel",
+                "mid-ea-td-vol", "mid-turn-days-vol"):
         assert sid in ms.STRATEGIES
+    for sid in ("mid-repurchase-plan", "mid-ncs-td-vol"):
+        assert sid not in ms.STRATEGIES and sid in ms.RETIRED_STRATEGIES
     overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
     assert champs <= overview and not demoted & overview
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path / "picks")
@@ -151,13 +154,43 @@ def test_sue_ladder_daily_pool_is_six_champions(tmp_path, monkeypatch):
     }
 
 
+def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
+    """回购三张卡、预告弱母集、激励弱反应子集、资产负债表三兄弟和弱尾退出日频。SUE 六冠军不动。"""
+    demoted = set(ms.NON_SUE_NEAR_DUP_DEMOTED)
+    champs = set(ms.NON_SUE_NEAR_DUP_CHAMPIONS)
+    protected = set(ms.NON_SUE_CULL_PROTECTED)
+    sue = set(ms.SUE_LADDER_CHAMPIONS)
+    assert len(demoted) == 17 and len(champs) == 8
+    assert not demoted & champs and not demoted & protected and not demoted & sue
+    assert demoted <= set(ms.RETIRED_STRATEGIES)
+    assert not demoted & set(ms.STRATEGIES)
+    assert champs | protected | sue <= set(ms.STRATEGIES)
+    live_mid = {sid for sid, meta in ms.STRATEGIES.items() if meta.get("horizon") == "mid"}
+    assert len(live_mid) == 30
+    assert live_mid & sue == sue
+    overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
+    assert live_mid == overview
+    assert not demoted & overview
+    monkeypatch.setattr(ms, "OUT_DIR", tmp_path / "picks")
+    assert ms.generate_picks(None, "2026-11-03", strategy_ids=["mid-repurchase-plan"]) == {}
+    assert ms.generate_picks(None, "2026-11-03", strategy_ids=["mid-repurchase-underreact"]) == {}
+    rows = ms.non_sue_near_dup_rejected_rows()
+    assert rows[0]["name"].startswith("非 SUE 近重复")
+    assert "47→30" in rows[0]["name"]
+    assert "仓位" in rows[0]["reason"]
+    assert {r["name"] for r in rows[1:]} == {
+        f"{ms.RETIRED_STRATEGIES[sid]['name']}（{sid}）" for sid in demoted
+    }
+
+
 def test_next_batch_note(tmp_path, monkeypatch):
     """strategies_overview 带动态 next_batch_note；无批次前缀「尚未出票；」。"""
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     monkeypatch.setattr(ms, "_next_month_end_trade_date", lambda db, today=None: "2026-10-30")
     # 无批次：全部前缀尚未出票
     notes = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("mid", db=None)}
-    assert notes["mid-repurchase-plan"] == "尚未出票；每个交易日盘后（17:35）选股，次日开盘买"
+    assert "mid-repurchase-plan" not in notes
+    assert notes["mid-repurchase-plan-underreact"] == "尚未出票；每个交易日盘后（17:35）选股，次日开盘买"
     assert notes["mid-small-cap-weekly"] == "尚未出票；每个周五收盘后选股，次日开盘买"
     assert notes["mid-block-trade-premium"] == "尚未出票；每晚约 21:00 大宗数据发布后选股，次日开盘买"
     long_notes = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("long", db=None)}
@@ -165,10 +198,10 @@ def test_next_batch_note(tmp_path, monkeypatch):
     assert long_notes["long-dividend-lowvol"] == "尚未出票；每月最后一个交易日收盘后选股，下一批：2026-10-30，次日开盘买"
     assert "2026-10-30" in long_notes["long-dividend-lowvol"]
     # 有批次后去掉前缀
-    (tmp_path / "2026-10-16_mid-repurchase-plan.json").write_text(
-        json.dumps({"strategy_id": "mid-repurchase-plan", "signal_date": "2026-10-16", "picks": []}))
+    (tmp_path / "2026-10-16_mid-repurchase-plan-underreact.json").write_text(
+        json.dumps({"strategy_id": "mid-repurchase-plan-underreact", "signal_date": "2026-10-16", "picks": []}))
     notes2 = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("mid", db=None)}
-    assert notes2["mid-repurchase-plan"] == "每个交易日盘后（17:35）选股，次日开盘买"
+    assert notes2["mid-repurchase-plan-underreact"] == "每个交易日盘后（17:35）选股，次日开盘买"
     assert notes2["mid-incentive-option"].startswith("尚未出票；")
 
 
@@ -177,13 +210,15 @@ def test_retired_strategies_not_in_horizon_lists(tmp_path, monkeypatch):
     名称查「现役→已下线」表，不显示英文 id；历史文件按 strategy_id 显式查询仍可读，持有期按 60 日。"""
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     d = "2026-10-14"
-    for sid in ("mid-repurchase-plan", "long-dividend-lowvol", "long-repurchase-big", "long-lowturn-lowvol",
-                "mystery-strategy"):
+    for sid in ("mid-repurchase-plan-underreact", "mid-repurchase-plan", "long-dividend-lowvol",
+                "long-repurchase-big", "long-lowturn-lowvol", "mystery-strategy"):
         (tmp_path / f"{d}_{sid}.json").write_text(json.dumps(
             {"strategy_id": sid, "signal_date": d, "picks": [{"code": "000001", "ratio": 0.02}]}))
     monkeypatch.setattr(ms, "_realize", lambda db, c, dd, h: {"status": "pending"})
     mid = ms.list_picks_page(None, None, "mid", page=1, page_size=30)
-    assert [b["strategy_id"] for b in mid["batches"]] == ["mid-repurchase-plan"]
+    assert [b["strategy_id"] for b in mid["batches"]] == ["mid-repurchase-plan-underreact"]
+    rp = ms.list_picks_page(None, "mid-repurchase-plan", None, 1, 30)["batches"][0]
+    assert rp["strategy_name"] == ms.RETIRED_STRATEGIES["mid-repurchase-plan"]["name"] and rp["hold_days"] == 20
     lng = ms.list_picks_page(None, None, "long", page=1, page_size=30)
     assert [b["strategy_id"] for b in lng["batches"]] == ["long-dividend-lowvol"]
     # §338 下线后历史文件保留，按 id 显式查询仍可读、持有期仍按 60 日结算
