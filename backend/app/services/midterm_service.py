@@ -131,10 +131,11 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "schedule": "daily",
     },
     # §513 业绩加速∩放量（scripts/midterm/eavol_s513.py EAVOL_h20；§282 达标；2026-11-01 上线）
+    # §975：同样本排序改 EA_combo（ann_pct + mv_pct；事件/放量门槛不变）
     "mid-earnings-accel-vol": {
         "name": "业绩加速∩放量确认（持20日）",
         "horizon": "mid",
-        "summary": "每个交易日盘后，在「财报业绩加速」事件池上再要求信号日成交额≥1.5×前20日均额。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按扣非净利同比（封顶300%）从高到低，次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：PEAD 量能确认（§513），盈余信息放量交易时漂移更稳。",
+        "summary": "每个交易日盘后，在「财报业绩加速」事件池上再要求信号日成交额≥1.5×前20日均额。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万。排序分（§975 EAVOL_combo）= 当日这批候选里「信号日涨跌幅」平均秩百分位 + 「总市值从小到大」平均秩百分位，两者等权、高者优先，平手按代码；次日开盘买入，各持有20个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：PEAD 量能确认（§513）+ 与无放量业绩加速同构的 combo 排序（§975）。",
         "kind": "earnings_accel_vol",
         "hold_days": 20,
         "schedule": "daily",
@@ -1924,6 +1925,8 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
             if ev is None:
                 result[sid] = "no_data"
                 continue
+            # §975：事件/放量不变，排序改 EA_combo（与 mid-earnings-accel 同构）
+            ev = ea_combo_rank(ev)
             picks = [p for p in ev if p["code"] not in held]
             if not picks:
                 result[sid] = 0
@@ -3184,7 +3187,7 @@ def _realize_rows(rows: list[Any], hold: int) -> dict[str, Any]:
 
 # 统一 rule_score：各策略自己的排序指标（原单位，见 label / better），selection_reason 为中文入选依据。
 # 业绩预告：列表展示真实增幅下限；排序分仍是落盘的 score=min(原值, 300)，批内名次按该分再按代码，这里不重排。
-# 业绩加速：新批次 score 是 §RV-C EA_combo（ann_pct + mv_pct）。没有这两项的旧批次仍按封顶同比展示，避免把 300 分说成百分位。
+# 业绩加速 / 业绩加速∩放量（§975）：新批次 score 是 EA_combo（ann_pct + mv_pct）。没有这两项的旧批次仍按封顶同比展示，避免把 300 分说成百分位。
 _RANK_CAP_NOTE = "排序时≥300%同等优先，平手按代码"
 _EA_COMBO_NOTE = "当日候选池内等权相加，平手按代码"
 
@@ -3257,11 +3260,19 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
                       f"业绩加速（扣非同比 {_f(p.get('dt_netprofit_yoy'), 1)}%，上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，"
                       f"营收同比 {_f(p.get('or_yoy'), 1)}%）")
         elif kind == "earnings_accel_vol":
-            score, label, better = _shown_pct(p.get("dt_netprofit_yoy"), p["score"]), "扣非净利同比(%)", "higher"
-            note = _RANK_CAP_NOTE
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告放量确认：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%；"
                       f"成交额/20日均额 {_f(p.get('vol_ratio'), 2)}×")
+            if "ann_pct" in p and "mv_pct" in p:
+                score, label, better = round(float(p["score"]), 4), "公告日涨幅百分位+小市值百分位", "higher"
+                note = _EA_COMBO_NOTE
+                mv_yi = _finite(p.get("total_mv"))
+                mv_yi = None if mv_yi is None else mv_yi / 1e4
+                reason += (f"；信号日涨跌幅 {_f(p.get('ann_pct_chg'), 2)}%，总市值 {_f(mv_yi)} 亿"
+                           f"（涨幅百分位 {_f(float(p['ann_pct']) * 100, 1)}%，小市值百分位 {_f(float(p['mv_pct']) * 100, 1)}%）")
+            else:
+                score, label, better = _shown_pct(p.get("dt_netprofit_yoy"), p["score"]), "扣非净利同比(%)", "higher"
+                note = _RANK_CAP_NOTE
         elif kind == "sue_accel_vol":
             score, label, better = round(float(p["score"]), 4), "SUE(封顶20)", "higher"
             note = _RANK_CAP_NOTE

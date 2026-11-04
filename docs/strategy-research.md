@@ -11923,3 +11923,9 @@ H1 / H3 同向（N3 均值 +0.85% / +0.77%，PF 1.39 / 1.21）。45 笔因出场
 - 脚本：`eavol_combo_s975.py` / `run_s975.sh`；输出 `backend/output/research/s975/`。
 
 
+### §975 EAVOL_combo_h20 — ADOPT → 已上线 mid-earnings-accel-vol（EA_combo 排序）
+- 结果：正段 6/8；R12 +2.86 PF1.65 n72 MDD−8.7；N3 +2.52 PF1.62 n196 MDD−13.1。判定 A ✓✓✓✓✓。
+- B门对照 EAVOL_base(sc_g：R12+1.56/N3+2.19 MDD−13.4)：**过**（R12/N3 每笔抬、N3 回撤略浅）。
+- → **ADOPT**。上线（2026-11-04 08:48 CST）：`mid-earnings-accel-vol` 排序 **dtp→EA_combo**（事件/放量≥1.5×不变）；`s975_onboard_metrics.py`；replay onboard 近3月；`safe_backend_restart`。解读：放量子集接上无放量 EA 已成立的 combo 排序，抬近一年/三年选股质量——非 SUE 梯子。
+
+

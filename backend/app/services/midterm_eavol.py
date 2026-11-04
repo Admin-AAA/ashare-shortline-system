@@ -1,7 +1,8 @@
 """[中线] §513 EAVOL_h20：业绩加速 ∩ 放量≥1.5×amt20（mid-earnings-accel-vol）实盘候选。
 
-研究：scripts/midterm/eavol_s513.py（G ∩ amount≥1.5·amt20，排序 sc_g=dtp 封顶300）。
+研究：scripts/midterm/eavol_s513.py（G ∩ amount≥1.5·amt20）。
 G 与现役 mid-earnings-accel 相同；另要求信号日成交额 ≥1.5×前20日均额。
+§975：generate_picks 路径对 mid-earnings-accel-vol 再套 ea_combo_rank；本函数仍返回 dtp 分供 EATD/EACAS 下游复用。
 事件时点 / 股池：同 earnings_accel_candidates。不另改数据网关。
 实盘推荐不设仓位上限（k_slots/max_new 仅回测口径）。
 §699 EATDVOL→ mid-ea-td-vol：G∩TD∩放量。
