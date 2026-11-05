@@ -303,6 +303,48 @@ def check_fina_period_coverage(db, now: datetime | None = None, snap_path: Path 
     return fina_coverage_item(periods, expected, db_codes, fina_coverage.load(snap_path))
 
 
+LOCAL_FINA_MISS_YELLOW = 10  # 库里有、本地逐股文件没有的可交易股票数（刷新后 0~2 只；11-05 修前三季报缺 5186 只）
+LOCAL_FINA_MISS_RED = 50
+
+
+def local_fina_item(periods: list[str], db_codes: dict[str, set[str]], local_codes: dict[str, set[str]],
+                    covered_through: str | None, lag: int | None) -> dict[str, Any]:
+    sev = GREEN if covered_through else YELLOW
+    parts = [f"刷新清单覆盖到 {covered_through}（落后 {lag} 个交易日）" if covered_through
+             else "没有刷新清单 _manifest.json（从未增量刷新过，重算按最大公告日判断覆盖）"]
+    if covered_through:
+        sev = _worse(sev, lag_severity(lag, allowed=0))
+    for p in periods:
+        miss = sorted((db_codes.get(p) or set()) - (local_codes.get(p) or set()))
+        s = RED if len(miss) >= LOCAL_FINA_MISS_RED else YELLOW if len(miss) >= LOCAL_FINA_MISS_YELLOW else GREEN
+        sev = _worse(sev, s)
+        parts.append(f"{p} 本地 {len(local_codes.get(p) or ())} 只，比库少 {len(miss)} 只" + (f"（{miss[0]}…{miss[-1]}）" if miss else ""))
+    return _item("file:midterm/fina:coverage", "本地逐股财务指标库覆盖", "数据质量", sev, kind="quality",
+                 latest=norm_date(covered_through), detail="；".join(parts),
+                 impact="近12个月滚动重算按本地覆盖日决定读本地还是走网关；SUE 家族的历史 SUE 全靠它，缺期就算不出、静默少票；"
+                        "fina_indicator_vip 不可用时的备用基线")
+
+
+def check_local_fina(db, open_days: list[str], expected: str, now: datetime | None = None,
+                     fina_dir: Path | None = None) -> dict[str, Any]:
+    """本地 data/midterm/fina：刷新清单落后几个交易日 + 最近 3 个已过截止日的报告期逐只比库。只读。"""
+    from app.services import local_fina_refresh as lfr
+
+    now = now or _now()
+    d = fina_dir or lfr.FINA_DIR
+    periods = due_report_periods(now.strftime("%Y%m%d"))
+    db_codes = {}
+    for p in periods:
+        db_codes[p] = {str(r[0]) for r in db.execute(text(
+            "SELECT DISTINCT f.code FROM stock_fina_indicator f JOIN stocks s ON s.code=f.code "
+            "WHERE f.end_date=:p AND LEFT(f.code,1) IN ('0','3','6') AND REPLACE(s.list_date,'-','')<=:d"),
+            {"p": p, "d": report_deadline(p)})}
+    local = lfr.local_period_index(d, periods)
+    ct = str(lfr.load_manifest(d).get("covered_through") or "") or None
+    lag = trade_lag(open_days, norm_date(ct), expected) if ct else None
+    return local_fina_item(periods, db_codes, local, ct, lag)
+
+
 def check_index_daily(db, open_days: list[str], expected: str) -> list[dict[str, Any]]:
     out = []
     rows = db.execute(text("SELECT ts_code, MAX(trade_date), COUNT(*) FROM index_daily GROUP BY ts_code")).all()
@@ -1004,6 +1046,9 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
                            lambda s=spec: [check_file_dataset(s, open_days, expected, now)])
         for spec in DIR_DATASETS:
             items += _safe(spec["label"], spec["key"], "文件数据集", "file", lambda s=spec: [check_dir_dataset(s, now)])
+        items += _safe("本地逐股财务指标库覆盖", "file:midterm/fina:coverage", "数据质量", "quality",
+                       lambda: [check_local_fina(db, open_days, expected, now)])
+        _rollback(db)
         for spec in AGE_FILES:
             items += _safe(spec["label"], spec["key"], "文件数据集", "file", lambda s=spec: [check_age_file(s, now)])
         items += _safe("xiaoshi_min1", "file:xiaoshi_min1", "文件数据集", "file", lambda: [check_xiaoshi_min1(open_days, expected)])

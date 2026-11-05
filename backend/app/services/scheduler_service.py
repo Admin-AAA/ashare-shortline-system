@@ -340,6 +340,55 @@ def _export_research_parquets(task_id: str) -> dict[str, Any]:
     return out
 
 
+# 本地逐股财务指标库 data/midterm/fina：10-17 一次性补数后没有任何任务更新（三季报只 47 只），rolling_r12 本地优先、
+# SUE 家族的历史、fina_fallback 基线都读它。每晚补数后按报告期增量追加（最近 4 期，每期 1~2 次网关调用，只追加新公告版本）。
+LOCAL_FINA_REFRESH_TIMEOUT_SECONDS = 1800
+
+
+def _refresh_local_fina(task_id: str) -> dict[str, Any]:
+    """独立子进程跑 scripts.midterm.refresh_local_fina（research 命名空间：熔断不影响实盘）；非致命，失败告警。"""
+    import json as _json
+    import os as _os
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    if _os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"status": "skipped", "reason": "pytest"}
+    backend = _Path(__file__).resolve().parents[2]
+    env = {**_os.environ, "ASHARE_BREAKER_NAMESPACE": "research"}
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(
+            [_sys.executable, "-m", "scripts.midterm.refresh_local_fina"],
+            cwd=str(backend), capture_output=True, text=True, env=env,
+            timeout=LOCAL_FINA_REFRESH_TIMEOUT_SECONDS, check=False,
+        )
+        out: dict[str, Any] = {"returncode": proc.returncode, "seconds": round(time.monotonic() - t0, 1),
+                               "stderr_tail": (proc.stderr or "")[-800:]}
+        last = next((ln for ln in reversed((proc.stdout or "").splitlines()) if ln.startswith("{")), "")
+        try:
+            out["result"] = _json.loads(last) if last else None
+        except ValueError:
+            out["result"] = None
+        out["status"] = "completed" if proc.returncode == 0 else "failed"
+    except Exception as exc:  # noqa: BLE001 - 超时等也只告警
+        out = {"status": "failed", "seconds": round(time.monotonic() - t0, 1),
+               "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    if out["status"] != "completed":
+        res = out.get("result") or {}
+        why = out.get("error") or (f"失败报告期 {res.get('failed_periods')}" if res else out.get("stderr_tail"))
+        logger.warning("本地财务指标库刷新失败 (%s): %s", task_id, why)
+        try:
+            from app.core.alerts import emit_alert
+
+            emit_alert("local_fina_refresh_failed", datetime.now().strftime("%Y-%m-%d"),
+                       f"本地逐股财务指标库 data/midterm/fina 增量刷新失败：{str(why)[:200]}（覆盖日不前移，重算会改走网关）")
+        except Exception:  # noqa: BLE001
+            logger.debug("local fina refresh alert failed", exc_info=True)
+    return out
+
+
 # 中长线需要补跑的当日状态：从未记录 / 取数失败 / 出票前数据闸门拦下。晚间补跑与盘前安全网共用这一份口径。
 MIDLONG_RETRY_STATUSES: tuple[str | None, ...] = (None, "data_error", "data_not_ready")
 
@@ -1007,6 +1056,7 @@ def _execute_task(
                                               f"{lr['recommendation'].get('completed_count')}/{lr['recommendation'].get('strategy_count')}")
                 # 出票之后再重导研究 parquet（不抢出票时间）
                 result["research_parquet_export"] = _export_research_parquets(task_id)
+                result["local_fina_refresh"] = _refresh_local_fina(task_id)
 
         _stamp_code_revision(result, start_revision)
         finish_task_run(
