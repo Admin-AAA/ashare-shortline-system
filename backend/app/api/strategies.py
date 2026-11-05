@@ -371,6 +371,20 @@ def standalone_metrics(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/data-readiness")
+def strategy_data_readiness(db: Session = Depends(get_db)):
+    """每个现役策略（短/中/长）依赖的数据现在是否最新，以及最近一次出票时数据闸门的记录。
+
+    live：按巡检的期望交易日现查（60 秒缓存）；recorded：最近一个出票日 output/strategy_readiness/<日期>.json。
+    前端在推荐卡片/策略页显示「缺数据：XX 最新 10-23，应为 11-04」。只读。"""
+    from app.services import strategy_data_readiness as sdr
+    from app.services.standalone_strategies import standalone_strategy_ids
+    from app.services.workbench_service import sync_skills
+
+    skills = sync_skills(db)
+    return sdr.overview(db, standalone_strategy_ids(skills), {s.skill_id: s.name for s in skills})
+
+
 @router.get("/{strategy_id}")
 def strategy_detail(
     strategy_id: str,

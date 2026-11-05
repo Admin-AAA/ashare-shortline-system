@@ -30,6 +30,7 @@ import { formatBj } from "../utils/time";
 import { ShortReturnInline } from "../components/StrategyQuality";
 import { isOutcomeSettled } from "../utils/display";
 import { historyExecutedReturn } from "../utils/executionConfirmation";
+import { DataReadinessBanner } from "../components/DataReadinessNote";
 
 /**
  * 今日记录（原候选池）—— 日期运行日志 → 运行抽屉 → 股票二级展开。
@@ -125,6 +126,7 @@ export function PoolPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+      <DataReadinessBanner horizon="short" />
       <PoolRunToolbar
         date={effectiveDate}
         today={today}

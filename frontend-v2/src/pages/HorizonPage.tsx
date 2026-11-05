@@ -11,6 +11,7 @@ import { EquityCurve } from "../components/EquityCurve";
 import { classifyHorizon } from "../utils/equityCurve";
 import { RankBadge, RankSortBar } from "../components/RankSortBar";
 import { DEFAULT_SORT, horizonMetrics, sortStrategies, type SortState } from "../utils/strategyRank";
+import { DataReadinessBanner, DataReadinessNote } from "../components/DataReadinessNote";
 
 type Target = { sid: string; date: string; code: string };
 const SCHEDULE_OVERRIDE: Record<string, string> = { "mid-block-trade-premium": "每晚约 21:00 大宗数据发布后选股" };
@@ -61,7 +62,7 @@ export function HorizonPage({ horizon, view = "strategies" }: { horizon: H; view
           <Rejected items={rejected} />
         </>
       )}
-      {view === "today" && picksBlock((b) => <TodayView batches={b} list={list} onPick={setTarget} />)}
+      {view === "today" && picksBlock((b) => <TodayView horizon={horizon} batches={b} list={list} onPick={setTarget} />)}
       {view === "review" && <ReviewView key={horizon + rev} horizon={horizon} list={list} rz={rz} onPick={setTarget} />}
     </div>
   );
@@ -106,7 +107,7 @@ const todayBj = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 1
 const buyingToday = (signalDate: string, p: HorizonPick) =>
   p.status === "pending" && !p.entry_date && signalDate < todayBj() && nextWeekday(signalDate) === todayBj();
 const DAILY: Record<string, [string, string]> = {
-  ok: ["今日已出票", "blue"], no_signal: ["今日无信号", "gray"], data_error: ["数据异常", "amber"], slots_full: ["仓位已满", "gray"], not_signal_day: ["非选股日", "gray"],
+  ok: ["今日已出票", "blue"], no_signal: ["今日无信号", "gray"], data_error: ["数据异常", "amber"], data_not_ready: ["缺数据·未出票", "amber"], slots_full: ["仓位已满", "gray"], not_signal_day: ["非选股日", "gray"],
 };
 /** 兼容 daily_status 为对象 {status,reason} 或字符串 + daily_status_reason；缺失返回 null（隐藏） */
 function DailyChip({ s }: { s: HorizonStrategy }) {
@@ -115,6 +116,8 @@ function DailyChip({ s }: { s: HorizonStrategy }) {
   const st = typeof raw === "string" ? raw : raw.status;
   const reason = (typeof raw === "object" ? raw.reason : null) ?? s.daily_status_reason ?? null;
   const [label, tone] = DAILY[st] ?? [st, "gray"];
+  // 缺数据的具体原因由 DataReadinessNote / DataReadinessBanner 显示，这里只给状态，避免同一句话出现两遍
+  if (st === "data_not_ready") return <span className="hz-daily"><span className={`hz-pill hz-pill--${tone}`}>{label}</span></span>;
   return <span className="hz-daily"><span className={`hz-pill hz-pill--${tone}`}>{label}</span>{reason ? <span className="hz-muted">{reason}</span> : null}</span>;
 }
 const Status = ({ s }: { s: string }) => { const [l, c] = STATUS[s] ?? [s, "gray"]; return <span className={`hz-pill hz-pill--${c}`}>{l}</span>; };
@@ -174,6 +177,7 @@ function StrategyCard({ s, rz }: { s: HorizonStrategy; rz: Realized }) {
         <h3>{s.name}</h3>
         <DailyChip s={s} />
         <RankBadge r={s} />
+        <DataReadinessNote id={s.id} />
         {s.rank_components?.note ? <div className="hz-muted" title="收益/回撤排序与展示用折算后的 tot_20 / mdd_20">{s.rank_components.note}</div> : null}
         <div className="hz-tags">
           <span className="hz-tag"><CalendarClock size={12} /> {SCHEDULE_OVERRIDE[s.id] ?? `${SCHEDULE[s.schedule] ?? s.schedule}选股`}</span>
@@ -247,7 +251,7 @@ function Rejected({ items }: { items: { name: string; reason: string }[] }) {
 }
 
 /* ---------- 今日 ---------- */
-function TodayView({ batches, list, onPick }: { batches: HorizonBatch[]; list: HorizonStrategy[]; onPick: (t: Target) => void }) {
+function TodayView({ horizon, batches, list, onPick }: { horizon: H; batches: HorizonBatch[]; list: HorizonStrategy[]; onPick: (t: Target) => void }) {
   const active = batches.filter((b) => b.status === "pending" || b.status === "holding");
   const withPicks = new Set(batches.map((b) => b.strategy_id));
   const noPicks = list.filter((s) => !withPicks.has(s.id));
@@ -255,6 +259,7 @@ function TodayView({ batches, list, onPick }: { batches: HorizonBatch[]; list: H
   const anyDaily = list.some((x) => x.daily_status);
   return (
     <>
+      <DataReadinessBanner horizon={horizon} />
       {anyDaily && (
         <section className="panel hz-pad">
           <div className="hz-sechead"><b>各策略今日状态</b></div>

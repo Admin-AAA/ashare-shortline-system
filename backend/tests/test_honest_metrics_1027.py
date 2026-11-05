@@ -239,7 +239,7 @@ def test_block_trade_pending_until_next_morning():
     stored = {"mid-a": {"status": "ok"}}  # 大宗溢价还没有记录
     sids = ["mid-a", "mid-block-trade-premium"]
     at_1840 = classify_midlong(stored, "2026-10-26", dt.datetime(2026, 10, 26, 18, 40), sids)
-    assert at_1840 == {"missing": [], "data_error": [], "pending": ["mid-block-trade-premium"]}
+    assert at_1840 == {"missing": [], "data_error": [], "data_not_ready": [], "pending": ["mid-block-trade-premium"]}
     nodata = {**stored, "mid-block-trade-premium": {"status": "data_error"}}
     assert classify_midlong(nodata, "2026-10-26", dt.datetime(2026, 10, 26, 21, 40), sids)["pending"] == \
         ["mid-block-trade-premium"]
