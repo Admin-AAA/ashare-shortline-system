@@ -74,6 +74,25 @@ def _compact(day: str | None) -> str:
     return (day or "").replace("-", "")
 
 
+def _covered_through(name: str, df, base: Path) -> str:
+    """本地库覆盖到哪天（YYYYMMDD；as_of ≤ 这天才读本地）。
+
+    原来直接取 ann_date 列的字符串最大值：空公告日 astype(str) 成 "None"/"nan"，按字符串比比任何日期都大，
+    本地会被当成覆盖到无穷远，之后每个重放日都读本地、静默少票；部分股票刷新了、其余没刷新时，最大公告日
+    也会前移，把半新半旧的库当完整。现在：只认 8 位数字公告日；fina 有刷新清单（local_fina_refresh 全部
+    报告期都成功才前移 covered_through，即「全市场按期拉取的时点」）时以清单为准。"""
+    s = df["ann_date"] if "ann_date" in df else None
+    valid = s[s.str.fullmatch(r"\d{8}", na=False)] if s is not None else []
+    mx = str(valid.max()) if len(valid) else ""
+    if name == "fina":
+        from app.services.local_fina_refresh import load_manifest
+
+        ct = str(load_manifest(base / "fina").get("covered_through") or "")
+        if len(ct) == 8 and ct.isdigit():
+            return ct
+    return mx
+
+
 @contextlib.contextmanager
 def local_first(data_dir: Path | None = None) -> Iterator[dict[str, Any]]:
     """重放期间优先读本地库，本地覆盖不到当前重放日（as_of）时才走网关；统计每个接口走了几次上游。
@@ -117,7 +136,7 @@ def local_first(data_dir: Path | None = None) -> Iterator[dict[str, Any]]:
                 for k in ("ts_code", "ann_date", "end_date"):
                     if k in df:
                         df[k] = df[k].astype(str).str.strip()
-                state["covered"][name] = str(df["ann_date"].max())
+                state["covered"][name] = _covered_through(name, df, base)
         except Exception:  # noqa: BLE001 - 本地读失败就全部走网关（会被计数）
             logger.warning("local %s store unreadable, falling back to gateway", name, exc_info=True)
             df = None
