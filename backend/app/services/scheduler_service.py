@@ -162,7 +162,7 @@ def _run_block_trade_picks_hook(db, task_id: str) -> dict[str, Any]:
         trade_date = _latest_allowed_bar_date()
         from app.services.midterm_service import generate_block_trade_picks
 
-        out = generate_block_trade_picks(db, trade_date, apply_daily_cap=True)
+        out = generate_block_trade_picks(db, trade_date, apply_daily_cap=True, data_gate=True)
         logger.warning("midterm block-trade picks (%s, T=%s): %s", task_id, trade_date, out)
         return {"trade_date": trade_date, "trigger": task_id, "result": out}
     except Exception as exc:  # noqa: BLE001 - must not break the parent job
@@ -2149,7 +2149,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
     try:
         from app.services.midterm_service import generate_picks as _mid_generate_picks
 
-        midterm_picks = {"trade_date": str(trade_date)[:10], "result": _mid_generate_picks(db, trade_date, apply_daily_cap=True)}
+        midterm_picks = {"trade_date": str(trade_date)[:10], "result": _mid_generate_picks(db, trade_date, apply_daily_cap=True, data_gate=True)}
         logger.warning("midterm picks (T=%s): %s", trade_date, midterm_picks["result"])
     except Exception as exc:  # noqa: BLE001
         db.rollback()
@@ -2265,7 +2265,9 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
         recommendation = await _run_standalone_recommendations(db, recommendation_payload)
         run_id = str(recommendation.get("related_run_id") or "")
         if not run_id:
-            raise RuntimeError("盘后单策略正式推荐未返回任何 Run ID")
+            # 全部策略都被数据就绪闸门拦下时也没有 Run ID：把原因带出来，别只写「未返回 Run ID」
+            why = str((recommendation.get("final_run") or {}).get("error") or "")
+            raise RuntimeError("盘后单策略正式推荐未返回任何 Run ID" + (f"：{why}" if why else ""))
         final_run = recommendation["final_run"]
         _plap("recommendation")
     except Exception as exc:
@@ -2505,6 +2507,50 @@ def _completed_standalone_runs(db, payload: dict) -> dict[str, dict[str, Any]]:
             out[ids[0]] = {"run_id": run_id, "recommended_count": int(cnt or 0)}
     return out
 
+def _standalone_gate_date(payload: dict) -> str:
+    """单策略 formal run 的出票交易日：补跑带 trade_date_override，盘后流水线与它同口径用 latest_allowed_bar_date。"""
+    raw = str(payload.get("trade_date_override") or "").strip() or _latest_allowed_bar_date()
+    if len(raw) == 8 and raw.isdigit():
+        raw = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+    return raw[:10]
+
+
+def _gate_standalone_payloads(db, payload: dict, items: list[dict[str, Any]],
+                              strategy_runs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """数据就绪闸门（短线）：返回仍要入队的 payload；被拦的追加 status=data_not_ready 到 strategy_runs。
+
+    检查本身出错时全部放行并告警（全局健康闸门已保证日K/报价/指数/涨停板），不能因为检查代码出错让短线全停。"""
+    if not items:
+        return items
+    from app.services import strategy_data_readiness as sdr
+
+    trade_date = _standalone_gate_date(payload)
+    try:
+        gate = sdr.ReadinessGate(db, trade_date)
+        verdicts = {item["single_skill_id"]: gate.check(item["single_skill_id"], "short") for item in items}
+    except Exception as exc:  # noqa: BLE001
+        sdr.alert_gate_failure(f"short:{trade_date}", exc)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return items
+    sdr.record(trade_date, gate.results)
+    kept: list[dict[str, Any]] = []
+    for item in items:
+        sid = item["single_skill_id"]
+        v = verdicts[sid]
+        if v["ready"]:
+            kept.append(item)
+            continue
+        logger.warning("短线 %s %s 依赖数据未就绪，今天不出票：%s", trade_date, sid, v["reason"])
+        strategy_runs.append({
+            "skill_id": sid, "status": sdr.STATUS, "trade_date": trade_date,
+            "error": f"数据未就绪，未出票：{v['reason']}", "data_not_ready": sdr.blocked_raw(v)[sdr.STATUS],
+        })
+    return kept
+
+
 async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
     """每个策略各跑一个 formal run（自己的分数线/出票上限/推荐/T+1 结算），分批并发。
 
@@ -2529,6 +2575,9 @@ async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
         payloads_to_run = kept
     else:
         payloads_to_run = payloads
+    # 出票前按策略检查依赖数据：不是最新的策略今天不入队、不出票，记 data_not_ready（不建 run，
+    # 所以安全网 _missing_standalone_strategies 会在数据补上后补跑它；已出票的策略照常幂等跳过）。
+    payloads_to_run = _gate_standalone_payloads(db, payload, payloads_to_run, strategy_runs)
     for start in range(0, len(payloads_to_run), STANDALONE_BATCH_SIZE):
         batch = payloads_to_run[start:start + STANDALONE_BATCH_SIZE]
         queued: list[tuple[str, str]] = []
@@ -2741,12 +2790,14 @@ def _safety_net_midlong_repair(db) -> dict:
         out["date"] = latest
         status_file = ms._status_dir() / f"{latest}.json"
         stored = _json.loads(status_file.read_text()) if status_file.exists() else {}
-        todo = [sid for sid in ms.STRATEGIES if (stored.get(sid) or {}).get("status") in (None, "data_error")]
+        # data_not_ready（出票前数据闸门拦下）同样补跑：数据补上后这次会正常出票，仍没补上就继续记 data_not_ready。
+        bad = (None, "data_error", "data_not_ready")
+        todo = [sid for sid in ms.STRATEGIES if (stored.get(sid) or {}).get("status") in bad]
         if not todo:
             return out
         out["retried"] = todo
-        res = ms.generate_picks(db, latest, strategy_ids=todo, apply_daily_cap=True)
-        out["still_error"] = [sid for sid in todo if ms.classify_daily_status(res.get(sid)) == "data_error"]
+        res = ms.generate_picks(db, latest, strategy_ids=todo, apply_daily_cap=True, data_gate=True)
+        out["still_error"] = [sid for sid in todo if ms.classify_daily_status(res.get(sid)) in bad[1:]]
         out["picks"] = {sid: res.get(sid) for sid in todo if isinstance(res.get(sid), int)}
         if out["still_error"]:
             from app.core.alerts import emit_alert
@@ -2754,7 +2805,7 @@ def _safety_net_midlong_repair(db) -> dict:
             emit_alert(
                 "midlong_repair_data_error",
                 latest,
-                f"盘前安全网补跑 {latest} 中长线后仍 data_error：{','.join(out['still_error'])}",
+                f"盘前安全网补跑 {latest} 中长线后仍数据异常/数据未就绪：{','.join(out['still_error'])}",
             )
     except Exception as exc:  # noqa: BLE001 - 补跑失败不阻断 formal 安全网主流程
         logger.warning("安全网中长线补跑失败（非阻塞）: %s", exc, exc_info=True)
@@ -2849,7 +2900,8 @@ async def _safety_net_run(db, payload: dict) -> dict:
             "skipped": False,
             **check,
             **result,
-            "error": "formal 安全网未返回关联 Run ID",
+            "error": "formal 安全网未返回关联 Run ID" + (
+                f"：{(result.get('final_run') or {}).get('error')}" if (result.get("final_run") or {}).get("error") else ""),
             "summary_text": "formal 安全网补跑派发失败：未返回关联 Run ID",
         }
     try:

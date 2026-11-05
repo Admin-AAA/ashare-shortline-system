@@ -20,6 +20,7 @@ import { useUrlRoute } from "../app/useUrlRoute";
 import { formatBj } from "../utils/time";
 import { RankBadge, RankSortBar } from "../components/RankSortBar";
 import { DEFAULT_SORT, sortStrategies, standaloneMetrics, type RankFields, type SortState } from "../utils/strategyRank";
+import { DataReadinessNote } from "../components/DataReadinessNote";
 
 type StrategyWindowDays = 30 | 180;
 
@@ -254,6 +255,7 @@ function CalledCard({ item, windowDays, rank }: { item: StrategyListItem; window
       </div>
 
       <ShortStrip id={item.skill_id} />
+      <DataReadinessNote id={item.skill_id} />
 
       <p style={{ margin: "var(--space-3) 0 0", color: "var(--muted)", fontSize: "var(--text-sm)", lineHeight: 1.5, minHeight: 38 }}>
         {item.description || "（无简介）"}
@@ -436,6 +438,7 @@ function DormantCard({ item, rank }: { item: StrategyListItem; rank?: RankFields
       </div>
 
       <ShortStrip id={item.skill_id} />
+      <DataReadinessNote id={item.skill_id} />
 
       <p style={{ margin: "var(--space-3) 0 0", color: "var(--muted)", fontSize: "var(--text-sm)", lineHeight: 1.5, minHeight: 38 }}>
         {item.description || "（无简介）"}
