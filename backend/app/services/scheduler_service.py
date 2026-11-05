@@ -174,6 +174,184 @@ def _run_block_trade_picks_hook(db, task_id: str) -> dict[str, Any]:
         return {"trade_date": trade_date, "trigger": task_id, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
 
+LATE_REPICK_HOOK_TASK_IDS = frozenset({POSTCLOSE_LATE_DATA_REPAIR_TASK_ID})
+
+
+def _formal_inflight_count(db, trade_date: str) -> int:
+    from sqlalchemy import text as _text
+
+    return int(db.execute(_text(
+        "SELECT COUNT(*) FROM recommendation_runs WHERE run_mode='formal' AND trade_date=:d "
+        "AND status IN ('queued','running')"
+    ), {"d": trade_date}).scalar() or 0)
+
+
+async def _late_repair_repick(db, task_id: str) -> dict[str, Any]:
+    """21:00 晚间补数完成后，补跑当天正式出票（10-30/11-03/11-04：17:35 当天日K/涨停板未到，闸门硬阻断，
+    短线 0/4 出票；21:00 补数把日K补上后没人重跑，要等次日 08:30 安全网）。
+
+    条件（全部满足才跑，否则只记原因跳过）：
+    - 当天还有有效短线策略缺 completed formal 批次，或中长线有 data_error（已出齐就不动）；
+    - 当天没有在途（queued/running）的 formal run；
+    - 现在仍在入场日 09:15 之前（实盘判定规则不变：之后生成的不算实盘，交给 08:30 安全网也没意义）；
+    - 健康闸门现在已通过（与 17:35 同一个 _diagnose_postclose_readiness）。
+    复用入口：中长线走 _safety_net_midlong_repair（只补 data_error / 未记录的策略），短线走
+    _run_standalone_recommendations（已 completed 的策略自动跳过，不重复出票），payload 与安全网同口径
+    （post_sync_formal_recommendation 的 payload + trade_date_override + 纯本地池）。非致命：异常只记录并告警。
+    """
+    out: dict[str, Any] = {"trigger": task_id}
+    try:
+        from app.services.midterm_live_seal import generated_before_entry_open
+
+        trade_date = str(_latest_allowed_bar_date())[:10]
+        out["trade_date"] = trade_date
+        missing = _missing_standalone_strategies(db, trade_date)
+        done = _completed_standalone_runs(db, {"trade_date_override": trade_date})
+        out["missing_strategies"] = missing
+        midlong_todo = _midlong_error_strategies(trade_date)
+        out["midlong_todo"] = midlong_todo
+        if done and not missing and not midlong_todo:
+            out.update(status="skipped", reason="already_completed")
+            return out
+        if not generated_before_entry_open(trade_date, datetime.now(timezone.utc)):
+            out.update(status="skipped", reason="past_entry_open")
+            return out
+        inflight = _formal_inflight_count(db, trade_date)
+        if inflight:
+            out.update(status="skipped", reason="inflight", inflight=inflight)
+            return out
+        readiness = _diagnose_postclose_readiness(db, trade_date)
+        if not readiness.get("can_run_local_recommendation"):
+            out.update(status="skipped", reason="gate_blocked", blockers=list(readiness.get("blockers") or [])[:10])
+            logger.warning("晚间补数后补跑 %s 跳过：健康闸门仍未通过：%s", trade_date, out["blockers"])
+            return out
+
+        logger.warning("晚间补数后健康闸门已通过，补跑 %s 当天出票：短线缺 %s，中长线 data_error %s",
+                       trade_date, missing or ("全部" if not done else "无"), midlong_todo)
+        # 与 17:35 闸门通过后的顺序一致：先结算到期推荐、刷新日K缓存，再出票。
+        try:
+            out["outcome"] = _run_outcome_label(db, {"horizon_days": 5})
+        except Exception as exc:  # noqa: BLE001
+            db.rollback()
+            out["outcome"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        try:
+            from app.services.market_pool import kbar_cache
+
+            if kbar_cache.enabled():
+                out["kbar_cache_refresh"] = kbar_cache.refresh_kbar_cache(db)
+        except Exception as exc:  # noqa: BLE001 - 读取端会回退 SQL
+            db.rollback()
+            out["kbar_cache_refresh"] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+        if midlong_todo:
+            out["midlong_repair"] = _safety_net_midlong_repair(db)
+
+        if missing or not done:
+            task = db.get(ScheduledTask, POSTCLOSE_PIPELINE_TASK_ID)
+            run_payload = json.loads(task.payload_json) if task and task.payload_json else {}
+            run_payload.update({
+                "run_name": f"晚间补数后补跑 {trade_date}",
+                "trade_date_override": trade_date,
+                "data_source": DATA_SOURCE_LOCAL_POOL,
+                "skip_aux_refresh": True,
+                "run_mode": "formal",
+            })
+            run_payload.pop("pre_run_full_sync", None)
+            if missing and done:
+                run_payload["standalone_skill_ids"] = list(missing)
+            try:
+                rec = await _run_standalone_recommendations(db, run_payload)
+            except ValueError as exc:
+                if _NO_RUNNABLE_SKILL_MSG not in str(exc):
+                    raise
+                out.update(status="skipped", reason="no_runnable_skill")
+                return out
+            out["recommendation"] = {k: rec.get(k) for k in (
+                "related_run_ids", "strategy_runs", "strategy_count", "completed_count", "recommended_count", "final_run")}
+            final_status = str((rec.get("final_run") or {}).get("status") or "failed")
+            out["status"] = "completed" if final_status == "completed" else "failed"
+        else:
+            out["status"] = "completed"
+        still = out.get("midlong_repair", {}).get("still_error") or []
+        if out["status"] != "completed" or still:
+            from app.core.alerts import emit_alert
+
+            emit_alert("late_repick_failed", trade_date,
+                       f"晚间补数后补跑 {trade_date} 未全部成功：短线 {out['status']}"
+                       + (f"；中长线仍 data_error：{','.join(still)}" if still else ""))
+        return out
+    except Exception as exc:  # noqa: BLE001 - must not break the parent job
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        logger.warning("晚间补数后补跑失败（非阻塞）(%s): %s", task_id, exc, exc_info=True)
+        out.update(status="failed", error=f"{type(exc).__name__}: {str(exc)[:200]}")
+        try:
+            from app.core.alerts import emit_alert
+
+            emit_alert("late_repick_failed", str(out.get("trade_date") or ""), f"晚间补数后补跑异常：{out['error']}")
+        except Exception:  # noqa: BLE001
+            logger.debug("late repick alert failed", exc_info=True)
+        return out
+
+
+# 研究/回测用的 data/midterm/*.parquet 由 scripts/midterm/export_data.py 从库导出，此前没有任何定时任务调用它，
+# 只靠手动跑：10-25 导出后 stk_limits.parquet 一直停在 2026-10-23（库里 stk_limits 每天 17:35 已补到当天），
+# daily_basic/index_daily/hk_holdings 同样停在 10-25。只读本地 MySQL、不调上游；增量（已有最大日期回看 7 天）+ 原子替换。
+RESEARCH_PARQUET_EXPORT_TABLES = ("stk_limits", "daily_basic", "index_daily", "hk_holdings")
+RESEARCH_PARQUET_EXPORT_TIMEOUT_SECONDS = 900
+
+
+def _export_research_parquets(task_id: str) -> dict[str, Any]:
+    """晚间补数后增量重导研究 parquet（独立子进程，内存随进程释放）；非致命，失败告警不改父任务状态。"""
+    import os as _os
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    tables = ",".join(RESEARCH_PARQUET_EXPORT_TABLES)
+    if _os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"status": "skipped", "reason": "pytest", "tables": tables}
+    backend = _Path(__file__).resolve().parents[2]
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(
+            [_sys.executable, "-m", "scripts.midterm.export_data", "--only", tables],
+            cwd=str(backend), capture_output=True, text=True,
+            timeout=RESEARCH_PARQUET_EXPORT_TIMEOUT_SECONDS, check=False,
+        )
+        out = {"status": "completed" if proc.returncode == 0 else "failed", "returncode": proc.returncode,
+               "tables": tables, "seconds": round(time.monotonic() - t0, 1),
+               "stdout_tail": (proc.stdout or "")[-1500:], "stderr_tail": (proc.stderr or "")[-800:]}
+    except Exception as exc:  # noqa: BLE001 - 超时等也只告警
+        out = {"status": "failed", "tables": tables, "seconds": round(time.monotonic() - t0, 1),
+               "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    if out["status"] != "completed":
+        logger.warning("研究 parquet 增量导出失败 (%s): %s", task_id, out.get("error") or out.get("stderr_tail"))
+        try:
+            from app.core.alerts import emit_alert
+
+            emit_alert("research_parquet_export_failed", datetime.now().strftime("%Y-%m-%d"),
+                       f"研究 parquet（{tables}）增量导出失败：{str(out.get('error') or out.get('stderr_tail'))[:200]}")
+        except Exception:  # noqa: BLE001
+            logger.debug("research parquet export alert failed", exc_info=True)
+    return out
+
+
+def _midlong_error_strategies(trade_date: str) -> list[str]:
+    """当天中长线状态文件里 data_error（或从未记录）的现役策略；读不到返回空 = 不触发。与 _safety_net_midlong_repair 同口径。"""
+    try:
+        from app.services import midterm_service as ms
+
+        f = ms._status_dir() / f"{trade_date}.json"
+        stored = json.loads(f.read_text()) if f.exists() else {}
+        return [sid for sid in ms.STRATEGIES if (stored.get(sid) or {}).get("status") in (None, "data_error")]
+    except Exception:  # noqa: BLE001
+        logger.debug("_midlong_error_strategies failed", exc_info=True)
+        return []
+
+
 def _configure_late_data_repair_task(db) -> None:
     task = db.get(ScheduledTask, POSTCLOSE_LATE_DATA_REPAIR_TASK_ID)
     existing_payload: dict[str, Any] = {}
@@ -813,6 +991,16 @@ def _execute_task(
             # 主：21:00 晚间全域数据补数完成后跑当日；备：08:03 midterm_block_trade_premarket 补跑上一交易日（幂等）。
             if task_id in BLOCK_TRADE_HOOK_TASK_IDS and isinstance(result, dict):
                 result["midterm_block_trade"] = _run_block_trade_picks_hook(db, task_id)
+            # 21:00 补数后：17:35 被闸门挡住的当天出票，闸门现已通过就补跑（幂等，不改补数任务自身状态）。
+            if task_id in LATE_REPICK_HOOK_TASK_IDS and isinstance(result, dict):
+                result["late_repick"] = asyncio.run(_late_repair_repick(db, task_id))
+                lr = result["late_repick"]
+                if lr.get("status") == "completed" and lr.get("recommendation"):
+                    result["summary_text"] = (str(result.get("summary_text") or "")
+                                              + f"；补跑 {lr.get('trade_date')} 正式出票 "
+                                              f"{lr['recommendation'].get('completed_count')}/{lr['recommendation'].get('strategy_count')}")
+                # 出票之后再重导研究 parquet（不抢出票时间）
+                result["research_parquet_export"] = _export_research_parquets(task_id)
 
         _stamp_code_revision(result, start_revision)
         finish_task_run(
