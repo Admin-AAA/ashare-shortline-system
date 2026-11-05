@@ -520,6 +520,68 @@ def dinc_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
     return _attach(db, as_of, dates, out)
 
 
+# §997 DIVP_DIP_h5（现金分红预案 × 公告前深跌；scripts/shortline_research/evdip_s996.py，口径同 lt_research13.div_sig）
+DIVP_YIELD_MIN = 0.01
+
+
+def divplan_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """as_of 收盘后可见的现金分红「预案」（同报告期第一次、税前派现>0），且每股税前派现 ÷ as_of 收盘 ≥1%。
+    同一信号日多个报告期的预案派现相加（同研究 group_by(code, sd).sum）。深跌过滤与排序交给 midterm_service._filter_event_dip。"""
+    w = _window(db, as_of)
+    if w is None:
+        return None
+    dates, start, end = w
+    local, cutoff = _local_div()
+    parts = [local[(local["ann_date"] >= start) & (local["ann_date"] <= min(end, cutoff))]]
+    d0 = max(_dt.datetime.strptime(start, "%Y%m%d").date(), _dt.datetime.strptime(cutoff, "%Y%m%d").date() + _dt.timedelta(days=1))
+    d1 = _dt.datetime.strptime(end, "%Y%m%d").date()
+    while d0 <= d1:
+        day = _div_day(d0.strftime("%Y%m%d"))
+        if day is None:
+            return None
+        parts.append(day)
+        d0 += _dt.timedelta(days=1)
+    win = pd.concat(parts, ignore_index=True)
+    cur = win[(win["div_proc"] == "预案") & (win["cash_div_tax"] > 0) & (win["ann_date"] >= start) & (win["ann_date"] <= end)
+              & win["ts_code"].map(_tradable_code)]
+    cur = cur.drop_duplicates(["ts_code", "end_date", "ann_date"])
+    if cur.empty:
+        return []
+    from app.services import midterm_service as ms
+    liq = ms._liq_ok(db, as_of, dates, sorted({t[:6] for t in cur["ts_code"]}))
+    cur = cur[cur["ts_code"].str[:6].isin(liq)]
+    dps: dict[str, float] = {}
+    meta: dict[str, dict[str, Any]] = {}
+    for _, r in cur.iterrows():
+        tc = r["ts_code"]
+        hist = local[local["ts_code"] == tc]
+        if end > cutoff:
+            gw = _div_code(tc)
+            if gw is None:
+                return None
+            hist = pd.concat([hist, gw], ignore_index=True)
+        prior = hist[(hist["end_date"] == r["end_date"]) & (hist["div_proc"] == "预案") & (hist["cash_div_tax"] > 0)
+                     & (hist["ann_date"].str.len() == 8) & (hist["ann_date"] < r["ann_date"])]
+        if len(prior):
+            continue  # 该报告期之前已有预案 -> 不是第一次
+        code = tc[:6]
+        dps[code] = dps.get(code, 0.0) + float(r["cash_div_tax"])
+        meta.setdefault(code, {"code": code, "ann_date": r["ann_date"], "end_date": r["end_date"]})
+    if not dps:
+        return []
+    closes = dict(db.execute(text("SELECT code, close FROM daily_kbars WHERE trade_date=:d AND code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"d": as_of, "codes": sorted(dps)}).all())
+    out: dict[str, dict[str, Any]] = {}
+    for code, cd in dps.items():
+        close = closes.get(code)
+        if not close or float(close) <= 0:
+            continue
+        y = cd / float(close)
+        if y >= DIVP_YIELD_MIN:
+            out[code] = {**meta[code], "cash_div_tax": cd, "div_yield": round(y, 5), "score": y}
+    return _attach(db, as_of, dates, out)
+
+
 # §599 TDVOL_h20（营业周期缩短∩放量；规则同 §184 / lt_research61，未调参）
 TD_IMPROVE, TD_LO, TD_HI, TD_PREV_HI, TD_CAP = 20.0, 30.0, 400.0, 800.0, 200.0
 
