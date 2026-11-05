@@ -95,7 +95,17 @@ def local_first(data_dir: Path | None = None) -> Iterator[dict[str, Any]]:
         df = None
         try:
             if name == "fina":
-                parts = [pd.read_parquet(p, columns=_LOCAL_FIELDS) for p in sorted((base / "fina").glob("*.parquet"))]
+                # 列取「重放要用的全部财务字段」（FINA_FIELDS）∪ 基础字段，文件里没有的列跳过；
+                # 只读基础 11 列会让用别的财务指标的策略（如销售费用率 saleexp_to_gr）取到缺列的表而抛 KeyError。
+                import pyarrow.parquet as pq
+
+                from app.services.midterm_fina_events import FINA_FIELDS
+
+                wanted = list(dict.fromkeys(_LOCAL_FIELDS + FINA_FIELDS.split(",")))
+                parts = []
+                for p in sorted((base / "fina").glob("*.parquet")):
+                    have = set(pq.read_schema(p).names)
+                    parts.append(pd.read_parquet(p, columns=[c for c in wanted if c in have]))
             elif name == "dividend":
                 parts = [pd.read_parquet(p, columns=["ts_code", "end_date", "ann_date", "div_proc", "cash_div_tax"])
                          for p in sorted((base / "dividend").glob("*.parquet"))]
@@ -124,7 +134,9 @@ def local_first(data_dir: Path | None = None) -> Iterator[dict[str, Any]]:
         if api == "fina_indicator_vip" and "period" in params:
             df = covers("fina")
             if df is not None:
-                cols = [c for c in str(params.get("fields") or ",".join(_LOCAL_FIELDS)).split(",") if c in df]
+                cols = str(params.get("fields") or ",".join(_LOCAL_FIELDS)).split(",")
+                if any(c not in df for c in cols):
+                    return None  # 本地缺所请求的列：回落网关，不悄悄返回少列的表让下游 KeyError
                 return df.loc[df["end_date"] == str(params["period"]), cols].reset_index(drop=True)
         if api == "dividend":
             df = covers("dividend")
@@ -330,7 +342,7 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
 
     with local_first() as upstream:
         replay = replay_midlong(db, replay_start, cutoff, list(ms.STRATEGIES), staging, stop_at=STOP_AT,
-                                apply_daily_cap=True, retry_waits=(60,))
+                                apply_daily_cap=True, retry_waits=(60,), isolate_errors=True)
     if replay.get("stopped"):
         # 计划内停下（00:00），不是失败：任务记 completed，下个交易日 22:30 按 manifest 同一截止日接着跑
         return {"status": "completed", "finished": False, "cutoff": cutoff,
@@ -338,9 +350,14 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
                 "upstream_calls": dict(upstream["calls"]),
                 "summary_text": f"中长线重放到 {replay.get('done_through')}，到 00:00 停下，下个交易日接着跑（截止日 {cutoff} 不变）"}
     midlong = midlong_window_stats(db, staging, window_start, cutoff)
+    # 重放中抛异常被跳过的策略：这条数据不完整，不能拿残缺笔数判正负 -> 标 error，不进"为正/为负"，单独告警，其余照算
+    crashed = {sid: c for sid, c in (replay.get("crashed") or {}).items() if sid in midlong}
+    for sid, c in crashed.items():
+        midlong[sid] = {**midlong[sid], "verdict": "error", "error": c.get("error"),
+                        "error_first_day": c.get("first_day"), "error_days": c.get("days")}
     short = short_window_stats(db, window_start, cutoff)
     allv = [v["verdict"] for v in midlong.values()] + [v["verdict"] for v in short["strategies"].values()]
-    judged = [v for v in allv if v != "insufficient_sample"]
+    judged = [v for v in allv if v not in ("insufficient_sample", "error")]  # 崩的策略不进为正比例分母
     incomplete = {k: v for k, v in (replay.get("no_data") or {}).items() if v} | \
                  {k: v for k, v in (replay.get("errors") or {}).items() if v}
     doc = {
@@ -351,7 +368,8 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
         "status": "completed",
         "positive_ratio": round(judged.count("positive") / len(judged), 3) if judged else None,
         "counts": {"positive": allv.count("positive"), "negative": allv.count("negative"),
-                   "insufficient_sample": allv.count("insufficient_sample")},
+                   "insufficient_sample": allv.count("insufficient_sample"), "error": allv.count("error")},
+        "crashed": {sid: {k: c.get(k) for k in ("error", "first_day", "days")} for sid, c in crashed.items()},
         "midlong": midlong,
         "short": short,
         "replay": {"days": replay.get("days"), "seconds": replay.get("seconds"),
@@ -379,6 +397,10 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
             emit_daily("rolling_r12_negative", cutoff, f"近12个月（截止 {cutoff}）每笔转负的现役策略：{','.join(neg)}")
         if incomplete:
             emit_alert("rolling_r12_incomplete", cutoff, f"近12个月滚动重算（截止 {cutoff}）有取数失败日：{doc['replay']['incomplete_days']}")
+        if crashed:
+            emit_alert("rolling_r12_incomplete", f"{cutoff}:crashed",
+                       f"近12个月滚动重算（截止 {cutoff}）有策略选股抛异常、已跳过（其余照算）："
+                       + "；".join(f"{sid}（{c.get('error')}）" for sid, c in crashed.items()))
     except Exception:  # noqa: BLE001
         logger.warning("rolling r12 alert failed", exc_info=True)
     # 任务本身跑完就是 completed；策略转负 / 取数失败是业务结果，写进摘要并单独告警，不让任务失败去扣健康分
@@ -390,7 +412,9 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
         "positive_ratio": doc["positive_ratio"],
         "negative": neg,
         "summary_text": (f"近12个月滚动重算（截止 {cutoff}）：为正 {doc['counts']['positive']}、为负 {doc['counts']['negative']}、"
-                         f"样本不足 {doc['counts']['insufficient_sample']}" + (f"；转负：{','.join(neg)}" if neg else "")
+                         f"样本不足 {doc['counts']['insufficient_sample']}"
+                         + (f"、选股抛异常已跳过 {len(crashed)}（{','.join(crashed)}）" if crashed else "")
+                         + (f"；转负：{','.join(neg)}" if neg else "")
                          + (f"；有取数失败日：{doc['replay']['incomplete_days']}" if incomplete else "")),
     }
 

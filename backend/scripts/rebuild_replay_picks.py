@@ -128,7 +128,7 @@ MID_RETRY_WAITS = (120, 300, 600, 900)  # 同一天 no_data/error 的策略按�
 
 def replay_midlong(db, start: str, end: str, strategies: list[str] | None, staging: Path,
                    stop_at: dt.time | None = None, *, apply_daily_cap: bool = True,
-                   retry_waits: tuple[int, ...] | None = None) -> dict:
+                   retry_waits: tuple[int, ...] | None = None, isolate_errors: bool = False) -> dict:
     """在 staging 目录里逐交易日顺序跑生产 generate_picks；返回统计。不碰生产 OUT_DIR。
 
     apply_daily_cap 默认 True：与实盘同一套每日新推荐上限（含同分顺延）。中线和长线都走本函数。
@@ -143,7 +143,7 @@ def replay_midlong(db, start: str, end: str, strategies: list[str] | None, stagi
     prog_f = staging.parent / "progress.json"
     prog = json.loads(prog_f.read_text()) if prog_f.exists() else {}
     stats = {"days": 0, "errors": prog.get("errors", {}), "no_data": prog.get("no_data", {}),
-             "seconds": 0.0, "stopped": False}
+             "crashed": prog.get("crashed", {}), "seconds": 0.0, "stopped": False}
     from app.services import midterm_forecast as mf
 
     orig_out, orig_store = ms.OUT_DIR, ms._store_repurchase_events
@@ -165,9 +165,11 @@ def replay_midlong(db, start: str, end: str, strategies: list[str] | None, stagi
                     break
                 pending, waits = strategies, list(MID_RETRY_WAITS if retry_waits is None else retry_waits)
                 while True:
-                    res = ms.generate_picks(db, d, strategy_ids=pending, apply_daily_cap=apply_daily_cap)
+                    kw = {"isolate_errors": True} if isolate_errors else {}
+                    res = ms.generate_picks(db, d, strategy_ids=pending, apply_daily_cap=apply_daily_cap, **kw)
+                    # 抛异常的策略（代码缺陷）重试没用，不进重试；取数类 no_data / error 才重试
                     bad = [sid for sid, raw in res.items()
-                           if raw == "no_data" or (isinstance(raw, dict) and "error" in raw)]
+                           if raw == "no_data" or (isinstance(raw, dict) and "error" in raw and not raw.get("exception"))]
                     if not bad or not waits:
                         break
                     w = waits.pop(0)
@@ -177,10 +179,13 @@ def replay_midlong(db, start: str, end: str, strategies: list[str] | None, stagi
                 for sid, raw in res.items():
                     if isinstance(raw, dict) and "error" in raw:
                         stats["errors"].setdefault(sid, []).append(d)
+                        if raw.get("exception"):
+                            stats["crashed"].setdefault(sid, {"first_day": d, "error": raw["error"], "days": 0})["days"] += 1
                     elif raw == "no_data":  # 多为数据源限流/缺数，必须为 0 才算干净重建
                         stats["no_data"].setdefault(sid, []).append(d)
                 stats["days"] += 1
-                prog = {"done_through": d, "errors": stats["errors"], "no_data": stats["no_data"]}
+                prog = {"done_through": d, "errors": stats["errors"], "no_data": stats["no_data"],
+                        "crashed": stats["crashed"]}
                 prog_f.write_text(json.dumps(prog, ensure_ascii=False))
                 print(f"[midlong] done {d} bad={bad}", flush=True)
     finally:
