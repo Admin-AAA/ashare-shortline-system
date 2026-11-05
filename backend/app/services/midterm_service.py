@@ -1916,7 +1916,8 @@ def _save_picks(sid: str, as_of: str, picks: list[dict[str, Any]], apply_daily_c
 
 @_formal_entry
 def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = None,
-                   strategy_ids: list[str] | None = None, apply_daily_cap: bool = False) -> dict[str, Any]:
+                   strategy_ids: list[str] | None = None, apply_daily_cap: bool = False,
+                   isolate_errors: bool = False) -> dict[str, Any]:
     """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。
 
     horizon / strategy_ids 只用于手动补跑（POST /api/horizons/{mid,long}/run），默认 None = 17:35 全部策略。
@@ -1931,6 +1932,31 @@ def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = No
     except Exception as exc:  # noqa: BLE001
         logger.warning("daily_basic staleness check failed: %s", exc)
     result: dict[str, Any] = {}
+    if isolate_errors:
+        # 滚动重算等批量回放用：某个策略抛异常只记它自己（{"error":..., "exception": True}），其余策略接着算。
+        # 实盘 17:35 不开这个开关，仍是出错就抛，避免悄悄少出票。
+        remaining = strategy_ids
+        while True:
+            try:
+                _generate_picks_loop(db, as_of, d, force, horizon, remaining, result, apply_daily_cap)
+                break
+            except Exception as exc:  # noqa: BLE001
+                cur = result.pop("__current__", None)
+                if not cur:
+                    _record_status(as_of, result)
+                    raise
+                logger.warning("%s %s 选股抛异常，已跳过该策略继续算其余策略: %s: %s", as_of, cur, type(exc).__name__, exc)
+                result[cur] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}", "exception": True}
+                try:
+                    db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                remaining = [s for s in (strategy_ids or list(STRATEGIES)) if s not in result]
+                if not remaining:
+                    break
+        result.pop("__current__", None)
+        _record_status(as_of, result)
+        return result
     try:
         _generate_picks_loop(db, as_of, d, force, horizon, strategy_ids, result, apply_daily_cap)
     except Exception as exc:
