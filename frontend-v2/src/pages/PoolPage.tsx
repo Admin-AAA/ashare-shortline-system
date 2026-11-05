@@ -27,6 +27,9 @@ import { useApi } from "../app/useApi";
 import { queryParam } from "../app/nav";
 import { describePoolRun, formatPoolRunTime, poolRunDate, summarizePoolRuns, type PoolRunKind } from "./poolRunView";
 import { formatBj } from "../utils/time";
+import { ShortReturnInline } from "../components/StrategyQuality";
+import { isOutcomeSettled } from "../utils/display";
+import { historyExecutedReturn } from "../utils/executionConfirmation";
 
 /**
  * 今日记录（原候选池）—— 日期运行日志 → 运行抽屉 → 股票二级展开。
@@ -444,6 +447,7 @@ function RecommendationResults({ run }: { run: RunSummary }) {
     () => codes.length ? api.recommendationOutcomeSummary(codes) : Promise.resolve({}),
     [codesKey],
   );
+  const statusOf = useRecStatus(run.trade_date, !!items?.length);
 
   if (loading) return <div style={drawerBodyStyle}><div className="skeleton" style={{ height: 56 }} /><div className="skeleton" style={{ height: 56 }} /></div>;
   if (error) return <div style={drawerBodyStyle}><ErrorPage title="推荐股票加载失败" message={error} onRetry={refetch} /></div>;
@@ -480,6 +484,11 @@ function RecommendationResults({ run }: { run: RunSummary }) {
                   </div>
                 </div>
               </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap", flexBasis: "100%", order: 2 }}>
+                {mainStrategyId(item) && <ShortReturnInline id={mainStrategyId(item)!} />}
+                <RecStatusTag s={statusOf(item.recommendation_id)} />
+                {item.evidence_class === "historical_reconstruction" && <span className="tag tag--warning" style={{ fontSize: "var(--text-xs)" }} title="历史回放重建的推荐，不是实盘，不计入实盘统计">回放 · 非实盘</span>}
+              </div>
               <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap", marginLeft: "auto" }}>
                 <TradeParamsInline item={item} />
                 <span className="text-mono" style={{ fontWeight: 700, color: "var(--accent-strong)", fontSize: "var(--text-lg)" }}>{item.final_score.toFixed(0)}</span>
@@ -502,6 +511,89 @@ function RecommendationResults({ run }: { run: RunSummary }) {
 
 function localDateKey() {
   return formatBj(new Date().toISOString(), "date");
+}
+
+/** 主策略 = 未被硬否决、分数最高的命中策略（与后端 setup_type 取最高分一致）；没有 strategy_id 返回 null。 */
+function mainStrategyId(item: CockpitRecommendation): string | null {
+  const sb = (item.skill_breakdown ?? []).filter((s) => s.strategy_id);
+  if (!sb.length) return null;
+  const pool = sb.some((s) => !s.hard_veto) ? sb.filter((s) => !s.hard_veto) : sb;
+  return [...pool].sort((a, b) => b.score - a.score)[0].strategy_id ?? null;
+}
+
+/**
+ * 单只推荐的状态（与中线「待买入 / 持有中 / 已平仓」对应）：
+ * - 已卖出：推荐历史里已结算且真实成交，收益 = executed_return − 附加成本（与「交易明细」同口径，扣成本）；
+ * - 没买进：已结算但未成交（missed / 未触发买点）；
+ * - 未结算的：看实时持仓接口（holding=持有中浮盈、未扣成本；waiting=待买入；watching=等买点）。
+ * 数据只读：/api/recommendations/history（按推荐交易日）+ /api/recommendations/realtime-pnl（与「持仓/待卖」共用缓存）。
+ */
+type RecStatus =
+  | { kind: "sold"; ret: number | null; exitDate?: string | null }
+  | { kind: "missed" }
+  | { kind: "holding"; pnl: number | null }
+  | { kind: "waiting" | "watching" | "unavailable" | "unknown" };
+
+function useRecStatus(tradeDate: string | undefined, enabled: boolean): (id: string) => RecStatus | null {
+  const hist = useQuery({
+    queryKey: ["pool-rec-status", tradeDate],
+    queryFn: () => api.recommendationHistory({ date_from: tradeDate, date_to: tradeDate, limit: 200 }),
+    enabled: enabled && !!tradeDate,
+    staleTime: 60_000,
+  });
+  const items = hist.data?.items ?? [];
+  const hasOpen = items.some((it) => !isOutcomeSettled(it.status));
+  const rt = useQuery({
+    queryKey: ["realtime-pnl"],
+    queryFn: () => api.recommendationRealtimePnl(false),
+    enabled: enabled && hasOpen,
+    staleTime: 60_000,
+  });
+  const cost = hist.data?.summary?.additional_cost_pct ?? null;
+  const byId = new Map(items.map((it) => [it.recommendation_id, it]));
+  const rtById = new Map((rt.data?.items ?? []).map((it) => [it.recommendation_id, it]));
+  return (id) => {
+    const it = byId.get(id);
+    if (!it) return null;
+    if (isOutcomeSettled(it.status)) {
+      const gross = historyExecutedReturn(it.outcome);
+      if (gross == null) return { kind: "missed" };
+      return { kind: "sold", ret: cost == null ? null : gross - cost, exitDate: it.outcome?.exit_date };
+    }
+    const r = rtById.get(id);
+    if (!r) return { kind: "unknown" };
+    if (r.status === "holding") return { kind: "holding", pnl: r.pnl_pct ?? null };
+    return { kind: r.status };
+  };
+}
+
+function RecStatusTag({ s }: { s: RecStatus | null }) {
+  if (!s) return null;
+  const sign = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(2)}%`;
+  const col = (v?: number | null) => (v == null ? "var(--ink)" : v > 0 ? "var(--market-up)" : v < 0 ? "var(--market-down)" : "var(--ink)");
+  if (s.kind === "sold") {
+    return (
+      <span className="recst tag" title={`已成交并卖出${s.exitDate ? `（${s.exitDate}）` : ""}，收益已扣交易成本`}>
+        已卖出 <b style={{ color: col(s.ret) }}>{s.ret == null ? "—" : sign(s.ret)}</b>
+      </span>
+    );
+  }
+  if (s.kind === "holding") {
+    return (
+      <span className="recst tag" title="已买入未卖出，按实时价估算，未扣成本，不计入已卖出统计">
+        持有中 <b style={{ color: col(s.pnl) }}>{s.pnl == null ? "—" : sign(s.pnl)}</b><span className="text-muted">（浮动）</span>
+      </span>
+    );
+  }
+  const label = { missed: "没买进", waiting: "待买入", watching: "等买点", unavailable: "行情不可用", unknown: "待确认" }[s.kind];
+  const tip = {
+    missed: "没触发买点或买不进，不算收益",
+    waiting: "等下一交易日开盘按规则买入",
+    watching: "还没碰到买点",
+    unavailable: "实时行情暂时取不到",
+    unknown: "实时状态暂未返回",
+  }[s.kind];
+  return <span className="recst tag text-muted" title={tip}>{label}</span>;
 }
 
 function runSortTime(run: RunSummary) {

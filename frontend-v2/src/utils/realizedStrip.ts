@@ -23,3 +23,21 @@ export function realizedStripCopy(
     tip: `前瞻已结算（仅实盘）${windowNote}。${lowNote}`,
   };
 }
+
+/** /api/metrics/by-strategy 一行里本函数用到的字段（短线）。 */
+export type SoldStatsSource = {
+  sold_count?: number;
+  sold_avg_net_return?: number | null;
+  sold_median_net_return?: number | null;
+  triggered_count?: number;
+  avg_return?: number;
+};
+
+/** by-strategy 一行 → 「已成交并卖出」统计（扣成本，不含未成交、不含未卖出），与中线「已平仓」同口径。
+ * 新后端给 sold_*；旧后端没有时退回 avg_return（同样只算已成交）+ triggered_count，中位数缺失显示「—」。
+ * 不用 average_net_return / trade_count：那是按推荐数平均，未成交记 0 收益，会把数字摊薄。 */
+export function soldStats(r?: SoldStatsSource | null): { n: number | null; avg: number | null; median: number | null } | null {
+  if (!r) return null;
+  if (r.sold_count != null) return { n: r.sold_count, avg: r.sold_avg_net_return ?? null, median: r.sold_median_net_return ?? null };
+  return { n: r.triggered_count ?? null, avg: r.triggered_count ? (r.avg_return ?? null) : null, median: null };
+}
