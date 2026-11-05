@@ -245,3 +245,9 @@ def test_strategy_metrics_expose_9kpi_not_only_trade_hit_rate(monkeypatch):
     assert row["recommendation_accuracy"] == 0.333
     assert row["accuracy_denominator"] == 3
     assert row["sample_confidence"] == "low"
+    # 已成交并卖出口径：去掉未成交那笔，只平均 2 笔扣成本收益
+    assert row["sold_count"] == 2
+    win, loss = 2.0 - ADDITIONAL_COST_PCT, -1.0 - ADDITIONAL_COST_PCT
+    assert row["sold_avg_net_return"] == round((win + loss) / 2, 3)
+    assert row["sold_median_net_return"] == round((win + loss) / 2, 3)
+    assert row["sold_win_rate"] == 50.0

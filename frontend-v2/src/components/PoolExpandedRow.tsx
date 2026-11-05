@@ -2,6 +2,8 @@ import { ClipboardCopy, History, ShieldAlert, ShieldCheck, ShieldQuestion } from
 import type { CockpitRecommendation, OutcomeSummary } from "../types";
 import { TradeMetric } from "./RecommendationDetailCard";
 import { StockTicker } from "./StockTicker";
+import { ShortStrip, useShortQuality } from "./StrategyQuality";
+import { ReturnSourceBlock } from "./ReturnSourceBlock";
 
 /**
  * 候选池展开行 —— 从 PoolPage 抽离的结构化子组件。
@@ -57,6 +59,8 @@ export function PoolExpandedRow({
         <span style={{ fontWeight: 700, color: "var(--ink)", fontSize: "var(--text-md)" }}>{item.name}</span>
         {item.industry && <span className="tag">{item.industry}</span>}
       </div>
+
+      <StrategyReturns item={item} />
 
       {/* 左：交易参数 + 买点原因 / 风险提示 */}
       <div>
@@ -228,6 +232,37 @@ export function PoolExpandedRow({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 命中策略的收益（与中线批次卡的画像条同口径）：每个命中策略一条
+ * 稳健/彩票标签 + 回测近12个月 / 2024-01至今（扣 0.3% 成本）+ 实盘已卖出 + 回放已卖出（两者分开，不混算），
+ * 再加「收益来源」（两头各去5%均值、去掉最赚5%、前10笔占比、中位数）。全是后端字段，只展示，不影响出票。
+ */
+function StrategyReturns({ item }: { item: CockpitRecommendation }) {
+  const get = useShortQuality();
+  const seen = new Set<string>();
+  const hits = (item.skill_breakdown ?? [])
+    .filter((s) => s.strategy_id && !seen.has(s.strategy_id) && seen.add(s.strategy_id))
+    .sort((a, b) => b.score - a.score);
+  if (!hits.length) return null;
+  return (
+    <div style={{ gridColumn: "1 / -1" }}>
+      <div className="panel__kicker" style={{ marginBottom: "var(--space-1)" }}>
+        策略收益 · 回测与已卖出每笔（扣成本；实盘和回放分开算）
+      </div>
+      {hits.map((s) => (
+        <div key={s.strategy_id} style={{ marginBottom: "var(--space-2)" }}>
+          <div style={{ fontSize: "var(--text-sm)", color: "var(--ink)", fontWeight: 600 }}>
+            {s.strategy_name}
+            {s.hard_veto && <span style={{ color: "var(--market-up)", fontWeight: 400 }}> · 已被否决</span>}
+          </div>
+          <ShortStrip id={s.strategy_id!} style={{ marginTop: 4 }} />
+          <ReturnSourceBlock quality={get(s.strategy_id!).fullQuality} />
+        </div>
+      ))}
     </div>
   );
 }

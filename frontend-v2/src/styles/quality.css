@@ -21,3 +21,12 @@
 .qs__none { color: var(--muted); font-size: 12px; align-self: center; }
 .qs__hint { font-size: 12px; color: var(--muted); margin: 4px 0 8px; line-height: 1.6; }
 @media (max-width: 720px) { .qs__g { flex: 1 1 calc(50% - 8px); max-width: none; } }
+/* 短线推荐卡折叠行：一行看到主策略的稳健/彩票 + 回测近12月每笔 + 实盘已卖出每笔 */
+.qinline { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; cursor: help; }
+.qinline b { font-weight: 650; color: var(--ink); }
+.qinline b.qs__up { color: var(--market-up); }
+.qinline b.qs__down { color: var(--market-down); }
+.qinline__k { color: var(--muted); }
+/* 单只推荐的状态：待买入 / 持有中 / 已卖出 / 没买进 */
+.recst { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.recst b { font-weight: 650; }

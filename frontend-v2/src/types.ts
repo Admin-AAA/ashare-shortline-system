@@ -234,6 +234,8 @@ export type CockpitRecommendation = {
   invalid_rule?: string | null;
   degraded_reason?: string | null;
   review_status?: "verified" | "partial" | "degraded" | "rule_only" | null;
+  /** historical_reconstruction = 历史回放重建，不是实盘 */
+  evidence_class?: string | null;
   market_context?: {
     main_industries?: string[];
     breadth?: Record<string, unknown>;
@@ -245,6 +247,7 @@ export type CockpitRecommendation = {
 };
 
 export type SkillBreakdownItem = {
+  strategy_id?: string;
   strategy_name: string;
   score: number;
   phase: string;
@@ -2577,6 +2580,11 @@ export type StrategyStatsRow = {
   trigger_rate?: number;
   avg_score: number;
   avg_return: number;
+  /** 只算已成交并卖出（扣成本）；未成交、未卖出不计。旧后端无此字段。 */
+  sold_count?: number;
+  sold_avg_net_return?: number | null;
+  sold_median_net_return?: number | null;
+  sold_win_rate?: number | null;
 } & EvaluationKpiFields;
 
 export type PrecisionAtKRow = {
