@@ -12010,3 +12010,25 @@ L-198。同一事件源只改持有期、弱反应带或放量门槛，是家族
   3. 选中「5 日跌得多」的票（§988 r5 中位 −10%、§989 −11%）回撤都超 −35%：短期大跌票在近两年延续下跌多于反弹，与 §290/§307 一致；加资金流或缩量条件没有扭转。
   4. 行业中性反转（§990）在 2019–2021 三段为正、2022 年后全负，短期反转效应在近年明显衰减。
 - 处置：5 个想法全部记入本日志的否决结论（短线没有单独的拒绝表，按 §307 惯例只记日志）；无策略接入实盘。**短线因子选股器这一批（等权分位、持 5 日）到站**；若再试，需换成本更低或持有更长的结构（例如持 10 日、或只在小盘闸门开时做），且必须重新预注册。
+
+
+## 治理 · 中线家族合并（FAMMERGE）— 预注册（2026-11-05 10:30 CST 写于拼任何合并收益之前）
+
+- 白话：同一家族的中线策略常常同一天选中同一批票（如 §535 与 §421），重复推荐让人看着乱，也把同一批票的风险放大。把每个家族合成一个「家族策略」：当天各成员选中的票取并集去重，按被几个成员同时选中、再按成员自己的名次排序，取前 5 只。用户授权同家族可合并，目标是提高系统收益。
+- 不改任何成员的事件、过滤和排序；不重跑整套回测；不是仓位管理。
+- 家族与成员（以 origin/main 2026-11-05 `STRATEGIES` 现役中线为准，成员固定，跑完不增删）：
+  - A 业绩加速/SUE（`mid-fam-earnings`）：mid-earnings-accel、mid-earnings-accel-vol、mid-sue-accel-vol、mid-sue-td-vol、mid-ea-td-vol、mid-ea-cas-vol、mid-sexp-sue-vol、mid-ocfs-sue-vol、mid-qn-sue-vol、mid-curr-sue-vol
+  - B 费用率下降（`mid-fam-expense`）：mid-sales-exp-drop、mid-sales-exp-vol、mid-fina-exp-drop、mid-fina-exp-vol
+  - C 业绩预告（`mid-fam-forecast`）：mid-forecast-beat、mid-forecast-beat-underreact、mid-forecast-preincrease-underreact、mid-forecast-preincrease-underreact-vol
+  - D 股权激励（`mid-fam-incentive`）：mid-incentive-option、mid-incentive-vol
+  - E 分红增加（`mid-fam-dividend`）：mid-dividend-increase、mid-dividend-increase-vol
+  - F 资产结构（`mid-fam-asset`）：mid-cas-vol、mid-turn-days-vol
+  - 不合并：小市值周度四只（周频、选股池不同源）、回购弱反应、大宗溢价（单成员）。
+- 合并规则（实盘与回测同一套）：信号日 d，各成员按自己现行规则出候选（含自己的排序）；并集按代码去重；剔除家族自身仍在 20 日持有期内的票；排序键 =（被几个成员同时选中 降序，各成员当日名次里最好的一个 升序，代码 升序）；取前 5 只（分数做成唯一值，不触发同分顺延）；次日开盘买、持 20 个交易日，成交模拟同现役（开盘涨停不买、跌停封死顺延、0.3%/笔）。
+- 回测拼法（`backend/scripts/midterm/fam_merge_s1105.py`）：每个阶段读各成员现行规则的逐笔文件（与 `midterm_backtest_metrics.json` 各阶段 n/每笔核对一致；mid-earnings-accel 用 §RV-C EA_combo、mid-earnings-accel-vol 用 §975 EA_combo 逐笔）；同一入场日内文件行序即成员当日名次；按上面的排序键、20 仓位、每天最多新开 5 只、已持有不重复买重新模拟；收益直接用成员逐笔的出场与收益；回撤用本地日 K 逐日盯市（同 realistic 引擎）。
+- 已知近似（事先写明，结果不因此调整）：成员自己因 5 只名额、20 仓位或已持有而没买的票，在逐笔文件里看不到，合并后也就少了这些候选；成员开盘涨停没买进的票不占合并名额。先用单成员自拼复现自身 n/每笔/回撤做校验。
+- 判定（两条都过才合并）：
+  1. §282 中线：R12、N3 扣成本后每笔为正；PF≥1.3；最大回撤≥−25%；8 段至少 6 段为正；W0、W00 每笔≥−5%；R12、N3 各≥30 笔。
+  2. 不比成员平均差：合并后 R12 每笔 ≥ 成员 R12 每笔简单平均，N3 每笔 ≥ 成员 N3 每笔简单平均，N3 最大回撤不深于成员 N3 回撤简单平均。
+- 只展示不作门槛：两两重叠度（N3 逐笔 (代码,入场日) 的 Jaccard 与包含率；实盘选股文件 (代码,信号日) 的 Jaccard，含被 5 只上限截掉的候选）、每持有日收益、两端去 5%、去最赚 5%、前 10 笔占比、中位数、稳健型/彩票型。
+- 落地：达标的家族新增 `mid-fam-*` 上线，成员移入 `RETIRED_STRATEGIES`，原因写「合并进 XX」；历史推荐不动；新策略走现有近 3 个月 replay 回补（origin:replay）。不达标的家族保持原样。
