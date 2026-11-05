@@ -121,6 +121,8 @@ MID_KIND_DEPS: dict[str, tuple[Dep, ...]] = {
     "dividend_lowvol": (("daily_kbars", 0),), "lowturn_lowvol": (("daily_kbars", 0),),
     "repurchase": _EVENT, "repurchase_underreact": _EVENT,
     "event_dip": _EVENT,  # §993 回购预案∪期权激励 × 公告前深跌：r20 与信号日涨跌都用当天日K
+    "ea_dip": _EVENT,  # §1000 业绩加速 × 公告前深跌（事件池同 earnings_accel）
+    "divplan_dip": _DIVIDEND,  # §997 分红预案 × 公告前深跌：「同报告期第一次预案」读本地分红历史
     "earnings_accel": _EVENT, "earnings_accel_vol": _EVENT, "ea_td_vol": _EVENT, "ea_cas_vol": _EVENT,
     "sue_accel": _SUE, "sue_accel_vol": _SUE, "sue_td_vol": _SUE, "sexp_sue_vol": _SUE, "ocfs_sue_vol": _SUE,
     "qn_sue_vol": _SUE, "curr_sue_vol": _SUE,
