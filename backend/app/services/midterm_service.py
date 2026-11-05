@@ -112,6 +112,18 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 20,
         "schedule": "daily",
     },
+    # §993 回购预案/期权激励 × 公告前深跌（scripts/shortline_research/sev_s992.py CATA_DIP_h10；预注册 b8c4f637；
+    # §282 短线 4 窗口与中线 8 段标准都达标；候选 = _event_dip_pool + _filter_event_dip）
+    "mid-repurchase-incentive-dip": {
+        "name": "回购/期权激励×公告前深跌（持10日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在「回购预案金额≥市值0.5%（365天内首次）」和「首次含股票期权的激励草案」两个事件池里，只保留信号日（公告后首个交易日）前20个交易日复权跌幅≥15%、且信号日收盘既没封涨停也没封跌停的票；按近20日涨幅从低到高（跌得越深越优先），次日开盘买入，各持有10个交易日。不限同时持有数量；每天新推荐数量有上限（默认5只）。思路：股价大跌后公司掏钱回购或用低行权价绑定管理层，是对“价格被低估”的直接表态。回测里约95%的信号来自回购，收益集中在市场急跌后的反弹段。",
+        "kind": "event_dip",
+        "min_ratio": 0.005,
+        "max_r20": -0.15,
+        "hold_days": 10,
+        "schedule": "daily",
+    },
     # §95 新权重复评（scripts/midterm/lt_research15.py EA_h20，即 §93 G_h20 原条件，未调参）
     "mid-earnings-accel": {
         "name": "财报业绩加速（持20日）",
@@ -1452,6 +1464,56 @@ def _filter_repurchase_underreact(db, as_of: str, pool: list[dict[str, Any]]) ->
         q["score"] = round(-pct, 6)  # §398：与研究 sc_pct=−pct 一致
         out.append(q)
     return sorted(out, key=lambda x: (x["signal_pct"], x["code"]))
+
+
+def _event_dip_pool(rp_cands: list[dict[str, Any]], inc_cands: list[dict[str, Any]], min_ratio: float,
+                    held: set[str]) -> list[dict[str, Any]]:
+    """§993：回购预案（金额/市值≥min_ratio）∪ 首次期权激励草案，同票只留一条（回购优先），已持有的不要。"""
+    out: dict[str, dict[str, Any]] = {}
+    for p in rp_cands:
+        if p["ratio"] >= min_ratio and p["code"] not in held:
+            out.setdefault(p["code"], {**p, "event": "回购预案"})
+    for p in inc_cands:
+        if p["code"] not in held:
+            out.setdefault(p["code"], {**p, "event": "期权激励草案"})
+    return list(out.values())
+
+
+def _filter_event_dip(db, as_of: str, pool: list[dict[str, Any]], max_r20: float) -> list[dict[str, Any]]:
+    """§993 CATA_DIP_h10：信号日前 20 日复权涨幅 r20 ≤ max_r20，且信号日收盘既非涨停也非跌停；
+    按 r20 升序（跌得越深越优先），平手按代码（研究 sc = −r20 − code×1e-10）。
+    r20 口径同 midterm_incentive._r20（pct_chg 近 20 行累乘、±35% 截断，= lt_research.build r20）。
+    daily_kbars 无涨跌停价列，用前收 ×(1±9.8%/19.8%) 近似（与 _filter_repurchase_underreact 一致）。"""
+    if not pool:
+        return []
+    from app.services.midterm_incentive import _r20
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 21"), {"d": as_of})]
+    if len(dates) < 21 or dates[0] != as_of:
+        return []
+    codes = sorted({p["code"] for p in pool})
+    r20 = _r20(db, as_of, dates, codes)
+    rows = db.execute(text(
+        "SELECT code, pct_chg, close FROM daily_kbars WHERE trade_date=:d AND code IN :codes"
+    ).bindparams(bindparam("codes", expanding=True)), {"d": as_of, "codes": codes}).mappings().all()
+    by = {r["code"]: r for r in rows}
+    out = []
+    for p in pool:
+        code, r, rv = p["code"], by.get(p["code"]), r20.get(p["code"])
+        if not r or r["pct_chg"] is None or r["close"] is None or rv is None or rv > max_r20:
+            continue
+        pct, close = float(r["pct_chg"]), float(r["close"])
+        band = 0.198 if code.startswith(("3", "688")) else 0.098
+        pre = close / (1 + pct / 100.0) if pct > -99.999 else close
+        if close >= pre * (1 + band) - 0.005 or close <= pre * (1 - band) + 0.005:
+            continue
+        q = dict(p)
+        q["r20"] = round(rv, 4)
+        q["signal_pct"] = round(pct, 3)
+        q["score"] = round(-rv, 6)
+        out.append(q)
+    return sorted(out, key=lambda x: (x["r20"], x["code"]))
 
 
 def repurchase_plan_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
@@ -3061,6 +3123,28 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+        if meta.get("kind") == "event_dip":
+            from app.services.midterm_incentive import incentive_candidates
+            held = _held_codes(db, sid, as_of)
+            if rp_cands == "unset":
+                rp_cands = repurchase_plan_candidates(db, as_of)
+            if rp_cands is None:
+                result[sid] = "no_data"
+                continue
+            ic = incentive_candidates(db, as_of, store=False)
+            # 回测里约 95% 信号来自回购：巨潮激励源失败时不整批作废，只出回购部分，并在每条选股上写明缺了激励源
+            inc_missing = ic is None
+            if inc_missing:
+                logger.warning("%s %s 巨潮激励草案拉取失败，本批只含回购预案", as_of, sid)
+            pool = _event_dip_pool(rp_cands, ic or [], meta["min_ratio"], held)
+            picks = _filter_event_dip(db, as_of, pool, meta["max_r20"])
+            if inc_missing:
+                picks = [{**p, "data_note": "激励草案源拉取失败，本批只含回购预案"} for p in picks]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
         # daily_basic 市值未更新到 as_of 时不拿旧市值排名/算小盘指数（10-16 批次曾用 10-09 市值）：标 data_error，补数后重跑。
         basic_max = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
         if basic_max is None or str(basic_max)[:10] < as_of:
@@ -3406,6 +3490,13 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             score, label, better = round(float(p.get("signal_pct") if p.get("signal_pct") is not None else -float(p.get("score") or 0)), 3), "信号日涨跌(%)", "lower"
             reason = (f"{p.get('ann_date', '')} 回购预案弱反应，金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，"
                       f"占总市值 {_f(float(p.get('ratio') or 0) * 100, 3)}%，信号日涨跌 {_f(score)}%")
+        elif kind == "event_dip":
+            score, label, better = round(float(p["r20"]) * 100, 2), "公告前20日涨幅(%)", "lower"
+            ev = p.get("event") or ""
+            extra = (f"金额上限 {_f(float(p.get('repurchase_amount') or 0) / 1e8)} 亿元，占总市值 {_f(float(p.get('ratio') or 0) * 100, 3)}%"
+                     if ev == "回购预案" else (p.get("title") or ""))
+            reason = (f"{p.get('ann_date', '')} {ev}：{extra}；公告前20日涨幅 {_f(score)}%（≤−15%），"
+                      f"信号日涨跌 {_f(p.get('signal_pct'), 2)}%")
         elif kind == "earnings_accel":
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%")
