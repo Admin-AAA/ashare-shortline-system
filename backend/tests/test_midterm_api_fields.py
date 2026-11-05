@@ -166,7 +166,7 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     assert not demoted & set(ms.STRATEGIES)
     assert champs | protected | sue <= set(ms.STRATEGIES)
     live_mid = {sid for sid, meta in ms.STRATEGIES.items() if meta.get("horizon") == "mid"}
-    assert len(live_mid) == 30
+    assert len(live_mid) == 31  # 47→30 收敛后 +1：§993 mid-repurchase-incentive-dip（新增深跌过滤，持10）
     assert live_mid & sue == sue
     overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
     assert live_mid == overview
