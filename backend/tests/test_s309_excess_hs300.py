@@ -32,12 +32,9 @@ def test_missing_index_day_raises():
 
 def test_metrics_files_have_hs300_fields():
     m = json.loads((B / "app/services/midterm_backtest_metrics.json").read_text())
-    # 与 test_s282 同一例外：mid-turn-days-vol 的上线卡没有 quality，也就没有沪深300字段。
     missing = sorted(sid for sid, e in m.items() if "quality" not in e)
-    assert missing == ["mid-turn-days-vol"]
+    assert missing == [], missing
     for sid, e in m.items():
-        if sid in missing:
-            continue
         for w in ("R12", "N3"):
             q = e["quality"][w]
             assert {"excess_hs300", "hs300_avg", "beat_hs300"} <= set(q), (sid, w)
