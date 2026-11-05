@@ -342,3 +342,67 @@ def test_overview_marks_live_and_recorded(db, monkeypatch, tmp_path):
     m = out["strategies"]["mid-x"]
     assert m["live"]["ready"] and m["recorded"]["ready"] is False and m["recorded"]["trade_date"] == "2026-10-27"
     assert [d["key"] for d in m["deps"]] == ["daily_kbars", "daily_basic"] and m["deps"][1]["allowed_lag"] == 1
+
+
+# ---------------------------------------------------------------- 21:00 晚间补跑（_late_repair_repick）
+def test_late_repick_midlong_includes_data_not_ready(monkeypatch, tmp_path):
+    from app.services import midterm_service as ms
+    from app.services import scheduler_service as ss
+
+    monkeypatch.setattr(ms, "OUT_DIR", tmp_path / "picks")
+    sd = ms._status_dir()
+    sd.mkdir(parents=True)
+    rows = {sid: {"status": "no_signal"} for sid in ms.STRATEGIES}
+    rows["mid-earnings-accel"] = {"status": "data_not_ready"}
+    rows["mid-incentive-vol"] = {"status": "data_error"}
+    (sd / "2026-11-04.json").write_text(json.dumps(rows))
+    assert sorted(ss._midlong_error_strategies("2026-11-04")) == ["mid-earnings-accel", "mid-incentive-vol"]
+    assert ss.MIDLONG_RETRY_STATUSES == (None, "data_error", "data_not_ready")
+
+
+def test_late_repick_reruns_short_strategy_blocked_by_gate(monkeypatch):
+    """短线被数据闸门拦下 = 当天没建 run：真实的 _missing_standalone_strategies 认它缺批次，晚间补跑只补它一个。"""
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.services import midterm_live_seal as seal
+    from app.services import scheduler_service as ss
+    from app.services import standalone_strategies as st
+    from app.services import workbench_service as wb
+
+    td = "2026-11-04"
+    live = ["chao-gu-yang-jia-skill", "chen-xiaoqun-skill", "oversold-capital-reversal", "sector-relative-strength-leader"]
+    blocked = "chen-xiaoqun-skill"
+    monkeypatch.setattr(wb, "sync_skills", lambda db: [SimpleNamespace(skill_id=s, enabled=True) for s in live])
+    monkeypatch.setattr(st, "standalone_strategy_ids", lambda skills: [s.skill_id for s in skills])
+    # 17:35 那次：其余 3 个 completed，被拦的没有 run
+    monkeypatch.setattr(ss, "_completed_standalone_runs",
+                        lambda db, p: {s: {"run_id": f"r-{s}", "recommended_count": 0} for s in live if s != blocked})
+    monkeypatch.setattr(ss, "_latest_allowed_bar_date", lambda: td)
+    monkeypatch.setattr(ss, "_midlong_error_strategies", lambda d: [])
+    monkeypatch.setattr(ss, "_formal_inflight_count", lambda db, d: 0)
+    monkeypatch.setattr(seal, "generated_before_entry_open", lambda d, now: True)
+    monkeypatch.setattr(ss, "_diagnose_postclose_readiness", lambda db, d: {"can_run_local_recommendation": True})
+    monkeypatch.setattr(ss, "_run_outcome_label", lambda db, p: {})
+    from app.services.market_pool import kbar_cache
+    monkeypatch.setattr(kbar_cache, "enabled", lambda: False)
+    seen = []
+
+    async def standalone(db, payload):
+        seen.append(payload)
+        return {"final_run": {"status": "completed"}, "strategy_count": 1, "completed_count": 1}
+
+    monkeypatch.setattr(ss, "_run_standalone_recommendations", standalone)
+    monkeypatch.setattr("app.core.alerts.emit_alert", lambda *a, **k: None)
+
+    class DB:
+        def get(self, _m, _k):
+            return SimpleNamespace(payload_json="{}")
+
+        def rollback(self):
+            pass
+
+    out = asyncio.run(ss._late_repair_repick(DB(), "postclose_late_data_repair"))
+    assert out["missing_strategies"] == [blocked] and out["status"] == "completed"
+    (p,) = seen
+    assert p["standalone_skill_ids"] == [blocked] and p["trade_date_override"] == td

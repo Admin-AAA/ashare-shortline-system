@@ -191,11 +191,12 @@ async def _late_repair_repick(db, task_id: str) -> dict[str, Any]:
     短线 0/4 出票；21:00 补数把日K补上后没人重跑，要等次日 08:30 安全网）。
 
     条件（全部满足才跑，否则只记原因跳过）：
-    - 当天还有有效短线策略缺 completed formal 批次，或中长线有 data_error（已出齐就不动）；
+    - 当天还有有效短线策略缺 completed formal 批次（含被出票前数据闸门拦下、没建 run 的），
+      或中长线有 data_error / data_not_ready（已出齐就不动）；
     - 当天没有在途（queued/running）的 formal run；
     - 现在仍在入场日 09:15 之前（实盘判定规则不变：之后生成的不算实盘，交给 08:30 安全网也没意义）；
     - 健康闸门现在已通过（与 17:35 同一个 _diagnose_postclose_readiness）。
-    复用入口：中长线走 _safety_net_midlong_repair（只补 data_error / 未记录的策略），短线走
+    复用入口：中长线走 _safety_net_midlong_repair（只补 data_error / data_not_ready / 未记录的策略），短线走
     _run_standalone_recommendations（已 completed 的策略自动跳过，不重复出票），payload 与安全网同口径
     （post_sync_formal_recommendation 的 payload + trade_date_override + 纯本地池）。非致命：异常只记录并告警。
     """
@@ -226,7 +227,7 @@ async def _late_repair_repick(db, task_id: str) -> dict[str, Any]:
             logger.warning("晚间补数后补跑 %s 跳过：健康闸门仍未通过：%s", trade_date, out["blockers"])
             return out
 
-        logger.warning("晚间补数后健康闸门已通过，补跑 %s 当天出票：短线缺 %s，中长线 data_error %s",
+        logger.warning("晚间补数后健康闸门已通过，补跑 %s 当天出票：短线缺 %s，中长线待补（数据异常/未就绪/未记录） %s",
                        trade_date, missing or ("全部" if not done else "无"), midlong_todo)
         # 与 17:35 闸门通过后的顺序一致：先结算到期推荐、刷新日K缓存，再出票。
         try:
@@ -278,7 +279,7 @@ async def _late_repair_repick(db, task_id: str) -> dict[str, Any]:
 
             emit_alert("late_repick_failed", trade_date,
                        f"晚间补数后补跑 {trade_date} 未全部成功：短线 {out['status']}"
-                       + (f"；中长线仍 data_error：{','.join(still)}" if still else ""))
+                       + (f"；中长线仍数据异常/未就绪：{','.join(still)}" if still else ""))
         return out
     except Exception as exc:  # noqa: BLE001 - must not break the parent job
         try:
@@ -339,14 +340,19 @@ def _export_research_parquets(task_id: str) -> dict[str, Any]:
     return out
 
 
+# 中长线需要补跑的当日状态：从未记录 / 取数失败 / 出票前数据闸门拦下。晚间补跑与盘前安全网共用这一份口径。
+MIDLONG_RETRY_STATUSES: tuple[str | None, ...] = (None, "data_error", "data_not_ready")
+
+
 def _midlong_error_strategies(trade_date: str) -> list[str]:
-    """当天中长线状态文件里 data_error（或从未记录）的现役策略；读不到返回空 = 不触发。与 _safety_net_midlong_repair 同口径。"""
+    """当天中长线状态文件里 data_error / data_not_ready（或从未记录）的现役策略；读不到返回空 = 不触发。
+    与 _safety_net_midlong_repair 同口径（MIDLONG_RETRY_STATUSES）。"""
     try:
         from app.services import midterm_service as ms
 
         f = ms._status_dir() / f"{trade_date}.json"
         stored = json.loads(f.read_text()) if f.exists() else {}
-        return [sid for sid in ms.STRATEGIES if (stored.get(sid) or {}).get("status") in (None, "data_error")]
+        return [sid for sid in ms.STRATEGIES if (stored.get(sid) or {}).get("status") in MIDLONG_RETRY_STATUSES]
     except Exception:  # noqa: BLE001
         logger.debug("_midlong_error_strategies failed", exc_info=True)
         return []
@@ -2791,7 +2797,7 @@ def _safety_net_midlong_repair(db) -> dict:
         status_file = ms._status_dir() / f"{latest}.json"
         stored = _json.loads(status_file.read_text()) if status_file.exists() else {}
         # data_not_ready（出票前数据闸门拦下）同样补跑：数据补上后这次会正常出票，仍没补上就继续记 data_not_ready。
-        bad = (None, "data_error", "data_not_ready")
+        bad = MIDLONG_RETRY_STATUSES
         todo = [sid for sid in ms.STRATEGIES if (stored.get(sid) or {}).get("status") in bad]
         if not todo:
             return out
