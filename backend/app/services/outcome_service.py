@@ -1481,6 +1481,7 @@ def _metrics_by_strategy(
         count = max(1, item["sample_count"])
         metric_rows = _metric_records_from_rows(item["rows"], benchmark_by_rec)
         metrics = _compute_full_metrics(metric_rows)
+        sold_fields = _sold_trade_fields(metric_rows)
         # 最近一次该策略出现在该口径推荐中的交易日（北极星 C 项：策略可追溯）
         last_rec_date = max(
             (str(getattr(r, "trade_date", "") or "") for r in item["rows"]),
@@ -1502,9 +1503,29 @@ def _metrics_by_strategy(
             "last_recommendation_date": last_rec_date,
             "horizon_metrics": _horizon_metrics_for_rows(item["rows"], horizon_records),
             **_group_metric_fields(metrics),
+            **sold_fields,
             "date_range": _window_meta(window_days, start_date, end_date, len(rows), metrics["trade_count"]),
         })
     return sorted(result, key=lambda x: (x["sample_count"], x["hit_rate"], x["avg_score"]), reverse=True)
+
+
+def _sold_trade_fields(metric_rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """只算「已成交并卖出」的笔（扣成本），与中线「已平仓」同口径，供推荐卡片展示策略收益。
+
+    metric_rows 已排除 pending/provisional（未卖出的不算）；这里再去掉未成交（missed 记 0 收益），
+    所以和 average_net_return（含未成交 0 收益、按推荐数平均）不是一个数。只展示，不参与任何判定。
+    """
+    import statistics
+
+    sold = [float(r.get("net_return_pct", 0.0) or 0.0) for r in metric_rows if r.get("executed")]
+    if not sold:
+        return {"sold_count": 0, "sold_avg_net_return": None, "sold_median_net_return": None, "sold_win_rate": None}
+    return {
+        "sold_count": len(sold),
+        "sold_avg_net_return": round(sum(sold) / len(sold), 3),
+        "sold_median_net_return": round(statistics.median(sold), 3),
+        "sold_win_rate": round(100.0 * sum(1 for r in sold if r > 0) / len(sold), 1),
+    }
 
 
 def strategy_perf_summary(
