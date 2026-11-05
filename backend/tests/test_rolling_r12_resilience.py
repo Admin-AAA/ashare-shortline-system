@@ -14,7 +14,7 @@ from app.services import rolling_r12 as rr
 
 # ---------------------------------------------------------------- generate_picks 单策略隔离
 def _fake_loop(boom: set[str]):
-    def loop(db, as_of, d, force, horizon, strategy_ids, result, apply_daily_cap=False):
+    def loop(db, as_of, d, force, horizon, strategy_ids, result, apply_daily_cap=False, gate=None):
         for sid in ["a", "b", "c"]:
             if strategy_ids and sid not in strategy_ids:
                 continue

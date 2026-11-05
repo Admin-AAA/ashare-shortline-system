@@ -272,7 +272,8 @@ def test_safety_net_midlong_repairs_only_data_error_or_unrecorded(monkeypatch, t
     (status / "2026-10-26.json").write_text(json.dumps(rows))
     seen = {}
 
-    def fake_generate(db, as_of, force=False, horizon=None, strategy_ids=None, apply_daily_cap=False):
+    def fake_generate(db, as_of, force=False, horizon=None, strategy_ids=None, apply_daily_cap=False, data_gate=False):
+        assert data_gate is True  # 盘前补跑是实盘入口，要开出票前数据闸门
         seen.update(as_of=as_of, ids=sorted(strategy_ids), cap=apply_daily_cap)
         return {"long-growth-streak": "no_data", "long-net-cash-switch": 3}
 

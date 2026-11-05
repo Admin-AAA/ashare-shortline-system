@@ -242,11 +242,27 @@ function metricsQuery(windowDays: number | undefined, sampleScope: MetricsSample
   return params.toString();
 }
 
+/** 出票前数据就绪闸门（GET /api/strategies/data-readiness）。reason 已是给用户看的中文：「缺数据：资金流向 最新 10-23，应为 11-04」 */
+export type DataReadinessItem = {
+  key: string; label: string; latest: string | null; expected: string | null; ok: boolean; reason: string;
+  allowed_lag?: number | null; max_age_days?: number | null;
+};
+export type StrategyDataReadiness = {
+  strategy_id: string; horizon: string; name: string;
+  deps: { key: string; label: string; allowed_lag?: number | null; max_age_days?: number | null }[];
+  live: { ready: boolean; reason: string; items: DataReadinessItem[] };
+  recorded: { trade_date: string | null; ready: boolean | null; reason: string | null; checked_at: string | null } | null;
+};
+export type DataReadinessResponse = {
+  expected_trade_date: string; checked_at: string; recorded_trade_date: string | null; rule: string;
+  strategies: Record<string, StrategyDataReadiness>;
+};
+
 export type HorizonMetrics = { n?: number; win?: number; avg?: number; pf?: number; days?: number; tot?: number; mdd?: number };
 export type HorizonStrategy = {
   id: string; name: string; horizon: string; summary: string; next_batch_note?: string | null;
   /** 当日出票状态（17:35 盘后才有）；缺失则不显示 */
-  daily_status?: { status: "ok" | "no_signal" | "data_error" | "slots_full" | "not_signal_day" | string; reason?: string | null; date?: string | null } | string | null;
+  daily_status?: { status: "ok" | "no_signal" | "data_error" | "data_not_ready" | "slots_full" | "not_signal_day" | string; reason?: string | null; date?: string | null } | string | null;
   daily_status_reason?: string | null; schedule: string; hold_days: number; top_n: number | null;
   metrics: { recent_12m?: HorizonMetrics; phases?: Record<string, HorizonMetrics>; window?: string; note?: string; quality?: import("../components/ReturnSourceBlock").ReturnSourceQuality };
   /** 综合分（后端 strategy_rank.py，仅周期内比较）；沉底策略 rank_score/rank 为空，rank_flags 说明原因 */
@@ -464,6 +480,8 @@ export const api = {
   skills: () => request<SkillSummary[]>("/api/skills", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   standaloneMetrics: () =>
     request<StandaloneMetricsResponse>("/api/strategies/standalone-metrics", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
+  strategyDataReadiness: () =>
+    request<DataReadinessResponse>("/api/strategies/data-readiness", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
   horizonStrategies: (horizon: "mid" | "long") =>
     request<HorizonStrategiesResponse>(`/api/horizons/${horizon}/strategies`),
   horizonPicks: (horizon: "mid" | "long", strategyId?: string, limit = 30) =>

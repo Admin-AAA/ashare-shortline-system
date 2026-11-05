@@ -375,7 +375,7 @@ def _run(db, horizon: str, payload: dict):
         raise HTTPException(409, "已有中长线出票在运行")
     try:
         result = svc.generate_picks(db, as_of, force=bool((payload or {}).get("force", False)),
-                                    horizon=horizon, strategy_ids=sids, apply_daily_cap=True)
+                                    horizon=horizon, strategy_ids=sids, apply_daily_cap=True, data_gate=True)
     finally:
         _RUN_LOCK.release()
     return {"horizon": horizon, "as_of": as_of, "force": bool((payload or {}).get("force", False)),

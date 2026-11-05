@@ -4,7 +4,9 @@
 1. 短线：每个现役单策略（standalone_strategy_ids）当天都有一个 completed、evaluation_scope=live_forward 的 formal run，
    且生成时间在入场日 09:15 之前。0 只推荐也算成功（策略规则否决是正常结果），只有"没跑出来"才算失败。
    安全网等带 trade_date_override 的补跑：入场日开盘前生成的同样记为 live_forward、算出票成功；开盘后才补的记 historical_replay，不算。
-2. 中长线：status/{date}.json 里现役策略没有 data_error，也没有缺记录。
+2. 中长线：status/{date}.json 里现役策略没有 data_error / data_not_ready，也没有缺记录。
+   出票前数据就绪闸门（strategy_data_readiness）拦下的策略，短线不建 run、中长线记 data_not_ready，都算当天没出票，
+   原因（缺哪份数据、最新到哪天、应到哪天）单独写进 reason，健康分的「盘后出票」项因此能看到。
    例外：晚发布数据的策略（LATE_DATA_STRATEGIES，大宗交易约 21:00 发布）在次日 08:30 之前没有结果只记「待数据、未到点」，
    不算失败；次日 08:50 复核时仍没有才算失败。
 
@@ -82,10 +84,10 @@ def late_data_ready_at(sid: str, trade_date: str) -> _dt.datetime | None:
 def classify_midlong(stored: dict[str, Any], trade_date: str, now: _dt.datetime,
                      strategy_ids: list[str]) -> dict[str, list[str]]:
     """把各现役中长线策略分成 失败（缺记录/数据异常）与 待数据（晚发布数据未到点）。now 为北京时间 naive。"""
-    missing, errors, pending = [], [], []
+    missing, errors, not_ready, pending = [], [], [], []
     for sid in strategy_ids:
         row = stored.get(sid)
-        bad = (not row) or row.get("status") == "data_error"
+        bad = (not row) or row.get("status") in ("data_error", "data_not_ready")
         if not bad:
             continue
         ready = late_data_ready_at(sid, trade_date)
@@ -93,24 +95,35 @@ def classify_midlong(stored: dict[str, Any], trade_date: str, now: _dt.datetime,
             pending.append(sid)
         elif not row:
             missing.append(sid)
+        elif row.get("status") == "data_not_ready":
+            not_ready.append(sid)
         else:
             errors.append(sid)
-    return {"missing": missing, "data_error": errors, "pending": pending}
+    return {"missing": missing, "data_error": errors, "data_not_ready": not_ready, "pending": pending}
 
 
 def daily_output_status(db, trade_date: str, now: _dt.datetime | None = None) -> dict[str, Any]:
     """now：北京时间 naive，默认当前。决定晚发布数据的策略是「待数据」还是「失败」。"""
     from app.services import midterm_service as ms
 
+    from app.services.strategy_data_readiness import blocked_on
+
     now = now or _dt.datetime.now(CN_TZ).replace(tzinfo=None)
     expected = expected_short_strategies(db)
     done = _live_short_runs(db, trade_date)
     short_missing = sorted(set(expected) - set(done))
     mid = classify_midlong(_midlong_status(trade_date)["stored"], trade_date, now, list(ms.STRATEGIES))
-    ok = not short_missing and not mid["missing"] and not mid["data_error"]
+    # 出票前数据就绪闸门拦下的策略（output/strategy_readiness/<日期>.json 里仍是未就绪）：同样算没出票，原因单列
+    blocked = blocked_on(trade_date)
+    short_not_ready = [sid for sid in short_missing if sid in blocked]
+    short_missing_other = [sid for sid in short_missing if sid not in blocked]
+    ok = not short_missing and not mid["missing"] and not mid["data_error"] and not mid["data_not_ready"]
     reasons = []
-    if short_missing:
-        reasons.append(f"短线缺实盘出票：{','.join(short_missing)}")
+    if short_missing_other:
+        reasons.append(f"短线缺实盘出票：{','.join(short_missing_other)}")
+    not_ready = short_not_ready + mid["data_not_ready"]
+    if not_ready:
+        reasons.append("数据未就绪、当天没出票：" + "；".join(f"{sid}（{blocked.get(sid) or '缺数据'}）" for sid in not_ready))
     if mid["missing"]:
         reasons.append(f"中长线缺运行记录：{','.join(mid['missing'])}")
     if mid["data_error"]:
@@ -128,6 +141,9 @@ def daily_output_status(db, trade_date: str, now: _dt.datetime | None = None) ->
         "short_recommended": sum(v["recommended_count"] for v in done.values()),
         "midlong_missing": mid["missing"],
         "midlong_data_error": mid["data_error"],
+        "midlong_data_not_ready": mid["data_not_ready"],
+        "short_data_not_ready": short_not_ready,
+        "data_not_ready_reasons": {sid: blocked.get(sid, "") for sid in not_ready},
         "midlong_pending": mid["pending"],
         "reason": "；".join(reasons) or "按时出票",
     }

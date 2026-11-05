@@ -142,8 +142,9 @@ def test_live_callers_pass_flag():
 
     assert "apply_daily_cap=True" in inspect.getsource(api_mod)
     src = inspect.getsource(ss)
-    assert "_mid_generate_picks(db, trade_date, apply_daily_cap=True)" in src
-    assert "generate_block_trade_picks(db, trade_date, apply_daily_cap=True)" in src
+    assert "_mid_generate_picks(db, trade_date, apply_daily_cap=True, data_gate=True)" in src
+    assert "generate_block_trade_picks(db, trade_date, apply_daily_cap=True, data_gate=True)" in src
+    assert "apply_daily_cap=True, data_gate=True" in inspect.getsource(api_mod)
 
 
 # ---- 短线卡片 ----

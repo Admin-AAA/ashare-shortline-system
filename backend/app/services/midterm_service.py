@@ -1918,7 +1918,7 @@ def _save_picks(sid: str, as_of: str, picks: list[dict[str, Any]], apply_daily_c
 @_formal_entry
 def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = None,
                    strategy_ids: list[str] | None = None, apply_daily_cap: bool = False,
-                   isolate_errors: bool = False) -> dict[str, Any]:
+                   isolate_errors: bool = False, data_gate: bool = False) -> dict[str, Any]:
     """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。
 
     horizon / strategy_ids 只用于手动补跑（POST /api/horizons/{mid,long}/run），默认 None = 17:35 全部策略。
@@ -1926,20 +1926,40 @@ def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = No
 
     apply_daily_cap：每策略每日新推荐上限（settings.max_daily_picks_per_strategy，默认 5，同分顺延）。
     实盘（17:35 定时任务 / 手动补跑 API）与历史回放重建（scripts/rebuild_replay_picks.replay_midlong，默认 True）都传 True。
-    本函数默认仍是 False：不带开关的直接调用和既有单测不截断。回放必须包在 replay_pick_writes() 里，否则过了入场截止时间不会覆盖旧文件。"""
+    本函数默认仍是 False：不带开关的直接调用和既有单测不截断。回放必须包在 replay_pick_writes() 里，否则过了入场截止时间不会覆盖旧文件。
+
+    data_gate：出票前按策略检查依赖数据（strategy_data_readiness）。信号日里依赖不是最新的策略记 data_not_ready、不落盘，
+    其它策略照常出。只有实盘入口（17:35 / 安全网补跑 / 手动补跑 API / 晚间大宗）传 True；历史回放、滚动重算不传，口径不变。"""
     d = _dt.date.fromisoformat(as_of)
     try:
         check_daily_basic_staleness(db, as_of)
     except Exception as exc:  # noqa: BLE001
         logger.warning("daily_basic staleness check failed: %s", exc)
     result: dict[str, Any] = {}
+    gate = None
+    if data_gate:
+        from app.services.strategy_data_readiness import ReadinessGate
+
+        gate = ReadinessGate(db, as_of)
+    try:
+        return _generate_picks_inner(db, as_of, d, force, horizon, strategy_ids, result, apply_daily_cap,
+                                     isolate_errors, gate)
+    finally:
+        if gate is not None and gate.results:
+            from app.services.strategy_data_readiness import record
+
+            record(as_of, gate.results)
+
+
+def _generate_picks_inner(db, as_of: str, d, force: bool, horizon, strategy_ids, result: dict[str, Any],
+                          apply_daily_cap: bool, isolate_errors: bool, gate) -> dict[str, Any]:
     if isolate_errors:
         # 滚动重算等批量回放用：某个策略抛异常只记它自己（{"error":..., "exception": True}），其余策略接着算。
         # 实盘 17:35 不开这个开关，仍是出错就抛，避免悄悄少出票。
         remaining = strategy_ids
         while True:
             try:
-                _generate_picks_loop(db, as_of, d, force, horizon, remaining, result, apply_daily_cap)
+                _generate_picks_loop(db, as_of, d, force, horizon, remaining, result, apply_daily_cap, gate)
                 break
             except Exception as exc:  # noqa: BLE001
                 cur = result.pop("__current__", None)
@@ -1959,7 +1979,7 @@ def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = No
         _record_status(as_of, result)
         return result
     try:
-        _generate_picks_loop(db, as_of, d, force, horizon, strategy_ids, result, apply_daily_cap)
+        _generate_picks_loop(db, as_of, d, force, horizon, strategy_ids, result, apply_daily_cap, gate)
     except Exception as exc:
         cur = result.pop("__current__", None)
         if cur:
@@ -1972,7 +1992,7 @@ def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = No
 
 
 def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, result: dict[str, Any],
-                         apply_daily_cap: bool = False) -> None:
+                         apply_daily_cap: bool = False, gate=None) -> None:
     rp_cands: list[dict[str, Any]] | None | str = "unset"
     for sid, meta in STRATEGIES.items():
         if horizon and meta.get("horizon") != horizon:
@@ -1986,6 +2006,25 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
         elif not force and not is_signal_day(sid, d):
             result[sid] = {"skipped": "not_signal_day"}
             continue
+        if gate is not None:
+            # 出票前数据就绪闸门：依赖不是最新 → 当天不出票、不落盘，记 data_not_ready（补数后安全网/手动补跑会重判）。
+            try:
+                g = gate.check(sid, str(meta.get("horizon") or ""))
+            except Exception as exc:  # noqa: BLE001 - 检查本身出错放行并告警，不拦
+                from app.services.strategy_data_readiness import alert_gate_failure
+
+                alert_gate_failure(f"midlong:{sid}", exc)
+                try:
+                    db.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+            else:
+                if not g["ready"]:
+                    from app.services.strategy_data_readiness import blocked_raw
+
+                    logger.warning("%s %s 依赖数据未就绪，今天不出票：%s", as_of, sid, g["reason"])
+                    result[sid] = blocked_raw(g)
+                    continue
         result["__current__"] = sid
         if meta.get("kind") in ("lowturn_lowvol", "dividend_lowvol"):
             cand_fn = lowturn_lowvol_candidates if meta["kind"] == "lowturn_lowvol" else dividend_lowvol_candidates
@@ -3054,11 +3093,13 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
         result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
 
 
-DAILY_STATUS_VALUES = ("ok", "no_signal", "data_error", "slots_full", "not_signal_day")  # slots_full 仅用于 10-22 前的旧状态文件（持仓名额上限已去掉）
+DAILY_STATUS_VALUES = ("ok", "no_signal", "data_error", "data_not_ready", "slots_full", "not_signal_day")  # slots_full 仅用于 10-22 前的旧状态文件（持仓名额上限已去掉）
 
 
 def classify_daily_status(raw: Any) -> str:
-    """generate_picks 单策略原始结果 -> ok / no_signal / data_error / slots_full / not_signal_day。"""
+    """generate_picks 单策略原始结果 -> ok / no_signal / data_error / data_not_ready / slots_full / not_signal_day。
+
+    data_not_ready：出票前数据就绪闸门拦下（依赖数据不是最新，没跑选股）；data_error：跑了但取数失败/异常。"""
     if isinstance(raw, bool):
         return "data_error"
     if isinstance(raw, int):
@@ -3066,6 +3107,8 @@ def classify_daily_status(raw: Any) -> str:
     if raw == "no_data":
         return "data_error"
     if isinstance(raw, dict):
+        if "data_not_ready" in raw:
+            return "data_not_ready"
         if "error" in raw:
             return "data_error"
         sk = raw.get("skipped")
@@ -3115,6 +3158,10 @@ def latest_daily_status(sid: str, *, lookback: int = 15) -> dict[str, Any] | Non
             raw = row.get("raw")
             if isinstance(raw, dict):
                 out["detail"] = raw.get("skipped") or raw.get("error")
+                if raw.get("data_not_ready"):
+                    out["detail"] = "data_not_ready"
+                    out["reason"] = raw.get("reason")  # 「缺数据：XX 最新 10-23，应为 11-04」，/mid、/long 接口原样给前端
+                    out["missing"] = raw.get("data_not_ready")
             return out
     return None
 
@@ -3133,9 +3180,25 @@ def _block_trade_picks(db, sid: str, meta: dict[str, Any], as_of: str, apply_dai
 
 
 @_formal_entry
-def generate_block_trade_picks(db, as_of: str, apply_daily_cap: bool = False) -> dict[str, Any]:
-    """只跑 mid-block-trade-premium（as_of = 大宗交易日 T，YYYY-MM-DD）。供 21:00 后 / T+1 开盘前的晚间任务调用。"""
+def generate_block_trade_picks(db, as_of: str, apply_daily_cap: bool = False, data_gate: bool = False) -> dict[str, Any]:
+    """只跑 mid-block-trade-premium（as_of = 大宗交易日 T，YYYY-MM-DD）。供 21:00 后 / T+1 开盘前的晚间任务调用。
+
+    data_gate 同 generate_picks：依赖数据不是最新时记 data_not_ready、不落盘。"""
     sid = "mid-block-trade-premium"
+    if data_gate:
+        from app.services import strategy_data_readiness as sdr
+
+        try:
+            gate = sdr.ReadinessGate(db, as_of)
+            g = gate.check(sid, "mid")
+        except Exception as exc:  # noqa: BLE001 - 检查本身出错放行并告警
+            sdr.alert_gate_failure(f"midlong:{sid}", exc)
+        else:
+            sdr.record(as_of, gate.results)
+            if not g["ready"]:
+                res = {sid: sdr.blocked_raw(g)}
+                _record_status(as_of, res)
+                return res
     try:
         res = {sid: _block_trade_picks(db, sid, STRATEGIES[sid], as_of, apply_daily_cap)}
     except Exception as exc:
