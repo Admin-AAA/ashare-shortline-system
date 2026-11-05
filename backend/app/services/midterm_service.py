@@ -124,6 +124,26 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 10,
         "schedule": "daily",
     },
+    # §997 现金分红预案 × 公告前深跌（scripts/shortline_research/evdip_s996.py DIVP_DIP_h5；预注册 4b2cf0fd；§282 短线达标）
+    "mid-divplan-dip": {
+        "name": "分红预案×公告前深跌（持5日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，扫描新发布的现金分红「预案」（同一报告期第一次、每股税前派现÷信号日收盘≥1%），剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；只保留信号日前20个交易日复权跌幅≥15%、且信号日收盘既没封涨停也没封跌停的票；按近20日涨幅从低到高（跌得越深越优先），次日开盘买入，各持有5个交易日。每天新推荐数量有上限（默认5只）。思路：股价急跌后公司仍拿出像样的现金分红，是对基本面的硬表态。回测收益约八成来自2024年4月、2025年4月两个年报季急跌反弹。",
+        "kind": "divplan_dip",
+        "max_r20": -0.15,
+        "hold_days": 5,
+        "schedule": "daily",
+    },
+    # §1000 财报业绩加速 × 公告前深跌（scripts/shortline_research/evdip_s996.py EA_DIP_h5；预注册 4b2cf0fd；§282 短线达标）
+    "mid-earnings-accel-dip": {
+        "name": "财报业绩加速×公告前深跌（持5日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在「财报业绩加速」事件池（首次披露的定期报告：扣非净利同比≥50%、营收同比≥20%、扣非为正且同比高于上一期；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万）里，只保留信号日前20个交易日复权跌幅≥15%、且信号日收盘既没封涨停也没封跌停的票；按近20日涨幅从低到高（跌得越深越优先），次日开盘买入，各持有5个交易日。每天新推荐数量有上限（默认5只）。思路：业绩明显变好却刚被市场砸下来，短期修复。回测收益约八成来自2024年4月、2025年4月两个年报季急跌反弹，近12个月只有34笔。",
+        "kind": "ea_dip",
+        "max_r20": -0.15,
+        "hold_days": 5,
+        "schedule": "daily",
+    },
     # §95 新权重复评（scripts/midterm/lt_research15.py EA_h20，即 §93 G_h20 原条件，未调参）
     "mid-earnings-accel": {
         "name": "财报业绩加速（持20日）",
@@ -1692,7 +1712,11 @@ def earnings_accel_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
             return None
         f = f.copy()
         f["ann_date"] = f["ann_date"].astype(str).str.strip()
-        frames[per] = f.sort_values("ann_date").drop_duplicates("ts_code", keep="first")
+        # 上游偶有同一 (股票, 公告日) 两行、其中一行扣非同比为空（例 301308 2026-08-11）。原来按公告日排序后保留第一行，
+        # 可能留下空行、把真事件丢掉；同一公告日内让有值的行排前面（研究用本地财报不受影响）。
+        f["_dtp_na"] = pd.to_numeric(f["dt_netprofit_yoy"], errors="coerce").isna()
+        frames[per] = (f.sort_values(["ann_date", "_dtp_na"], kind="mergesort")
+                        .drop_duplicates("ts_code", keep="first").drop(columns="_dtp_na"))
     out: dict[str, dict[str, Any]] = {}
     for cur, prev in ((periods[0], periods[1]), (periods[1], periods[2])):
         f = frames[cur]
@@ -3145,6 +3169,23 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+        if meta.get("kind") in ("divplan_dip", "ea_dip"):
+            # §997 / §1000：事件池 + 与 §993 同一个深跌过滤（r20≤−15%、信号日未封板、按 r20 升序）
+            held = _held_codes(db, sid, as_of)
+            if meta["kind"] == "ea_dip":
+                pool = earnings_accel_candidates(db, as_of)
+            else:
+                from app.services.midterm_fina_events import divplan_candidates
+                pool = divplan_candidates(db, as_of)
+            if pool is None:
+                result[sid] = "no_data"
+                continue
+            picks = _filter_event_dip(db, as_of, [p for p in pool if p["code"] not in held], meta["max_r20"])
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
         # daily_basic 市值未更新到 as_of 时不拿旧市值排名/算小盘指数（10-16 批次曾用 10-09 市值）：标 data_error，补数后重跑。
         basic_max = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
         if basic_max is None or str(basic_max)[:10] < as_of:
@@ -3497,6 +3538,16 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
                      if ev == "回购预案" else (p.get("title") or ""))
             reason = (f"{p.get('ann_date', '')} {ev}：{extra}；公告前20日涨幅 {_f(score)}%（≤−15%），"
                       f"信号日涨跌 {_f(p.get('signal_pct'), 2)}%")
+        elif kind == "divplan_dip":
+            score, label, better = round(float(p["r20"]) * 100, 2), "公告前20日涨幅(%)", "lower"
+            reason = (f"{p.get('ann_date', '')} 现金分红预案（{p.get('end_date', '')}）：每股税前派现 {_f(p.get('cash_div_tax'), 3)} 元，"
+                      f"约合股息 {_f(float(p.get('div_yield') or 0) * 100)}%；公告前20日涨幅 {_f(score)}%（≤−15%），"
+                      f"信号日涨跌 {_f(p.get('signal_pct'), 2)}%")
+        elif kind == "ea_dip":
+            score, label, better = round(float(p["r20"]) * 100, 2), "公告前20日涨幅(%)", "lower"
+            reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
+                      f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%；"
+                      f"公告前20日涨幅 {_f(score)}%（≤−15%），信号日涨跌 {_f(p.get('signal_pct'), 2)}%")
         elif kind == "earnings_accel":
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%")
