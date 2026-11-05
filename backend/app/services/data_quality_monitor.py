@@ -234,6 +234,75 @@ def check_concept_completeness(db, open_days: list[str], expected: str) -> dict[
                  impact="截断时概念成分只覆盖 3 个板块，题材归属退化为行业兜底；板块热度 heat_rank 本身只是接口返回顺序，不是真实热度")
 
 
+FINA_COV_YELLOW = 0.97  # 披露截止日已过的报告期，可交易 A 股（0/3/6 开头）覆盖率低于此值黄
+FINA_COV_RED = 0.90
+_FINA_DEADLINE = {"0331": ("04", "30", 0), "0630": ("08", "31", 0), "0930": ("10", "31", 0), "1231": ("04", "30", 1)}
+
+
+def report_deadline(period: str) -> str:
+    m, d, plus = _FINA_DEADLINE[period[4:]]
+    return f"{int(period[:4]) + plus}{m}{d}"
+
+
+def due_report_periods(today: str, n: int = 3) -> list[str]:
+    """披露截止日（一季报 4/30、半年报 8/31、三季报 10/31、年报次年 4/30）已过的最近 n 个报告期，新到旧。"""
+    y = int(today[:4])
+    cands = [f"{yy}{md}" for yy in (y, y - 1, y - 2) for md in ("1231", "0930", "0630", "0331")]
+    return sorted((p for p in cands if report_deadline(p) < today.replace("-", "")), reverse=True)[:n]
+
+
+FINA_GW_MISS_YELLOW = 10  # 库里有、网关最近一次按期拉取却没有的可交易股票数（完整时 0~1 只；11-05 截断时 119 只）
+FINA_GW_MISS_RED = 50
+
+
+def fina_coverage_item(periods: list[str], expected: dict[str, int], db_codes: dict[str, set[str]],
+                       snap: dict[str, Any]) -> dict[str, Any]:
+    """expected：截止日前已上市的可交易 A 股数；db_codes：库里该期的可交易股票（∩ 截止日前已上市）；snap：网关快照。"""
+    sev, parts = GREEN, []
+    for p in periods:
+        exp = max(1, int(expected.get(p) or 0))
+        dset = db_codes.get(p) or set()
+        r = len(dset) / exp
+        s = RED if r < FINA_COV_RED else YELLOW if r < FINA_COV_YELLOW else GREEN
+        txt = f"{p} 库 {len(dset)}/{exp}（{min(r, 1):.0%}）"
+        g = snap.get(p)
+        if g:
+            miss = sorted(dset - set(g.get("tradable") or ()))
+            gs = RED if len(miss) >= FINA_GW_MISS_RED else YELLOW if len(miss) >= FINA_GW_MISS_YELLOW else GREEN
+            if g.get("row_cap_multiple"):
+                gs = RED
+            s = _worse(s, gs)
+            txt += (f"，网关最近一次（{g.get('fetched_at')}，{g.get('source')}，{g.get('rows')} 行）比库少 {len(miss)} 只"
+                    + (f"（{miss[0]}…{miss[-1]}）" if miss else "")
+                    + ("，行数正好是 10000 的整数倍，疑似被截断" if g.get("row_cap_multiple") else ""))
+        sev = _worse(sev, s)
+        parts.append(txt)
+    return _item("db:fina_period_coverage", "按报告期财报覆盖率", "数据质量", sev, kind="quality",
+                 latest=periods[0] if periods else None,
+                 detail="；".join(parts) + f"（可交易 A 股口径，黄<{FINA_COV_YELLOW:.0%} 红<{FINA_COV_RED:.0%}）",
+                 impact="财报类中线策略（业绩加速、SUE 家族、连续双增、费用率等）漏股票就漏信号；"
+                        "2026-11-05 曾因 teajoin 单次 10000 行上限截断半年报，科创板尾部 121 只缺失")
+
+
+def check_fina_period_coverage(db, now: datetime | None = None, snap_path: Path | None = None) -> dict[str, Any]:
+    """最近 3 个已过披露截止日的报告期：库 stock_fina_indicator 与网关最近一次按期拉取的覆盖率。只读。"""
+    from app.services.datasource import fina_coverage
+
+    now = now or _now()
+    periods = due_report_periods(now.strftime("%Y%m%d"))
+    expected, db_codes = {}, {}
+    for p in periods:
+        dl = report_deadline(p)
+        expected[p] = int(db.execute(text(
+            "SELECT COUNT(*) FROM stocks WHERE LEFT(code,1) IN ('0','3','6') AND REPLACE(list_date,'-','')<=:d"),
+            {"d": dl}).scalar() or 0)
+        db_codes[p] = {str(r[0]) for r in db.execute(text(
+            "SELECT DISTINCT f.code FROM stock_fina_indicator f JOIN stocks s ON s.code=f.code "
+            "WHERE f.end_date=:p AND LEFT(f.code,1) IN ('0','3','6') AND REPLACE(s.list_date,'-','')<=:d"),
+            {"p": p, "d": dl})}
+    return fina_coverage_item(periods, expected, db_codes, fina_coverage.load(snap_path))
+
+
 def check_index_daily(db, open_days: list[str], expected: str) -> list[dict[str, Any]]:
     out = []
     rows = db.execute(text("SELECT ts_code, MAX(trade_date), COUNT(*) FROM index_daily GROUP BY ts_code")).all()
@@ -920,6 +989,9 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     items += _safe("筹码空洞", "db:daily_kbars:chip_history", "数据质量", "quality", lambda: [check_chip_history(db)])
     items += _safe("概念板块完整性", "db:concept_sector:completeness", "数据质量", "quality",
                    lambda: [check_concept_completeness(db, open_days, expected)])
+    _rollback(db)
+    items += _safe("按报告期财报覆盖率", "db:fina_period_coverage", "数据质量", "quality",
+                   lambda: [check_fina_period_coverage(db, now)])
     _rollback(db)
     items += _safe("交易日历", "db:trade_calendar", "数据库表", "db", lambda: [check_calendar_horizon(open_days, now)])
     _rollback(db)
