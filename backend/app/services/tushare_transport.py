@@ -1220,6 +1220,97 @@ def _alert_all_providers_failed(api_name: str, failures: Sequence[Any]) -> None:
     emit_alert("datasource_all_failed", api_name, f"Tushare 全部上游失败 api={api_name} [{detail}]")
 
 
+# ── 单次返回行数上限 → 自动翻页（2026-11-05）──
+# 实测 teajoin fina_indicator_vip(period=20260630) 恰好返回 10000 行（5258 只股票），offset=10000 再给 1694 行：
+# 上游单次上限 10000、超出静默截断。此前所有「按报告期/按日期全市场」调用都没翻页，财报类中线策略漏票。
+# 规则：未显式带 limit/offset 的请求，若某页行数正好等于上限（或上游声明 has_more），就钉在同一个 provider 上
+# 按 offset 往后翻，直到某页不满；翻页中途失败、上游无视 offset（重复首页）、超过页数上限，都当本 provider 失败、
+# 换下一个源，绝不返回截断的表。命中上限一律告警（每接口每天一次）。
+PROVIDER_ROW_CAPS: dict[str, int] = {"teajoin": 10000}
+# 其它源（promax/quantdata 等 tushare 代理）各接口上限不一（cyq_perf/daily_basic 5000 等），且 quantdata 拒绝
+# limit/offset（2003）：不在网关里自动翻页（调用方已有 fetch_trade_date_paged，续页失败保留首页），只在行数正好
+# 等于常见上限或上游声明 has_more 时告警，免得静默截断。
+COMMON_ROW_CAPS: frozenset[int] = frozenset({3000, 4000, 5000, 6000, 8000, 10000})
+# 分钟线等由调用方按时间窗切片（上游截断时保留最新的、offset 语义不同），不自动翻页。
+NO_AUTO_PAGING_APIS: frozenset[str] = frozenset({"stk_mins", "etf_mins", "rt_k", "rt_min"})
+MAX_AUTO_PAGES = 50
+
+
+def _row_cap_hit(provider_name: str, api_name: str, params: Mapping[str, Any] | None, data: Any) -> bool:
+    """True = 需要（且本 provider 支持）自动翻页。不支持翻页的 provider 命中疑似上限时只告警，返回 False。"""
+    if api_name in NO_AUTO_PAGING_APIS or not isinstance(data, Mapping):
+        return False
+    if params and ("limit" in params or "offset" in params):
+        return False
+    n = len(data.get("items") or [])
+    if not n:
+        return False
+    cap = PROVIDER_ROW_CAPS.get(provider_name)
+    if cap:
+        return n >= cap or data.get("has_more") is True
+    if data.get("has_more") is True or n in COMMON_ROW_CAPS:
+        logger.warning("tushare %s provider=%s 返回 %d 行（has_more=%s），疑似命中单次上限，本源不自动翻页 params=%s",
+                       api_name, provider_name, n, data.get("has_more"), dict(params or {}))
+        _alert_row_cap_hit(api_name, provider_name, n, 1, n, paged=False)
+    return False
+
+
+def _page_through(provider: Any, api_name: str, params: Mapping[str, Any] | None, fields: str,
+                  envelope: Mapping[str, Any]) -> Mapping[str, Any]:
+    """首页已命中上限：同一 provider 按 offset 翻到底，返回合并后的 envelope。取不全就抛 ProviderFailure。"""
+    data = envelope["data"]
+    cols = list(data.get("fields") or [])
+    first = list(data.get("items") or [])
+    page_size = len(first)
+    items = list(first)
+    pages = 1
+
+    def fail(detail: str) -> ProviderFailure:
+        _metrics.inc("provider_paging_failed", api=api_name, provider=provider.name)
+        return ProviderFailure(provider=provider.name, api_name=api_name, category=FailureCategory.MALFORMED_RESPONSE,
+                               retryable=False, fallback_allowed=True, upstream_detail=detail)
+
+    while True:
+        if pages >= MAX_AUTO_PAGES:
+            raise fail(f"paging_exceeded_{MAX_AUTO_PAGES}")
+        page_env = provider.request(api_name, params={**dict(params or {}), "offset": len(items)}, fields=fields)
+        pdata = page_env.get("data") if isinstance(page_env, Mapping) else None
+        page = list((pdata or {}).get("items") or []) if isinstance(pdata, Mapping) else []
+        pages += 1
+        if page and page[0] == first[0] and page[:3] == first[:3]:
+            raise fail("offset_ignored")  # 上游不认 offset，又给了首页
+        pcols = list((pdata or {}).get("fields") or cols) if isinstance(pdata, Mapping) else cols
+        if page and pcols != cols:
+            if set(cols) - set(pcols):
+                raise fail("paging_fields_changed")
+            idx = [pcols.index(c) for c in cols]
+            page = [[row[i] for i in idx] for row in page]
+        items.extend(page)
+        more = isinstance(pdata, Mapping) and pdata.get("has_more") is True
+        if not page or (len(page) < page_size and not more):
+            break
+    merged_data = {**dict(data), "fields": cols, "items": items, "has_more": False}
+    _metrics.inc("provider_paged", api=api_name, provider=provider.name)
+    logger.warning("tushare %s provider=%s 单页 %d 行命中上限，已翻 %d 页取全，共 %d 行 params=%s",
+                   api_name, provider.name, page_size, pages, len(items), dict(params or {}))
+    _alert_row_cap_hit(api_name, provider.name, page_size, pages, len(items))
+    return {**dict(envelope), "data": merged_data}
+
+
+def _alert_row_cap_hit(api_name: str, provider_name: str, page_size: int, pages: int, total: int,
+                       *, paged: bool = True) -> None:
+    try:
+        from app.core.alerts import emit_alert
+
+        day = time.strftime("%Y-%m-%d")
+        tail = (f"已自动翻 {pages} 页取全 {total} 行" if paged
+                else "该源不支持网关翻页，结果可能被截断，请核对调用方是否自己续页")
+        emit_alert("provider_row_cap_hit", f"{provider_name}:{api_name}:{day}",
+                   f"{provider_name} {api_name} 单次返回 {page_size} 行，正好等于上限（不翻页就会被截断）；{tail}")
+    except Exception:  # noqa: BLE001 - 告警失败不影响取数
+        logger.debug("row cap alert failed", exc_info=True)
+
+
 class TushareProviderRouter:
     """API-aware routing over independently protected providers."""
 
@@ -1312,7 +1403,10 @@ class TushareProviderRouter:
         p = self._providers.get(provider_name)
         if p is None or not self._is_enabled(p.name) or not p.supports(api_name):
             raise TushareProviderError(api_name, [])
-        return p.request(api_name, params=params, fields=fields)
+        envelope = p.request(api_name, params=params, fields=fields)
+        if _row_cap_hit(p.name, api_name, params, envelope.get("data")):
+            envelope = _page_through(p, api_name, params, fields, envelope)
+        return envelope
 
     def _ordered_providers(self, api_name: str) -> list[TushareHttpProvider]:
         enabled = [
@@ -1483,6 +1577,8 @@ class TushareProviderRouter:
                         envelope = provider.request(api_name, params=params, fields=fields)
                 else:
                     envelope = provider.request(api_name, params=params, fields=fields)
+                if _row_cap_hit(provider.name, api_name, params, envelope.get("data")):
+                    envelope = _page_through(provider, api_name, params, fields, envelope)
                 duration_ms = int((time.perf_counter() - started) * 1000)
                 data = envelope.get("data")
                 items = data.get("items") if isinstance(data, Mapping) else None

@@ -274,6 +274,15 @@ class TushareRawEnvelope:
         )
 
 
+def _record_fina_coverage(period: str, fields: str, frame: Any, source: str) -> None:
+    """按报告期全市场财报的覆盖快照（给 data_quality_monitor 看）；只记带 ts_code 列的结果，失败静默。"""
+    if frame is None or "ts_code" not in getattr(frame, "columns", ()):
+        return
+    from app.services.datasource.fina_coverage import record
+
+    record(period, frame, source=source)
+
+
 def _akshare_backup_apis() -> frozenset[str]:
     from app.services.datasource.akshare_backup import AKSHARE_BACKUP_APIS
 
@@ -373,7 +382,13 @@ class _TushareSession:
 
                 cats = {getattr(getattr(f, "category", None), "value", "") for f in getattr(exc, "failures", ())}
                 allow_delta = "circuit_open" not in cats
-                return fina_period_fallback(self, str(params["period"]), fields, allow_delta=allow_delta)
+                frame = fina_period_fallback(self, str(params["period"]), fields, allow_delta=allow_delta)
+                _record_fina_coverage(str(params["period"]), fields, frame, "fallback")
+                return frame
+            frame = self._envelope_frame(api_name, fields, envelope)
+            if not params.get("ts_code"):
+                _record_fina_coverage(str(params["period"]), fields, frame, "gateway")
+            return frame
         elif api_name in _akshare_backup_apis():
             return self._call_with_akshare_backup(api_name, fields=fields, params=params)
         else:
