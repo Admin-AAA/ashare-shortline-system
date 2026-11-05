@@ -48,6 +48,8 @@ def main(dry=False):
                  + "最近12个月 84 笔 +4.62%/笔 PF2.30 回撤 −5.9%；近3年 242 笔 +2.96%/笔 PF1.75 回撤 −18.7%。"
                  "§599 按§282绝对收益达标新上线 /mid。"
                  "实盘推荐不设仓位上限；回测指标按20仓位口径（k_slots=20、max_new=5）。"),
+        # 2026-11-05 补：原版漏写 quality，/mid 卡片缺 §282 判定与收益来源
+        "quality": q,
         "backtest_position_caps": {"k_slots": 20, "max_new": 5, "note": "仅回测；实盘推荐不设仓位上限"},
     }
     print(json.dumps({"pass": v["pass"], "label": q["label"], "R12": q["R12"]["avg"], "N3": q["N3"]["avg"]}, ensure_ascii=False))
