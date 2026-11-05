@@ -848,6 +848,64 @@ def _rollback(db) -> None:
         pass
 
 
+ROLLING_R12_KEY = "formal:rolling_r12"
+_ROLLING_RED_NIGHTS = 6   # 本月已过这么多个交易日夜晚仍没有结果文件 = 红
+_ROLLING_RED_FAILS = 2    # 或滚动重算任务连续失败这么多次仍没有本月结果 = 红
+
+
+def rolling_r12_item(latest: dict[str, Any] | None, month: str, nights_passed: int, fail_streak: int,
+                     last_error: str = "") -> dict[str, Any]:
+    """近12个月滚动重算的结果是否出来了、是否完整。失败不能只靠任务黄灯：连续失败或久不出结果记红。"""
+    impact = "现役策略近12个月每笔是否转负看不到（结果文件 rolling_r12_latest.json），转负告警也发不出"
+    done = bool(latest) and latest.get("month") == month and latest.get("status") == "completed"
+    if done:
+        crashed = latest.get("crashed") or {}
+        if crashed:
+            return _item(ROLLING_R12_KEY, "近12个月滚动重算", "盘后出票", RED, kind="job", latest=str(latest.get("cutoff")),
+                         detail=f"{len(crashed)} 个策略选股抛异常被跳过（其余已算）：" + "；".join(
+                             f"{sid}（{str(c.get('error'))[:80]}）" for sid, c in crashed.items()),
+                         impact=impact)
+        inc = (latest.get("replay") or {}).get("incomplete_days") or {}
+        if inc:
+            return _item(ROLLING_R12_KEY, "近12个月滚动重算", "盘后出票", YELLOW, kind="job", latest=str(latest.get("cutoff")),
+                         detail=f"有取数失败日：{inc}", impact=impact)
+        return _item(ROLLING_R12_KEY, "近12个月滚动重算", "盘后出票", GREEN, kind="job", latest=str(latest.get("cutoff")),
+                     detail=f"{month} 结果已出（截止 {latest.get('cutoff')}）")
+    err = f"；最近一次报错：{last_error[:120]}" if last_error else ""
+    if fail_streak >= _ROLLING_RED_FAILS or nights_passed >= _ROLLING_RED_NIGHTS:
+        return _item(ROLLING_R12_KEY, "近12个月滚动重算", "盘后出票", RED, kind="job",
+                     detail=f"{month} 还没有结果文件（本月已过 {nights_passed} 个交易日夜晚，任务连续失败 {fail_streak} 次）{err}",
+                     impact=impact)
+    if fail_streak >= 1:
+        return _item(ROLLING_R12_KEY, "近12个月滚动重算", "盘后出票", YELLOW, kind="job",
+                     detail=f"{month} 还没有结果文件，最近一次任务失败{err}", impact=impact)
+    return _item(ROLLING_R12_KEY, "近12个月滚动重算", "盘后出票", GREEN, kind="job",
+                 detail=f"{month} 结果还在跑或还没到点")
+
+
+def check_rolling_r12(db, open_days: list[str], now: datetime | None = None, path: Path | None = None) -> dict[str, Any]:
+    from app.services.rolling_r12 import LATEST
+
+    now = now or _now()
+    month = now.strftime("%Y-%m")
+    today = now.strftime("%Y-%m-%d")
+    nights = sum(1 for d in open_days if d.startswith(month) and d < today)
+    try:
+        latest = json.loads((path or LATEST).read_text())
+    except Exception:  # noqa: BLE001 - 没有文件 / 坏文件都当没有结果
+        latest = None
+    runs = db.execute(text(
+        "SELECT status, summary FROM scheduled_task_runs WHERE task_id = 'rolling_r12_monthly' "
+        "ORDER BY started_at DESC LIMIT 5")).all()
+    streak = 0
+    for r in runs:
+        if str(r[0]) in _BAD_STATUS:
+            streak += 1
+        else:
+            break
+    return rolling_r12_item(latest, month, nights, streak, str(runs[0][1] or "") if runs and streak else "")
+
+
 def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -> dict[str, Any]:
     now = now or _now()
     open_days = load_open_days(db)
@@ -890,6 +948,8 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     items += _safe("scheduled", "job:*", "调度任务", "job", lambda: check_scheduled_tasks(db, open_days, now))
     _rollback(db)
     items += _safe("daily_output", "formal:daily_output", "盘后出票", "job", lambda: [check_daily_output(db, open_days, now)])
+    _rollback(db)
+    items += _safe("rolling_r12", ROLLING_R12_KEY, "盘后出票", "job", lambda: [check_rolling_r12(db, open_days, now)])
     _rollback(db)
     items += _safe("log", "log:*", "静默失败", "log", lambda: check_log_signals(now))
     items += _safe("stale_alerts", "alerts:stale_active", "静默失败", "log", lambda: [check_stale_alerts(now)])
