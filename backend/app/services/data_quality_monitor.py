@@ -697,7 +697,13 @@ def check_capability_matrix(now: datetime | None = None, path: Path | None = Non
     j = json.loads(p.read_text(encoding="utf-8"))
     probed = str(j.get("probed_at") or "")
     rows = j.get("rows") or []
-    bad = [f"{r.get('provider')}/{r.get('api')}" for r in rows if r.get("status") not in ("ok", None)]
+    # 异常只看「真的不能用了」：transient（限流/额度耗尽/超时/熔断）是上游当下的容量状态，
+    # 由 gateway:providers 单独反映；把它算成接口异常会让一个额度耗尽的 token 变成几十条「异常」
+    # （2026-11-06 实测 57 项里 38 项是同一个 quantdata 额度耗尽），把真正的故障埋掉。
+    from app.services.datasource.capability import classify
+
+    bad = [f"{r.get('provider')}/{r.get('api')}" for r in rows if classify(r) in ("unsupported", "unverified")]
+    skipped_transient = sum(1 for r in rows if classify(r) == "transient")
     age_days = None
     try:
         age_days = ((now or _now()) - datetime.strptime(probed, "%Y-%m-%dT%H:%M:%S%z")).total_seconds() / 86400
@@ -705,6 +711,8 @@ def check_capability_matrix(now: datetime | None = None, path: Path | None = Non
         pass
     sev = GREEN
     parts = [f"探测于 {probed}（{'%.1f 天前' % age_days if age_days is not None else '未知'}），{len(rows)} 项，异常 {len(bad)} 项"]
+    if skipped_transient:
+        parts.append(f"另 {skipped_transient} 项因上游限流/额度耗尽未取到能力结论（见 数据网关承载）")
     if age_days is None or age_days > 3:
         sev = YELLOW
         parts.append("探测已超过 3 天未更新")

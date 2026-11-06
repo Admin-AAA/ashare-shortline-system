@@ -235,11 +235,19 @@ def routing_table_drift(matrix: Mapping[str, Any], table: Mapping[str, Any]) -> 
 
     只看会让请求白白失败/漏用的两类：
     1. 矩阵里 provider 对该 API 已 unsupported（no_permission），路由表却仍把它放在 order 里；
-    2. 路由表把 provider 标为 unsupported，而矩阵显示它现在可用。
+    2. 路由表把 provider 标为 unsupported，而矩阵**探测成功**（status ∈ OK，真的拿到数据）显示可用。
+    order 的先后差异（按限速额度分流的结果）不算漂移，transient/unverified 也不算「可用」。
     order 的先后差异（按限速额度分流的结果）不算漂移。
     """
     expected = build_routing_table(matrix, table).get("apis", {})
     current = table.get("apis", table)
+    # 「可用」必须是探测真的拿到数据（status ∈ OK）。transient（限流/额度耗尽/超时/熔断）
+    # 和 unverified 都不是可用证据：额度耗尽时整批 API 都 transient，若按「不在 unsupported
+    # 里就算可用」推断，会一次性产出大量「矩阵显示其当前可用」的伪漂移告警（2026-11-06 实测 6 条）。
+    verified: dict[str, set[str]] = {}
+    for r in matrix.get("rows", []):
+        if r.get("status") in OK:
+            verified.setdefault(str(r.get("api")), set()).add(str(r.get("provider")))
     out: list[str] = []
     for api, exp in sorted(expected.items()):
         cur = current.get(api)
@@ -250,7 +258,7 @@ def routing_table_drift(matrix: Mapping[str, Any], table: Mapping[str, Any]) -> 
             continue
         cur_bad = set(cur.get("unsupported") or ())
         stale = sorted(p for p in (cur.get("order") or ()) if p in exp_bad)
-        wrongly_excluded = sorted(cur_bad - exp_bad)
+        wrongly_excluded = sorted(cur_bad & verified.get(api, set()))
         if stale:
             out.append(f"{api}: 矩阵显示 {stale} 无权限，路由表仍在 order={cur.get('order')} 中")
         if wrongly_excluded:
