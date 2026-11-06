@@ -356,19 +356,24 @@ def _realtime_bar_issue(
     - 全市场快照来自日 K，盘中当日日 K 还没收盘入库，快照必然停在**上一交易日**。
       要求快照也等于当日，等于在 15:00 前把整个盘中确认链路全部判成「未就绪」，推荐
       因此在入场日一次都写不下状态，收盘后被批量判过期（覆盖率红项的真正来源）。
-      快照的合理下界是 ``latest_allowed_bar_date()``：17:30 前=上一交易日，之后=当日。
-      低于它才说明补数停滞、快照真过期。
+      快照的合理下界是「以 expected_quote_date 为当天」推出来的 ``latest_allowed_bar_date``
+      （17:30 前=上一交易日，之后=当日）。低于它才说明补数停滞、快照真过期。
+
+    下界必须从 expected_quote_date 推，不能用墙钟：回放/对账历史入场日（以及单测里
+    冻结的日期）会因此被整批判成「快照过期」——2026-11-06 就踩过这个坑。
     """
-    from app.engine.trading_calendar import latest_allowed_bar_date, previous_weekday
+    from datetime import date as _date
+
+    from app.engine.trading_calendar import latest_allowed_bar_date
 
     quote_date = normalize_trade_date(rt.get("trade_date"))
     if quote_date != expected_quote_date:
         return f"实时 K 日期未就绪（实时 K {quote_date or '—'}，期望 {expected_quote_date}）"
-    bar_day = local_now.date()
-    if bar_day.weekday() < 5 and (local_now.hour, local_now.minute) < (17, 30):
-        bar_day = previous_weekday(bar_day)  # 17:30 前当日收盘日K尚未就绪
-    min_bar_date = latest_allowed_bar_date(bar_day)
-    if data_as_of and normalize_trade_date(data_as_of) < min_bar_date:
+    try:
+        min_bar_date = latest_allowed_bar_date(_date.fromisoformat(expected_quote_date))
+    except (TypeError, ValueError):
+        min_bar_date = ""
+    if data_as_of and min_bar_date and normalize_trade_date(data_as_of) < min_bar_date:
         return f"行情快照过期（快照 {data_as_of}，应不早于 {min_bar_date}）"
     if expected_quote_date == local_now.date().isoformat() and (local_now.hour, local_now.minute) < (9, 25):
         return "集合竞价尚未结束，实时 K 尚未形成"
