@@ -92,6 +92,29 @@ def test_file_dataset_event_mode_uses_calendar_days_and_mixed_types(tmp_path):
     assert dq.check_file_dataset(spec, OPEN, "2026-10-23", base=tmp_path)["severity"] == dq.RED
 
 
+def test_file_dataset_seasonal_quiet_month_releases_but_never_hides_skipped_window(tmp_path):
+    """业绩预告强季节性：淡月放宽，但长期停更不得被淡月掩盖。"""
+    spec = {"key": "k", "label": "L", "mode": "event", "glob": "e/f_2026.parquet", "cols": ("ann_date",),
+            "event_days": (6, 14), "max": dq.RED, "impact": "i",
+            "seasonal": {"active_months": (1, 4, 7, 10), "thresholds": (45, 90)}}
+    p = tmp_path / "e/f_2026.parquet"
+
+    def sev(mx: str, expected: str) -> str:
+        _write_pq(p, "ann_date", [mx])
+        return dq.check_file_dataset(spec, OPEN, expected, base=tmp_path)["severity"]
+
+    # 淡月（11 月）落后 13 天：上游本就没有预告，不算停更
+    assert sev("20261024", "2026-11-06") == dq.GREEN
+    # 淡月但落后 52 天：超过放宽阈值，仍需黄
+    assert sev("20261024", "2026-12-15") == dq.YELLOW
+    # 活跃月（1 月年报预告）：严格阈值，落后 88 天直接红
+    assert sev("20261024", "2027-01-20") == dq.RED
+    # 关键防漏报：卡在 8 月（未跟上最近一个活跃月 10 月），即使是淡月也按严格阈值判红
+    assert sev("20260815", "2026-11-06") == dq.RED
+    # 季度边界：恰好停在活跃月首日，视为已跟上
+    assert sev("20261001", "2026-11-06") == dq.GREEN
+
+
 def test_xiaoshi_min1_is_retired_and_never_alerts(tmp_path):
     root = tmp_path / "xiaoshi_min1"
     for code, d in (("000001", "2026-08-07"), ("000002", "2026-08-05")):

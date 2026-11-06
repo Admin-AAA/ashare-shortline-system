@@ -523,6 +523,11 @@ FILE_DATASETS: list[dict[str, Any]] = [
      "impact": "线上中线 期权激励 策略"},
     {"key": "file:midterm/events/forecast_live", "label": "业绩预告事件 parquet（线上预告预喜策略读取）", "mode": "event",
      "glob": "midterm/events/forecast_live_20[0-9][0-9].parquet", "cols": ("ann_date",), "event_days": (6, 14), "max": RED,
+     # 业绩预告是强季节性事件：年报预告 1 月、一季报预告 4 月、中报预告 7 月、三季报预告 10 月，
+     # 这四个活跃月合计占全年 >99%，2/3/5/6/8/9/11/12 月合计不足 1%（实测 202511 全月 17 条、
+     # 202611 至今 0 条）。淡月里文件不增长是上游本就没有预告，不是停更，故放宽到 (45, 90)；
+      # 但要求已跟上「最近一个活跃月」，否则说明真跳过了窗口，仍按严格阈值判。
+     "seasonal": {"active_months": (1, 4, 7, 10), "thresholds": (45, 90)},
      "impact": "线上中线 预告预喜 策略"},
     {"key": "file:midterm/events/holdertrade_in", "label": "增持事件 parquet", "mode": "event",
      "glob": "midterm/events/holdertrade_in_20[0-9][0-9].parquet", "cols": ("ann_date",), "event_days": (7, 21), "max": YELLOW,
@@ -548,6 +553,25 @@ AGE_FILES: list[dict[str, Any]] = [
     {"key": "file:runtime/pool_bar_source_stats.json", "label": "行情池日K来源统计", "path": "runtime/pool_bar_source_stats.json",
      "yellow_days": 5, "red_days": 15, "max": YELLOW, "impact": "行情池来源口径一致性核对"},
 ]
+
+
+def _last_active_month_start(expected: str, active_months: set[int]) -> str | None:
+    """返回不晚于 expected 的「最近一个活跃月」的首日（ISO），用作淡月豁免的下界。
+
+    淡月放宽的隐含风险是：文件长期停更（比如卡在 6 月）而当前恰逢淡月，会被误判为正常。
+    加这个下界即可堵住——文件最新日期必须已经进入最近一个活跃月，才承认它「跟上了」。
+    """
+    try:
+        y, m = int(expected[:4]), int(expected[5:7])
+    except (TypeError, ValueError):
+        return None
+    for _ in range(36):
+        if m in active_months:
+            return f"{y:04d}-{m:02d}-01"
+        m -= 1
+        if m == 0:
+            y, m = y - 1, 12
+    return None
 
 
 def check_file_dataset(spec: dict[str, Any], open_days: list[str], expected: str, now: datetime | None = None,
@@ -579,6 +603,14 @@ def check_file_dataset(spec: dict[str, Any], open_days: list[str], expected: str
         sev = RED if age > r else YELLOW if age > y else GREEN
         lag = trade_lag(open_days, mx, expected)
         detail = f"{path.name} 最新事件日期 {mx}，距期望 {expected} {age} 天（黄>{y} 红>{r}）；文件修改 {mtime}"
+        se = spec.get("seasonal")
+        if se and sev is not GREEN:
+            floor = _last_active_month_start(expected, set(se["active_months"]))
+            if floor and mx >= floor:
+                qy, qr = se["thresholds"]
+                sev = RED if age > qr else YELLOW if age > qy else GREEN
+                detail += (f"；季节性淡月口径（活跃月 {'/'.join(str(m) for m in se['active_months'])} 月之外"
+                           f"历史占比<1%，已跟上最近活跃月 {floor}，放宽到黄>{qy} 红>{qr}）")
     sev = cap_severity(sev, spec["max"])
     if prov:
         sev = cap_severity(sev, YELLOW)
