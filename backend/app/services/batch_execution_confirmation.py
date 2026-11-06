@@ -348,10 +348,28 @@ def _realtime_bar_issue(
     expected_quote_date: str,
     local_now: datetime,
 ) -> str | None:
-    """返回实时 K 不可用于买入判断的原因；None 表示可用。"""
+    """返回实时 K 不可用于买入判断的原因；None 表示可用。
+
+    两个日期口径不同，不能用同一个等号判断（2026-11-06 修复）：
+
+    - 实时 K 的日期必须是 expected_quote_date——报价不受盘后就绪窗口约束，工作日即当日。
+    - 全市场快照来自日 K，盘中当日日 K 还没收盘入库，快照必然停在**上一交易日**。
+      要求快照也等于当日，等于在 15:00 前把整个盘中确认链路全部判成「未就绪」，推荐
+      因此在入场日一次都写不下状态，收盘后被批量判过期（覆盖率红项的真正来源）。
+      快照的合理下界是 ``latest_allowed_bar_date()``：17:30 前=上一交易日，之后=当日。
+      低于它才说明补数停滞、快照真过期。
+    """
+    from app.engine.trading_calendar import latest_allowed_bar_date, previous_weekday
+
     quote_date = normalize_trade_date(rt.get("trade_date"))
-    if data_as_of != expected_quote_date or quote_date != expected_quote_date:
-        return f"行情日期未就绪（快照 {data_as_of or '—'}，实时 K {quote_date or '—'}）"
+    if quote_date != expected_quote_date:
+        return f"实时 K 日期未就绪（实时 K {quote_date or '—'}，期望 {expected_quote_date}）"
+    bar_day = local_now.date()
+    if bar_day.weekday() < 5 and (local_now.hour, local_now.minute) < (17, 30):
+        bar_day = previous_weekday(bar_day)  # 17:30 前当日收盘日K尚未就绪
+    min_bar_date = latest_allowed_bar_date(bar_day)
+    if data_as_of and normalize_trade_date(data_as_of) < min_bar_date:
+        return f"行情快照过期（快照 {data_as_of}，应不早于 {min_bar_date}）"
     if expected_quote_date == local_now.date().isoformat() and (local_now.hour, local_now.minute) < (9, 25):
         return "集合竞价尚未结束，实时 K 尚未形成"
     open_price = _f(rt.get("open"))
@@ -575,6 +593,9 @@ def _compute_batch(
                 signal_age_trade_days=age,
                 review=None,
                 entry_bar=_entry_bar_from_rt(usable_rt_quotes.get(code)),
+                # 判断依据是上面用 rt_k 合成的当日临时 K，日期必须按报价日算；
+                # 沿用 snapshot（上一交易日的日 K 快照）会把盘中判断全部判成「未就绪」。
+                data_as_of=normalize_trade_date((usable_rt_quotes.get(code) or {}).get("trade_date")) or data_as_of,
             )
             assessments.append(result)
             items.append(_to_batch_item(result))

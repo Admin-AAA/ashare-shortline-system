@@ -34,7 +34,7 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "cninfo_search": ProviderSpec((("cninfo", "news"),), 20, ("CninfoBlockedError",)),
     "xiaoshi_quote": ProviderSpec((("xiaoshi", "quote"),), 0),
     "xiaoshi_kline": ProviderSpec((("xiaoshi", "kline"),), 0),
-    "xiaoshi_alt": ProviderSpec((("xiaoshi", "quote"),), 0),
+    "xiaoshi_alt": ProviderSpec((("xiaoshi", "alt"),), 0),
     "tushare_quote": ProviderSpec((("tushare", "quote"),), 0),
     "tushare_kline": ProviderSpec((("tushare", "kline"),), 0),
     "tushare_limit_up": ProviderSpec((("tushare", "limit_up"),), 0),
@@ -45,6 +45,12 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "tushare": ProviderSpec((), 0),  # Tushare calls already go through the router limiter/LB
     "local": ProviderSpec((), 0),
 }
+
+# 上游契约明确不提供的 (source, 数据域)：网关仍保留这类开关行（用户可在「数据源管理」里停用），
+# 但数据源健康不再把它算作「故障」。xiaoshi v3 公开操作清单没有全市场报价端点，
+# 它的 quote 通道是「声明能力缺失后立即失败」（见 xiaoshi_market_source.fetch_quotes），
+# 从来不可能成功；若按 degraded 计入健康分，该项会永久扣 5 分且无法自愈。
+CAPABILITY_MISSING_KEYS: frozenset[tuple[str, str]] = frozenset({("xiaoshi", "quote")})
 
 _limiters: dict[str, Any] = {}
 _breakers: dict[tuple[str, str], Any] = {}

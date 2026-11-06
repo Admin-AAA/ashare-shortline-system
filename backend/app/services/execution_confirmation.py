@@ -301,8 +301,14 @@ def confirm_with_prepared_context(
     signal_age_trade_days: int,
     review: dict[str, Any] | None = None,
     entry_bar: dict[str, Any] | None = None,
+    data_as_of: str | None = None,
 ) -> dict[str, Any]:
     """在已准备好的市场上下文（snapshot/enriched stock/策略 signal）下确认一笔推荐。
+
+    data_as_of：本次判断所依据的行情日期，默认取 snapshot 的日 K 日期。批量确认盘中用
+    rt_k 重建了当日临时 K，判断依据已经是当日，必须显式传当日报价日——否则会把
+    「快照停在上一交易日（当日日 K 未收盘）」误判成数据未就绪，fresh 恒 False，
+    状态一行都写不下去（2026-11-06 修复）。
 
     entry_bar：入场日（data_as_of）开盘至今的实时 K（open/high/low/close/volume/amount/pre_close）。
     未传时从 current["_bars"] 里取同日 K；都取不到则买入确认判「继续观察」。
@@ -315,7 +321,7 @@ def confirm_with_prepared_context(
     已加载的历史 K），但语义一致：推荐日之后到 data_as_of（含）之间的真实交易日数。
     """
     code = str(rec.code)
-    data_as_of = str(snapshot.get("trade_date") or current.get("latest_trade_date") or "")
+    data_as_of = str(data_as_of or snapshot.get("trade_date") or current.get("latest_trade_date") or "")
 
     local_now = datetime.now()
     expected_quote_date = latest_allowed_quote_date()

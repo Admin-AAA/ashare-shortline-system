@@ -533,13 +533,21 @@ def reconcile_stock_identity(db, trade_date: str | None = None, *, sample: int =
     活跃代码 = 最近交易日 daily_kbars 中 volume>0 的代码。issues 非空即应告警：
     - 活跃代码不在 stocks（新股没进身份表）；
     - 活跃代码在 trade_date 没有可见的元数据区间（回测 / st_hist 会把它当作未知股票）；
-    - stocks.is_st 与 trade_date 当天可见区间 is_st 不一致（任一方过期）；
+    - stocks.is_st 与「元数据当前区间」is_st 不一致（任一方过期）；
     - 名称含 ST 但 is_st=0（stocks 或区间）；
     - 区间 effective_from 非 ISO 格式、区间重叠。
+
+    ST 一致性必须用 `st_asof = max(trade_date, 元数据最新 effective_from)` 作基准日：
+    `stocks.is_st` 是「当前状态」，而元数据刷新（effective_from=今日）常比 K 线（trade_date=上一交易日）
+    早一天落地。若仍按 trade_date 找区间，会命中**截止到 trade_date 的旧区间**（如 000972 旧区间
+    effective_to=11-05 的 is_st=1、新区间 effective_from=11-06 的 is_st=0），把整批换档股误判成不一致。
     """
     td = trade_date or db.execute(text("SELECT MAX(trade_date) FROM daily_kbars")).scalar()
     td = iso_date(td) or str(td)
     q = lambda sql, **p: db.execute(text(sql), p).all()  # noqa: E731
+    meta_latest = iso_date(db.execute(text("SELECT MAX(effective_from) FROM stock_metadata_history")).scalar())
+    # 对账基准日：谁更新就用谁，避免「元数据已换档、K 线还停在上一交易日」造成系统性误报
+    st_asof = max(td, meta_latest) if meta_latest else td
     active = int(q("SELECT COUNT(DISTINCT code) FROM daily_kbars WHERE trade_date=:d AND volume>0", d=td)[0][0] or 0)
     not_in_stocks = q(
         "SELECT DISTINCT k.code FROM daily_kbars k LEFT JOIN stocks s ON s.code=k.code "
@@ -554,7 +562,7 @@ def reconcile_stock_identity(db, trade_date: str | None = None, *, sample: int =
     st_mismatch = q(
         "SELECT s.code, s.name, s.is_st, h.is_st FROM stocks s JOIN stock_metadata_history h ON h.code=s.code "
         "AND h.effective_from<=:d AND (h.effective_to IS NULL OR h.effective_to>=:d) "
-        "WHERE s.is_st<>h.is_st ORDER BY s.code", d=td)
+        "WHERE s.is_st<>h.is_st ORDER BY s.code", d=st_asof)
     st_name_not_flagged = q(
         "SELECT s.code, s.name FROM stocks s WHERE UPPER(s.name) LIKE '%ST%' AND s.is_st=0 ORDER BY s.code")
     meta_name_st_not_flagged = q(
@@ -574,7 +582,7 @@ def reconcile_stock_identity(db, trade_date: str | None = None, *, sample: int =
     if stocks_without_meta:
         issues.append(f"stocks 中无任何元数据区间: {len(stocks_without_meta)} 只（{','.join(ids(stocks_without_meta)[:sample])}…）")
     if st_mismatch:
-        issues.append(f"stocks.is_st 与 {td} 元数据 is_st 不一致: {len(st_mismatch)} 只（{','.join(ids(st_mismatch)[:sample])}…）")
+        issues.append(f"stocks.is_st 与 {st_asof} 元数据 is_st 不一致: {len(st_mismatch)} 只（{','.join(ids(st_mismatch)[:sample])}…）")
     if st_name_not_flagged:
         issues.append(f"stocks 名称含 ST 但 is_st=0: {len(st_name_not_flagged)} 只（{','.join(ids(st_name_not_flagged)[:sample])}…）")
     if meta_name_st_not_flagged:
@@ -583,6 +591,7 @@ def reconcile_stock_identity(db, trade_date: str | None = None, *, sample: int =
         issues.append(f"stock_metadata_history.effective_from 非 ISO 格式: {bad_format} 行")
     return {
         "table": "stock_identity:reconcile", "latest": td, "issues": issues,
+        "st_asof": st_asof, "meta_latest_effective_from": meta_latest,
         "active_codes": active, "not_in_stocks": len(not_in_stocks), "no_visible_metadata": len(no_meta),
         "stocks_without_metadata": len(stocks_without_meta), "st_flag_mismatch": len(st_mismatch),
         "stocks_name_st_not_flagged": len(st_name_not_flagged), "meta_name_st_not_flagged": len(meta_name_st_not_flagged),

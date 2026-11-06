@@ -986,8 +986,19 @@ def _quote(**kwargs: Any) -> dict[str, Any]:
     }
 
 
+# 上游契约明确不提供「全市场报价」的源：即便 .env 的 QUOTE_SOURCES 里写了它，也不进路由链。
+# xiaoshi v3 公开操作清单没有全市场报价端点（market/quotes 仅限小批量，逐批枚举会被平台判
+# bulk_download_required 并暂停该 key 实时报价 24h，见 xiaoshi_market_source.fetch_quotes），
+# 保留它只会让每次全市场快照多走一次必失败分支，并让数据源注册表的 xiaoshi/quote 永久 degraded
+# （健康分长期 −5，无法自愈）。能力缺失由适配器如实声明，这里在入口处剔除。
+_QUOTE_CAPABILITY_MISSING = frozenset({"xiaoshi"})
+
+
 def _quote_sources(settings: Any) -> list[str]:
-    return _parse_source_list(getattr(settings, "quote_sources", "tushare"))
+    sources = [s for s in _parse_source_list(getattr(settings, "quote_sources", "tushare"))
+               if s not in _QUOTE_CAPABILITY_MISSING]
+    # 配成只有缺能力的源时（如 QUOTE_SOURCES=xiaoshi）回落到 tushare，而不是让全市场快照无源可用。
+    return sources or ["tushare"]
 
 
 def _kline_sources(settings: Any) -> list[str]:

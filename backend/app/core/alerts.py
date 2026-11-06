@@ -114,9 +114,66 @@ def resolve_alert(kind: str, key: str, message: str = "") -> bool:
 
 
 def active_alert_records(kind: str | None = None) -> list[dict[str, Any]]:
+    expire_stale_alerts()
     reg = _load_registry()
     rows = [v for v in reg.values() if kind is None or v.get("kind") == kind]
     return sorted(rows, key=lambda r: (r.get("kind", ""), r.get("key", "")))
+
+
+# ---------------------------------------------------------------- TTL 自动过期
+# 2026-11-06：登记里积了 87 条超过 24 小时仍活跃的告警，绝大多数是「key 不带日期、发出后没有
+# 任何解除方」的孤儿——datasource_all_failed|<api>（某接口当时全部上游失败，之后成功了也不会
+# 主动解除）、ivol_coverage|<date>（按日一次性）、DAILY_RUN_FAILED|<date>（当日失败，隔天再也
+# 不会重发也不再结算）。于是「超过 24 小时仍未解除的告警」这一项永远是黄：检查项的本意是
+# 「放着不管的告警会变成噪音」，而它自己被这种永不结算的告警永久污染。
+#
+# 告警语义是「当前是否仍然成立」。同一 (kind, key) 超过 TTL 没有再出现过一次，就说明条件已经
+# 不成立（或者没有检查方再关心它），自动解除并记一条 [ALERT_RESOLVED] 留审计痕迹；条件若真的
+# 还在，下一次 emit_alert 会重新登记，不会丢。
+ALERT_TTL_HOURS = float(os.environ.get("ASHARE_ALERT_TTL_HOURS", "24") or 24)
+_expire_lock = threading.Lock()
+_last_expire_at: float = 0.0
+EXPIRE_INTERVAL_SECONDS = 300.0
+
+
+def expire_stale_alerts(now: datetime | None = None) -> list[str]:
+    """把「超过 TTL 没有再出现」的活跃告警自动解除，返回被解除的 key 列表（kind|key）。
+
+    只看 last_seen：emit_alert 每次都会刷新它，所以还在发生的告警不会被清掉。
+    注册表读不出来 / pytest 内存登记时直接跳过。节流到每 EXPIRY 一次，读路径频繁调用也不痛。
+    """
+    global _last_expire_at, _memory_registry
+    monotonic_now = time.monotonic()
+    if monotonic_now - _last_expire_at < EXPIRE_INTERVAL_SECONDS:
+        return []
+    with _expire_lock:
+        if time.monotonic() - _last_expire_at < EXPIRE_INTERVAL_SECONDS:
+            return []
+        _last_expire_at = time.monotonic()
+        now = now or datetime.now(_CST)
+        reg = _load_registry()
+        if not reg:
+            return []
+        expired: list[str] = []
+        for key, entry in list(reg.items()):
+            try:
+                seen = datetime.strptime(str(entry.get("last_seen")), "%Y-%m-%d %H:%M:%S").replace(tzinfo=_CST)
+            except Exception:  # noqa: BLE001 - 时间坏掉不清理，留给人工
+                continue
+            if (now - seen).total_seconds() <= ALERT_TTL_HOURS * 3600:
+                continue
+            reg.pop(key, None)
+            expired.append(key)
+        if not expired:
+            return []
+        _save_registry(reg)
+    for key in expired:
+        kind, _, name = key.partition("|")
+        _last_emitted.pop((kind, name), None)
+        logger.warning("[ALERT_RESOLVED:%s] %s 已超过 %g 小时未再出现，自动解除（TTL 归档） | key=%s",
+                       kind, name, ALERT_TTL_HOURS, name)
+    return expired
+
 
 
 def reset_alerts() -> None:

@@ -76,6 +76,13 @@ def list_data_sources(db: Session) -> list[dict[str, Any]]:
         total = success_count + failure_count + empty_count
         # success_rate 只算 success / (success + failure)，empty 是正常返回不计入分母
         effective_total = success_count + failure_count
+        status = _source_status(enabled, health_row)
+        # 上游契约里本就没有的能力（如 xiaoshi 的全市场报价）不算「故障」：
+        # 保留开关行供页面停用，但状态标 restricted，健康分不因它扣分。
+        from app.services.datasource.wrap import CAPABILITY_MISSING_KEYS
+
+        if (source, source_type) in CAPABILITY_MISSING_KEYS:
+            status = "restricted"
         rows.append(
             {
                 "source": source,
@@ -91,7 +98,7 @@ def list_data_sources(db: Session) -> list[dict[str, Any]]:
                 "last_success_at": health_row.last_success_at.isoformat() if health_row and health_row.last_success_at else None,
                 "last_failure_at": health_row.last_failure_at.isoformat() if health_row and health_row.last_failure_at else None,
                 "last_error": health_row.last_error if health_row else None,
-                "status": _source_status(enabled, health_row),
+                "status": status,
                 "updated_at": config.updated_at.isoformat() if config and config.updated_at else None,
             }
         )

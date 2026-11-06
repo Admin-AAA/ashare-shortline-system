@@ -658,6 +658,7 @@ def _data_source_health(db: Session) -> dict[str, Any]:
     broken: list[dict[str, Any]] = []
     untested: list[dict[str, Any]] = []
     disabled: list[dict[str, Any]] = []
+    restricted: list[dict[str, Any]] = []
     for s in sources:
         status = s.get("status", "unknown")
         entry = {
@@ -679,6 +680,8 @@ def _data_source_health(db: Session) -> dict[str, Any]:
             broken.append(entry)
         elif status == "disabled":
             disabled.append(entry)
+        elif status == "restricted":
+            restricted.append(entry)
         else:  # untested / unknown
             untested.append(entry)
 
@@ -686,7 +689,7 @@ def _data_source_health(db: Session) -> dict[str, Any]:
     # 数据是否真的缺失已由 data_domains / recent_coverage 单独计分，避免重复惩罚。
     # promax 与 quantdata 属于同一逻辑 Tushare 源下的两个独立故障域：只要其中
     # 一个健康，Router 仍有可用路径，单个 Provider 降级不再重复扣分。
-    all_entries = working + broken + untested + disabled
+    all_entries = working + broken + untested + disabled + restricted
     provider_entries = [
         item for item in all_entries if item.get("source_type") == "tushare_provider"
     ]
@@ -710,13 +713,16 @@ def _data_source_health(db: Session) -> dict[str, Any]:
         "broken_count": len(broken),
         "untested_count": len(untested),
         "disabled_count": len(disabled),
+        "restricted_count": len(restricted),
         "total": len(sources),
         "working_sources": working,
         "broken_sources": broken,
         "untested_sources": untested,
         "disabled_sources": disabled,
+        "restricted_sources": restricted,
         "score_penalty": penalty,
-        "score_policy": "仅明确失败且没有可用同组容灾时扣分；未测试仅提示，不扣分。",
+        "score_policy": "仅明确失败且没有可用同组容灾时扣分；未测试仅提示，不扣分；"
+                         "restricted（上游契约本就不提供该能力）不计为故障。",
         "provider_redundancy": {
             "configured_count": len(enabled_providers),
             "healthy_count": len(healthy_providers),
