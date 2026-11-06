@@ -144,6 +144,16 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 5,
         "schedule": "daily",
     },
+    # §1011 行业热点×深跌×企稳×量能确认（scripts/shortline_research/sds_s1010.py SDS_VOL_h5；§282 短线达标；2026-11-06 预注册）
+    "mid-sector-dip-stabilize": {
+        "name": "行业热点×深跌企稳（持5日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，在全A（剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万）里，找同时满足以下条件的票：①近20日复权跌幅≥15%（深跌提供安全边际）；②所属行业（industry_cache 110个行业）近5日等权收益排名前5（行业正在被资金关注）；③当日振幅≤5%且收阳（企稳确认，不是继续暴跌）；④当日成交量≥20日均量（有真实承接，不是无量空涨）；⑤收盘未封涨停。按近20日涨幅从低到高（跌得越深越优先），次日开盘买入，各持有5个交易日。每天新推荐数量有上限（默认5只）。思路：行业轮动提供催化、深跌提供安全边际、企稳+量能确认提供入场时机——是§993「事件×深跌」的技术面 analog。",
+        "kind": "sector_dip_stabilize",
+        "max_r20": -0.15,
+        "hold_days": 5,
+        "schedule": "daily",
+    },
     # §95 新权重复评（scripts/midterm/lt_research15.py EA_h20，即 §93 G_h20 原条件，未调参）
     "mid-earnings-accel": {
         "name": "财报业绩加速（持20日）",
@@ -1534,6 +1544,148 @@ def _filter_event_dip(db, as_of: str, pool: list[dict[str, Any]], max_r20: float
         q["signal_pct"] = round(pct, 3)
         q["score"] = round(-rv, 6)
         out.append(q)
+    return sorted(out, key=lambda x: (x["r20"], x["code"]))
+
+
+# ── §1011 行业热点×深跌×企稳×量能确认 ──────────────────────────────────────────────
+_IND_CACHE_PATH = Path(__file__).resolve().parents[2] / "data/industry_cache.json"
+_ind_cache: dict[str, str] | None = None
+
+
+def _load_industry_cache() -> dict[str, str]:
+    global _ind_cache
+    if _ind_cache is None:
+        _ind_cache = json.loads(_IND_CACHE_PATH.read_text()) if _IND_CACHE_PATH.exists() else {}
+    return _ind_cache
+
+
+def sector_dip_stabilize_candidates(db, as_of: str) -> list[dict[str, Any]] | None:
+    """§1011 SDS_VOL_h5：行业热点×深跌×企稳×量能确认。
+    条件：liq（amt20>5000万、上市>250日、非ST、非北交所）+ r20≤−15% + 行业5日等权收益前5 +
+    当日振幅≤5% + 收阳 + vr20≥1.0 + 未封涨停。按 r20 升序（跌得越深越优先）。
+    数据不足返回 None。"""
+    ind_map = _load_industry_cache()
+    if not ind_map:
+        return None
+    # 需要 25 个交易日（20 日 r20 + 5 日行业收益）
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 26"), {"d": as_of})]
+    if len(dates) < 26 or dates[0] != as_of:
+        return None
+    d5, d20, d250 = dates[5], dates[20], dates[-1]
+    # 拉 as_of 当天全市场日K
+    rows_today = db.execute(text(
+        "SELECT code, open, high, low, close, volume, amount, pct_chg "
+        "FROM daily_kbars WHERE trade_date=:d"), {"d": as_of}).mappings().all()
+    if not rows_today:
+        return None
+    # 拉近 20 日 pct_chg 用于计算 r20（批量）
+    r20_rows = db.execute(text(
+        "SELECT code, pct_chg FROM daily_kbars WHERE trade_date>:d20 AND trade_date<=:d "
+        "ORDER BY code, trade_date"), {"d20": d20, "d": as_of}).all()
+    r20_acc: dict[str, list[float]] = {}
+    for code, pc in r20_rows:
+        r20_acc.setdefault(code, []).append(float(pc or 0.0))
+    r20_map: dict[str, float] = {}
+    for code, xs in r20_acc.items():
+        v = 1.0
+        for x in xs:
+            v *= 1 + max(-35.0, min(35.0, x)) / 100
+        r20_map[code] = v - 1
+    # 拉近 20 日 volume 用于计算 vr20（当日量 / 前 20 日均量）
+    vol_rows = db.execute(text(
+        "SELECT code, trade_date, volume FROM daily_kbars WHERE trade_date>:d20 AND trade_date<=:d "
+        "ORDER BY code, trade_date"), {"d20": d20, "d": as_of}).all()
+    vol_acc: dict[str, list[float]] = {}
+    for code, td, vol in vol_rows:
+        vol_acc.setdefault(code, []).append((td, float(vol or 0)))
+    # 拉近 5 日 pct_chg 用于计算行业 5 日收益
+    r5_rows = db.execute(text(
+        "SELECT code, pct_chg FROM daily_kbars WHERE trade_date>:d5 AND trade_date<=:d "
+        "ORDER BY code, trade_date"), {"d5": d5, "d": as_of}).all()
+    r5_acc: dict[str, list[float]] = {}
+    for code, pc in r5_rows:
+        r5_acc.setdefault(code, []).append(float(pc or 0.0))
+    r5_map: dict[str, float] = {}
+    for code, xs in r5_acc.items():
+        v = 1.0
+        for x in xs:
+            v *= 1 + max(-35.0, min(35.0, x)) / 100
+        r5_map[code] = v - 1
+    # 拉 20 日均成交额（liq 判定）
+    amt_rows = db.execute(text(
+        "SELECT code, AVG(amount) as avg_amt FROM daily_kbars "
+        "WHERE trade_date>:d20 AND trade_date<=:d GROUP BY code HAVING COUNT(*)>=15"),
+        {"d20": d20, "d": as_of}).all()
+    amt_map = {code: float(a or 0) for code, a in amt_rows}
+    # 上市天数（用 daily_kbars 里该 code 最早日期近似）
+    age_rows = db.execute(text(
+        "SELECT code, COUNT(*) as cnt FROM daily_kbars WHERE trade_date<=:d GROUP BY code"),
+        {"d": as_of}).all()
+    age_map = {code: int(cnt) for code, cnt in age_rows}
+    # ST 判定（同 _liq_ok 口径）
+    st_rows = db.execute(text(
+        "SELECT code FROM stock_metadata_history WHERE (is_st=1 OR name LIKE '%ST%' OR name LIKE '%退%') "
+        "AND effective_from<=:d AND (effective_to IS NULL OR effective_to>:d)"),
+        {"d": as_of}).all()
+    st_codes = {r[0] for r in st_rows}
+
+    # 计算行业 5 日等权收益排名
+    ind_r5: dict[str, list[float]] = {}
+    for code, r5 in r5_map.items():
+        ind = ind_map.get(code)
+        if ind and code not in st_codes and not code.startswith(("4", "8", "9")):
+            ind_r5.setdefault(ind, []).append(r5)
+    ind_avg = {ind: sum(xs) / len(xs) for ind, xs in ind_r5.items() if len(xs) >= 5}
+    top5_inds = set(sorted(ind_avg, key=lambda x: ind_avg[x], reverse=True)[:5])
+
+    # 筛选信号
+    out: list[dict[str, Any]] = []
+    for row in rows_today:
+        code = row["code"]
+        if code.startswith(("4", "8", "9")) or code in st_codes:
+            continue
+        if age_map.get(code, 0) < 250 or amt_map.get(code, 0) < 5e7:
+            continue
+        ind = ind_map.get(code)
+        if not ind or ind not in top5_inds:
+            continue
+        rv = r20_map.get(code)
+        if rv is None or rv > -0.15:
+            continue
+        o, h, l, cl = float(row["open"] or 0), float(row["high"] or 0), float(row["low"] or 0), float(row["close"] or 0)
+        pct = float(row["pct_chg"] or 0)
+        vol = float(row["volume"] or 0)
+        if o <= 0 or cl <= 0:
+            continue
+        pre_c = cl / (1 + pct / 100.0) if pct > -99.999 else cl
+        # 振幅 ≤ 5%
+        if pre_c > 0 and (h - l) / pre_c > 0.05:
+            continue
+        # 收阳
+        if cl <= o:
+            continue
+        # 未封涨停
+        band = 0.198 if code.startswith(("3", "688")) else 0.098
+        if cl >= pre_c * (1 + band) - 0.005:
+            continue
+        # vr20 ≥ 1.0
+        vols = vol_acc.get(code, [])
+        prev_vols = [v for td, v in vols if td != as_of]
+        if len(prev_vols) < 10:
+            continue
+        avg_vol = sum(prev_vols[-20:]) / len(prev_vols[-20:])
+        if avg_vol <= 0 or vol / avg_vol < 1.0:
+            continue
+        out.append({
+            "code": code, "r20": round(rv, 4), "industry": ind,
+            "ind_r5": round(ind_avg.get(ind, 0), 4),
+            "vr20": round(vol / avg_vol, 2),
+            "range_pct": round((h - l) / pre_c, 4) if pre_c > 0 else 0,
+            "signal_pct": round(pct, 3),
+            "score": round(-rv, 6),
+        })
     return sorted(out, key=lambda x: (x["r20"], x["code"]))
 
 
@@ -3189,6 +3341,18 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+        if meta.get("kind") == "sector_dip_stabilize":
+            held = _held_codes(db, sid, as_of)
+            pool = sector_dip_stabilize_candidates(db, as_of)
+            if pool is None:
+                result[sid] = "no_data"
+                continue
+            picks = [p for p in pool if p["code"] not in held]
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
         # daily_basic 市值未更新到 as_of 时不拿旧市值排名/算小盘指数（10-16 批次曾用 10-09 市值）：标 data_error，补数后重跑。
         basic_max = db.execute(text("SELECT MAX(trade_date) FROM daily_basic WHERE trade_date<=:d"), {"d": as_of}).scalar()
         if basic_max is None or str(basic_max)[:10] < as_of:
@@ -3551,6 +3715,11 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%；"
                       f"公告前20日涨幅 {_f(score)}%（≤−15%），信号日涨跌 {_f(p.get('signal_pct'), 2)}%")
+        elif kind == "sector_dip_stabilize":
+            score, label, better = round(float(p["r20"]) * 100, 2), "近20日涨幅(%)", "lower"
+            reason = (f"行业「{p.get('industry', '')}」近5日等权收益 {_f(float(p.get('ind_r5', 0)) * 100, 2)}%（前5热点）；"
+                      f"个股近20日涨幅 {_f(score)}%（≤−15%深跌），信号日振幅 {_f(float(p.get('range_pct', 0)) * 100, 1)}%（≤5%企稳），"
+                      f"量比 {_f(p.get('vr20'), 2)}（≥1.0有承接），信号日涨跌 {_f(p.get('signal_pct'), 2)}%")
         elif kind == "earnings_accel":
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%")
