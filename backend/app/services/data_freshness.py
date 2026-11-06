@@ -46,7 +46,12 @@ EVENT_TABLES: list[tuple[str, str, int]] = [
     ("institutional_surveys", "surv_date", 14),
     ("stock_fina_indicator", "ann_date", 30),
     ("holder_numbers", "ann_date", 45),
-    ("pledge_stats", "end_date", 30),
+    # pledge_stats 按自然日 30 天判停更是误报：线上唯一取数路径（state_adapters.TushareStateProvider.pledge_stat）
+    # 只按「季末候选从近到远回退」拉 Tushare pledge_stat，而 Tushare 该接口当前只在季末有数据
+    # （2026-11-06 实测：20261016/20261024/20261031 对 Tushare 均为空，只有 akshare 备份有周频数据；
+    #  20260930 有 2212 行，与本库 2212 只一致）。所以每个季度末之后 30 天起必然误报，直到下个季末。
+    # 按季频给 130 天（与 holder_numbers / fina_indicator 同口径），Q4 数据在 130 天内到达。
+    ("pledge_stats", "end_date", 130),
     ("margin_data", "trade_date", 5),
     ("hk_holdings", "trade_date", 100),
 ]

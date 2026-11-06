@@ -171,6 +171,7 @@ def sdb():
         c.execute(text("CREATE TABLE daily_kbars (code TEXT, trade_date TEXT, open REAL, high REAL, low REAL, close REAL, "
                        "volume REAL, pct_chg REAL)"))
         c.execute(text("CREATE TABLE index_daily (ts_code TEXT, trade_date TEXT, close REAL)"))
+        c.execute(text("CREATE TABLE stocks (code TEXT, name TEXT, list_date TEXT)"))
         c.execute(text("CREATE TABLE trade_calendar (exchange TEXT, cal_date TEXT, is_open INTEGER)"))
         for d in OPEN:
             c.execute(text("INSERT INTO trade_calendar VALUES ('SSE', :d, 1)"), {"d": d.replace("-", "")})
@@ -220,6 +221,37 @@ def test_daily_kbar_value_anomalies(sdb):
     sdb.commit()
     it = dq.check_daily_kbar_values(sdb, OPEN, "2026-10-23")
     assert it["severity"] == dq.YELLOW and it["anomalous_rows"] == 2 and "002731" in it["detail"]
+
+
+def test_new_listing_price_limit_exemption(sdb):
+    """新股上市首 5 个交易日无涨跌幅限制：+397% 是合法行情，不该刷黄（2026-11-03 001381 实测）。"""
+    sdb.execute(text("INSERT INTO stocks VALUES ('001381', 'C皇冠新材', '2026-10-23')"))
+    sdb.execute(text("INSERT INTO stocks VALUES ('600000', '浦发银行', '1999-11-10')"))
+    sdb.execute(text("INSERT INTO daily_kbars VALUES ('001381','2026-10-23',56,150.58,56,84.55,100,397.9)"))
+    sdb.execute(text("INSERT INTO daily_kbars VALUES ('600000','2026-10-23',10,11,9,10,100,45.0)"))
+    sdb.commit()
+    it = dq.check_daily_kbar_values(sdb, OPEN, "2026-10-23")
+    # 只报老股那一条；新股那条记入豁免并写进 detail，保留可审计性
+    assert it["severity"] == dq.YELLOW and it["anomalous_rows"] == 1
+    assert it["new_listing_exempted"] == 1 and "001381" in it["detail"] and "600000" in it["detail"]
+
+
+def test_new_listing_exemption_keeps_price_errors(sdb):
+    """价格类硬错误（最高<最低/收盘≤0）不受新股豁免影响，任何股票都要报。"""
+    sdb.execute(text("INSERT INTO stocks VALUES ('001381', 'C皇冠新材', '2026-10-23')"))
+    sdb.execute(text("INSERT INTO daily_kbars VALUES ('001381','2026-10-23',56,44,60,84.55,100,5.0)"))
+    sdb.commit()
+    it = dq.check_daily_kbar_values(sdb, OPEN, "2026-10-23")
+    assert it["severity"] == dq.YELLOW and it["anomalous_rows"] == 1 and it["new_listing_exempted"] == 0
+
+
+def test_missing_stocks_table_does_not_break_value_check(sdb):
+    """缺 stocks 表时豁免退化为空集，检查本身不能变成「检查失败」。"""
+    sdb.execute(text("DROP TABLE stocks"))
+    sdb.execute(text("INSERT INTO daily_kbars VALUES ('001381','2026-10-23',56,150.58,56,84.55,100,397.9)"))
+    sdb.commit()
+    it = dq.check_daily_kbar_values(sdb, OPEN, "2026-10-23")
+    assert it["severity"] == dq.YELLOW and it["anomalous_rows"] == 1 and it["new_listing_exempted"] == 0
 
 
 def test_index_daily_per_index_and_duplicates(sdb):

@@ -365,16 +365,65 @@ def check_index_daily(db, open_days: list[str], expected: str) -> list[dict[str,
     return out
 
 
+# 注册制新股上市首 5 个交易日不设涨跌幅限制（主板/创业板/科创板/北交所均如此），
+# 首日 +397% 是合法行情而非数据错误（2026-11-03 001381 C皇冠新材即如此）。
+# 不剔除的话，每上一只新股就把这条检查刷黄，真异常反而被噪音淹掉。
+# 按自然日给 10 天窗口（5 个交易日≈7 个自然日，留余量），只豁免「涨跌幅越界」，
+# 价格类硬错误（≤0、最高<最低、负成交量）无论是否新股都要报。
+_NEW_LISTING_GRACE_DAYS = 10
+
+
+def _parse_day(v: Any) -> date | None:
+    """'20261023' / '2026-10-23' / date → date；无法识别返回 None。"""
+    s = norm_date(v)
+    if not s:
+        return None
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _new_listing_codes(db, codes: list[str], start: str) -> set[str]:
+    """返回 start 之后上市不满 _NEW_LISTING_GRACE_DAYS 个自然日的股票代码。
+
+    查不到 stocks（表缺失/字段缺失/查询报错）时返回空集：豁免是减噪音的增强项，
+    不能因为它把整条值域检查拖成「检查失败」。
+    """
+    out: set[str] = set()
+    start_day = _parse_day(start)
+    if start_day is None:
+        return out
+    for code in codes:
+        try:
+            raw = db.scalar(text("SELECT list_date FROM stocks WHERE code = :c"), {"c": code})
+        except Exception:  # noqa: BLE001 - 豁免查不到就退回「照常报异常」
+            return set()
+        ld = _parse_day(raw or "")
+        if ld is not None and (start_day - ld).days <= _NEW_LISTING_GRACE_DAYS:
+            out.add(code)
+    return out
+
+
 def check_daily_kbar_values(db, open_days: list[str], expected: str) -> dict[str, Any]:
-    """最近 3 个交易日日K值域：收盘/开盘 ≤0、最高<最低、|涨跌幅|>31%、成交量<0、零成交占比 >15%。"""
+    """最近 3 个交易日日K值域：收盘/开盘 ≤0、最高<最低、|涨跌幅|>31%、成交量<0、零成交占比 >15%。
+
+    新股上市初期的涨跌幅越界不算异常（见 _NEW_LISTING_GRACE_DAYS），剔除条数单独回报以便审计。
+    """
     start = _window_start(open_days, expected, 3)
     rows = db.execute(text(
-        "SELECT code, trade_date, close, pct_chg FROM daily_kbars WHERE trade_date >= :s AND "
+        "SELECT code, trade_date, close, pct_chg, "
+        "(close <= 0 OR open <= 0 OR high < low OR volume < 0) AS price_bad "
+        "FROM daily_kbars WHERE trade_date >= :s AND "
         "(close <= 0 OR open <= 0 OR high < low OR volume < 0 OR ABS(pct_chg) > 31)"), {"s": start}).all()
     tot, zero = db.execute(text("SELECT COUNT(*), SUM(CASE WHEN volume = 0 THEN 1 ELSE 0 END) FROM daily_kbars "
                                 "WHERE trade_date >= :s"), {"s": start}).one()
     zero_ratio = float(zero or 0) / float(tot) if tot else 0.0
     sev, parts = GREEN, []
+    pct_only = [r for r in rows if not int(r[4] or 0)]
+    new_listing = _new_listing_codes(db, sorted({r[0] for r in pct_only}), start) if pct_only else set()
+    exempted = [r for r in pct_only if r[0] in new_listing]
+    rows = [r for r in rows if not (r[0] in new_listing and not int(r[4] or 0))]
     if rows:
         sev = RED if len(rows) > 20 else YELLOW
         sample = "、".join(f"{r[0]}@{norm_date(r[1])}(收{r[2]},涨跌幅{r[3]})" for r in rows[:6])
@@ -382,9 +431,14 @@ def check_daily_kbar_values(db, open_days: list[str], expected: str) -> dict[str
     if zero_ratio > 0.15:
         sev = RED if zero_ratio > 0.4 else _worse(sev, YELLOW)
         parts.append(f"零成交占比 {zero_ratio:.1%}")
+    if exempted:
+        parts.append(f"已排除 {len(exempted)} 行新股上市初期涨跌幅（无涨跌幅限制）："
+                     + "、".join(f"{r[0]}@{norm_date(r[1])}" for r in exempted[:4]))
+    detail = "；".join(parts) or f"最近 3 日 {int(tot or 0)} 行值域正常（零成交 {zero_ratio:.1%}）"
     return _item("db:daily_kbars:values", "日K值域/异常值", "数据质量", sev, kind="quality", latest=expected, expected=expected,
-                 detail="；".join(parts) or f"最近 3 日 {int(tot or 0)} 行值域正常（零成交 {zero_ratio:.1%}）",
-                 impact="异常价格会污染涨跌幅/涨停判断、回测收益", anomalous_rows=len(rows))
+                 detail=detail,
+                 impact="异常价格会污染涨跌幅/涨停判断、回测收益",
+                 anomalous_rows=len(rows), new_listing_exempted=len(exempted))
 
 
 def check_chip_history(db) -> dict[str, Any]:
