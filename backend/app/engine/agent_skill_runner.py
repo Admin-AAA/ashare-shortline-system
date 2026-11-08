@@ -380,6 +380,8 @@ def _compact_stock(stock: dict[str, Any]) -> dict[str, Any]:
         "latest_trade_date",
         "data_quality",
         "market_regime",
+        "mkt_rsi6",
+        "mkt_lu_ld",
         "is_main_theme",
         "is_shortline_leader_candidate",
         "shortline_leader_score",

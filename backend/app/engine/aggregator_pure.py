@@ -12,6 +12,29 @@ RISK_TEMPLATE_PENALTY = {
     "aggressive": 0.7,
 }
 
+# 市场级策略按「当日成交额」排序，而不是按被证据分上限压平后的 final_score 排。
+# 目前只有 rsi6-capitulation（恐慌出清买成交额前 10）；不改变其它策略的排序。
+AMOUNT_RANKED_STRATEGY_IDS = frozenset({"rsi6-capitulation"})
+
+
+def _amount_ranked_card(card: dict[str, Any]) -> bool:
+    for signal in card.get("strategy_signals") or ():
+        if isinstance(signal, dict) and str(signal.get("strategy_id") or "") in AMOUNT_RANKED_STRATEGY_IDS:
+            return True
+    return False
+
+
+def _card_amount_yi(card: dict[str, Any]) -> float:
+    value = card.get("amount_yi")
+    if value is None:
+        snapshot = card.get("feature_snapshot")
+        if isinstance(snapshot, dict):
+            value = snapshot.get("amount_yi")
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
 
 # ── 风险分级：按严重程度差异化扣分 ──
 # high: 真实交易风险，需重点对待
@@ -802,6 +825,7 @@ def apply_pool_rules(
         formal_cards,
         key=lambda card: (
             -float(card.get("final_score", 0)),
+            -_card_amount_yi(card) if _amount_ranked_card(card) else 0.0,
             str(card.get("code") or ""),
         ),
     )

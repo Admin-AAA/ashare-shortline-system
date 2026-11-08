@@ -20,13 +20,42 @@ from app.models.market import DailyKbar
 
 logger = logging.getLogger(__name__)
 
-FIELDS = ("mkt_eqw_ma20_ratio", "mkt_eqw_ma60_ratio")
+FIELDS = ("mkt_eqw_ma20_ratio", "mkt_eqw_ma60_ratio", "mkt_rsi6")
 _MIN_SAMPLE = 1000
 _LOOKBACK_CAL_DAYS = 130
 
 
 def _clip(v: float) -> float:
     return max(-20.0, min(20.0, float(v)))
+
+
+def _rsi_wilder(values: list[float], n: int = 6) -> list[float]:
+    """Wilder RSI（因果）；前 n 个涨跌幅均值做初值，预热不足返回 0。"""
+    out = [0.0] * len(values)
+    if len(values) <= n:
+        return out
+    gains: list[float] = []
+    losses: list[float] = []
+    for i in range(1, len(values)):
+        delta = values[i] - values[i - 1]
+        gains.append(max(0.0, delta))
+        losses.append(max(0.0, -delta))
+    avg_gain = sum(gains[:n]) / n
+    avg_loss = sum(losses[:n]) / n
+    out[n] = _rsi_value(avg_gain, avg_loss)
+    for i in range(n + 1, len(values)):
+        avg_gain = (avg_gain * (n - 1) + gains[i - 1]) / n
+        avg_loss = (avg_loss * (n - 1) + losses[i - 1]) / n
+        out[i] = _rsi_value(avg_gain, avg_loss)
+    return out
+
+
+def _rsi_value(avg_gain: float, avg_loss: float) -> float:
+    if avg_loss <= 0:
+        return 100.0 if avg_gain > 0 else 50.0
+    if avg_gain <= 0:
+        return 0.0
+    return 100.0 - 100.0 / (1.0 + avg_gain / avg_loss)
 
 
 _RET_CACHE: dict[str, float] = {}
@@ -71,6 +100,9 @@ def ratios_from_returns(returns: Mapping[str, float]) -> dict[str, dict[str, flo
         r20 = level / (sum(closes[-20:]) / 20) if len(closes) >= 60 else 0.0
         r60 = level / (sum(closes[-60:]) / 60) if len(closes) >= 60 else 0.0
         out[d] = {"mkt_eqw_ma20_ratio": round(r20, 6), "mkt_eqw_ma60_ratio": round(r60, 6)}
+    rsi6 = _rsi_wilder(closes, 6)
+    for i, d in enumerate(sorted(returns)):
+        out[d]["mkt_rsi6"] = round(rsi6[i], 6)
     return out
 
 

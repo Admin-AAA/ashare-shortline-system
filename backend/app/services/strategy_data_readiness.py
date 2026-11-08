@@ -100,6 +100,8 @@ SHORT_DEPS: dict[str, tuple[Dep, ...]] = {
     "chen-xiaoqun-skill": _SHORT_BASE + (("dragon_tiger", 0),),
     "oversold-capital-reversal": _SHORT_BASE,
     "sector-relative-strength-leader": _SHORT_BASE,
+    # 市场 RSI6 用日K；成交额/涨跌停家数用收盘快照。不需要涨停池/资金流/概念板块。
+    "rsi6-capitulation": (("daily_kbars", 0), ("stock_quotes", 0)),
 }
 # 新上线、还没写进上表的短线策略：只按全局闸门那三份判，不凭空多拦（测试会提醒把新策略补进 SHORT_DEPS）。
 SHORT_DEFAULT: tuple[Dep, ...] = (("daily_kbars", 0), ("stock_quotes", 0), ("limit_up_board", 0))

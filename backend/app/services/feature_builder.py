@@ -50,7 +50,7 @@ def build_features(
         from app.services.market_trend import trend_for_live
         mkt_trend = trend_for_live(db, str(snapshot.get("trade_date") or ""), stocks)
     else:
-        mkt_trend = {"mkt_eqw_ma20_ratio": 0.0, "mkt_eqw_ma60_ratio": 0.0}
+        mkt_trend = {"mkt_eqw_ma20_ratio": 0.0, "mkt_eqw_ma60_ratio": 0.0, "mkt_rsi6": 0.0}
     for stock in stocks:
         item = dict(stock)
         item["is_main_theme"] = item.get("industry") in main_industries and item.get("industry") != "未分类"
@@ -62,6 +62,8 @@ def build_features(
         item["down_count"] = int(snapshot.get("down_count") or 0)
         item["limit_up_count"] = int(snapshot.get("limit_up_count") or 0)
         item["limit_down_count"] = int(snapshot.get("limit_down_count") or 0)
+        # 恐慌出清过滤：跌停家数占优（涨停/跌停，跌停为 0 时按 1 处理）。
+        item["mkt_lu_ld"] = item["limit_up_count"] / max(1, item["limit_down_count"])
         item.update(mkt_trend)
         enriched.append(item)
 

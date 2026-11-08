@@ -47,7 +47,7 @@ RETIRED_STRATEGY_IDS: frozenset[str] = frozenset(
 # 观察名单：照常每日独立运行，/strategies 标「运行中·观察」。删除只看绝对收益（近12月每笔均值/总收益/MDD），
 # 同池随机对照仅作诊断（2026-10-18 恢复，L-191）。陈小群 MDD -30.5% 偏大。
 # （high-range-breakout-momentum 2026-10-19 §107 修复失败 → 移出观察、退役。）
-WATCH_STRATEGY_IDS: frozenset[str] = frozenset({"chen-xiaoqun-skill"})
+WATCH_STRATEGY_IDS: frozenset[str] = frozenset({"chen-xiaoqun-skill", "rsi6-capitulation"})
 
 # 纯风险提示 / 非选股技能（没有可执行选股合约），不单独出票。
 NON_PICKING_SKILL_IDS: frozenset[str] = frozenset({"high-position-volume-stall-warning"})
@@ -57,10 +57,29 @@ DEFAULT_SCORE_LINE = 72.0
 DEFAULT_OUTPUT_COUNT = 3
 
 # 按策略覆盖分数线 / 出票上限（空 = 用默认）。分数线不得低于 formal 地板 72。
-STRATEGY_RUN_OVERRIDES: dict[str, dict[str, float | int]] = {}
+# rsi6-capitulation：研究口径一次买成交额前 10，按 10 张输出；分数 80~100 保证在 72 线之上。
+STRATEGY_RUN_OVERRIDES: dict[str, dict[str, float | int]] = {
+    "rsi6-capitulation": {"output_count": 10},
+}
 
-# 单策略政策覆盖：组合层闸门里对某些策略结构性不可达的项（当前无）。
-STRATEGY_POLICY_OVERRIDES: dict[str, dict[str, Any]] = {}
+# 单策略政策覆盖：组合层闸门里对某些策略结构性不可达的项。
+# rsi6-capitulation 是「弱市恐慌日买入」策略，必须关掉弱市分数封顶/低 chg20 惩罚；
+# 否则 72 分线 + 弱势 cap60 会让它永远 0 出票（与 §1051 回测口径不一致）。
+STRATEGY_POLICY_OVERRIDES: dict[str, dict[str, Any]] = {
+    "rsi6-capitulation": {
+        # 研究口径是「恐慌日买成交额最大的 10 只」，不叠加生产端的横截面风险否决。
+        "weak_regime_score_cap": None,
+        "weak_low_chg20_penalty": 0.0,
+        "panic_score_penalty": 0.0,
+        "high_amount_veto_yi": None,
+        "high_turnover_veto_pct": None,
+        "high_chg20_veto": None,
+        "max_dd60_veto": None,
+        "max_limit_up_days20": None,
+        "weak_low_ivoldn20_veto_enabled": False,
+        "output_limit_enabled": False,
+    },
+}
 
 
 def standalone_strategy_ids(skills: Iterable[Any]) -> list[str]:

@@ -110,7 +110,20 @@ def prep() -> pl.DataFrame:
     )
     pc = c("close").shift(1).over("code")
     ul = pl.coalesce(c("up_limit"), pc * (1 + band))
+    dl = pl.coalesce(c("down_limit"), pc * (1 - band))
     not_lu = (c("close") < ul - 0.005).fill_null(False)
+
+    # 市场涨跌停家数（T 收盘可得）：用于「跌停家数占优」的 capitulation 过滤。
+    act = (c("volume") > 0) & (c("close") > 0) & ~c("code").str.slice(0, 1).is_in(["4", "8", "9"])
+    is_lu = act & (c("close") >= ul - 0.005)
+    is_ld = act & (c("close") <= dl + 0.005)
+    ms = (
+        df.with_columns(is_lu.fill_null(False).alias("_lu"), is_ld.fill_null(False).alias("_ld"))
+        .group_by("trade_date")
+        .agg(c("_lu").sum().alias("_lu_n"), c("_ld").sum().alias("_ld_n"))
+        .with_columns((c("_lu_n") / c("_ld_n").clip(1)).alias("mkt_lu_ld"))
+    )
+    df = df.join(ms.select("trade_date", "mkt_lu_ld"), on="trade_date", how="left")
 
     rsi2, rsi6, rsi14 = c("rsi2"), c("rsi6"), c("rsi14")
     base = c("liq") & not_lu
@@ -120,6 +133,7 @@ def prep() -> pl.DataFrame:
     sig_dip2 = base & (rsi2 < 10) & has_r20
     sig_strong2 = base & (rsi2 < 10) & has_r20
     sig_broad6 = base & (rsi6 < 20)
+    sig_cap6 = sig_broad6 & (c("mkt_lu_ld") <= 0.34)
     sig_broad14 = base & (rsi14 < 30)
 
     df = df.with_columns(
@@ -127,11 +141,13 @@ def prep() -> pl.DataFrame:
         sig_dip2.fill_null(False).alias("S_MRSI2_DIP"),
         sig_strong2.fill_null(False).alias("S_MRSI2_STRONG"),
         sig_broad6.fill_null(False).alias("S_MRSI6_BROAD"),
+        sig_cap6.fill_null(False).alias("S_MRSI6_CAP"),
         sig_broad14.fill_null(False).alias("S_MRSI14_BROAD"),
         base.fill_null(False).alias("S_ALL_BROAD"),
         (base & has_r20).fill_null(False).alias("S_ALL_DIP"),
         (base & has_r20).fill_null(False).alias("S_ALL_STRONG"),
         c("amt20").alias("sc_amt"),
+        c("amount").alias("sc_amt_today"),
         (-c("r20").fill_null(-9.0)).alias("sc_dip"),
         (c("r20").fill_null(-9.0)).alias("sc_strong"),
     )

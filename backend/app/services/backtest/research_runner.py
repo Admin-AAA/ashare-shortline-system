@@ -1959,6 +1959,8 @@ def _stock_as_of(
         "market_sample_count": int((market_context or {}).get("sample_count") or 0),
         "mkt_eqw_ma20_ratio": float((market_context or {}).get("mkt_eqw_ma20_ratio") or 0.0),
         "mkt_eqw_ma60_ratio": float((market_context or {}).get("mkt_eqw_ma60_ratio") or 0.0),
+        "mkt_rsi6": float((market_context or {}).get("mkt_rsi6") or 0.0),
+        "mkt_lu_ld": float((market_context or {}).get("limit_up_count") or 0) / max(1, int((market_context or {}).get("limit_down_count") or 0)),
         "data_completeness_score": 100.0,
         "evidence_quality_score": 100.0,
         # 供因子管线复刻生产聚合（_apply_relative_features / build_features）

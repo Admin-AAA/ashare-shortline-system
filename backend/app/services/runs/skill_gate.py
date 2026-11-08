@@ -108,6 +108,7 @@ def build_skill_rule_gate(
                         "score": gate_score,
                         "tier": tier,
                         "reason": skill_gate_reason(signal, gate_score, min_score),
+                        "amount_yi": float(stock.get("amount_yi") or 0.0),
                     }
                 )
             else:
@@ -128,7 +129,14 @@ def build_skill_rule_gate(
         dynamic_max = min(dynamic_max, 30)
         per_skill_audit[skill_id]["dynamic_max_per_skill"] = dynamic_max
 
-        rows.sort(key=lambda row: float(row["score"]), reverse=True)
+        if skill_id == "rsi6-capitulation":
+            # 该策略按当日成交额选前 10；规则分被证据上限压平后用它做 tie-break。
+            rows.sort(
+                key=lambda row: (float(row["score"]), float(row.get("amount_yi") or 0.0)),
+                reverse=True,
+            )
+        else:
+            rows.sort(key=lambda row: float(row["score"]), reverse=True)
         high_tier = [row for row in rows if row["tier"] == "high"]
         mid_tier = [row for row in rows if row["tier"] == "mid"]
         standard_tier = [row for row in rows if row["tier"] == "standard"]
@@ -160,7 +168,13 @@ def build_skill_rule_gate(
             selected_pairs.append({**row, "skill_id": skill_id})
             per_skill_audit[skill_id]["gate_pass"] += 1
 
-    selected_pairs.sort(key=lambda row: float(row["score"]), reverse=True)
+    selected_pairs.sort(
+        key=lambda row: (
+            float(row["score"]),
+            float(row.get("amount_yi") or 0.0) if row.get("skill_id") == "rsi6-capitulation" else 0.0,
+        ),
+        reverse=True,
+    )
     if max_total and len(selected_pairs) > max_total:
         selected_pairs = selected_pairs[:max_total]
         selected_pair_keys = {(row["code"], row["skill_id"]) for row in selected_pairs}
@@ -190,7 +204,12 @@ def build_skill_rule_gate(
 
     skill_candidates = [entry for entry in by_code.values() if entry.get("review_skill_ids")]
     skill_candidates.sort(
-        key=lambda entry: max((entry.get("skill_gate_scores") or {"_": entry.get("prelim_score", 0)}).values()),
+        key=lambda entry: (
+            max((entry.get("skill_gate_scores") or {"_": entry.get("prelim_score", 0)}).values()),
+            float((entry.get("stock") or {}).get("amount_yi") or 0.0)
+            if "rsi6-capitulation" in (entry.get("review_skill_ids") or [])
+            else 0.0,
+        ),
         reverse=True,
     )
     non_skill_entries = [

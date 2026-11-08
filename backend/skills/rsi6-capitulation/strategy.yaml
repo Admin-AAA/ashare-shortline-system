@@ -1,0 +1,16 @@
+# RSI6 恐慌出清（命令式策略）
+# 研究：docs/research/rsi_exit_s1051_capitulation_filter.md
+# 回测：§1053/§1054 R12 +1.77%/笔 PF1.90、N3 +1.21%/笔 PF1.55；4 窗口 4/4、8 段 6/8。
+id: rsi6-capitulation
+name: RSI6恐慌出清
+enabled: true
+default_entry_mode: next_open
+contract:
+  type: strategy
+  executable: true
+  schema_version: 1
+# 实盘结算与回测同构：+5% 止盈、-4.5% 止损、关闭 trailing（activation 99 视为不激活）
+exit_overrides:
+  take_profit_pct: 5.0
+  stop_loss_pct: 4.5
+  activation_gain_pct: 99.0

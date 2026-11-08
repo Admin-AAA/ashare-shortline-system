@@ -283,12 +283,20 @@ def _simulate_outcome(
     executed_entry_price = round(float(entry_result["executed_price"]), 4)
     # 止损线与回测（execution_core.execute_trade）同口径：实际买入成交价（含买入滑点）往下 5.5%，
     # 不再用推荐快照里的止损价夹在 −5.5%~−5.7% 之间、也不按未含滑点的开盘价（2026-10-27 用户定）。
+    _exit_sid = exit_strategy_id(feature_snapshot)
+    _exit_ov = exit_overrides_for(_exit_sid)
     stop_loss_price = (
         _resolve_stop_loss_price(raw_entry_price, feature_snapshot) if legacy_r20261019
-        else _backtest_stop_loss_price(float(entry_result["executed_price"]))
+        else _backtest_stop_loss_price(
+            float(entry_result["executed_price"]),
+            stop_loss_pct=_exit_ov.get("stop_loss_pct"),
+        )
     )
     take_profit_price = _resolve_take_profit_price(
-        raw_entry_price, feature_snapshot, recommend_price=recommend_price
+        raw_entry_price,
+        feature_snapshot,
+        recommend_price=recommend_price,
+        take_profit_pct=_exit_ov.get("take_profit_pct"),
     )
 
     # 持仓 K 线：从入场日（含）起的 future bars，取 horizon_days 根。
@@ -857,11 +865,15 @@ def _resolve_exit(
     return result.raw_price, result.trade_date, result.reason
 
 
-def _backtest_stop_loss_price(executed_entry_price: float) -> float:
-    """结算用的止损线：与回测同一公式——买入成交价 ×（1 − 默认止损幅度），不取整。止损关闭时为 0。"""
+def _backtest_stop_loss_price(executed_entry_price: float, stop_loss_pct: float | None = None) -> float:
+    """结算用的止损线：默认买入成交价 ×（1 − 默认止损幅度）；策略可覆盖止损百分比。"""
     if not STOP_LOSS_ENABLED or executed_entry_price <= 0:
         return 0.0
-    return executed_entry_price * (1 + DEFAULT_STOP_LOSS_PCT / 100.0)
+    pct = float(stop_loss_pct) if stop_loss_pct is not None else -DEFAULT_STOP_LOSS_PCT
+    # 统一成负的百分比；策略 yaml 里写 4.5 表示 -4.5%。
+    if pct > 0:
+        pct = -pct
+    return executed_entry_price * (1 + pct / 100.0)
 
 
 def _resolve_stop_loss_price(raw_entry_price: float | None, feature_snapshot: dict[str, Any]) -> float:
@@ -884,13 +896,17 @@ def _resolve_take_profit_price(
     raw_entry_price: float | None,
     feature_snapshot: dict[str, Any],
     recommend_price: float | None = None,
+    take_profit_pct: float | None = None,
 ) -> float | None:
     """Resolve take profit relative to actual entry and canonical policy bounds.
 
     When the actual entry gaps away from the recommendation price, preserve the
     recommendation's implied target ratio before applying the versioned minimum
-    and maximum target bounds.
+    and maximum target bounds.  A strategy-level ``take_profit_pct`` override
+    bypasses the default minimum (used by the RSI capitulation strategy at +5%).
     """
+    if raw_entry_price is not None and raw_entry_price > 0 and take_profit_pct is not None:
+        return round(raw_entry_price * (1 + float(take_profit_pct) / 100.0), 2)
     raw_target = _as_float(feature_snapshot.get("take_profit"))
     if raw_entry_price is None or raw_entry_price <= 0:
         return round(raw_target, 2) if raw_target > 0 else 0.0
