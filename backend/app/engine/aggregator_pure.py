@@ -1535,9 +1535,13 @@ def apply_pool_rules(
                     result.append(card)
     result = _apply_sector_diversity(result, same_day_industry_counts=same_day_industry_counts)
     daily_output_limit = int(getattr(selection_policy, "daily_output_limit", 10))
-    remaining_daily_slots = max(
-        0,
-        daily_output_limit - max(0, int(same_day_recommendation_count)),
+    # rsi6-capitulation 是独立的市场级篮子（一次 10 只），不按同日其它策略已用名额
+    # 递减；否则排在其它策略之后只剩 1~5 只，研究口径失效。
+    _absolute_output = any(_amount_ranked_card(card) for card in formal_cards)
+    remaining_daily_slots = (
+        daily_output_limit
+        if _absolute_output
+        else max(0, daily_output_limit - max(0, int(same_day_recommendation_count)))
     )
     for card in result[remaining_daily_slots:]:
         card["policy_drop_owner"] = "daily_top_n"

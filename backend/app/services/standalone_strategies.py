@@ -78,6 +78,7 @@ STRATEGY_POLICY_OVERRIDES: dict[str, dict[str, Any]] = {
         "max_limit_up_days20": None,
         "weak_low_ivoldn20_veto_enabled": False,
         "output_limit_enabled": False,
+        "daily_output_limit": 10,
     },
 }
 
