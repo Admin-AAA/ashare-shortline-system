@@ -101,7 +101,7 @@ def test_dir_dataset_blocks_only_past_red_line(tmp_path):
     now = dt.datetime(2026, 10, 27, 18, 0, tzinfo=sdr.dq._CST)
     ok = sdr.check_dir_dataset("fina_hist", "2026-10-27", now=now, base=tmp_path)
     assert ok["ok"]
-    old = time.time() - 130 * 86400
+    old = now.timestamp() - 130 * 86400
     for f in d.iterdir():
         os.utime(f, (old, old))
     bad = sdr.check_dir_dataset("fina_hist", "2026-10-27", now=now, base=tmp_path)

@@ -101,7 +101,7 @@ def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
     for fn in ("cld_candidates", "dinc_candidates", "udp_candidates", "ncs_candidates", "cg_candidates"):
         monkeypatch.setattr(fe, fn, lambda db, d: None)
     res = ms.generate_picks(None, "2026-10-16", horizon="long")
-    assert set(res) == {"long-dividend-lowvol", "long-growth-streak", "long-net-cash-switch"}
+    assert set(res) == {"long-dividend-lowvol", "long-growth-streak"}
     res = ms.generate_picks(None, "2026-10-16", strategy_ids=["long-dividend-lowvol"])
     assert set(res) == {"long-dividend-lowvol"}
     # §338 已下线的低换手低波：按 id 指名也不再出票（generate_picks 只遍历现役 STRATEGIES）
@@ -109,11 +109,12 @@ def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
 
 
 def test_retired_strategies_not_live():
-    """§278/§282：新标准重评仍不达标的 /long 策略已下线（long-net-cash-switch 已于 §282 恢复上线），不在现役 STRATEGIES，也不出票。
+    """§278/§282/§1055：不达标的 /long 策略已下线，不在现役 STRATEGIES，也不出票。
     §338：long-lowturn-lowvol 近12个月满期卖出每笔为负，下线。
+    §1055：long-net-cash-switch 生产滚动 R12 每笔 −7.16%、verdict=negative，重新下线。
     2026-11-03：SUE∩质量家族非冠军一并退出日频，定义留在 RETIRED_STRATEGIES。"""
     long_retired = {"long-repurchase-big", "long-current-debt-down", "long-dividend-increase",
-                    "long-undist-profit-growth", "long-lowturn-lowvol"}
+                    "long-undist-profit-growth", "long-lowturn-lowvol", "long-net-cash-switch"}
     sue_demoted = set(ms.SUE_LADDER_DEMOTED)
     near_dup = set(ms.NON_SUE_NEAR_DUP_DEMOTED)
     assert long_retired <= set(ms.RETIRED_STRATEGIES)

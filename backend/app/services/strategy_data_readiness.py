@@ -137,6 +137,8 @@ MID_KIND_DEPS: dict[str, tuple[Dep, ...]] = {
     "sexp_yoy": _EVENT, "sexp_vol": _EVENT, "fina_yoy": _EVENT, "fina_vol": _EVENT,
     "dinc_yoy": _DIVIDEND, "dinc_vol": _DIVIDEND,
     "td_vol": _EVENT, "cas_vol": _EVENT, "cg_streak": _EVENT, "ncs_switch": _EVENT,
+    # §1011 深跌×行业热点×企稳（mid-sector-dip-stabilize）：日K+行业缓存，不读财报/预告
+    "sector_dip_stabilize": _EVENT,
 }
 MID_DEFAULT: tuple[Dep, ...] = _EVENT
 

@@ -205,8 +205,8 @@ def test_ncs_rules_and_order(monkeypatch):
     assert ann["rule_score"] == 1.5 and "转为净现金" in ann["selection_reason"]
 
 
-def test_ncs_registered_no_caps():
-    meta = ms.STRATEGIES["long-net-cash-switch"]
+def test_ncs_retired_metadata_no_caps():
+    meta = ms.RETIRED_STRATEGIES["long-net-cash-switch"]
     assert meta["horizon"] == "long" and meta["hold_days"] == 60 and meta["schedule"] == "daily"
     assert meta["kind"] == "ncs_switch" and "k_slots" not in meta and "max_new" not in meta
 
