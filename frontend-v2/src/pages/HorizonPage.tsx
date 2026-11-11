@@ -380,8 +380,10 @@ function BatchCard({ b, defaultOpen, list, highlight, rz, onPick }: { b: Horizon
   const cancelN = b.picks.filter(isCancelled).length;
   const first = b.picks.find((p) => p.rule_score_label);
   const hasHolding = b.picks.some((p) => p.status === "holding");
+  // 盘中确认：入场日当天日K还没入库，后端用实时快照给出开盘价与浮盈，收益口径是「实时价」不是收盘价
+  const intraday = b.picks.some((p) => p.intraday);
   const markDate = b.picks.find((p) => p.status === "holding" && p.mark_date)?.mark_date;
-  const retHead = b.status === "closed" ? "收益（含成本）" : hasHolding ? `浮动收益（按 ${markDate ?? "最新"} 收盘，未扣 0.3% 成本）` : "收益";
+  const retHead = b.status === "closed" ? "收益（含成本）" : hasHolding ? (intraday ? "浮动收益（盘中实时价，未扣 0.3% 成本）" : `浮动收益（按 ${markDate ?? "最新"} 收盘，未扣 0.3% 成本）`) : "收益";
   // 同一批次只有一个策略，规则分单位一致；按批内排名排序，不跨策略比较
   const picks = [...b.picks].sort((x, y) => (x.selection_rank ?? 999) - (y.selection_rank ?? 999));
   return (
@@ -395,7 +397,7 @@ function BatchCard({ b, defaultOpen, list, highlight, rz, onPick }: { b: Horizon
         {b.origin !== "replay" && b.generated_at && b.entry_deadline && new Date(b.generated_at) > new Date(b.entry_deadline) && (
           <span className="hz-pill hz-pill--gray" title={`生成于 ${b.generated_at}，晚于次日开盘前截止 ${b.entry_deadline}，不计入实盘统计`}>开盘后补跑</span>
         )}
-        {b.status === "pending" && b.picks.some((p) => buyingToday(b.signal_date, p)) ? <span className="hz-pill hz-pill--amber">今日开盘买入，收盘后确认</span> : <Status s={b.status} />}
+        {b.status === "pending" && b.picks.some((p) => buyingToday(b.signal_date, p)) ? <span className="hz-pill hz-pill--amber">今日开盘买入，收盘后确认</span> : intraday && b.status === "holding" ? <span className="hz-pill hz-pill--blue" title="今日开盘已买入，日K约 17:05 入库后转为正式结算">持有中 · 盘中</span> : <Status s={b.status} />}
         <span className="hz-muted">{b.picks.length} 只{cancelN ? `（${cancelN} 只开盘涨停取消）` : ""}{hold ? ` · 持 ${hold} 日` : ""}</span>
         <span className={`hz-batch__ret hz-num ${pnl(b.avg_ret)}`}>{b.avg_ret == null ? "—" : `${b.status === "closed" ? "平均" : "浮动平均"} ${pct(b.avg_ret)}`}</span>
       </button>
@@ -411,9 +413,9 @@ function BatchCard({ b, defaultOpen, list, highlight, rz, onPick }: { b: Horizon
                   <td className="r hz-num">{p.selection_rank ?? "—"}</td>
                   <td className="hz-num">{p.code}</td><td>{p.name}</td>
                   <td className="r hz-num">{p.rule_score ?? "—"}</td>
-                  <td>{buyingToday(b.signal_date, p) ? <span className="hz-pill hz-pill--amber">今日开盘买入，收盘后确认</span> : <Status s={isCancelled(p) ? "skipped" : p.status} />}{isCancelled(p) || (p.exit_delayed_days ?? 0) > 0 ? <PickStatusLine p={p} /> : null}</td>
+                  <td>{buyingToday(b.signal_date, p) ? <span className="hz-pill hz-pill--amber">今日开盘买入，收盘后确认</span> : p.intraday && !isCancelled(p) ? <span className="hz-pill hz-pill--blue" title="今日开盘已买入，日K约 17:05 入库后转为正式结算">持有中 · 盘中</span> : <Status s={isCancelled(p) ? "skipped" : p.status} />}{isCancelled(p) || (p.exit_delayed_days ?? 0) > 0 ? <PickStatusLine p={p} /> : null}</td>
                   <td className="hz-num">{p.entry_date ? `${p.entry_date} @${p.entry_price ?? "—"}` : "—"}</td>
-                  <td className="hz-num">{p.exit_date ? `${p.exit_date} @${p.exit_price ?? "—"}` : p.mark_date ? `${p.mark_date} @${p.mark_price ?? "—"}（估）` : "—"}</td>
+                  <td className="hz-num">{p.exit_date ? `${p.exit_date} @${p.exit_price ?? "—"}` : p.mark_date ? `${p.mark_date} @${p.mark_price ?? "—"}（${p.intraday ? "实时" : "估"}）` : "—"}</td>
                   <td className="r hz-num">{p.days ?? "—"}</td>
                   <td className={`r hz-num ${pnl(p.ret)}`}>{pct(p.ret)}</td>
                   <td className="hz-muted hz-reason">{p.selection_reason ?? "—"}</td>

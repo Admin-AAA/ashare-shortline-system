@@ -4235,6 +4235,128 @@ def _load_batch(db, f: Path, _prefetched: bool = False) -> dict[str, Any]:
     return data
 
 
+_INTRADAY_TTL = 45.0  # 实时快照缓存：同一次刷新里多次读列表只打一次上游
+_INTRADAY_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+_INTRADAY_LOCK = threading.Lock()
+_CST = _dt.timezone(_dt.timedelta(hours=8))
+_OPEN_AUCTION = _dt.time(9, 25)  # 集合竞价结束，开盘价此时已确定
+
+
+def _intraday_quotes(codes: list[str]) -> dict[str, dict[str, Any]]:
+    """取实时快照（sina，tushare SDK 爬虫，无 token）。失败返回已命中缓存的部分，不影响主流程。"""
+    if not codes:
+        return {}
+    now = time.time()
+    out: dict[str, dict[str, Any]] = {}
+    stale: list[str] = []
+    with _INTRADAY_LOCK:
+        for c in codes:
+            hit = _INTRADAY_CACHE.get(c)
+            if hit is not None and now - hit[0] < _INTRADAY_TTL:
+                out[c] = hit[1]
+            else:
+                stale.append(c)
+    if not stale:
+        return out
+    try:
+        from app.services.datasource.sina_realtime import fetch_frame, normalize_rows
+        from app.services.tushare_client import ts_code
+
+        rows = normalize_rows(fetch_frame([ts_code(c) for c in stale]))
+    except Exception as exc:  # noqa: BLE001 - 实时源不可用就退回「待买入」，不阻塞列表
+        logger.warning("中线盘中实时快照取数失败（%d 只）：%s", len(stale), exc)
+        return out
+    with _INTRADAY_LOCK:
+        fresh = time.time()
+        if len(_INTRADAY_CACHE) > 2000:  # 只留活票，防进程长期运行无限堆积
+            for k in [k for k, (ts, _) in _INTRADAY_CACHE.items() if fresh - ts >= _INTRADAY_TTL]:
+                _INTRADAY_CACHE.pop(k, None)
+        for c in stale:
+            q = rows.get(c)
+            if q:
+                out[c] = q
+                _INTRADAY_CACHE[c] = (now, q)
+    return out
+
+
+def _refresh_batch_rollup(doc: dict[str, Any]) -> None:
+    """picks 状态被改动后重算批次汇总（与 _load_batch 里的口径一致）。"""
+    picks = doc.get("picks") or []
+    rets = [p["ret"] for p in picks if p.get("status") in ("closed", "holding") and p.get("ret") is not None]
+    doc["avg_ret"] = round(sum(rets) / len(rets), 2) if rets else None
+    doc["status"] = ("closed" if all(p.get("status") in ("closed", "skipped") for p in picks)
+                     else "pending" if all(p.get("status") == "pending" for p in picks) else "holding")
+
+
+def _intraday_overlay(db, docs: list[dict[str, Any]], now: _dt.datetime | None = None) -> None:
+    """盘中确认：信号日的下一个交易日（= 今天）开盘买入、但当日日K还没入库的票，
+    用实时快照给出「已买入 + 浮动收益」，让持有期第一天就能看到预计收益，而不是整天停在待买入。
+
+    只改返回给接口的内存对象：不写结算缓存、不改已落盘的批次文件；当日日K入库后由 _realize_rows
+    正常接管（缓存按数据版本失效）。开盘价在 09:25 集合竞价即确定、当前价是当下已知信息，不构成未来函数。"""
+    if db is None:
+        return
+    now = now or _dt.datetime.now(_CST)
+    today = now.date()
+    if now.time() < _OPEN_AUCTION:
+        return
+    pending = [p for d in docs for p in (d.get("picks") or []) if p.get("status") == "pending"]
+    if not pending:
+        return
+    from app.services.trade_calendar import open_dates_between
+
+    today_s = today.isoformat()
+    next_open: dict[str, str | None] = {}
+
+    def _next_open_day(signal_date: str) -> str | None:
+        if signal_date in next_open:
+            return next_open[signal_date]
+        try:
+            start = _dt.date.fromisoformat(signal_date)
+        except ValueError:
+            next_open[signal_date] = None
+            return None
+        try:
+            days = open_dates_between(start, today, db=db)  # ['YYYYMMDD', ...]
+        except Exception as exc:  # noqa: BLE001 - 日历查不到就当作不是今天入场
+            logger.debug("盘中确认取交易日历失败：%s", exc)
+            days = []
+        compact = signal_date.replace("-", "")
+        nxt = next((x for x in days if x > compact), None)
+        next_open[signal_date] = f"{nxt[:4]}-{nxt[4:6]}-{nxt[6:]}" if nxt else None
+        return next_open[signal_date]
+
+    targets = [(d, p) for d in docs for p in (d.get("picks") or [])
+               if p.get("status") == "pending" and _next_open_day(d["signal_date"]) == today_s]
+    if not targets:
+        return
+    quotes = _intraday_quotes(sorted({p["code"] for _, p in targets}))
+    if not quotes:
+        return
+    touched: set[int] = set()
+    for d, p in targets:
+        q = quotes.get(p["code"])
+        if not q:
+            continue
+        o, price, pre = float(q.get("open") or 0), float(q.get("price") or 0), float(q.get("pre_close") or 0)
+        if o <= 0 or pre <= 0:
+            continue  # 停牌/无成交：顺延买入，保持待买入
+        band = 0.2 if p["code"].startswith(("300", "301", "688", "689")) else 0.1
+        if o >= pre * (1 + band) - 0.005:  # 一字涨停买不进，与 _realize_rows 同口径
+            p.update({"status": "skipped", "entry_date": today_s, "reason": "开盘涨停买不进",
+                      "cancel_code": "limit_up_open", "entry_open": round(o, 2), "intraday": True})
+        elif price > 0:
+            p.update({"status": "holding", "entry_date": today_s, "entry_price": round(o, 2),
+                      "mark_date": today_s, "mark_price": round(price, 2), "days": 0,
+                      "ret": round((price / o - 1) * 100, 2), "intraday": True})
+        else:
+            continue
+        touched.add(id(d))
+    for d in docs:
+        if id(d) in touched:
+            _refresh_batch_rollup(d)
+
+
 def _fill_missing_names(db, docs: list[dict[str, Any]]) -> None:
     """读盘兜底：历史批次里没写 name 的（如 sector_dip_stabilize 早期候选）在这里补上，
     只补返回给接口的内存对象，不改写已落盘的实盘批次文件。
@@ -4284,6 +4406,7 @@ def _load_batches(db, files: list[Path]) -> list[dict[str, Any]]:
     prefetch_realized(db, metas)
     docs = [_load_batch(db, f, _prefetched=True) for f in files]
     _fill_missing_names(db, docs)
+    _intraday_overlay(db, docs)
     return docs
 
 
