@@ -1632,6 +1632,8 @@ def sector_dip_stabilize_candidates(db, as_of: str) -> list[dict[str, Any]] | No
         "AND effective_from<=:d AND (effective_to IS NULL OR effective_to>:d)"),
         {"d": as_of}).all()
     st_codes = {r[0] for r in st_rows}
+    # 与其它 *_candidates 一致：落盘带股票名（此前漏写，前端「名称」列只能显示 —）
+    names = dict(db.execute(text("SELECT code,name FROM stocks")).all())
 
     # 计算行业 5 日等权收益排名
     ind_r5: dict[str, list[float]] = {}
@@ -1681,7 +1683,7 @@ def sector_dip_stabilize_candidates(db, as_of: str) -> list[dict[str, Any]] | No
         if avg_vol <= 0 or vol / avg_vol < 1.0:
             continue
         out.append({
-            "code": code, "r20": round(rv, 4), "industry": ind,
+            "code": code, "name": names.get(code, ""), "r20": round(rv, 4), "industry": ind,
             "ind_r5": round(ind_avg.get(ind, 0), 4),
             "vr20": round(vol / avg_vol, 2),
             "range_pct": round((h - l) / pre_c, 4) if pre_c > 0 else 0,
@@ -4233,6 +4235,46 @@ def _load_batch(db, f: Path, _prefetched: bool = False) -> dict[str, Any]:
     return data
 
 
+def _fill_missing_names(db, docs: list[dict[str, Any]]) -> None:
+    """读盘兜底：历史批次里没写 name 的（如 sector_dip_stabilize 早期候选）在这里补上，
+    只补返回给接口的内存对象，不改写已落盘的实盘批次文件。
+    stocks 是当前在市股票池，退市/改名的再退到 stock_metadata_history 取最新一条名称。"""
+    if db is None:
+        return
+    missing = {p["code"] for d in docs for p in (d.get("picks") or []) if not p.get("name")}
+    if not missing:
+        return
+    codes = sorted(missing)
+    names: dict[str, str] = {}
+    try:
+        rows = db.execute(
+            text("SELECT code, name FROM stocks WHERE code IN :cs").bindparams(bindparam("cs", expanding=True)),
+            {"cs": codes},
+        ).all()
+        names = {c: n for c, n in rows if n}
+    except Exception as exc:  # noqa: BLE001 - 补名失败不影响主流程（前端降级显示 —）
+        logger.debug("补股票名失败（stocks）：%s", exc)
+    rest = [c for c in codes if c not in names]
+    if rest:
+        try:
+            rows = db.execute(text(
+                "SELECT code, name FROM stock_metadata_history WHERE code IN :cs "  # noqa: S608 - expanding IN
+                "ORDER BY code, effective_from DESC").bindparams(bindparam("cs", expanding=True)),
+                {"cs": rest},
+            ).all()
+            for c, n in rows:
+                if n and c not in names:
+                    names[c] = n
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("补股票名失败（stock_metadata_history）：%s", exc)
+    if not names:
+        return
+    for d in docs:
+        for p in d.get("picks") or []:
+            if not p.get("name"):
+                p["name"] = names.get(p["code"])
+
+
 def _load_batches(db, files: list[Path]) -> list[dict[str, Any]]:
     """批量版 _load_batch：先一次性校验数据版本并批量结算所有未缓存的入选股，再逐个组装，结果与逐个 _load_batch 相同。"""
     metas = []
@@ -4240,7 +4282,9 @@ def _load_batches(db, files: list[Path]) -> list[dict[str, Any]]:
         d = json.loads(_read_pick_file(f)[0])
         metas.append((d["strategy_id"], d["signal_date"], [p["code"] for p in d["picks"]]))
     prefetch_realized(db, metas)
-    return [_load_batch(db, f, _prefetched=True) for f in files]
+    docs = [_load_batch(db, f, _prefetched=True) for f in files]
+    _fill_missing_names(db, docs)
+    return docs
 
 
 def list_picks(db, strategy_id: str | None = None, limit_batches: int = 30,
