@@ -66,8 +66,13 @@ for i, d in enumerate(todo):
         df["trade_date"] = df["trade_date"].astype(str)
         buf.append(df.astype({c: "string" for c in df.columns if df[c].dtype == object}))
     else:
-        with open(done_file, "a") as fh:
-            fh.write(d + "\n")
+        # 当日榜单发布很晚（实测 22:00 之后偶尔仍未出）：空结果不能记成「该日无数据」，
+        # 否则第二天断点逻辑会永久跳过这一天。只有历史日期才写空日标记。
+        if d >= pd.Timestamp.now().strftime("%Y%m%d"):
+            print(d, "empty（尚未发布，不记空日，下次重试）", flush=True)
+        else:
+            with open(done_file, "a") as fh:
+                fh.write(d + "\n")
     if (i + 1) % 50 == 0:
         flush()
         print(f"{i + 1}/{len(todo)} last={d} rows={len(df)}", flush=True)

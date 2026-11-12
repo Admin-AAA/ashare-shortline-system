@@ -65,10 +65,60 @@ def test_holder_number_single_batch_call_empty_codes_no_filter():
     client = _RecordingClient({"stk_holdernumber": frame})
     provider = TushareStateProvider(client, session=None)
     rows = provider.holder_number(_request((), date(2026, 7, 16)))
-    # 两行都已在 2026-07-16 前公告；no codes → no filter
-    assert client.calls == [("stk_holdernumber", {"end_date": "20260630"})]
+    # 两行都已在 2026-07-16 前公告；no codes → no filter。单页不足一页即停，只调用一次。
+    assert client.calls == [("stk_holdernumber", {
+        "end_date": "20260630", "limit": provider.HOLDER_PAGE_SIZE, "offset": 0})]
     assert {row["code"] for row in rows} == {"000001", "600000"}
     assert {row["ann_date"] for row in rows} == {"2026-07-05", "2026-07-10"}
+
+
+def test_holder_number_pages_until_short_page(monkeypatch):
+    """整页（=HOLDER_PAGE_SIZE）时继续翻页，短页停止并合并。"""
+    monkeypatch.setattr(TushareStateProvider, "HOLDER_PAGE_SIZE", 2)
+    page1 = pd.DataFrame([
+        {"ts_code": "000001.SZ", "ann_date": "20260705", "end_date": "20260630", "holder_num": 10},
+        {"ts_code": "600000.SH", "ann_date": "20260706", "end_date": "20260630", "holder_num": 20},
+    ])
+    page2 = pd.DataFrame([
+        {"ts_code": "300001.SZ", "ann_date": "20260707", "end_date": "20260630", "holder_num": 30},
+    ])
+
+    class _PagedClient:
+        def __init__(self):
+            self.offsets = []
+
+        def stk_holdernumber(self, **kwargs):
+            self.offsets.append(kwargs["offset"])
+            return page1 if kwargs["offset"] == 0 else page2
+
+    client = _PagedClient()
+    provider = TushareStateProvider(client, session=None)
+    rows = provider.holder_number(_request((), date(2026, 7, 16)))
+    assert client.offsets == [0, 2]
+    assert {row["code"] for row in rows} == {"000001", "600000", "300001"}
+
+
+def test_holder_number_stops_when_offset_ignored(monkeypatch):
+    """上游忽略 offset（每页内容相同）时必须停，不能无限翻页。"""
+    monkeypatch.setattr(TushareStateProvider, "HOLDER_PAGE_SIZE", 2)
+    page = pd.DataFrame([
+        {"ts_code": "000001.SZ", "ann_date": "20260705", "end_date": "20260630", "holder_num": 10},
+        {"ts_code": "600000.SH", "ann_date": "20260706", "end_date": "20260630", "holder_num": 20},
+    ])
+
+    class _StuckClient:
+        def __init__(self):
+            self.calls = 0
+
+        def stk_holdernumber(self, **kwargs):
+            self.calls += 1
+            return page
+
+    client = _StuckClient()
+    provider = TushareStateProvider(client, session=None)
+    rows = provider.holder_number(_request((), date(2026, 7, 16)))
+    assert client.calls == 2          # 第二次发现全是重复行就退出
+    assert {row["code"] for row in rows} == {"000001", "600000"}
 
 
 def test_holder_number_skips_rows_announced_after_trade_date():

@@ -134,6 +134,14 @@ TASK_TYPE_ROLLING_R12 = "rolling_r12_recompute"
 ROLLING_R12_TASK_ID = "rolling_r12_monthly"
 ROLLING_R12_CRON = "30 22 * * mon-fri"
 
+# 研究缓存日更（开盘啦涨停榜 kpl_list，data/research_cache/kpl_list/kpl_YYYY.parquet）。
+# 上游当日榜单发布时间不固定（实测 16:00 之后、有时 22:00 还没出），此前没有任何定时任务调用
+# fetch_kpl_list.py，只能靠手工补，缓存一度停在 10-21（滞后 15 个交易日），数据质量巡检长期挂黄。
+# 22:20 跑（在 21:00 晚间补数之后、rolling_r12 22:30 之前），脚本自带断点：已有日期跳过、空日记 _empty_days.txt。
+TASK_TYPE_RESEARCH_CACHE_REFRESH = "research_cache_refresh"
+KPL_LIST_TASK_ID = "research_kpl_list_daily"
+KPL_LIST_CRON = "20 22 * * mon-fri"
+
 
 # ── 盘中锁利影子链路（只记录不交易，见 intraday_lock_service）────────────────
 # 调度时机由 outcome 出入场时序决定（见 outcome_simulation.py §51-53 + T+1 锁仓）：

@@ -763,11 +763,43 @@ class TushareStateProvider:
             })
         return rows
 
+    # 2026-11-12：不带 limit 的 stk_holdernumber(end_date=...) 会一次性返回全量（全市场 × 全部历史期），
+    # 实测把进程撑到 OOM（SIGKILL 137），晚间补数里的 holder_number 因此每晚失败、健康分长期挂一条黄。
+    # 改为按 offset 分页：单页固定上限，内存恒定；上游若忽略 offset（页内容重复）立即停，避免死循环。
+    HOLDER_PAGE_SIZE = 3000
+    HOLDER_MAX_PAGES = 40
+
+    def _holder_number_rows(self, target: str):
+        """分页拉 stk_holdernumber(end_date=target)，返回拼接后的 DataFrame，空则 None。"""
+        import pandas as pd
+
+        pages: list[Any] = []
+        offset = 0
+        seen_keys: set[tuple[Any, Any]] = set()
+        for _ in range(self.HOLDER_MAX_PAGES):
+            frame = self._client.stk_holdernumber(
+                end_date=target, limit=self.HOLDER_PAGE_SIZE, offset=offset)
+            if frame is None or frame.empty:
+                break
+            keys = set(zip(frame.get("ts_code", []), frame.get("end_date", [])))
+            if keys and keys <= seen_keys:
+                logger.warning(
+                    "stk_holdernumber(offset=%d) 返回的全是已有行（上游未支持分页），停止翻页", offset)
+                break
+            seen_keys |= keys
+            pages.append(frame)
+            if len(frame) < self.HOLDER_PAGE_SIZE:
+                break
+            offset += self.HOLDER_PAGE_SIZE
+        if not pages:
+            return None
+        return pd.concat(pages, ignore_index=True) if len(pages) > 1 else pages[0]
+
     def holder_number(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         # 股东人数按季度披露（慢变数据），用 end_date 批量一次拉全市场，再按
         # requested_codes 过滤。逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。
         target = _quarter_end_day(request.trade_date)
-        frame = self._client.stk_holdernumber(end_date=target)
+        frame = self._holder_number_rows(target)
         if frame is None or frame.empty:
             return ()
         validate_market_frame("holder_number", frame, provider="tushare-auxiliary")

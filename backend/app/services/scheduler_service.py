@@ -54,6 +54,9 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     ROLLING_R12_CRON,
     ROLLING_R12_TASK_ID,
     TASK_TYPE_ROLLING_R12,
+    KPL_LIST_CRON,
+    KPL_LIST_TASK_ID,
+    TASK_TYPE_RESEARCH_CACHE_REFRESH,
     TASK_TYPE_DATA_FRESHNESS_CHECK,
     TASK_TYPE_STOCK_IDENTITY_REFRESH,
     BLOCK_TRADE_BACKUP_TASK_ID,
@@ -337,6 +340,51 @@ def _export_research_parquets(task_id: str) -> dict[str, Any]:
                        f"研究 parquet（{tables}）增量导出失败：{str(out.get('error') or out.get('stderr_tail'))[:200]}")
         except Exception:  # noqa: BLE001
             logger.debug("research parquet export alert failed", exc_info=True)
+    return out
+
+
+# 研究缓存日更：开盘啦涨停榜 kpl_list（data/research_cache/kpl_list/kpl_YYYY.parquet）。
+# 上游当日榜单发布晚且不稳定，此前没有任何任务调用 fetch_kpl_list.py，缓存曾停在 10-21（滞后 15 个交易日），
+# 数据质量巡检长期挂黄。脚本自带断点（已有日期跳过、空日写 _empty_days.txt），给最近 25 天窗口即可自愈漏补。
+KPL_LIST_REFRESH_TIMEOUT_SECONDS = 600
+
+
+def _refresh_kpl_list_cache(task_id: str) -> dict[str, Any]:
+    """独立子进程增量补 kpl_list；非致命，失败只告警，不改父任务自身状态。"""
+    import os as _os
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    if _os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"status": "skipped", "reason": "pytest"}
+    backend = _Path(__file__).resolve().parents[2]
+    # 只补到「最近已收盘交易日」：盘中或当日数据尚未发布时拉当天只会拿到空表。
+    end_day = _latest_allowed_bar_date()
+    end = end_day.replace("-", "")
+    start = (datetime.strptime(end_day, "%Y-%m-%d") - timedelta(days=25)).strftime("%Y%m%d")
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(
+            [_sys.executable, "scripts/shortline_research/fetch_kpl_list.py", start, end],
+            cwd=str(backend), capture_output=True, text=True,
+            timeout=KPL_LIST_REFRESH_TIMEOUT_SECONDS, check=False,
+        )
+        out = {"status": "completed" if proc.returncode == 0 else "failed",
+               "window": f"{start}~{end}", "seconds": round(time.monotonic() - t0, 1),
+               "stdout_tail": (proc.stdout or "")[-800:], "stderr_tail": (proc.stderr or "")[-500:]}
+    except Exception as exc:  # noqa: BLE001 - 超时等也只告警
+        out = {"status": "failed", "window": f"{start}~{end}", "seconds": round(time.monotonic() - t0, 1),
+               "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    if out["status"] != "completed":
+        logger.warning("kpl_list 日更失败 (%s): %s", task_id, out.get("error") or out.get("stderr_tail"))
+        try:
+            from app.core.alerts import emit_alert
+
+            emit_alert("research_cache_refresh_failed", datetime.now().strftime("%Y-%m-%d"),
+                       f"kpl_list 日更失败（{start}~{end}）：{str(out.get('error') or out.get('stderr_tail'))[:200]}")
+        except Exception:  # noqa: BLE001
+            logger.debug("kpl list alert failed", exc_info=True)
     return out
 
 
@@ -638,6 +686,11 @@ def _ensure_rolling_r12_task() -> None:
                         TASK_TYPE_ROLLING_R12, ROLLING_R12_CRON)
 
 
+def _ensure_research_cache_task() -> None:
+    _ensure_simple_task(KPL_LIST_TASK_ID, "研究缓存：开盘啦涨停榜 kpl_list 每交易日增量补齐（22:20，上游发布晚）",
+                        TASK_TYPE_RESEARCH_CACHE_REFRESH, KPL_LIST_CRON)
+
+
 def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
     """任务本身跑完即 completed；红项 / 出票失败 / 巡检失败写进摘要并单独告警，不把业务结果变成任务失败（否则又去扣健康分）。"""
     from app.core.alerts import emit_alert
@@ -911,6 +964,7 @@ def ensure_scheduled_task_registrations() -> None:
     _ensure_strategy_profile_task()
     _ensure_health_snapshot_task()
     _ensure_rolling_r12_task()
+    _ensure_research_cache_task()
 
 
 def _current_code_revision() -> str:
@@ -1035,6 +1089,8 @@ def _execute_task(
                 result = _run_data_health_snapshot(db, payload)
             elif task_type == TASK_TYPE_ROLLING_R12:
                 result = _run_rolling_r12(db, payload)
+            elif task_type == TASK_TYPE_RESEARCH_CACHE_REFRESH:
+                result = _refresh_kpl_list_cache(task_id)
             elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
                 result = _run_intraday_lock_shadow(db, payload)
             elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
@@ -1086,6 +1142,7 @@ def _execute_task(
                 )
         except Exception:
             logger.exception("记录盘后可重试失败状态时出错: %s", task_id)
+        _sync_task_status_alert(task_id, task_run_id, "failed", str(exc))
         raise
     except Exception as e:
         logger.exception("调度任务失败: %s", task_id)
@@ -1102,6 +1159,9 @@ def _execute_task(
                 )
         except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
             logger.warning("_execute_task: ignored non-fatal error: %s", exc)
+        # 抛异常路径此前只落库、不发 task_status 告警：任务连续异常时看板仍显示上一次
+        # 成功状态。与正常返回 failed 的路径保持同一告警语义。
+        _sync_task_status_alert(task_id, task_run_id, "failed", str(e))
     finally:
         db.close()
         _mark_done(task_id)
@@ -2887,12 +2947,13 @@ async def _safety_net_run(db, payload: dict) -> dict:
                 or postclose_task.last_run_at is None
             )
             if not needs_outcome and postclose_task.last_run_at:
-                from datetime import datetime as _dt
-                # last_run_at 超过 1 个交易日（按 25h 估算含隔夜）未跑 → 补 outcome
+                from app.core.time import utcnow_naive
+                # last_run_at 由 finish_task_run 写成 UTC-naive；这里必须用同一时钟，
+                # 否则在 CST 机器上会虚增 8 小时，把「17 小时未跑」误判成 >25h。
                 try:
                     last = postclose_task.last_run_at
                     if hasattr(last, "timestamp"):
-                        age_hours = (_dt.now() - last.replace(tzinfo=None)).total_seconds() / 3600
+                        age_hours = (utcnow_naive() - last.replace(tzinfo=None)).total_seconds() / 3600
                     else:
                         age_hours = 999
                     needs_outcome = age_hours > 25
