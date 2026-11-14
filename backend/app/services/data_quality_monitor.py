@@ -32,6 +32,11 @@ DATA_DIR = BACKEND_ROOT / "data"
 LOG_FILE = BACKEND_ROOT / "logs" / "app.log"
 REPORT_PATH = DATA_DIR / "runtime" / "data_quality_report.json"
 ALERT_KIND = "data_quality"
+# 巡检告警的稳态重复冷却。默认 10 分钟的全局冷却对「每 2 小时一次的巡检」毫无抑制：
+# 同一批红/黄项每轮都重发一条 [ALERT:data_quality] ERROR，9 个坏项一天能刷出几十条，
+# 反过来把 log:error_volume（近 24h ERROR > 30）顶成黄项，黄项又新增一轮告警——自激。
+# 稳态重复项按日级冷却；首次出现、红↔黄状态变化仍然立即告警，不掩盖新增/恶化。
+QUALITY_ALERT_COOLDOWN_SECONDS = float(os.environ.get("ASHARE_QUALITY_ALERT_COOLDOWN_SECONDS", "") or 24 * 3600)
 _CST = timezone(timedelta(hours=8))
 RED, YELLOW, GREEN = "red", "yellow", "green"
 _RANK = {GREEN: 0, YELLOW: 1, RED: 2}
@@ -883,6 +888,18 @@ def last_expected_run(expr: str, now: datetime, open_days: list[str]) -> datetim
 _CRITICAL_TASKS = {"post_sync_formal_recommendation", "postclose_late_data_repair", "formal_run_safety_net",
                    "data_freshness_check_daily", "stock_identity_refresh_daily", "midterm_block_trade_premarket"}
 _MISSED_GRACE_MIN = 120
+# 纯只读巡检作业：自身执行成功，却把「巡检结果有红/黄项」写成 partial_failed。
+# 那些红黄项已经在 db:* / file:* / formal:* 等各自的检查项里计过分了，若这里再算一个 job:*
+# 黄项，就是同一事实扣两次，且会让「红黄项越多 → 作业黄项越多」循环放大。
+# 只对这些作业、且 summary 明确是巡检结果摘要时去重；真正的作业异常（别的 summary）照旧计黄。
+_RESULT_DERIVED_JOBS = {"data_freshness_check_daily", "data_quality_check_morning", "data_quality_check_evening"}
+_RESULT_SUMMARY_RE = re.compile(r"数据质量巡检\s*红\s*\d+\s*/\s*黄\s*\d+\s*/\s*绿\s*\d+")
+
+
+def is_result_derived_partial_failure(task_id: str, status: str, summary: str) -> bool:
+    """巡检作业的 partial_failed 是否只是「下游巡检结果不达标」而非作业本身失败。"""
+    return (status == "partial_failed" and task_id in _RESULT_DERIVED_JOBS
+            and _RESULT_SUMMARY_RE.search(summary or "") is not None)
 
 
 def check_scheduled_tasks(db, open_days: list[str], now: datetime | None = None) -> list[dict[str, Any]]:
@@ -917,11 +934,16 @@ def check_scheduled_tasks(db, open_days: list[str], now: datetime | None = None)
                     streak += 1
                 else:
                     break
-            fail_names = re.search(r"失败数据集[:：]([^）)]+)", summary)
-            msg = f"最近一次 {started:%m-%d %H:%M} 状态 {status}，连续 {streak} 次非成功"
-            msg += f"（失败数据集：{fail_names.group(1)}）" if fail_names else f"：{summary[:140]}"
-            notes.append(msg)
-            sev = _worse(sev, RED if (streak >= 3 and crit and status == "failed") else YELLOW)
+            if is_result_derived_partial_failure(task_id, status, summary):
+                # 保留可观测性：作业状态照实写出来，但不重复计一个黄项。
+                notes.append(f"最近一次 {started:%m-%d %H:%M} 已执行；partial_failed 仅派生自巡检结果"
+                             f"（{summary[:100]}），红黄项已在各自检查项计分，不重复计黄")
+            else:
+                fail_names = re.search(r"失败数据集[:：]([^）)]+)", summary)
+                msg = f"最近一次 {started:%m-%d %H:%M} 状态 {status}，连续 {streak} 次非成功"
+                msg += f"（失败数据集：{fail_names.group(1)}）" if fail_names else f"：{summary[:140]}"
+                notes.append(msg)
+                sev = _worse(sev, RED if (streak >= 3 and crit and status == "failed") else YELLOW)
         out.append(_item(key, f"调度任务 {task_id}", "调度任务", sev, kind="job", latest=f"{started:%Y-%m-%d %H:%M}",
                          expected=(f"{exp:%Y-%m-%d %H:%M}" if exp else None),
                          detail="；".join(notes) or f"最近一次 {started:%m-%d %H:%M} {status}", impact=str(name)))
@@ -1393,9 +1415,15 @@ def sync_alerts(report: dict[str, Any]) -> dict[str, list[str]]:
 
     emitted, resolved = [], []
     bad = {i["key"]: i for i in report["items"] if i["severity"] != GREEN}
+    previous = {str(r["key"]): r for r in active_alert_records(ALERT_KIND)}
     for key, it in bad.items():
         tag = "红" if it["severity"] == RED else "黄"
-        emit_alert(ALERT_KIND, key, f"[{tag}] {it['label']}: {it['detail']}（影响：{it['impact']}）"[:480])
+        prev_msg = str((previous.get(key) or {}).get("message") or "")
+        prev_tag = "红" if prev_msg.startswith("[红]") else ("黄" if prev_msg.startswith("[黄]") else None)
+        # 首次出现 / 严重度变化（含恢复前再次恶化）立即告警；否则按日级冷却抑制重复 ERROR。
+        cooldown = 0.0 if prev_tag != tag else QUALITY_ALERT_COOLDOWN_SECONDS
+        emit_alert(ALERT_KIND, key, f"[{tag}] {it['label']}: {it['detail']}（影响：{it['impact']}）"[:480],
+                   cooldown=cooldown)
         emitted.append(key)
     for rec in active_alert_records(ALERT_KIND):
         k = str(rec["key"])

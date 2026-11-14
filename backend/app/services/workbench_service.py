@@ -626,6 +626,29 @@ def _prepare_workbench_run(
     return params, request, selected_skills, execution_version, execution_audit
 
 
+def fail_orphaned_queued_run(db, repository, run_id: str, reason: str) -> bool:
+    """把「已落库但没能派发给 worker」的 queued run 收尾为 failed。
+
+    只走 RunCoordinator.spawn_failed（状态机 + CAS，不会误伤已被 worker 接管的 run）；
+    收尾失败只记日志，绝不掩盖调用方原本的派发异常。
+    """
+    try:
+        ok = RunCoordinator(repository).spawn_failed(
+            run_id, now=datetime.now(timezone.utc).replace(tzinfo=None), message=reason[:500])
+        if ok:
+            db.commit()
+        else:
+            db.rollback()
+        return bool(ok)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("queued run %s 收尾失败: %r", run_id, exc)
+        try:
+            db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        return False
+
+
 def enqueue_workbench_run(
     db: Session,
     payload: dict[str, Any],
@@ -671,7 +694,16 @@ def enqueue_workbench_run(
     db.commit()
     invalidate_bootstrap_cache()
     if dispatch:
-        _trigger_recommendation(run_id)
+        try:
+            _trigger_recommendation(run_id)
+        except Exception as exc:
+            # run 已经在上面 commit 成 queued。Prefect 触发失败若把这条 queued 留在库里，
+            # 补跑/安全网的 inflight 检查会永远认为「有在途任务」而跳过出票
+            # （2026-11-15 实测：一次配置漂移留下 5 个孤儿，堵死 11-13 补跑）。
+            # 用既有状态机把「worker 尚未接管」的 queued run 收尾为 failed，保留审计痕迹。
+            fail_orphaned_queued_run(db, repository, run_id,
+                                     f"orchestration trigger failed: {type(exc).__name__}: {exc}")
+            raise
     return {
         "run": _serialize_run_summary(db, run),
         "recommendations": [],

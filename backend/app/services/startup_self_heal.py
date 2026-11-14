@@ -18,8 +18,11 @@
    已有完整数据的日期不动，避免每次开机都重刷上游。
 3. 库表补齐后再刷新文件数据集（库 → parquet 增量导出），最后清掉诊断缓存，
    让 readiness 闸门与页面健康分立刻看到新数据。
-4. 正式出票缺口**只归档、不伪造**：实盘出票错过就是错过，不能补记为
-   live_forward。归档结果供复盘与出票成功率趋势使用。
+4. 正式出票缺口先归档（复盘用），再在**入场日 09:15 之前**且库表已补齐时，
+   复用 21:00 既有的幂等补跑流程（自带健康闸门 / 在途检查 / 缺策略检查）真正把票补出来；
+   该窗口内生成的票按系统既有口径仍记 live_forward，过了窗口就绝不补造。
+   2026-11-13 实测：机器离线让 17:35 主流水线没启动，19:30 watchdog 只告警，
+   21:00 与次日 08:30 补跑又被健康闸门拦下，自愈补齐库表后没有任何环节再触发，漏票一直挂着。
 
 所有动作彼此隔离（单个失败不影响其余），结果写
 `data/runtime/startup_self_heal.json`（保留最近 20 次），并带最小间隔防抖。
@@ -32,7 +35,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -505,6 +508,72 @@ def _archive_output_gaps(db: Session, days: list[str], now: datetime) -> dict[st
     return out
 
 
+def repick_enabled() -> bool:
+    """漏出票自动补跑总开关（默认开，可用环境变量关掉做人工兜底）。"""
+    return os.environ.get("ASHARE_SELF_HEAL_REPICK_ENABLED", "1").strip().lower() not in ("0", "false", "off", "no")
+
+
+def _under_pytest() -> bool:
+    return bool(os.environ.get("PYTEST_CURRENT_TEST"))
+
+
+def _try_repick_missed_output(db: Session, days: list[str], now: datetime,
+                               remaining_gaps: dict[str, list[str]]) -> dict[str, Any]:
+    """库表补齐后，重试一次正式出票补跑。只读判定 + 复用既有幂等流程，不新造出票口径。
+
+    前置条件全部满足才调用 ``scheduler_service._late_repair_repick``：最近交易日仍缺票、
+    还在入场日 09:15 之前、核心表缺口已清零、没有在途 formal run、健康闸门通过
+    （后三项由被复用的流程自己再查一遍）。pytest 下直接跳过，避免单测误触发生产出票。
+    """
+    if not days:
+        return {"status": "skipped", "reason": "no_trade_day"}
+    if _under_pytest():
+        return {"status": "skipped", "reason": "pytest"}
+    if not repick_enabled():
+        return {"status": "skipped", "reason": "disabled"}
+    if remaining_gaps:
+        return {"status": "skipped", "reason": "data_gaps_remain", "gaps": sorted(remaining_gaps)}
+    trade_date = days[-1]
+    try:
+        from app.services.daily_output_check import daily_output_status
+        from app.services.midterm_live_seal import generated_before_entry_open
+
+        if not generated_before_entry_open(trade_date, datetime.now(timezone.utc)):
+            return {"status": "skipped", "reason": "past_entry_open", "trade_date": trade_date}
+        st = daily_output_status(db, trade_date, now=now.replace(tzinfo=None))
+        if st.get("ok"):
+            return {"status": "skipped", "reason": "already_completed", "trade_date": trade_date}
+    except Exception as exc:  # noqa: BLE001 - 前置判定失败不阻塞自愈其余动作
+        _safe_rollback(db)
+        return {"status": "skipped", "reason": "precheck_error",
+                "error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        pass
+    else:
+        # 自愈守护跑在后台线程（无 loop），这里只防「将来有人在 async 上下文直接调用」。
+        return {"status": "skipped", "reason": "running_event_loop", "trade_date": trade_date}
+
+    t = time.monotonic()
+    try:
+        from app.services.scheduler_service import _late_repair_repick
+
+        out = asyncio.run(_late_repair_repick(db, "startup_self_heal_repick"))
+        res = {"status": str(out.get("status") or "unknown"), "trade_date": out.get("trade_date") or trade_date,
+               "reason": out.get("reason"), "blockers": out.get("blockers"),
+               "seconds": round(time.monotonic() - t, 1)}
+        logger.info("self_heal: 漏出票补跑 %s status=%s reason=%s (%.1fs)",
+                    trade_date, res["status"], res["reason"], res["seconds"])
+        return res
+    except Exception as exc:  # noqa: BLE001 - 补跑失败只记录，不拖垮自愈
+        _safe_rollback(db)
+        logger.warning("self_heal: 漏出票补跑失败 %s: %r", trade_date, exc)
+        return {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+
+
 def _load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {"runs": []}
@@ -628,6 +697,9 @@ def run_self_heal(
     result["status"] = "completed" if not result["remaining_gaps"] else "partial"
     if result["remaining_gaps"]:
         result["unrepaired"] = _emit_unrepaired_alert(result["remaining_gaps"], result["run_at"])
+    # 数据补齐后再触发一次漏出票补跑：此前 21:00 / 08:30 的补跑可能被健康闸门拦下，
+    # 而闸门恢复（正是本轮自愈做的事）之后没有任何环节会重试，漏票就一直挂到下一交易日。
+    result["output_repick"] = _try_repick_missed_output(db, days, now, result["remaining_gaps"])
     result["seconds"] = round(time.monotonic() - t0, 2)
     try:
         _save_state(path, result)

@@ -66,3 +66,28 @@ launchd 直接写文件的日志（`~/Library/Logs/ashare-*.log` 等）无法 re
 （命令：`cd backend && PYTHONPATH=. .venv/bin/python scripts/backfill_chip_dates.py 2026-07-30 2026-08-25 2026-08-31 2026-09-09`）。
 只在 10-27 的 09:00–16:25 启动；额度没恢复就 20 分钟后重试，最多 3 次；跑完自我卸载（plist 改名 .done）。日志 `~/Library/Logs/ashare-chip-oneshot-20261027.log`。
 > 2026-10-26 更新：4 个筹码空洞日已于 15:4x 通过 teajoin（cyq_perf 兜底）提前补完，上面的一次性任务已取消（plist 改名 .cancelled）。
+
+## Prefect 数据库体积（2026-11-15 巡检）
+
+`~/.prefect/prefect.db` 现约 451MB。历史高峰 825MB：stale-run-recovery / 盘中锁利轮询每 5 分钟各产生一条
+flow run，07-30～10-10 积了约 1.9 万条。治理已落在 `backend/scripts/run_prefect_server.py`：
+
+- `PREFECT_SERVER_SERVICES_DB_VACUUM_ENABLED=events,flow_runs`：启用 Prefect 3 内建的
+  `db_vacuum` perpetual service（默认只有 `events`，flow run 历史会永久保留）。
+- `PREFECT_SERVER_SERVICES_DB_VACUUM_RETENTION_PERIOD=2592000`（30 天）：只删
+  `end_time` 早于保留期、已终态、且非子任务的 flow run，连带清 logs / artifacts，分批 200 条、每小时一轮。
+  events 另按 `server.events.retention_period`（默认 7 天）清理。业务侧执行记录在 MySQL
+  `scheduled_task_runs`，不受影响。
+- 环境变量由 launcher 在 Python 进程内注入（`env={**defaults, **os.environ}`），**launchd plist 里看不到**，
+  排查时别据此判定「没配」。校验：`PREFECT_SERVER_SERVICES_DB_VACUUM_ENABLED=events,flow_runs \
+  .venv/bin/python -c "from prefect.settings import get_current_settings as g; print(g().server.services.db_vacuum.enabled_vacuum_types)"`。
+
+**DELETE 不会缩小 SQLite 文件**：删完留下空闲页由后续写入复用，`auto_vacuum=0` 时文件仍是旧体积。
+2026-11-15 实测 `page_count=115362`、`freelist_count=17357`（约 71MB / 15%）。要物理回收必须停 server 后：
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.wangao.ashare-prefect-server   # 或先 bootout，见上方 GUI 会话坑
+sqlite3 ~/.prefect/prefect.db "PRAGMA wal_checkpoint(TRUNCATE); VACUUM;"
+```
+
+不把 VACUUM 挂成自动任务：它需要独占锁，与常驻 server 的持续写冲突，停机窗口的收益小于风险。

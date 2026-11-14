@@ -43,6 +43,11 @@ DEFAULT_COVERAGE_DROP = 0.05
 BASELINE_DAYS = 5
 # 补完仍低于中位数的这个比例，说明上游当日还没全量发布，必须留在待补清单里次日重试。
 _INCOMPLETE_COVERAGE_FLOOR = 0.8
+# 上游当日未全量发布时（实测 2026-11-13 promax 与东财都只给 2019/4485 行），每 2 小时的
+# 自愈轮次会重复打同一个 WARNING、重复请求同一个上游。连续 N 次 incomplete 且库内行数
+# 毫无变化，说明上游还没发布，先退避 12 小时；行数一旦变化立即恢复正常重试。
+_INCOMPLETE_BACKOFF_ATTEMPTS = 4
+_INCOMPLETE_BACKOFF_SECONDS = 12 * 3600
 _VALUE_FIELDS = ("rzye", "rqye", "rzmre", "rzche", "rzrqye", "rqyl")
 _FILE_LOCK = threading.Lock()
 
@@ -189,6 +194,33 @@ def _append_provenance(record: dict[str, Any]) -> None:
         logger.warning("margin_detail_fill provenance write failed", exc_info=True)
 
 
+def _backoff_active(trade_date: str, now: datetime | None = None) -> bool:
+    """该日是否处于「上游连续未发布全量」的退避窗口。纯读 provenance，失败一律不误退避。"""
+    try:
+        lines = (runtime_dir() / "margin_fill_provenance.jsonl").read_text(encoding="utf-8").splitlines()[-300:]
+    except OSError:
+        return False
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if _iso(rec.get("trade_date") or "") == trade_date:
+            rows.append(rec)
+    tail = [r for r in rows[-_INCOMPLETE_BACKOFF_ATTEMPTS:] if r.get("status") == "incomplete"]
+    if len(tail) < _INCOMPLETE_BACKOFF_ATTEMPTS:
+        return False
+    if len({r.get("rows_after") for r in tail}) != 1:
+        return False  # 行数在变 = 上游正在陆续发布，不能退避
+    try:
+        last = datetime.fromisoformat(str(tail[-1].get("ts") or ""))
+        ref = (now or datetime.now()).replace(tzinfo=None)
+        return (ref - last.replace(tzinfo=None)).total_seconds() < _INCOMPLETE_BACKOFF_SECONDS
+    except (ValueError, TypeError):
+        return False
+
+
 def _default_fetch(trade_date: str) -> list[dict[str, Any]]:
     from app.services.datasource.eastmoney import _call, fetch_margin_detail
 
@@ -299,7 +331,13 @@ def run_margin_detail_fill(
             select(MarginDetail.trade_date).where(MarginDetail.trade_date <= upper)
             .group_by(MarginDetail.trade_date).order_by(MarginDetail.trade_date.desc()).limit(lookback_days)
         )]
-        for d in sorted(set(recent) | set(load_pending())):
+        pending = set(load_pending())
+        result["backoffed"] = []
+        for d in sorted(set(recent) | pending):
+            if d in pending and _backoff_active(d, now):
+                result["backoffed"].append(d)
+                logger.info("margin_detail_fill td=%s 上游连续未发布全量，退避一次重试", d)
+                continue
             result["days"].append(fill_margin_day(db, d, fetch=fetch, now=now))
     except Exception as exc:  # noqa: BLE001
         logger.warning("margin_detail_fill run failed: %s", exc, exc_info=True)
