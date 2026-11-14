@@ -719,9 +719,37 @@ def check_xiaoshi_min_all(open_days: list[str], expected: str, now: datetime | N
               f"（{'%.0f 小时前' % age_h if age_h is not None else '未知'}，下载 {run.get('downloaded')}，错误 {errs}）")
     if errs:
         sev = _worse(sev, YELLOW)
-    return _item(key, label, "文件数据集", cap_severity(sev, YELLOW), kind="file", latest=mx, expected=expected, lag=lag,
+    # 同步日志里的 fatal 是「上游不可达」，不是「本地漏跑」。此前巡检只显示滞后天数 +
+    # 「另一补数任务建设中」，让人误以为补个任务就能好；实际 2026-11-12 起小石
+    # /api/v3/history/catalog 连续多日返回失败，本地做什么都补不回，必须显式暴露。
+    upstream_error = _xiaoshi_last_sync_error(st.parent / "sync.log")
+    item = _item(key, label, "文件数据集", cap_severity(sev, YELLOW), kind="file", latest=mx, expected=expected, lag=lag,
                  detail=detail + "（临时阈值：另一补数任务回补/每日增量建设中，待其完成后复核）",
                  impact="追龙/连板研究的全市场分钟线（小石只保留最近约3个月，需每日增量保存）", provisional=True)
+    if upstream_error:
+        item["upstream_error"] = upstream_error
+        item["detail"] += (f"；**上游同步失败**：{upstream_error}（本地无法补，"
+                           "需上游恢复后重跑 scripts/sync_xiaoshi_min_all.py）")
+    return item
+
+
+def _xiaoshi_last_sync_error(log_path: Path) -> str | None:
+    """读 sync.log 最近 10 行，返回最近一条失败摘要；文件不存在/损坏时返回 None。"""
+    try:
+        lines = [x for x in log_path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    except (OSError, UnicodeError):
+        return None
+    for raw in reversed(lines[-10:]):
+        try:
+            row = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        fatal = str(row.get("fatal") or "").strip()
+        if fatal:
+            return f"{row.get('ts', '?')} {fatal[:160]}"
+        if int(row.get("errors") or 0) > 0:
+            return f"{row.get('ts', '?')} 同步有 {row['errors']} 个文件下载失败"
+    return None
 
 
 def check_capability_matrix(now: datetime | None = None, path: Path | None = None) -> dict[str, Any]:

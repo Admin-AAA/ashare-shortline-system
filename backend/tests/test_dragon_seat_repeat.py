@@ -25,6 +25,7 @@ def test_real_seat_amounts_reconcile_and_unknown_sides_remain_unknown():
 
 
 @pytest.mark.integration
+@pytest.mark.requires_market_data
 def test_real_signals_are_point_in_time_and_artifact_metrics_reconcile():
     artifact = json.loads((ROOT / "output/dragon-seat-repeat-metrics-2026-09-22.json").read_text())
     assert artifact["caliber"]["output_count"] == 6

@@ -11,6 +11,7 @@ from scripts.research_limit_up_benchmark import CONFIG_PATH, attach_labels, load
 
 
 @pytest.mark.integration
+@pytest.mark.requires_market_data
 def test_real_history_patterns_are_causal_and_labels_use_next_day():
     frame, _ = load_frame("2025-01-01", "2025-03-31", ["000737", "600789", "002300"])
     calendar = sorted(frame.trade_date.unique())

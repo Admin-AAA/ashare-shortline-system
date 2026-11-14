@@ -9,7 +9,14 @@ from app.services import strategy_rank as sr
 TODAY = dt.date(2026, 10, 25)
 
 
-def _strat(sid, n=100, avg=2.0, tot=10.0, mdd=-10.0, phases=None, window="2025-10-01~2026-10-16", n3=None):
+def _strat(sid, n=100, avg=2.0, tot=10.0, mdd=-10.0, phases=None, window=None, n3=None):
+    # 窗口必须相对「真实今天」生成：rank_horizon_strategies 用 dt.date.today() 判 stale，
+    # 曾把窗口写死成 ~2026-10-16，21 天后两个策略全被标 stale_data 沉底、保持原序，
+    # 让「hi 应排在 lo 前」的断言随时间自动失败（2026-11-14 实测）。
+    # 需要验证过期行为的用例仍然显式传 window=，不受影响。
+    if window is None:
+        end = dt.date.today() - dt.timedelta(days=3)
+        window = f"{(end - dt.timedelta(days=380)).isoformat()}~{end.isoformat()}"
     ph = phases if phases is not None else {"P19 2019": {"avg": 1.0}, "R12 2025-10~2026-10": {"avg": avg}}
     if n3 is not None:
         ph = {**ph, "N3 2024-01~2026-10": {"avg": n3}}

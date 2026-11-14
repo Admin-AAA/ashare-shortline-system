@@ -65,6 +65,25 @@ _CORE_DAILY_TABLES: tuple[tuple[str, int], ...] = (
     ("minute_kbars", 1000),
 )
 
+# 「能检测」不等于「能补回」。2026-11-14 审计：remediate_data_health_gaps 用的是
+# 逻辑数据集名（daily_kbar/index_daily/news…），而 scan_gaps 用的是物理表名，
+# 两条清单并不重合。把每个核心物理表的补数归属写死在这里，避免出现
+# 「每轮都报缺口、却没有任何动作负责补」的静默盲区。
+_REMEDIABLE_VIA_DIAGNOSIS: frozenset[str] = frozenset({
+    "daily_kbars", "index_daily", "limit_up_board", "capital_flow",
+    "concept_sector", "concept_sector_stock", "dragon_tiger", "minute_kbars",
+})
+# 这三张走各自专门的幂等动作（daily_basic_ingest / stk_limit 窗口 / auction 直连脚本）
+_DEDICATED_ACTIONS: frozenset[str] = frozenset({"daily_basic", "stk_limits", "auction_data"})
+# 盘中实时快照含无法从日K还原的时点字段，历史缺口一律不自动组装：
+# 伪造一份「看起来像真的」快照会污染正式选股链路与 PIT 证据，只告警并给修复入口。
+_NO_AUTO_REPAIR: frozenset[str] = frozenset({"stock_quotes"})
+_NO_AUTO_REPAIR_HINT = (
+    "stock_quotes 是盘中实时快照，历史日无法由日K无损还原；"
+    "请按目标交易日人工重建（脚本 scripts/repair_snapshot_day.py，带 --dry-run），"
+    "或在下一次正常盘后刷新中确认已恢复"
+)
+
 _daemon_started = False
 _daemon_lock = threading.Lock()
 
@@ -247,17 +266,27 @@ def _act_survey_margin(db: Session, days: list[str], gaps: dict[str, list[str]])
     return out
 
 
+def _gap_tables(gaps: dict[str, list[str]]) -> set[str]:
+    return {t for tables in gaps.values() for t in tables}
+
+
+def _gap_days_for(gaps: dict[str, list[str]], table: str) -> list[str]:
+    return sorted(d for d, tables in gaps.items() if table in tables)
+
+
 def _act_remediate(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
     """诊断驱动的补数：覆盖日K / 指数 / 涨停板 / 概念成分 / 新闻等最近 10 个交易日缺口。
 
-    只在扫描发现缺口时调用；否则冷诊断 + 计划构建纯属浪费（约 20 秒起）。
+    只在缺口里确实有本入口能补的表时调用；否则冷诊断 + 计划构建纯属浪费（约 20 秒起），
+    而且会掩盖「缺口补不回」这个事实。
     """
-    if not gaps:
-        return {"status": "skipped", "reason": "库表无缺口"}
+    targets = _gap_tables(gaps) & _REMEDIABLE_VIA_DIAGNOSIS
+    if not targets:
+        return {"status": "skipped", "reason": f"无本入口可补的表（缺口表={sorted(_gap_tables(gaps))}）"}
     from app.services.data_gap_remediation_service import remediate_data_health_gaps
 
     result = remediate_data_health_gaps(db, post_diagnosis=False)
-    return {"status": "completed",
+    return {"status": "completed", "target_tables": sorted(targets),
             "plan_count": len(result.get("actions") or result.get("plan") or []),
             "remediation_status": result.get("status")}
 
@@ -312,6 +341,51 @@ def _act_limit_list_d(db: Session, days: list[str], gaps: dict[str, list[str]]) 
                 "stdout_tail": (proc.stdout or "")[-500:], "stderr_tail": (proc.stderr or "")[-300:]}
     except Exception as exc:  # noqa: BLE001
         return {"status": "failed", "window": f"{start}~{end}",
+                "seconds": round(time.monotonic() - t0, 1),
+                "error": f"{type(exc).__name__}: {str(exc)[:180]}"}
+
+
+def _act_stk_limits(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    """stk_limits 不在 remediate_data_health_gaps 的逻辑表清单里，但有现成的按日幂等回填。"""
+    targets = _gap_days_for(gaps, "stk_limits")
+    if not targets:
+        return {"status": "skipped", "reason": "stk_limits 无缺口"}
+    from app.services.scheduler_service import _backfill_stk_limit_window
+
+    out = _backfill_stk_limit_window(db, reference_trade_date=targets[-1],
+                                     window_days=max(1, len(days)))
+    rows = out.get("backfilled_dates") or []
+    done = [r for r in rows if r.get("status") == "success"]
+    return {"status": "completed" if done else "failed", "target_days": targets,
+            "backfilled": {r.get("trade_date"): r.get("count") for r in done},
+            "unfilled": [r for r in rows if r.get("status") != "success"]}
+
+
+def _act_auction_data(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    """auction_data 同样不在诊断补数清单里；直连脚本按交易日删当日再插，天然幂等。"""
+    import subprocess
+    import sys
+
+    targets = _gap_days_for(gaps, "auction_data")
+    if not targets:
+        return {"status": "skipped", "reason": "auction_data 无缺口"}
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"status": "skipped", "reason": "pytest"}
+    backend = Path(__file__).resolve().parents[2]
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(
+        p for p in (str(backend), os.environ.get("PYTHONPATH", "")) if p)}
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(
+            [sys.executable, "scripts/backfill_auction_direct.py",
+             "--start", targets[0], "--end", targets[-1]],
+            cwd=str(backend), env=env, capture_output=True, text=True, timeout=900, check=False,
+        )
+        return {"status": "completed" if proc.returncode == 0 else "failed",
+                "target_days": targets, "seconds": round(time.monotonic() - t0, 1),
+                "stdout_tail": (proc.stdout or "")[-400:], "stderr_tail": (proc.stderr or "")[-300:]}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "failed", "target_days": targets,
                 "seconds": round(time.monotonic() - t0, 1),
                 "error": f"{type(exc).__name__}: {str(exc)[:180]}"}
 
@@ -404,6 +478,8 @@ _ACTIONS: tuple[tuple[str, Callable[[Session, list[str], dict[str, list[str]]], 
     ("kpl_list_cache", _act_kpl_list),
     ("limit_list_d_cache", _act_limit_list_d),
     ("event_parquets", _act_event_parquets),
+    ("stk_limits", _act_stk_limits),
+    ("auction_data", _act_auction_data),
 )
 
 
@@ -468,6 +544,26 @@ def archived_output_miss(trade_date: str) -> str | None:
     return None
 
 
+def _emit_unrepaired_alert(remaining: dict[str, list[str]], run_at: str) -> dict[str, Any]:
+    """补完后仍有缺口时显式告警，别让「每轮都报、永远没人管」变成静默常态。"""
+    blocked = sorted(_gap_tables(remaining) & _NO_AUTO_REPAIR)
+    info: dict[str, Any] = {"days": sorted(remaining),
+                            "tables": sorted(_gap_tables(remaining)),
+                            "no_auto_repair_tables": blocked,
+                            "hint": _NO_AUTO_REPAIR_HINT if blocked else None}
+    try:
+        from app.core import alerts
+
+        msg = (f"开机自愈 {run_at} 后仍有 {len(remaining)} 个交易日库表缺口："
+               f"{json.dumps(remaining, ensure_ascii=False)[:600]}；涉及表 {info['tables']}。"
+               + (f"其中 {blocked} 不支持自动补回：{_NO_AUTO_REPAIR_HINT}" if blocked else ""))
+        info["alerted"] = bool(alerts.emit_alert("data_health", "self_heal_unrepaired", msg))
+    except Exception:  # noqa: BLE001 - 告警失败不影响自愈本身
+        logger.debug("self_heal: 未修复缺口告警失败", exc_info=True)
+        info["alerted"] = False
+    return info
+
+
 def run_self_heal(
     db: Session,
     *,
@@ -529,6 +625,8 @@ def run_self_heal(
     # 复扫一次，把补完后仍缺的表记下来，下一轮开机继续补（不靠人工发现）。
     result["remaining_gaps"] = scan_gaps(db, days) if days else {}
     result["status"] = "completed" if not result["remaining_gaps"] else "partial"
+    if result["remaining_gaps"]:
+        result["unrepaired"] = _emit_unrepaired_alert(result["remaining_gaps"], result["run_at"])
     result["seconds"] = round(time.monotonic() - t0, 2)
     try:
         _save_state(path, result)

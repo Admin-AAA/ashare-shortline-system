@@ -177,6 +177,8 @@ def _get_session():
         pytest.skip(f"MySQL 不可达: {e}")
 
 
+@pytest.mark.integration
+@pytest.mark.requires_market_data
 def test_integration_runs_and_no_future_func():
     """回测可复现、结构正确、信号过滤正确、分桶完整（不锁胜率）。"""
     session = _get_session()

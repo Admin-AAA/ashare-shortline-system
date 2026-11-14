@@ -91,6 +91,76 @@ def test_run_self_heal_debounces_when_previous_run_was_clean(state_file, monkeyp
     assert "距上次自愈" in out["reason"]
 
 
+def test_every_core_table_has_a_declared_repair_owner():
+    """静态护栏：新增核心表却没配补数归属时，测试必须失败。
+
+    scan_gaps 会检测 12 张物理表；如果某张表既不在诊断补数清单、也没有专门动作、
+    又没被显式登记为「不可自动补回」，它就会变成每轮报缺口却没人负责的静默盲区。
+    """
+    owners = sh._REMEDIABLE_VIA_DIAGNOSIS | sh._DEDICATED_ACTIONS | sh._NO_AUTO_REPAIR
+    core = {t for t, _ in sh._CORE_DAILY_TABLES}
+    assert core <= owners, f"未登记补数归属的核心表：{sorted(core - owners)}"
+    assert not (sh._REMEDIABLE_VIA_DIAGNOSIS & sh._DEDICATED_ACTIONS)
+    assert not (sh._DEDICATED_ACTIONS & sh._NO_AUTO_REPAIR)
+    assert any(name == "stk_limits" for name, _ in sh._ACTIONS)
+    assert any(name == "auction_data" for name, _ in sh._ACTIONS)
+
+
+def test_remediate_skips_when_only_unrepairable_table_is_missing(monkeypatch):
+    """只有 stock_quotes 缺口时别白跑一次昂贵的冷诊断，也不能伪造快照。"""
+    called = []
+    monkeypatch.setattr("app.services.data_gap_remediation_service.remediate_data_health_gaps",
+                        lambda *a, **k: called.append(1) or {"status": "ok"})
+    gaps = {"2026-11-13": ["stock_quotes"]}
+    out = sh._act_remediate(object(), ["2026-11-13"], gaps)
+    assert out["status"] == "skipped" and called == []
+    # 专门动作只对各自负责的表出手
+    assert sh._act_stk_limits(object(), ["2026-11-13"], gaps)["status"] == "skipped"
+    assert sh._act_auction_data(object(), ["2026-11-13"], gaps)["status"] == "skipped"
+
+
+def test_dedicated_actions_target_only_their_gap_days(monkeypatch):
+    monkeypatch.setattr("app.services.scheduler_service._backfill_stk_limit_window",
+                        lambda db, **k: {"backfilled_dates": [
+                            {"trade_date": "2026-11-12", "status": "success", "count": 5500},
+                            {"trade_date": "2026-11-13", "status": "success", "count": 5501}]})
+    gaps = {"2026-11-12": ["stk_limits"], "2026-11-13": ["stk_limits", "daily_basic"]}
+    out = sh._act_stk_limits(object(), ["2026-11-12", "2026-11-13"], gaps)
+    assert out["status"] == "completed" and out["target_days"] == ["2026-11-12", "2026-11-13"]
+    assert out["backfilled"]["2026-11-13"] == 5501
+
+
+def test_fault_injection_repaired_gap_is_clean(state_file, monkeypatch):
+    """故障注入：某日核心表缺失 → 动作跑完 → 复扫归零 → completed 且不告警。"""
+    calls = _no_actions(monkeypatch)
+    scans = [{"2026-11-13": ["index_daily"]}, {}]
+    monkeypatch.setattr(sh, "scan_gaps", lambda db, days: scans.pop(0))
+    monkeypatch.setattr("app.core.alerts.emit_alert",
+                        lambda *a, **k: pytest.fail("缺口已修复，不应告警"))
+    out = sh.run_self_heal(object(), now=datetime(2026, 11, 14, 18, 45))
+    assert calls == ["a", "b", "c"]
+    assert out["status"] == "completed" and out["remaining_gaps"] == {}
+    assert out["gaps"] == {"2026-11-13": ["index_daily"]}
+
+
+def test_fault_injection_unrepaired_gap_alerts_without_faking_snapshot(state_file, monkeypatch):
+    """补不回的缺口必须显式告警；快照类缺口不得被自动组装成看起来像真的数据。"""
+    _no_actions(monkeypatch)
+    monkeypatch.setattr(sh, "scan_gaps",
+                        lambda db, days: {"2026-11-13": ["stock_quotes"]})
+    alerts: list[tuple] = []
+    monkeypatch.setattr("app.core.alerts.emit_alert",
+                        lambda *a, **k: alerts.append(a) or True)
+    out = sh.run_self_heal(object(), now=datetime(2026, 11, 14, 18, 45))
+    assert out["status"] == "partial"
+    assert alerts and alerts[0][1] == "self_heal_unrepaired"
+    assert "stock_quotes" in alerts[0][2]
+    assert out["unrepaired"]["no_auto_repair_tables"] == ["stock_quotes"]
+    assert out["unrepaired"]["alerted"] is True
+    # 动作清单里没有任何「自动补快照」的动作
+    assert not any("quote" in name or "snapshot" in name for name in out["actions"])
+
+
 def test_event_parquets_only_refresh_when_stale(monkeypatch):
     """事件 parquet 有日更动作，但新鲜时不得打上游。"""
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
