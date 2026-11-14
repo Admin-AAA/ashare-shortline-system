@@ -91,6 +91,28 @@ def test_run_self_heal_debounces_when_previous_run_was_clean(state_file, monkeyp
     assert "距上次自愈" in out["reason"]
 
 
+def test_event_parquets_only_refresh_when_stale(monkeypatch):
+    """事件 parquet 有日更动作，但新鲜时不得打上游。"""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    assert any(name == "event_parquets" for name, _ in sh._ACTIONS)
+
+    monkeypatch.setattr(sh, "_event_parquet_latest",
+                        lambda year: {"holdertrade_in": "20261113", "holdertrade_de": "20261113"})
+    fresh = sh._act_event_parquets(object(), ["2026-11-12", "2026-11-13"], {})
+    assert fresh["status"] == "skipped" and "已新鲜" in fresh["reason"]
+
+    # 滞后超过门槛时应当真正触发；这里把子进程替换掉，只验证会走取数分支
+    calls: list[list[str]] = []
+    monkeypatch.setattr(sh, "_event_parquet_latest",
+                        lambda year: {"holdertrade_in": "20261105", "holdertrade_de": "20261105"})
+    monkeypatch.setattr("subprocess.run", lambda cmd, **kw: (
+        calls.append(cmd) or type("P", (), {"returncode": 0, "stdout": "", "stderr": ""})()))
+    out = sh._act_event_parquets(object(), ["2026-11-12", "2026-11-13"], {})
+    assert out["status"] == "completed"
+    assert calls and calls[0][-2:] == ["events", "events_de"]
+    assert set(out["before"]) == {"holdertrade_in", "holdertrade_de"}
+
+
 def test_output_gaps_are_archived_but_no_ticket_is_created(state_file, monkeypatch):
     """实盘出票错过无法事后补记为 live_forward：自愈只归档事实，不创建 run。"""
     _no_actions(monkeypatch)

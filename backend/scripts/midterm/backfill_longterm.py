@@ -116,7 +116,7 @@ def per_code_stage(pro, db, s, key, api, outdir, to_mysql=False):
         if not _per_code_pass(pro, db, s, key, api, outdir, to_mysql): break
 
 def _per_code_pass(pro, db, s, key, api, outdir, to_mysql):
-    done = set(s.get(key, [])); (D / outdir).mkdir(exist_ok=True)
+    done = set(s.get(key, [])); (D / outdir).mkdir(parents=True, exist_ok=True)
     todo = [c for c in codes(db) if c not in done]
     for n, c in enumerate(todo):
         kw = {"ts_code": ts(c)}
@@ -189,7 +189,7 @@ def events_stage(pro, s, start="20170701", specs=EVENTS_SPECS, passes=1, pass_wa
     return left
 
 def _events_pass(pro, s, start, specs, window_sleep):
-    out = D / "events"; out.mkdir(exist_ok=True)
+    out = D / "events"; out.mkdir(parents=True, exist_ok=True)
     today = dt.date.today(); left = 0
     # holdertrade: increases only (trade_type=IN) -- far fewer rows than DE, so monthly windows fit under the row cap
     for api, name, step, cap, extra in specs:

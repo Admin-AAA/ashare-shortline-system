@@ -316,6 +316,83 @@ def _act_limit_list_d(db: Session, days: list[str], gaps: dict[str, list[str]]) 
                 "error": f"{type(exc).__name__}: {str(exc)[:180]}"}
 
 
+_EVENT_PARQUET_STALE_DAYS = 3
+_EVENT_BACKFILL_TIMEOUT_SECONDS = 900
+
+
+def _event_parquet_latest(year: str) -> dict[str, str | None]:
+    """读当年增减持事件 parquet 的最新公告日期（YYYYMMDD）。读不到视为缺失。"""
+    import pandas as pd
+
+    base = Path(__file__).resolve().parents[2] / "data" / "midterm" / "events"
+    out: dict[str, str | None] = {}
+    for name in ("holdertrade_in", "holdertrade_de"):
+        f = base / f"{name}_{year}.parquet"
+        try:
+            s = pd.read_parquet(f, columns=["ann_date"])["ann_date"].astype(str)
+            # ann_date 在不同批次里可能是 '20261105' / '2026-11-05' / 数值型，统一成 8 位数字
+            s = s.str.replace(r"\D", "", regex=True).str[:8]
+            s = s[s.str.len() == 8]
+            out[name] = str(s.max()) if len(s) else None
+        except Exception:  # noqa: BLE001 - 文件缺失/损坏都按「需补」处理
+            out[name] = None
+    return out
+
+
+def _act_event_parquets(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    """增减持/回购事件 parquet 增量日更。
+
+    这两个事件集由 `scripts/midterm/backfill_longterm.py` 从 Tushare 按窗口拉取，
+    但此前**没有任何日更调度**（只在 10 月人工全量回填过一次），所以每天都会挂一条
+    「最新事件日期滞后 N 天」的巡检黄项。脚本自带按窗口的断点状态，重复执行只会
+    拉最近未覆盖的窗口，适合放进自愈；这里再加滞后门槛，避免每次开机都打上游。
+    """
+    import subprocess
+    import sys
+
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"status": "skipped", "reason": "pytest"}
+    if not days:
+        return {"status": "skipped", "reason": "无交易日"}
+    year = days[-1][:4]
+    expected = datetime.fromisoformat(days[-1])
+    def _is_stale(v: str | None) -> bool:
+        if not v:
+            return True
+        try:
+            return datetime.strptime(v, "%Y%m%d") < expected - timedelta(days=_EVENT_PARQUET_STALE_DAYS)
+        except ValueError:
+            return True
+
+    before = _event_parquet_latest(year)
+    stale = {k: v for k, v in before.items() if _is_stale(v)}
+    if not stale:
+        return {"status": "skipped", "reason": "事件 parquet 已新鲜", "latest": before}
+
+    backend = Path(__file__).resolve().parents[2]
+    env = {**os.environ,
+           "PYTHONPATH": os.pathsep.join(p for p in (str(backend), os.environ.get("PYTHONPATH", "")) if p),
+           # 自愈是轻量增量，不用历史回填那套 6 轮 ×90s 的失败重试
+           "ASHARE_DE_PASSES": "2", "ASHARE_DE_PASS_WAIT": "10", "ASHARE_DE_WINDOW_SLEEP": "0.6"}
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(
+            [sys.executable, "scripts/midterm/backfill_longterm.py", "events", "events_de"],
+            cwd=str(backend), env=env, capture_output=True, text=True,
+            timeout=_EVENT_BACKFILL_TIMEOUT_SECONDS, check=False,
+        )
+        ok = proc.returncode == 0
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "failed", "stale": stale,
+                "error": f"{type(exc).__name__}: {str(exc)[:180]}",
+                "seconds": round(time.monotonic() - t0, 1)}
+    after = _event_parquet_latest(year)
+    return {"status": "completed" if ok else "failed", "before": before, "after": after,
+            "advanced": {k: (before.get(k), after.get(k)) for k in before if after.get(k) != before.get(k)},
+            "seconds": round(time.monotonic() - t0, 1),
+            "stdout_tail": (proc.stdout or "")[-500:], "stderr_tail": (proc.stderr or "")[-300:]}
+
+
 _ACTIONS: tuple[tuple[str, Callable[[Session, list[str], dict[str, list[str]]], dict[str, Any]]], ...] = (
     ("remediate_health_gaps", _act_remediate),
     ("daily_basic", _act_daily_basic),
@@ -326,6 +403,7 @@ _ACTIONS: tuple[tuple[str, Callable[[Session, list[str], dict[str, list[str]]], 
     ("research_parquets", _act_research_parquets),
     ("kpl_list_cache", _act_kpl_list),
     ("limit_list_d_cache", _act_limit_list_d),
+    ("event_parquets", _act_event_parquets),
 )
 
 
@@ -475,16 +553,22 @@ def start_self_heal_daemon(
 
     def _loop() -> None:
         time.sleep(startup_delay)
+        first = True
         while True:
             if not os.environ.get("PYTEST_CURRENT_TEST"):
                 try:
                     from app.db.session import SessionLocal
 
                     with SessionLocal() as db:
-                        run_self_heal(db, trigger="startup" if startup_delay else "daemon")
+                        out = run_self_heal(db, trigger="startup" if first else "daemon")
+                        logger.info("self_heal: 轮次完成 trigger=%s status=%s gaps=%d",
+                                    out.get("trigger"), out.get("status"), len(out.get("gaps") or {}))
                 except Exception:  # noqa: BLE001
                     logger.exception("self_heal: 后台自愈轮次异常")
+                finally:
+                    first = False
             time.sleep(interval)
 
     threading.Thread(target=_loop, name="startup-self-heal", daemon=True).start()
+    logger.info("self_heal: 后台守护已启动（首轮延迟 %.0fs，间隔 %.0fs）", startup_delay, interval)
     return True
