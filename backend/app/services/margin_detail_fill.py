@@ -41,6 +41,8 @@ DEFAULT_PAGE_CAPS: tuple[int, ...] = (2000, 3000, 4000, 5000, 6000, 8000, 10000)
 DEFAULT_MIN_ROWS = 2000
 DEFAULT_COVERAGE_DROP = 0.05
 BASELINE_DAYS = 5
+# 补完仍低于中位数的这个比例，说明上游当日还没全量发布，必须留在待补清单里次日重试。
+_INCOMPLETE_COVERAGE_FLOOR = 0.8
 _VALUE_FIELDS = ("rzye", "rqye", "rzmre", "rzche", "rzrqye", "rqyl")
 _FILE_LOCK = threading.Lock()
 
@@ -237,13 +239,20 @@ def fill_margin_day(
             inserted = _insert_missing(db, new)
             after = _count(db, iso_day)
             median = det["baseline_median"]
+            coverage_after = round(after / median, 4) if median else None
             out.update(
                 eastmoney_rows=len(fetched), eastmoney_inserted=inserted, rows_after=after,
-                coverage_after=round(after / median, 4) if median else None, status="filled",
+                coverage_after=coverage_after, status="filled",
             )
             out["inserted_codes"] = [r["code"] for r in new]
             pend = set(load_pending())
-            if iso_day in pend:
+            # 备份源也没给全（上游当日未全量发布）时不能标 filled：否则该日会从
+            # 待补清单里被删掉，次日断点直接跳过，缺口永久留着。实测 2026-11-13
+            # promax 2019 行、东财也只给 2019 行，coverage_after=0.4498 却被判 filled。
+            if median and after / median < _INCOMPLETE_COVERAGE_FLOOR:
+                out["status"] = "incomplete"
+                _save_pending(pend | {iso_day})
+            elif iso_day in pend:
                 _save_pending(pend - {iso_day})
         except Exception as exc:  # noqa: BLE001 - 备份路径不阻断日跑
             try:

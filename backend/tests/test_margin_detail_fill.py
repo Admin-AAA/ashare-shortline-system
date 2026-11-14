@@ -167,7 +167,9 @@ def test_independent_of_eastmoney_alt_flag(db, monkeypatch):
     _baseline(db)
     _seed(db, "2026-10-16", _codes(2001))
     r = mf.fill_margin_day(db, "2026-10-16", fetch=lambda td: [{"code": "000001", "trade_date": "2026-10-16"}], now=AFTER_CLOSE)
-    assert r["status"] == "filled" and r["eastmoney_inserted"] == 1
+    # 备份源只补回 1 行、覆盖率仍 ~0.45：不能标 filled 清掉待补，必须留到次日重试。
+    assert r["status"] == "incomplete" and r["eastmoney_inserted"] == 1
+    assert "2026-10-16" in mf.load_pending()
 
 
 # ── 日志 / 来源记录 ───────────────────────────────────────────────────────
@@ -179,10 +181,12 @@ def test_log_line_and_provenance(db, tmp_path, caplog):
     line = [r.getMessage() for r in caplog.records if r.getMessage().startswith("margin_detail_fill td=2026-10-16")]
     assert len(line) == 1
     msg = line[0]
-    for part in ("status=filled", "promax_rows=2001", "eastmoney_rows=3", "eastmoney_inserted=3", "rows_after=2004",
+    for part in ("status=incomplete", "promax_rows=2001", "eastmoney_rows=3", "eastmoney_inserted=3", "rows_after=2004",
                  "baseline_median=4451.0", "coverage_after=0.4502", "source=eastmoney.margin_detail_fill"):
         assert part in msg, part
+    assert "2026-10-16" in mf.load_pending(), "半量补齐必须留在待补清单，次日才不会跳过"
     recs = [json.loads(x) for x in (tmp_path / "margin_fill_provenance.jsonl").read_text().splitlines()]
     assert len(recs) == 1
+    assert recs[0]["status"] == "incomplete"
     assert recs[0]["source"] == mf.SOURCE and recs[0]["inserted_codes"] == ["000000", "000001", "000002"]
     assert recs[0]["promax_rows"] == 2001 and recs[0]["eastmoney_inserted"] == 3

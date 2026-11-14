@@ -365,9 +365,14 @@ def _refresh_kpl_list_cache(task_id: str) -> dict[str, Any]:
     start = (datetime.strptime(end_day, "%Y-%m-%d") - timedelta(days=25)).strftime("%Y%m%d")
     t0 = time.monotonic()
     try:
+        # 脚本用法写明 PYTHONPATH=backend：直接以文件路径启动子进程时，sys.path[0]
+        # 是 scripts/shortline_research，不是 cwd，`from app...` 必然 ModuleNotFoundError。
+        # 此前这个日更任务每次都失败，kpl_list 缓存长期滞后却只被记成黄项。
+        env = {**_os.environ, "PYTHONPATH": _os.pathsep.join(
+            p for p in (str(backend), _os.environ.get("PYTHONPATH", "")) if p)}
         proc = subprocess.run(
             [_sys.executable, "scripts/shortline_research/fetch_kpl_list.py", start, end],
-            cwd=str(backend), capture_output=True, text=True,
+            cwd=str(backend), env=env, capture_output=True, text=True,
             timeout=KPL_LIST_REFRESH_TIMEOUT_SECONDS, check=False,
         )
         out = {"status": "completed" if proc.returncode == 0 else "failed",

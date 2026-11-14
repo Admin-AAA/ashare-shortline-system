@@ -299,6 +299,16 @@ def on_startup() -> None:
     _warmup_data_health_cache()
     _warmup_pool_cache(delay_seconds=2.0)
     _warmup_horizon_realized(delay_seconds=5.0)
+    # 开机自愈（2026-11-14）：本机不常在线，所有日更任务挂在固定墙钟时刻，漏跑后
+    # 没有任何机制按目标业务日回补，健康分每隔一两天就掉一次。进程启动是唯一可靠的
+    # 触发点——后台线程扫描最近 N 个已收盘交易日，逐日补库表/指标/文件数据集。
+    # 非阻塞、幂等、单动作失败隔离；另有 2 小时一次的守护循环覆盖「开机后不重启」。
+    try:
+        from app.services.startup_self_heal import start_self_heal_daemon
+
+        start_self_heal_daemon()
+    except Exception:  # noqa: BLE001 - 自愈启动失败不能拖垮 API 启动
+        logger.exception("开机自愈启动失败")
 
 
 def _warmup_horizon_realized(delay_seconds: float = 0.0) -> None:

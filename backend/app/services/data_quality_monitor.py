@@ -154,7 +154,7 @@ DB_DATASETS: list[dict[str, Any]] = [
     {"key": "db:auction_data", "label": "集合竞价", "table": "auction_data", "col": "trade_date", "entity": "COUNT(*)",
      "lag": 0, "cliff": True, "impact": "竞价类研究/部分短线过滤"},
     {"key": "db:margin_detail", "label": "融资融券明细", "table": "margin_detail", "col": "trade_date", "entity": "COUNT(*)",
-     "lag": 1, "cliff": True, "impact": "融资类过滤（来源盘后晚出，允许滞后 1 日）"},
+     "lag": 1, "cliff": True, "source_lag_prone": True, "impact": "融资类过滤（来源盘后晚出，允许滞后 1 日）"},
     {"key": "db:stock_quotes", "label": "实时报价快照", "table": "stock_quotes", "col": "trade_date", "entity": "COUNT(*)",
      "lag": 0, "cliff": True, "impact": "首页/行情池"},
     {"key": "db:concept_sector", "label": "概念板块", "table": "concept_sector", "col": "trade_date", "entity": "COUNT(*)",
@@ -207,6 +207,10 @@ def check_db_dataset(db, spec: dict[str, Any], open_days: list[str], expected: s
                 # 概念板块：行数暴增 = ths_index 从截断（5 条）恢复为全量（2517 条），不是异常；截断由 completeness 检查负责
                 notes.append(f"{latest_day} {cmsg}（已核实：上游从截断恢复为全量，非重复写入，不告警）")
             elif csev != GREEN:
+                if spec.get("source_lag_prone") and latest_day == expected:
+                    # 两融这类盘后 T+1 才全量发布的源：最新日行数腰斩通常是上游还没发完，
+                    # 不是系统漏拉。只补上下文方便判断，severity 照常判红、不改口径。
+                    cmsg += "（该源 T+1 全量发布，当日行数腰斩多为上游未发完；系统按待补清单在下一周期重试）"
                 notes.append(f"{latest_day} {cmsg}")
                 sev = _worse(sev, csev)
             med = statistics.median(baseline) if baseline else 0
@@ -510,7 +514,7 @@ FILE_DATASETS: list[dict[str, Any]] = [
      "impact": "研究用（季度快照）"},
     {"key": "file:research_cache/kpl_list", "label": "开盘啦涨停榜缓存(kpl)", "mode": "daily",
      "glob": "research_cache/kpl_list/kpl_20[0-9][0-9].parquet", "cols": ("trade_date",), "max": YELLOW,
-     "impact": "热点题材/龙头类研究；此缓存无日更任务，靠手工 fetch"},
+     "impact": "热点题材/龙头类研究；由 research_kpl_list_daily 每交易日 22:20 增量补齐，开机自愈也会补最近窗口"},
     {"key": "file:research_cache/limit_list_d", "label": "涨停榜 limit_list_d 缓存（回补范围：2023-10-27 起 + 2020 早期片段）", "mode": "daily",
      "glob": "research_cache/limit_list_d/limit_list_d_20[0-9][0-9].parquet", "cols": ("trade_date",), "max": YELLOW,
      "provisional": True, "expected_start": "20231027",
@@ -896,6 +900,35 @@ def check_scheduled_tasks(db, open_days: list[str], now: datetime | None = None)
     return out
 
 
+def check_health_diagnosis(db) -> dict[str, Any]:
+    """健康诊断链路自检：计算异常 / 结果不完整时显式红项，不再静默。
+
+    2026-11-14 事故：诊断缓存 TTL 改造漏了 `import time`，`diagnose_all` 直接抛
+    NameError，驾驶舱健康分 500、快照任务静默失败，一整天没人发现分数本身是坏的。
+    巡检此前没有任何一项检查「健康诊断自己能不能跑」，这里补上，并把结果直接暴露
+    成红项（不用 _safe 的兜底黄项——那会把致命故障降级成「需人工排查」的提示）。
+    """
+    from app.services.data_health_service import diagnose_all
+
+    try:
+        result = diagnose_all(db)
+    except Exception as exc:  # noqa: BLE001
+        err = f"{type(exc).__name__}: {str(exc)[:180]}"
+        return _item("quality:data_health_diagnosis", "健康诊断可用性", "数据质量", RED,
+                     kind="quality", detail=f"诊断计算抛异常：{err}",
+                     impact="驾驶舱健康分与出票就绪闸门拿不到结果，故障会被静默掩盖",
+                     diagnosis_error=err)
+    score = result.get("score")
+    ref = result.get("reference_trade_date")
+    if not isinstance(score, (int, float)) or not ref:
+        return _item("quality:data_health_diagnosis", "健康诊断可用性", "数据质量", RED,
+                     kind="quality", detail=f"诊断结果不完整（score={score!r}，参考交易日={ref!r}）",
+                     impact="健康分为空或参考交易日缺失，所有滞后判定都不可信")
+    return _item("quality:data_health_diagnosis", "健康诊断可用性", "数据质量", GREEN,
+                 kind="quality", latest=ref, detail=f"诊断正常：参考交易日 {ref}，库表健康分 {score}",
+                 impact="诊断链路可用性自检")
+
+
 def check_daily_output(db, open_days: list[str], now: datetime | None = None) -> dict[str, Any]:
     """盘后出票是否成功（短线实盘 run + 中长线运行记录），过了当天 18:35 仍没出来 = 红项。
 
@@ -911,6 +944,17 @@ def check_daily_output(db, open_days: list[str], now: datetime | None = None) ->
     sev = GREEN if st["ok"] else RED  # 待数据、未到点（大宗交易 21:00 发布）不算失败
     detail = (f"{target} 短线 {st['short_done']}/{st['short_expected']} 个策略按时实盘出票（共 {st['short_recommended']} 只）"
               + ("" if st["status"] == "ok" else f"；{st['reason']}"))
+    if not st["ok"]:
+        # 历史漏跑（机器没开机）无法事后补成实盘出票，但仍要区分「已归档旧账」与
+        # 「今天新出的故障」。只补上下文，不改 severity、不动出票成功率统计口径。
+        try:
+            from app.services.startup_self_heal import archived_output_miss
+
+            note = archived_output_miss(target)
+            if note:
+                detail += f"；{note}"
+        except Exception:  # noqa: BLE001
+            logger.debug("daily_output: 自愈归档说明读取失败", exc_info=True)
     return _item("formal:daily_output", "盘后出票", "盘后出票", sev, kind="job", latest=target, detail=detail,
                  impact="当天没有实盘推荐，次日无票可买；实盘统计也会缺这一天", output=st)
 
@@ -1116,6 +1160,10 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     open_days = load_open_days(db)
     expected = expected_trade_date(open_days, now)
     items: list[dict[str, Any]] = []
+    # 诊断链路自检放在最前：它一旦崩溃，后面所有基于诊断的判定（含出票闸门）都不可信。
+    items += _safe("health_diagnosis", "quality:data_health_diagnosis", "数据质量", "quality",
+                   lambda: [check_health_diagnosis(db)])
+    _rollback(db)
     for spec in DB_DATASETS:
         items += _safe(spec["label"], spec["key"], "数据库表", "db", lambda s=spec: [check_db_dataset(db, s, open_days, expected)])
         _rollback(db)
@@ -1335,7 +1383,17 @@ def run_data_quality_check(db, *, alert: bool = True, now: datetime | None = Non
         report = run_checks(db, now=now, include_files=include_files)
     except Exception as exc:  # noqa: BLE001
         logger.exception("data quality monitor failed")
-        return {"overall": "error", "error": f"{type(exc).__name__}: {str(exc)[:200]}", "items": [], "summary": {}}
+        err = f"{type(exc).__name__}: {str(exc)[:200]}"
+        # 巡检整体崩溃时报告里 items 为空，页面只会看到「没有数据」而不是故障；
+        # 显式告警，避免像 11-14 那样静默一整天。
+        try:
+            from app.core.alerts import emit_alert
+
+            emit_alert("data_quality_check_failed", (now or _now()).strftime("%Y-%m-%d"),
+                       f"数据质量巡检整体失败：{err}")
+        except Exception:  # noqa: BLE001
+            logger.debug("data quality failure alert failed", exc_info=True)
+        return {"overall": "error", "error": err, "items": [], "summary": {}}
     if persist:
         write_report(report)
     if alert:

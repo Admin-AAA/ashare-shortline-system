@@ -220,10 +220,17 @@ def test_measure_does_not_use_stale_report_when_quality_fails(monkeypatch):
 
 def test_snapshot_task_is_completed_even_when_output_fails(monkeypatch):
     from app.services import data_health_snapshot as hs
+    from app.services import honest_alerts as ha
     from app.services import scheduler_service as ss
 
     alerts = []
     monkeypatch.setattr("app.core.alerts.emit_alert", lambda kind, key, msg, **k: alerts.append(kind))
+    # 本例只验证「出票失败时任务仍 completed 且发出对应告警」。持续告警重发/过期清理
+    # 属于 honest_alerts 自己的状态机，会读取磁盘上的真实告警文件；不隔离的话，
+    # 本机残留的 rolling_r12_negative 之类的告警会混进 alerts 让断言变得环境相关。
+    monkeypatch.setattr(ha, "expire_stale", lambda now=None: [])
+    monkeypatch.setattr(ha, "reemit_persistent", lambda db, now=None: [])
+    monkeypatch.setattr(ha, "resolve_recovered", lambda *a, **k: None)
     monkeypatch.setattr(hs, "take_snapshot", lambda db, mode: {"trade_date": "2026-10-26", "written": "original",
                                                               "sample": _sample(60, "failed", red=["x"])})
     monkeypatch.setattr(hs, "summarize", lambda days: {"days_with_original": 1, "avg_score": 60, "output_success_rate": 0.0,

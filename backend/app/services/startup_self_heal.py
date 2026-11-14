@@ -1,0 +1,490 @@
+"""开机自愈（boot-time catch-up）：按「目标业务日」补齐漏掉的数据与文件数据集。
+
+根因
+----
+这套系统跑在个人 Mac 上，机器不常在线。全部日更任务都挂在墙钟时刻
+（17:35 盘后同步 / 18:40 健康快照 / 21:00 晚间补数 / 22:20 研究缓存），
+机器没开机就整批漏掉。下次开机时没有任何机制按「本该跑的那个交易日」回补，
+于是日K、指数、涨停板、daily_basic、两融、派生指标、研究 parquet、正式出票
+成片滞后，健康分每隔一两天就掉一次（2026-11-13 实测 43 分、11-14 页面 67 分）。
+
+设计
+----
+不新增调度时刻。「进程刚起来」是本机唯一可靠的时间点：
+
+1. 扫描最近 N 个**已收盘的真实交易日**（Tushare 日历，失败回退本地日K），
+   逐日检查核心表当日行数，得到 `gaps[trade_date] = [缺的表]`。
+2. 只针对缺口日调用现有**幂等**补数入口（重新拉当日 / 只补 NULL / 只补缺失代码），
+   已有完整数据的日期不动，避免每次开机都重刷上游。
+3. 库表补齐后再刷新文件数据集（库 → parquet 增量导出），最后清掉诊断缓存，
+   让 readiness 闸门与页面健康分立刻看到新数据。
+4. 正式出票缺口**只归档、不伪造**：实盘出票错过就是错过，不能补记为
+   live_forward。归档结果供复盘与出票成功率趋势使用。
+
+所有动作彼此隔离（单个失败不影响其余），结果写
+`data/runtime/startup_self_heal.json`（保留最近 20 次），并带最小间隔防抖。
+启动由 `app.main.on_startup` 挂后台线程，另有低频守护循环覆盖「开机后不重启」。
+"""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import threading
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Any, Callable
+
+from sqlalchemy import text
+from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_LOOKBACK_DAYS = 5
+MIN_INTERVAL_SECONDS = 30 * 60
+STARTUP_DELAY_SECONDS = 12.0
+DAEMON_INTERVAL_SECONDS = 2 * 3600
+STATE_KEEP_RUNS = 20
+
+# 每个已收盘交易日都该有的核心表。(表名, 当日至少行数)
+# 行数下限只用于区分「整日缺失」和「有数据」；精确完整性由既有巡检负责。
+# margin_detail 是 T+1 盘后晚出，单独走截断补缺，不列入这里的整日缺失判定。
+_CORE_DAILY_TABLES: tuple[tuple[str, int], ...] = (
+    ("daily_kbars", 3000),
+    ("stock_quotes", 3000),
+    ("index_daily", 4),
+    ("stk_limits", 3000),
+    ("limit_up_board", 1),
+    ("auction_data", 3000),
+    ("capital_flow", 3000),
+    ("concept_sector", 1),
+    ("concept_sector_stock", 1000),
+    ("dragon_tiger", 1),
+    ("daily_basic", 3000),
+    ("minute_kbars", 1000),
+)
+
+_daemon_started = False
+_daemon_lock = threading.Lock()
+
+
+def _safe_rollback(db: Any) -> None:
+    """动作失败后回滚；rollback 自身的异常不能盖掉原始错误（也不要求 db 是真 Session）。"""
+    try:
+        db.rollback()
+    except Exception:  # noqa: BLE001
+        logger.debug("self_heal: rollback 失败", exc_info=True)
+
+
+def _state_path() -> Path:
+    from app.services.data_quality_monitor import DATA_DIR
+
+    return DATA_DIR / "runtime" / "startup_self_heal.json"
+
+
+def _norm_date(value: Any) -> str | None:
+    if value is None:
+        return None
+    s = str(value).strip()[:10]
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        return s
+    return None
+
+
+def _recent_closed_trade_days(db: Session, now: datetime, lookback: int) -> list[str]:
+    """最近 N 个已收盘交易日（升序）。优先 Tushare 真实日历，失败回退本地日K。"""
+    from app.engine.trading_calendar import latest_allowed_bar_date, previous_weekday
+
+    # 复刻 latest_allowed_bar_date() 的「工作日 17:30 前当日日K未就绪」判据，
+    # 但用传入的 now 计算（可测试），而不是偷偷读系统时钟。
+    day = now.date()
+    if day.weekday() < 5 and (now.hour < 17 or (now.hour == 17 and now.minute < 30)):
+        day = previous_weekday(day)
+    cutoff = latest_allowed_bar_date(day)
+    days: list[str] = []
+    try:
+        from app.services.tushare_client import fetch_recent_trade_dates
+
+        for raw in fetch_recent_trade_dates():
+            day = _norm_date(raw)
+            if day:
+                days.append(day)
+    except Exception as exc:  # noqa: BLE001 - 上游不可用不该阻断自愈
+        logger.debug("self_heal: 交易日历不可用，回退本地: %r", exc)
+    if not days:
+        try:
+            rows = db.execute(text(
+                "SELECT DISTINCT trade_date FROM daily_kbars "
+                "ORDER BY trade_date DESC LIMIT :n"), {"n": lookback + 10}).all()
+            days = [d for r in rows if (d := _norm_date(r[0]))]
+        except Exception as exc:  # noqa: BLE001
+            _safe_rollback(db)
+            logger.warning("self_heal: 本地交易日回退也失败: %r", exc)
+            return []
+    closed = sorted({d for d in days if d <= cutoff})
+    return closed[-lookback:]
+
+
+def _day_rows(db: Session, table: str, day: str) -> int:
+    """当日行数。历史写入混用过 YYYY-MM-DD / YYYYMMDD，两种都算。"""
+    try:
+        return int(db.execute(
+            text(f"SELECT COUNT(*) FROM {table} WHERE trade_date IN (:d, :dc)"),
+            {"d": day, "dc": day.replace("-", "")},
+        ).scalar() or 0)
+    except Exception as exc:  # noqa: BLE001 - 表不存在时按缺失处理
+        _safe_rollback(db)
+        logger.debug("self_heal: %s %s 计数失败: %r", table, day, exc)
+        return 0
+
+
+def scan_gaps(db: Session, trade_days: list[str]) -> dict[str, list[str]]:
+    """逐交易日扫描核心表整日缺失。"""
+    gaps: dict[str, list[str]] = {}
+    for day in trade_days:
+        missing = [t for t, floor in _CORE_DAILY_TABLES if _day_rows(db, t, day) < floor]
+        if missing:
+            gaps[day] = missing
+    return gaps
+
+
+# ---------------------------------------------------------------- 补数动作
+# 每个动作签名 (db, trade_days, gaps) -> dict；内部自行决定要不要跑、跑哪几天。
+# 抛异常由 _run_actions 统一兜住，不影响其它动作。
+
+def _act_daily_basic(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    from app.services.daily_basic_ingest import ingest_daily_basic
+
+    targets = [d for d in days if "daily_basic" in gaps.get(d, [])]
+    if not targets:
+        return {"status": "skipped", "reason": "daily_basic 无缺口"}
+    out: dict[str, Any] = {"status": "completed", "days": {}}
+    for day in targets:
+        try:
+            out["days"][day] = ingest_daily_basic(db, day)
+        except Exception as exc:  # noqa: BLE001
+            _safe_rollback(db)
+            out["days"][day] = {"error": f"{type(exc).__name__}: {str(exc)[:180]}"}
+    return out
+
+
+def _act_margin_detail(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    """两融明细 T+1 晚出且 promax 分页常截断：按最近几日检测并只补缺失代码。"""
+    from app.services.margin_detail_fill import run_margin_detail_fill
+
+    if not days:
+        return {"status": "skipped", "reason": "无交易日"}
+    return {"status": "completed", **run_margin_detail_fill(db, trade_date=days[-1], lookback_days=5)}
+
+
+def _derived_indicators_need_repair(db: Session, end: str) -> tuple[bool, dict[str, Any]]:
+    """派生指标是否真的失真。fill_local_indicators 要加载全历史 OHLC 分批重算（分钟级），
+    不能每次开机都白跑一遍；只有当日横截面出现整列 NULL / 大面积缺值才补。"""
+    try:
+        row = db.execute(text(
+            "SELECT COUNT(*) AS n, "
+            "SUM(CASE WHEN ivol20 IS NOT NULL THEN 1 ELSE 0 END) AS ivol_nn, "
+            "SUM(CASE WHEN ma5 IS NOT NULL THEN 1 ELSE 0 END) AS ma5_nn, "
+            "SUM(CASE WHEN vol_ratio_5 IS NOT NULL THEN 1 ELSE 0 END) AS vr_nn "
+            "FROM daily_kbars WHERE trade_date IN (:d, :dc)"
+        ), {"d": end, "dc": end.replace("-", "")}).mappings().first()
+    except Exception as exc:  # noqa: BLE001 - 探测失败时保守地执行修复
+        _safe_rollback(db)
+        return True, {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+    n = int((row or {}).get("n") or 0)
+    if not n:
+        return True, {"reason": "当日无 daily_kbars 行"}
+    ratios = {k: round(int((row or {}).get(k) or 0) / n, 3)
+              for k in ("ivol_nn", "ma5_nn", "vr_nn")}
+    return any(v < 0.8 for v in ratios.values()), {"rows": n, **ratios}
+
+
+def _act_indicators(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    """派生指标只补 NULL / 重算最近窗口，修「整列 NULL」这类结构检查看不见的失真。"""
+    if not gaps or not days:
+        return {"status": "skipped", "reason": "库表无缺口，跳过指标重算"}
+    end = max(gaps)
+    need, probe = _derived_indicators_need_repair(db, end)
+    if not need:
+        return {"status": "skipped", "reason": "派生指标覆盖正常", "probe": probe}
+    from app.services.ivol_fill import fill_ivol_incremental
+    from app.services.kdj_boll_cci_fill import fill_kdj_boll_cci
+    from app.services.local_indicator_fill import fill_local_indicators
+
+    end = max(gaps)
+    start = (datetime.fromisoformat(end) - timedelta(days=18)).date().isoformat()
+    out: dict[str, Any] = {"status": "completed", "window": [start, end], "probe": probe}
+    steps: tuple[tuple[str, Callable[[], Any]], ...] = (
+        ("ivol", lambda: fill_ivol_incremental(db, end)),
+        ("kdj_boll_cci", lambda: fill_kdj_boll_cci(db, since=start, end=end)),
+        ("local_indicators", lambda: fill_local_indicators(db, since=start, end=end)),
+    )
+    for name, fn in steps:
+        try:
+            out[name] = fn()
+        except Exception as exc:  # noqa: BLE001
+            _safe_rollback(db)
+            out[name] = {"error": f"{type(exc).__name__}: {str(exc)[:180]}"}
+    return out
+
+
+def _act_survey_margin(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    from app.services.survey_margin_ingest import daily_survey_margin_update
+
+    targets = [d for d in days if gaps.get(d)]
+    if not targets:
+        return {"status": "skipped", "reason": "无缺口日"}
+    out: dict[str, Any] = {"status": "completed", "days": {}}
+    for day in targets[-2:]:  # 只补最近两天，避免开机一次打满上游
+        try:
+            out["days"][day] = daily_survey_margin_update(db, day)
+        except Exception as exc:  # noqa: BLE001
+            _safe_rollback(db)
+            out["days"][day] = {"error": f"{type(exc).__name__}: {str(exc)[:180]}"}
+    return out
+
+
+def _act_remediate(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    """诊断驱动的补数：覆盖日K / 指数 / 涨停板 / 概念成分 / 新闻等最近 10 个交易日缺口。
+
+    只在扫描发现缺口时调用；否则冷诊断 + 计划构建纯属浪费（约 20 秒起）。
+    """
+    if not gaps:
+        return {"status": "skipped", "reason": "库表无缺口"}
+    from app.services.data_gap_remediation_service import remediate_data_health_gaps
+
+    result = remediate_data_health_gaps(db, post_diagnosis=False)
+    return {"status": "completed",
+            "plan_count": len(result.get("actions") or result.get("plan") or []),
+            "remediation_status": result.get("status")}
+
+
+def _act_kbar_cache(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    """data/cache/daily_kbar.parquet：回测日K缓存，从库增量刷新（无变化时指纹快速跳过）。"""
+    from app.services.market_pool import kbar_cache
+
+    if not kbar_cache.enabled():
+        return {"status": "skipped", "reason": "kbar cache 功能未启用"}
+    return {"status": "completed", **kbar_cache.refresh_kbar_cache(db)}
+
+
+def _act_research_parquets(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    """研究 parquet（daily_basic / stk_limits / index_daily / hk_holdings）增量重导。"""
+    from app.services.scheduler_service import _export_research_parquets
+
+    return _export_research_parquets("startup_self_heal")
+
+
+def _act_kpl_list(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    from app.services.scheduler_service import _refresh_kpl_list_cache
+
+    return _refresh_kpl_list_cache("startup_self_heal")
+
+
+def _act_limit_list_d(db: Session, days: list[str], gaps: dict[str, list[str]]) -> dict[str, Any]:
+    """涨跌停榜 limit_list_d 研究缓存：脚本自带断点（已有日期跳过），只补最近窗口。
+
+    此前这个 parquet 只靠手工跑，长期滞后 10+ 个交易日挂在巡检黄项里。
+    """
+    import subprocess
+    import sys
+
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"status": "skipped", "reason": "pytest"}
+    if not days:
+        return {"status": "skipped", "reason": "无交易日"}
+    backend = Path(__file__).resolve().parents[2]
+    end = days[-1].replace("-", "")
+    start = (datetime.fromisoformat(days[0]) - timedelta(days=5)).strftime("%Y%m%d")
+    t0 = time.monotonic()
+    try:
+        env = {**os.environ, "PYTHONPATH": os.pathsep.join(
+            p for p in (str(backend), os.environ.get("PYTHONPATH", "")) if p)}
+        proc = subprocess.run(
+            [sys.executable, "scripts/shortline_research/fetch_limit_list_d.py", start, end],
+            cwd=str(backend), env=env, capture_output=True, text=True, timeout=600, check=False,
+        )
+        return {"status": "completed" if proc.returncode == 0 else "failed",
+                "window": f"{start}~{end}", "seconds": round(time.monotonic() - t0, 1),
+                "stdout_tail": (proc.stdout or "")[-500:], "stderr_tail": (proc.stderr or "")[-300:]}
+    except Exception as exc:  # noqa: BLE001
+        return {"status": "failed", "window": f"{start}~{end}",
+                "seconds": round(time.monotonic() - t0, 1),
+                "error": f"{type(exc).__name__}: {str(exc)[:180]}"}
+
+
+_ACTIONS: tuple[tuple[str, Callable[[Session, list[str], dict[str, list[str]]], dict[str, Any]]], ...] = (
+    ("remediate_health_gaps", _act_remediate),
+    ("daily_basic", _act_daily_basic),
+    ("margin_detail", _act_margin_detail),
+    ("survey_margin", _act_survey_margin),
+    ("derived_indicators", _act_indicators),
+    ("kbar_parquet_cache", _act_kbar_cache),
+    ("research_parquets", _act_research_parquets),
+    ("kpl_list_cache", _act_kpl_list),
+    ("limit_list_d_cache", _act_limit_list_d),
+)
+
+
+def _archive_output_gaps(db: Session, days: list[str], now: datetime) -> dict[str, Any]:
+    """把漏出票的交易日归档。**不补票、不改口径**：实盘出票错过无法事后补记为
+    live_forward，但必须留下可复盘的记录，而不是只靠健康分红项事后猜。"""
+    try:
+        from app.services.daily_output_check import daily_output_status
+    except Exception:  # noqa: BLE001
+        return {}
+    out: dict[str, Any] = {}
+    for day in days:
+        try:
+            st = daily_output_status(db, day, now=now.replace(tzinfo=None))
+            if not st.get("ok"):
+                out[day] = {"status": st.get("status"),
+                            "reason": str(st.get("reason") or "")[:300],
+                            "short_done": st.get("short_done"),
+                            "short_expected": st.get("short_expected")}
+        except Exception as exc:  # noqa: BLE001
+            _safe_rollback(db)
+            out[day] = {"error": f"{type(exc).__name__}: {str(exc)[:160]}"}
+    return out
+
+
+def _load_state(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"runs": []}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state.setdefault("runs", [])
+        return state
+    except (json.JSONDecodeError, OSError):
+        return {"runs": []}
+
+
+def _save_state(path: Path, run: dict[str, Any]) -> None:
+    state = _load_state(path)
+    runs = [r for r in state["runs"] if r.get("run_at") != run.get("run_at")]
+    runs.append(run)
+    state["runs"] = runs[-STATE_KEEP_RUNS:]
+    state["last_run_at"] = run.get("run_at")
+    state["last_reference_trade_date"] = run.get("reference_trade_date")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+
+
+def archived_output_miss(trade_date: str) -> str | None:
+    """只读查询：该交易日的历史漏出票是否已由自愈归档（供巡检红项补充上下文）。
+
+    注意这里**不改判定、不降级别**：实盘出票错过就是错过。只是让页面上那条红项
+    说清楚「数据已补齐、这是一笔已归档的旧账」，而不是让人以为故障仍在扩散。
+    """
+    state = _load_state(_state_path())
+    for run in reversed(state.get("runs") or []):
+        miss = (run.get("output_missed") or {}).get(trade_date)
+        if miss and "error" not in miss:
+            return (f"数据已由开机自愈补齐并归档（{run.get('run_at')}）；"
+                    "实盘出票错过无法事后补记为 live_forward，见出票成功率趋势")
+    return None
+
+
+def run_self_heal(
+    db: Session,
+    *,
+    now: datetime | None = None,
+    lookback: int = DEFAULT_LOOKBACK_DAYS,
+    trigger: str = "startup",
+    force: bool = False,
+) -> dict[str, Any]:
+    """跑一次开机自愈。同步执行，失败不抛出；调用方负责放在后台线程。"""
+    now = now or datetime.now().astimezone()
+    path = _state_path()
+    state = _load_state(path)
+    t0 = time.monotonic()
+
+    # 防抖：同一交易日、半小时内、且上次没有留下缺口，就不再打上游。
+    last = (state.get("runs") or [{}])[-1]
+    if not force and last.get("reference_trade_date") and not last.get("gaps"):
+        try:
+            age = (now.replace(tzinfo=None) - datetime.fromisoformat(last["run_at"]).replace(tzinfo=None)).total_seconds()
+        except Exception:  # noqa: BLE001
+            age = MIN_INTERVAL_SECONDS + 1
+        if age < MIN_INTERVAL_SECONDS:
+            return {"status": "skipped", "reason": f"距上次自愈 {age:.0f}s 且无遗留缺口",
+                    "reference_trade_date": last.get("reference_trade_date")}
+
+    try:
+        days = _recent_closed_trade_days(db, now, lookback)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("self_heal: 交易日扫描失败: %r", exc)
+        days = []
+    gaps = scan_gaps(db, days) if days else {}
+    result: dict[str, Any] = {
+        "run_at": now.isoformat(timespec="seconds"),
+        "trigger": trigger,
+        "reference_trade_date": days[-1] if days else None,
+        "scanned_days": days,
+        "gaps": gaps,
+        "actions": {},
+    }
+
+    for name, fn in _ACTIONS:
+        t = time.monotonic()
+        try:
+            out = fn(db, days, gaps)
+        except Exception as exc:  # noqa: BLE001 - 单个动作失败不拖垮整轮自愈
+            _safe_rollback(db)
+            logger.warning("self_heal: 动作 %s 失败: %r", name, exc)
+            out = {"status": "failed", "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+        result["actions"][name] = {"seconds": round(time.monotonic() - t, 2), **out}
+
+    result["output_missed"] = _archive_output_gaps(db, days, now)
+    try:
+        from app.services.data_health_service import clear_data_health_cache
+
+        clear_data_health_cache()
+    except Exception:  # noqa: BLE001
+        logger.debug("self_heal: 清诊断缓存失败", exc_info=True)
+
+    # 复扫一次，把补完后仍缺的表记下来，下一轮开机继续补（不靠人工发现）。
+    result["remaining_gaps"] = scan_gaps(db, days) if days else {}
+    result["status"] = "completed" if not result["remaining_gaps"] else "partial"
+    result["seconds"] = round(time.monotonic() - t0, 2)
+    try:
+        _save_state(path, result)
+    except Exception:  # noqa: BLE001
+        logger.warning("self_heal: 状态写入失败", exc_info=True)
+    logger.info("self_heal: %s 自愈完成 status=%s gaps=%s remaining=%s (%.1fs)",
+                trigger, result["status"], list(gaps), list(result["remaining_gaps"]), result["seconds"])
+    return result
+
+
+def start_self_heal_daemon(
+    *,
+    startup_delay: float = STARTUP_DELAY_SECONDS,
+    interval: float = DAEMON_INTERVAL_SECONDS,
+) -> bool:
+    """启动后台自愈循环（进程内单例）。首次延迟执行，避免和启动预热抢数据库/上游。"""
+    global _daemon_started
+    with _daemon_lock:
+        if _daemon_started:
+            return False
+        _daemon_started = True
+
+    def _loop() -> None:
+        time.sleep(startup_delay)
+        while True:
+            if not os.environ.get("PYTEST_CURRENT_TEST"):
+                try:
+                    from app.db.session import SessionLocal
+
+                    with SessionLocal() as db:
+                        run_self_heal(db, trigger="startup" if startup_delay else "daemon")
+                except Exception:  # noqa: BLE001
+                    logger.exception("self_heal: 后台自愈轮次异常")
+            time.sleep(interval)
+
+    threading.Thread(target=_loop, name="startup-self-heal", daemon=True).start()
+    return True

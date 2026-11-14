@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from threading import Condition
@@ -175,25 +176,70 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
 # ── 进程内诊断缓存 ─────────────────────────────────────────────────────
 # 诊断结果会被驾驶舱与配置页同时读取。冷缓存时合并并发请求，避免 React
 # StrictMode 等重复挂载让两个请求各自执行一次约 20 秒的全量诊断。
-_diagnosis_cache: dict[str, Any] = {"reference_trade_date": None, "result": None}
+#
+# 2026-11-14：缓存此前**没有任何时间失效条件**——_get_cached_diagnosis 只拿缓存里的
+# reference_trade_date 跟缓存里的另一个字段比，恒等成立，等于永不过期；只要当天
+# 第一次诊断跑过（那时日K可能还没入库），整个交易日所有调用都复用它，盘后出票的
+# readiness 闸门因此读到「日K线未覆盖当天（最新=前一交易日）」的陈旧结论而把出票拦掉
+# （实测 11-12：15:41 日K已完整、15:45 手工跑能出票，17:35 正式任务仍报未覆盖）。
+# 现在加两道失效：TTL（默认 5 分钟）+ 数据版本（日K/行情池最新交易日前进即失效）。
+_DIAGNOSIS_CACHE_TTL_SECONDS = 300.0
+_diagnosis_cache: dict[str, Any] = {
+    "reference_trade_date": None,
+    "result": None,
+    "ts": 0.0,
+    "data_version": None,
+}
 _diagnosis_cache_condition = Condition()
 _diagnosis_cache_generation = 0
 _diagnosis_in_progress = False
 
 
-def _get_cached_diagnosis() -> dict[str, Any] | None:
-    """命中返回缓存结果，否则 None。"""
+def _diagnosis_data_version(db: Session) -> str | None:
+    """轻量数据版本：日K与行情池的最新交易日。任一前进（新一天数据落库）就让缓存失效。
+
+    走 trade_date 索引，单次往返毫秒级；失败返回 None（降级为只按 TTL 失效）。
+    """
+    try:
+        row = db.execute(text(
+            "SELECT (SELECT MAX(trade_date) FROM daily_kbars) AS k, "
+            "(SELECT MAX(trade_date) FROM stock_quotes) AS q")).first()
+    except Exception as exc:  # noqa: BLE001 - 版本探测失败不应影响诊断
+        logger.debug("data_health: 数据版本探测失败: %s", exc)
+        return None
+    if row is None:
+        return None
+    return f"{row[0]}|{row[1]}"
+
+
+def _get_cached_diagnosis(db: Session | None = None) -> dict[str, Any] | None:
+    """命中返回缓存结果，否则 None。
+
+    失效条件：无缓存 / reference_trade_date 对不上 / 超过 TTL / 数据版本前进。
+    """
     cached = _diagnosis_cache.get("result")
     if cached is None:
         return None
     if cached.get("reference_trade_date") != _diagnosis_cache.get("reference_trade_date"):
         return None
+    age = time.monotonic() - float(_diagnosis_cache.get("ts") or 0.0)
+    if age > _DIAGNOSIS_CACHE_TTL_SECONDS:
+        logger.debug("data_health: cache expired (age=%.0fs)", age)
+        return None
+    if db is not None:
+        version = _diagnosis_data_version(db)
+        if version is not None and version != _diagnosis_cache.get("data_version"):
+            logger.debug("data_health: cache invalidated by data version %s -> %s",
+                         _diagnosis_cache.get("data_version"), version)
+            return None
     return cached
 
 
-def _set_cached_diagnosis(result: dict[str, Any]) -> None:
+def _set_cached_diagnosis(result: dict[str, Any], db: Session | None = None) -> None:
     _diagnosis_cache["reference_trade_date"] = result.get("reference_trade_date")
     _diagnosis_cache["result"] = result
+    _diagnosis_cache["ts"] = time.monotonic()
+    _diagnosis_cache["data_version"] = _diagnosis_data_version(db) if db is not None else None
 
 
 def clear_data_health_cache() -> None:
@@ -202,6 +248,8 @@ def clear_data_health_cache() -> None:
     with _diagnosis_cache_condition:
         _diagnosis_cache["reference_trade_date"] = None
         _diagnosis_cache["result"] = None
+        _diagnosis_cache["ts"] = 0.0
+        _diagnosis_cache["data_version"] = None
         _diagnosis_cache_generation += 1
 
 
@@ -213,15 +261,28 @@ def diagnose_all(db: Session, *, force_refresh: bool = False) -> dict[str, Any]:
     """
     global _diagnosis_in_progress
     with _diagnosis_cache_condition:
-        cached = _get_cached_diagnosis()
+        cached = _get_cached_diagnosis(db)
         if cached is not None and not force_refresh:
             logger.debug("data_health: cache hit (reference_date=%s)", cached.get("reference_trade_date"))
             return cached
 
         while _diagnosis_in_progress:
             logger.debug("data_health: waiting for in-flight diagnosis")
+            wait_generation = _diagnosis_cache_generation
             _diagnosis_cache_condition.wait()
-            cached = _get_cached_diagnosis()
+            # 同一次冷诊断刚刚完成：无条件复用它。这里不能再走 TTL / 数据版本失效判断——
+            # 并发等待者本就该共享这次结果；若版本探测在两次调用之间抖动（或调用方传入
+            # 的是 mock session），刚写入的缓存会被误判为过期，于是每个等待者各自再跑
+            # 一次约 20 秒的全量诊断，冷缓存合并语义彻底失效。
+            just_finished = _diagnosis_cache.get("result")
+            if (
+                wait_generation == _diagnosis_cache_generation
+                and not _diagnosis_in_progress
+                and just_finished is not None
+            ):
+                logger.debug("data_health: reusing just-finished in-flight diagnosis")
+                return just_finished
+            cached = _get_cached_diagnosis(db)
             if cached is not None:
                 logger.debug("data_health: reusing completed in-flight diagnosis")
                 return cached
@@ -239,7 +300,7 @@ def diagnose_all(db: Session, *, force_refresh: bool = False) -> dict[str, Any]:
 
     with _diagnosis_cache_condition:
         if cache_generation == _diagnosis_cache_generation:
-            _set_cached_diagnosis(result)
+            _set_cached_diagnosis(result, db)
         _diagnosis_in_progress = False
         _diagnosis_cache_condition.notify_all()
     return result

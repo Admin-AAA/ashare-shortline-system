@@ -16,12 +16,15 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import logging
 import threading
 from pathlib import Path
 from statistics import mean
 from typing import Any
 
 from app.services.data_quality_monitor import DATA_DIR
+
+logger = logging.getLogger(__name__)
 
 SNAPSHOT_PATH = DATA_DIR / "runtime" / "data_health_snapshots.jsonl"
 ORIGINAL_TIME = _dt.time(18, 40)
@@ -37,7 +40,24 @@ def combined_health(db, *, force_refresh: bool = False, report: dict[str, Any] |
     from app.services.data_health_service import diagnose_all
     from app.services.data_quality_monitor import load_report, quality_score_penalty
 
-    result = diagnose_all(db, force_refresh=force_refresh)
+    try:
+        result = diagnose_all(db, force_refresh=force_refresh)
+    except Exception as exc:  # noqa: BLE001 - 诊断崩了必须显式暴露，不能静默 500 / 沿用旧分
+        err = f"{type(exc).__name__}: {str(exc)[:260]}"
+        logger.exception("data_health: 诊断计算失败")
+        try:
+            from app.core.alerts import emit_alert
+
+            emit_alert("data_health_diagnosis_failed", _dt.datetime.now().strftime("%Y-%m-%d"),
+                       f"健康诊断计算失败：{err}")
+        except Exception:  # noqa: BLE001 - 告警失败不影响返回
+            logger.debug("data_health: diagnosis alert failed", exc_info=True)
+        return {
+            "score": None, "score_db": None,
+            "diagnosis_error": err,
+            "score_detail": {"penalty": 0, "score_db": None, "diagnosis_error": err},
+            "issues": [{"severity": "high", "message": f"健康诊断计算失败：{err}"}],
+        }
     rep = report if report is not None else load_report()
     pen = quality_score_penalty(rep)
     base = result.get("score")
