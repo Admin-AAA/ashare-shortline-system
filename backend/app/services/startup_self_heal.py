@@ -586,7 +586,8 @@ def run_self_heal(
         except Exception:  # noqa: BLE001
             age = MIN_INTERVAL_SECONDS + 1
         if age < MIN_INTERVAL_SECONDS:
-            return {"status": "skipped", "reason": f"距上次自愈 {age:.0f}s 且无遗留缺口",
+            return {"status": "skipped", "trigger": trigger,
+                    "reason": f"距上次自愈 {age:.0f}s 且无遗留缺口",
                     "reference_trade_date": last.get("reference_trade_date")}
 
     try:

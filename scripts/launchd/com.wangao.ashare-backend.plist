@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>NO_PROXY</key>
+		<string>127.0.0.1,localhost,::1</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>PREFECT_API_URL</key>
+		<string>http://127.0.0.1:4200/api</string>
+		<key>PYTHONPATH</key>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/backend</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+		<key>TUSHARE_SHARED_LIMITER_DB</key>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/backend/data/runtime/tushare_ratelimit.sqlite</string>
+		<key>no_proxy</key>
+		<string>127.0.0.1,localhost,::1</string>
+	</dict>
+	<key>KeepAlive</key>
+	<true/>
+	<key>Label</key>
+	<string>com.wangao.ashare-backend</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/backend/.venv/bin/python3.12</string>
+		<string>-m</string>
+		<string>uvicorn</string>
+		<string>app.main:app</string>
+		<string>--app-dir</string>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/backend</string>
+		<string>--host</string>
+		<string>127.0.0.1</string>
+		<string>--port</string>
+		<string>8765</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/Users/wangao/Library/Logs/ashare-backend.err.log</string>
+	<key>StandardOutPath</key>
+	<string>/Users/wangao/Library/Logs/ashare-backend.out.log</string>
+	<key>WorkingDirectory</key>
+	<string>/Users/wangao/Desktop/ashare-shortline-system/backend</string>
+</dict>
+</plist>

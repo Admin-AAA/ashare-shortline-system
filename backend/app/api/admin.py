@@ -7,6 +7,10 @@ from fastapi import Depends, HTTPException, Query
 from app.api.contracts import ContractRouter as APIRouter
 from sqlalchemy.orm import Session
 
+from app.core.prefect_bootstrap import (
+    PrefectClientUnavailable,
+    prefect_client_status,
+)
 from app.db.session import get_db
 from app.services.cost_service import (
     cost_summary,
@@ -382,8 +386,27 @@ def run_task_now(task_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="task not found")
     from app.orchestration import trigger_scheduled_task
 
-    ref = trigger_scheduled_task(task_id)
+    try:
+        ref = trigger_scheduled_task(task_id)
+    except PrefectClientUnavailable as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Prefect 客户端未连到常驻 server，已拒绝触发：{exc}；"
+                   f"请检查 /api/admin/orchestration/status 并重启后端",
+        ) from exc
     return {"ok": True, "orchestration_run_id": ref.run_id}
+
+
+@router.get("/orchestration/status")
+def orchestration_status():
+    """只读诊断：Prefect 客户端当前指向哪个 server。
+
+    ``mode=ephemeral_fallback`` 或 ``api_url=None`` 意味着每次触发都会自建临时
+    server，与常驻 server 抢同一个 SQLite（database is locked / 502）。
+    """
+    status = prefect_client_status()
+    healthy = bool(status.get("api_url")) and not status.get("ephemeral_risk")
+    return {"ok": healthy, **status}
 
 
 @router.post("/tasks/{task_id}/_record")

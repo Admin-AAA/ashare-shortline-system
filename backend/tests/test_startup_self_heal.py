@@ -89,6 +89,8 @@ def test_run_self_heal_debounces_when_previous_run_was_clean(state_file, monkeyp
     out = sh.run_self_heal(object(), now=datetime(2026, 11, 14, 18, 45))
     assert out["status"] == "skipped"
     assert "距上次自愈" in out["reason"]
+    # 防抖返回也必须带 trigger，否则守护日志会显示 trigger=None
+    assert out["trigger"] == "startup"
 
 
 def test_every_core_table_has_a_declared_repair_owner():

@@ -261,7 +261,11 @@ def fill_margin_day(
                 pass
             out.update(status="error", error=str(exc)[:200])
             _save_pending(set(load_pending()) | {iso_day})
-    logger.warning(
+    # 无缺口 / 主源未给数据只是例行巡检：自愈每 2 小时扫 5 个交易日，全打 WARNING
+    # 会每天刷几十条告警级噪音，把真正的 incomplete / error 淹掉。
+    level = logging.INFO if out["status"] in ("not_truncated", "skipped_no_primary") else logging.WARNING
+    logger.log(
+        level,
         "margin_detail_fill td=%s status=%s reasons=%s promax_rows=%d eastmoney_rows=%d eastmoney_inserted=%d "
         "rows_after=%d baseline_median=%s coverage_after=%s source=%s",
         iso_day, out["status"], ",".join(out["reasons"]) or "-", promax_rows, out["eastmoney_rows"],

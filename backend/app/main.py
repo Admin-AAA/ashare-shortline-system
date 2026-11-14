@@ -6,6 +6,12 @@ from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 from time import perf_counter
 
+# 必须早于任何 prefect 导入：Prefect settings 在首次 import 时缓存 API URL，
+# 之后再补环境变量已经无效（会静默起临时 server 抢同一个 SQLite）。
+from app.core.prefect_bootstrap import ensure_resident_prefect_server
+
+PREFECT_CLIENT_STATUS = ensure_resident_prefect_server()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse

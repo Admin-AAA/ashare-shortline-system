@@ -3,6 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from app.orchestration import api
 from app.orchestration.deployments import schedule_all_enabled_tasks
 
@@ -29,6 +31,25 @@ def test_manual_scheduled_task_trigger_uses_one_prefect_deployment(monkeypatch) 
     assert len(call["parameters"]["correlation_id"]) == 32
     assert call["timeout"] == 0
     assert call["_sync"] is True
+
+
+def test_trigger_failure_emits_alert_and_keeps_original_exception(monkeypatch) -> None:
+    """Prefect 触发失败必须留可 grep 的告警，且不改变既有调用方的异常语义。"""
+    alerts: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(api, "emit_alert", lambda kind, key, msg: alerts.append((kind, key, msg)) or True)
+
+    def boom(**_kwargs):
+        raise RuntimeError("502 Bad Gateway from ephemeral server")
+
+    monkeypatch.setattr(api, "run_deployment", boom)
+
+    with pytest.raises(RuntimeError, match="502 Bad Gateway"):
+        api.trigger_scheduled_task("postclose_late_data_repair")
+
+    assert len(alerts) == 1
+    assert alerts[0][0] == "prefect_trigger_failed"
+    assert "scheduled-task/postclose_late_data_repair" in alerts[0][1]
+    assert "502 Bad Gateway" in alerts[0][2]
 
 
 def test_recommendation_trigger_carries_only_durable_run_id(monkeypatch) -> None:
