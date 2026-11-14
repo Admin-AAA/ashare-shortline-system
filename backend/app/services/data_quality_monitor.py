@@ -36,6 +36,7 @@ ALERT_KIND = "data_quality"
 # 同一批红/黄项每轮都重发一条 [ALERT:data_quality] ERROR，9 个坏项一天能刷出几十条，
 # 反过来把 log:error_volume（近 24h ERROR > 30）顶成黄项，黄项又新增一轮告警——自激。
 # 稳态重复项按日级冷却；首次出现、红↔黄状态变化仍然立即告警，不掩盖新增/恶化。
+# 根因侧另见 scan_log_signals：告警通知本身是 logger.error 落盘的，必须从「应用异常」计数里剔除。
 QUALITY_ALERT_COOLDOWN_SECONDS = float(os.environ.get("ASHARE_QUALITY_ALERT_COOLDOWN_SECONDS", "") or 24 * 3600)
 _CST = timezone(timedelta(hours=8))
 RED, YELLOW, GREEN = "red", "yellow", "green"
@@ -720,16 +721,24 @@ def check_xiaoshi_min_all(open_days: list[str], expected: str, now: datetime | N
     lag = trade_lag(open_days, mx, expected)
     sev = lag_severity(lag, 0)
     errs = int(run.get("errors") or 0)
-    detail = (f"已登记 {len(files)} 个文件，数据最新 {mx}，期望 {expected}，滞后 {lag}；最近一次同步 {run.get('ts')}"
+    # last_run 只在成功同步时更新；上游失败的日子只有 sync.log 里的 fatal。写「最近一次同步」会
+    # 让人以为好几天没跑，写「最近一次成功同步」才与事实一致。
+    detail = (f"已登记 {len(files)} 个文件，数据最新 {mx}，期望 {expected}，滞后 {lag}；最近一次成功同步 {run.get('ts')}"
               f"（{'%.0f 小时前' % age_h if age_h is not None else '未知'}，下载 {run.get('downloaded')}，错误 {errs}）")
     if errs:
         sev = _worse(sev, YELLOW)
-    # 同步日志里的 fatal 是「上游不可达」，不是「本地漏跑」。此前巡检只显示滞后天数 +
-    # 「另一补数任务建设中」，让人误以为补个任务就能好；实际 2026-11-12 起小石
-    # /api/v3/history/catalog 连续多日返回失败，本地做什么都补不回，必须显式暴露。
+    # 同步日志里的 fatal 是「上游不可达」，不是「本地漏跑」。此前巡检显示滞后天数 +
+    # 「另一补数任务建设中」，让人误以为补个任务就能好；实际 2026-11-11 起小石
+    # /api/v3/history/catalog 连续多日 TLS/网络失败，本地做什么都补不回，必须显式暴露。
     upstream_error = _xiaoshi_last_sync_error(st.parent / "sync.log")
+    if upstream_error:
+        # 已确认上游不可达时不能再写「另一补数任务建设中」：那是两种互斥的处置路径，
+        # 同时出现在一条 detail 里会互相矛盾、把排查带偏。
+        detail += "（滞后由上游不可达造成，本地补数任务无法回补）"
+    else:
+        detail += "（临时阈值：另一补数任务回补/每日增量建设中，待其完成后复核）"
     item = _item(key, label, "文件数据集", cap_severity(sev, YELLOW), kind="file", latest=mx, expected=expected, lag=lag,
-                 detail=detail + "（临时阈值：另一补数任务回补/每日增量建设中，待其完成后复核）",
+                 detail=detail,
                  impact="追龙/连板研究的全市场分钟线（小石只保留最近约3个月，需每日增量保存）", provisional=True)
     if upstream_error:
         item["upstream_error"] = upstream_error
@@ -1018,15 +1027,24 @@ def _tail_text(path: Path, max_bytes: int = 6_000_000) -> str:
 
 
 _LOG_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) \[(ERROR|WARNING)\] (?:\[pid \d+\] )?([\w\.]+): (.*)$")
+# 告警系统自己写的通知行（emit_alert 用 logger.error，resolve/TTL 用 logger.warning）。
+# 它们是「巡检结论的通知」，不是「被吞掉的应用异常」：计入 error_count 会让告警越多分越低、
+# 又把 log:error_volume 顶黄再触发新一轮告警（自激），同时把真正的异常淹没在几十条通知里。
+# 告警本身另有 alerts:stale_active / honest_alerts 等专门巡检项盯着，剔除不会漏报。
+_ALERT_NOTICE_RE = re.compile(r"^\[ALERT(?:_RESOLVED)?:")
 
 
 def scan_log_signals(text_blob: str, now: datetime | None = None, hours: int = 24) -> dict[str, Any]:
-    """近 N 小时日志：各数据源 provider 回退次数（按 provider:原因）、ERROR 条数与 Top 签名。纯函数，便于测试。"""
+    """近 N 小时日志：provider 回退次数、真实应用 ERROR 条数与 Top 签名、告警通知条数。
+
+    error_count 只数真正的应用异常；以 ``[ALERT:`` 开头的行单独记 alert_count，纯函数便于测试。
+    """
     now = now or _now()
     since = (now - timedelta(hours=hours)).replace(tzinfo=None)
     fallbacks: dict[str, int] = {}
     errors: dict[str, int] = {}
     n_err = 0
+    n_alert = 0
     for line in text_blob.splitlines():
         m = _LOG_RE.match(line)
         if not m:
@@ -1043,10 +1061,14 @@ def scan_log_signals(text_blob: str, now: datetime | None = None, hours: int = 2
             k = f"{fb.group(2)}:{fb.group(3)}"
             fallbacks[k] = fallbacks.get(k, 0) + 1
         if lvl == "ERROR":
+            if _ALERT_NOTICE_RE.match(msg):
+                n_alert += 1
+                continue
             n_err += 1
             sig = f"{logger_name}: {re.sub(r'[0-9]+', 'N', msg)[:70]}"
             errors[sig] = errors.get(sig, 0) + 1
-    return {"fallbacks": fallbacks, "error_count": n_err, "top_errors": sorted(errors.items(), key=lambda kv: -kv[1])[:5]}
+    return {"fallbacks": fallbacks, "error_count": n_err, "alert_count": n_alert,
+            "top_errors": sorted(errors.items(), key=lambda kv: -kv[1])[:5]}
 
 
 def check_log_signals(now: datetime | None = None, log_file: Path | None = None) -> list[dict[str, Any]]:
@@ -1064,9 +1086,13 @@ def check_log_signals(now: datetime | None = None, log_file: Path | None = None)
     out = [_item("log:provider_fallbacks", "数据源回退/额度（日志）", "静默失败", sev, kind="log", detail=detail,
                  impact="回退成功不会报错，但额度耗尽/熔断说明冗余已失效")]
     n = sig["error_count"]
+    n_alert = sig.get("alert_count", 0)
     top = "；".join(f"{s}×{c}" for s, c in sig["top_errors"][:3])
+    detail = f"{n} 条应用异常 ERROR" + (f"，Top：{top}" if top else "")
+    if n_alert:
+        detail += f"；另有 {n_alert} 条告警通知（[ALERT:*]，告警系统落盘，不计入应用异常）"
     out.append(_item("log:error_volume", "应用 ERROR 日志量（近24小时）", "静默失败", YELLOW if n > 30 else GREEN, kind="log",
-                     detail=f"{n} 条 ERROR" + (f"，Top：{top}" if top else ""), impact="被吞掉的异常只留在日志里"))
+                     detail=detail, impact="被吞掉的异常只留在日志里"))
     return out
 
 
@@ -1432,6 +1458,40 @@ def sync_alerts(report: dict[str, Any]) -> dict[str, list[str]]:
     return {"emitted": emitted, "resolved": resolved}
 
 
+def reconcile_fact_alerts(db) -> list[str]:
+    """复核解除「只在失败时 emit、成功路径不一定跑得到」的事实型告警。
+
+    daily_output_failed（盘后出票失败）和 late_repick_failed（晚间补跑失败）都由作业在失败时
+    emit，解除只挂在「下一次复核作业也跑到」这条链上。机器离线、自愈补跑或人工修复把票补齐后，
+    那个复核作业往往早已跑过，告警就一直挂到 24h TTL 自动过期；期间面板显示着已经不成立的红项，
+    24h 后还可能被 alerts:stale_active 当成「放着不管的告警」再扣一个黄项。
+
+    每次正式巡检（alert=True）按出票判定的唯一口径 daily_output_status 复核一次：ok 才解除，
+    pending/failed/读不到一律不动，绝不把真未恢复的告警提前抹掉。key 必须是交易日，异常 key 跳过。
+    daily_output_status 的 ok 同时覆盖短线 completed live_forward 与中长线无 data_error/data_not_ready，
+    因此也能正确代表补跑是否达成目标。
+    """
+    from app.core.alerts import active_alert_records, resolve_alert
+    from app.services.daily_output_check import daily_output_status
+
+    resolved: list[str] = []
+    for kind in ("daily_output_failed", "late_repick_failed"):
+        for rec in active_alert_records(kind):
+            key = str(rec["key"])
+            td = key[:10]
+            if len(td) != 10 or td[4] != "-" or td[7] != "-":
+                continue
+            try:
+                st = daily_output_status(db, td)
+            except Exception:  # noqa: BLE001 - 复核失败不影响巡检
+                logger.debug("fact alert reconcile unreadable %s|%s", kind, key, exc_info=True)
+                continue
+            if st.get("ok") and resolve_alert(
+                    kind, key, f"{td} 复核：出票已恢复 {st.get('short_done')}/{st.get('short_expected')}"):
+                resolved.append(f"{kind}|{key}")
+    return resolved
+
+
 def run_data_quality_check(db, *, alert: bool = True, now: datetime | None = None, include_files: bool = True,
                            persist: bool = True) -> dict[str, Any]:
     """入口：只读巡检 → 写报告 → 同步告警。永不抛出（失败返回 overall=error）。"""
@@ -1457,4 +1517,8 @@ def run_data_quality_check(db, *, alert: bool = True, now: datetime | None = Non
             report["alerts"] = sync_alerts(report)
         except Exception as exc:  # noqa: BLE001
             logger.warning("data quality alert sync failed: %r", exc)
+        try:
+            report["reconciled_alerts"] = reconcile_fact_alerts(db)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("fact alert reconcile failed: %r", exc)
     return report

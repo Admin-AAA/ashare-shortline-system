@@ -387,7 +387,9 @@ LOG = """2026-10-26 09:00:00 [WARNING] [pid 1] app.services.tushare_transport: t
 def test_scan_log_signals_counts_recent_only():
     sig = dq.scan_log_signals(LOG, _t("2026-10-26 14:00"), hours=24)
     assert sig["fallbacks"] == {"quantdata:quota_exhausted": 1}
-    assert sig["error_count"] == 1
+    # LOG 里近期唯一的 ERROR 是告警通知，不是应用异常
+    assert sig["error_count"] == 0
+    assert sig["alert_count"] == 1
 
 
 def test_log_check_flags_quota_exhausted(tmp_path):
