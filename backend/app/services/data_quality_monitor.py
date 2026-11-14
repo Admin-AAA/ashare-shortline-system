@@ -1190,10 +1190,24 @@ def rolling_r12_item(latest: dict[str, Any] | None, month: str, nights_passed: i
                          detail=f"{len(crashed)} 个策略选股抛异常被跳过（其余已算）：" + "；".join(
                              f"{sid}（{str(c.get('error'))[:80]}）" for sid, c in crashed.items()),
                          impact=impact)
-        inc = (latest.get("replay") or {}).get("incomplete_days") or {}
+        replay = latest.get("replay") or {}
+        inc = replay.get("incomplete_days") or {}
         if inc:
+            # 裸 dict 看不出量级：按失败天数降序，标出「整个窗口无样本」的策略，
+            # 并说明跨夜续跑时累计失败天数会大于本次运行天数（否则 271 > 227 很费解）。
+            window_days = int(replay.get("window_days") or 0)
+            run_days = int(replay.get("days") or 0)
+            unavailable = set(replay.get("unavailable_strategies") or [])
+            bits = [f"{sid} {n}{'/' + str(window_days) if window_days else ''} 天"
+                    + ("（指标不可得）" if sid in unavailable else "")
+                    for sid, n in sorted(inc.items(), key=lambda kv: -kv[1])]
+            detail = "回放取数失败：" + "；".join(bits)
+            if run_days and any(n > run_days for n in inc.values()):
+                detail += f"（本次运行 {run_days} 天，失败天数为跨夜续跑累计）"
+            if unavailable:
+                detail += "；整窗失败多为回放数据通道未接本地存档，须修通道后重算（重试上游无效）"
             return _item(ROLLING_R12_KEY, "近12个月滚动重算", "盘后出票", YELLOW, kind="job", latest=str(latest.get("cutoff")),
-                         detail=f"有取数失败日：{inc}", impact=impact)
+                         detail=detail[:460], impact=impact)
         return _item(ROLLING_R12_KEY, "近12个月滚动重算", "盘后出票", GREEN, kind="job", latest=str(latest.get("cutoff")),
                      detail=f"{month} 结果已出（截止 {latest.get('cutoff')}）")
     err = f"；最近一次报错：{last_error[:120]}" if last_error else ""

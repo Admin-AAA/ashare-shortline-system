@@ -249,6 +249,21 @@ def trade_stats(rets: list[float], open_count: int = 0) -> dict[str, Any]:
     }
 
 
+def find_unavailable_strategies(no_data: dict, midlong: dict, window_days: int) -> dict[str, int]:
+    """整个回放窗口都取不到数的现役策略 -> {sid: 失败天数}，其近 12 个月指标完全不可得。
+
+    trade_stats 在 n=0 时也返回 insufficient_sample，与「有 12 笔但不到 30 笔」同标签，
+    会把回放通道缺陷伪装成样本偏少。已标 error（选股抛异常）的策略以 error 为准。
+    window_days 取 replay['window_days']（replay_midlong 用完整交易日列表算的），
+    不能用 replay['days']——跨夜续跑时后者只是最后一次运行的天数。
+    """
+    if not window_days:
+        return {}
+    return {sid: len(set(days)) for sid, days in (no_data or {}).items()
+            if days and len(set(days)) >= window_days
+            and sid in midlong and midlong[sid].get("verdict") != "error"}
+
+
 def midlong_window_stats(db, staging: Path, window_start: str, cutoff: str) -> dict[str, dict[str, Any]]:
     from app.services import midterm_service as ms
 
@@ -375,9 +390,18 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
         midlong[sid] = {**midlong[sid], "verdict": "error", "error": c.get("error"),
                         "error_first_day": c.get("first_day"), "error_days": c.get("days")}
     short = short_window_stats(db, window_start, cutoff)
+    # 「整个回放窗口都取不到数」不是「样本不足」：前者是该策略近 12 个月指标完全不可得，
+    # 后者只是笔数没到 30。trade_stats 在 n=0 时也返回 insufficient_sample，混在一起
+    # 会让人误以为只是样本偏少，掩盖回放数据通道缺陷（激励策略曾这样空了 271 天）。
+    # window_days 由 replay_midlong 用完整交易日列表给出；这里不再查库（R12 单测用 fake db）。
+    window_days = int(replay.get("window_days") or 0)
+    no_data = replay.get("no_data") or {}
+    unavailable = find_unavailable_strategies(no_data, midlong, window_days)
+    for sid, n in unavailable.items():
+        midlong[sid] = {**midlong[sid], "verdict": "unavailable", "unavailable_days": n}
     allv = [v["verdict"] for v in midlong.values()] + [v["verdict"] for v in short["strategies"].values()]
-    judged = [v for v in allv if v not in ("insufficient_sample", "error")]  # 崩的策略不进为正比例分母
-    incomplete = {k: v for k, v in (replay.get("no_data") or {}).items() if v} | \
+    judged = [v for v in allv if v not in ("insufficient_sample", "error", "unavailable")]
+    incomplete = {k: v for k, v in no_data.items() if v} | \
                  {k: v for k, v in (replay.get("errors") or {}).items() if v}
     doc = {
         "month": month,
@@ -387,15 +411,17 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
         "status": "completed",
         "positive_ratio": round(judged.count("positive") / len(judged), 3) if judged else None,
         "counts": {"positive": allv.count("positive"), "negative": allv.count("negative"),
-                   "insufficient_sample": allv.count("insufficient_sample"), "error": allv.count("error")},
+                   "insufficient_sample": allv.count("insufficient_sample"), "error": allv.count("error"),
+                   "unavailable": allv.count("unavailable")},
         "crashed": {sid: {k: c.get(k) for k in ("error", "first_day", "days")} for sid, c in crashed.items()},
         "midlong": midlong,
         "short": short,
-        "replay": {"days": replay.get("days"), "seconds": replay.get("seconds"),
+        "replay": {"days": replay.get("days"), "window_days": window_days, "seconds": replay.get("seconds"),
                    "incomplete_days": {k: len(v) for k, v in incomplete.items()},
+                   "unavailable_strategies": sorted(unavailable),
                    "upstream_calls": dict(upstream["calls"]), "local_served": dict(upstream["local"]),
                    "local_covered_through": upstream["covered"]},
-        "method": ("中长线：现行生产选股代码重放（开每日上限），财报/分红/回购/业绩预告优先读本地库，本地未覆盖的日期才走网关；"
+        "method": ("中长线：现行生产选股代码重放（开每日上限），财报/分红/回购/业绩预告/股权激励草案优先读本地库与事件存档，本地未覆盖的日期才走网关；"
                    "只算窗口内信号、截止日前已卖出的笔，扣 0.3%。"
                    f"短线：{short['replay_coverage_end']}（来源 {short['replay_coverage_end_source']}）及以前只用历史重建、"
                    "之后只用实盘，两段分开列，已成交净收益（未成交不摊 0%）。"
@@ -432,6 +458,7 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
         "negative": neg,
         "summary_text": (f"近12个月滚动重算（截止 {cutoff}）：为正 {doc['counts']['positive']}、为负 {doc['counts']['negative']}、"
                          f"样本不足 {doc['counts']['insufficient_sample']}"
+                         + (f"、指标不可得 {len(unavailable)}（{','.join(sorted(unavailable))}）" if unavailable else "")
                          + (f"、选股抛异常已跳过 {len(crashed)}（{','.join(crashed)}）" if crashed else "")
                          + (f"；转负：{','.join(neg)}" if neg else "")
                          + (f"；有取数失败日：{doc['replay']['incomplete_days']}" if incomplete else "")),

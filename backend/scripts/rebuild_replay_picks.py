@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import datetime as dt
 import json
 import os
@@ -34,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -143,7 +145,7 @@ def replay_midlong(db, start: str, end: str, strategies: list[str] | None, stagi
     prog_f = staging.parent / "progress.json"
     prog = json.loads(prog_f.read_text()) if prog_f.exists() else {}
     stats = {"days": 0, "errors": prog.get("errors", {}), "no_data": prog.get("no_data", {}),
-             "crashed": prog.get("crashed", {}), "seconds": 0.0, "stopped": False}
+             "crashed": prog.get("crashed", {}), "seconds": 0.0, "stopped": False, "window_days": 0}
     from app.services import midterm_forecast as mf
 
     orig_out, orig_store = ms.OUT_DIR, ms._store_repurchase_events
@@ -154,10 +156,18 @@ def replay_midlong(db, start: str, end: str, strategies: list[str] | None, stagi
     # 2026-10-19 23:30 起 promax forecast 持续 upstream_pool_exhausted；本地与 API 对 20251018~24 逐行一致。
     mf._fetch_forecast_day = _local_forecast_reader(orig_fc_fetch)
     mf._store_live = lambda new: None
+    # 股权激励草案同样改读本地事件存档：历史日打 cninfo 在线网关查一年区间几乎必然取不到数，
+    # 会让两个现役期权策略在整个 R12 窗口全记 no_data（详见 _local_incentive_reader）。
+    restore_inc = None
     t0 = time.time()
     try:
+        restore_inc = install_offline_incentive()
+        dates = _trade_dates(db, start, end)
+        # 完整回放窗口的交易日数。跨夜续跑时 stats["days"] 只是本次运行天数，
+        # R12 用它判断「某策略是否整个窗口都没取到数」会误判，必须单列。
+        stats["window_days"] = len(dates)
         with ms.replay_pick_writes():
-            for d in _trade_dates(db, start, end):
+            for d in dates:
                 if d <= prog.get("done_through", ""):
                     continue
                 if stop_at and dt.datetime.now().time() >= stop_at and dt.datetime.now().time() < dt.time(16, 0):
@@ -191,6 +201,8 @@ def replay_midlong(db, start: str, end: str, strategies: list[str] | None, stagi
     finally:
         ms.OUT_DIR, ms._store_repurchase_events = orig_out, orig_store
         mf._fetch_forecast_day, mf._store_live = orig_fc_fetch, orig_fc_store
+        if restore_inc is not None:
+            restore_inc()
         stats["seconds"] = round(time.time() - t0, 1)
     stats["done_through"] = prog.get("done_through")
     tag_dir(staging)
@@ -226,6 +238,66 @@ def _local_forecast_reader(api_fetch):
         return groups.get(day, empty)
 
     return fetch
+
+
+def _local_incentive_reader(api_fetch):
+    """按披露日期从本地股权激励公告存档取全市场草案；超出本地覆盖才回落在线网关。
+
+    回放历史日时 mid-incentive-option / mid-incentive-vol 每天都要走 cninfo 在线网关
+    查约一年的历史公告区间，网关对历史区间持续取不到数 —— 近 12 个月 271 个交易日
+    全部记 no_data，两个现役策略的 R12 指标其实是空的（trade_stats n=0 被当成「样本不足」）。
+    output/research/sprint4/incentive/*.parquet（2018-01 起）与
+    data/midterm/events/incentive_live_*.parquet 本就是同一接口的抓取存档，
+    按 ann_date<=as_of 过滤即可保证 PIT，不留未来函数。
+    """
+    import pandas as pd
+    from app.services import midterm_incentive as mi
+
+    files = sorted(mi.HIST_DIR.glob("*.parquet")) + sorted(mi.LIVE_DIR.glob("incentive_live_*.parquet"))
+    frames = []
+    for f in files:
+        try:
+            part = pd.read_parquet(f, columns=mi.COLS)
+            if len(part):
+                frames.append(part)
+        except Exception as exc:  # noqa: BLE001 - 单个存档坏了就跳过，宁可少数据也不伪造
+            print(f"[replay] incentive parquet {f.name} unreadable: {exc!r}", flush=True)
+    if not frames:
+        return api_fetch  # CI / 空数据目录：没有本地覆盖，保持原行为
+    df = pd.concat(frames, ignore_index=True)
+    df["ann_date"] = df["ann_date"].astype(str).str.strip()
+    # HIST 与 LIVE 的区间有重叠；同一公告去重，不同标题（草案/摘要/法律意见书）照原样保留。
+    df = df.drop_duplicates(subset=["code", "ann_date", "ann_id", "title"])
+    covered_through = str(df["ann_date"].max())
+    by_date = {k: g.to_dict("records") for k, g in df.groupby("ann_date", sort=True)}
+    dates = sorted(by_date)
+
+    def fetch(start: str, end: str, max_pages: int = 60):
+        s, e = start.replace("-", ""), end.replace("-", "")
+        if e > covered_through:
+            # 本地存档没覆盖到当前回放日就诚实回落网关，绝不拿旧事件冒充新公告。
+            return api_fetch(start, end, max_pages)
+        lo, hi = bisect.bisect_left(dates, s), bisect.bisect_right(dates, e)
+        return [r for day in dates[lo:hi] for r in by_date[day]]
+
+    return fetch
+
+
+def install_offline_incentive() -> Callable[[], None]:
+    """回放期间把激励公告源换成本地存档并禁止回写实盘事件库；返回无条件还原回调。
+
+    只看回放进程内的模块全局，实盘进程不受影响；退出时（含异常）必须调用回调还原。
+    """
+    from app.services import midterm_incentive as mi
+
+    orig_fetch, orig_store = mi.fetch_range, mi._store_live
+    mi.fetch_range = _local_incentive_reader(orig_fetch)
+    mi._store_live = lambda new: None  # 回放不得把历史公告再写进 live 事件库
+
+    def restore() -> None:
+        mi.fetch_range, mi._store_live = orig_fetch, orig_store
+
+    return restore
 
 
 def tag_dir(d: Path) -> None:
