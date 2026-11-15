@@ -19,11 +19,10 @@ from app.core.shared_breaker import LIVE_NAMESPACE
 
 LABELS: dict[str, str] = {
     "tushare_rt_k": "Promax rt_k", "sina_realtime": "新浪", "tdx_quote": "通达信", "tencent_qt": "腾讯",
-    "tushare_rt_min": "QuantData rt_min", "xiaoshi_snapshot": "小石快照",
-    "xiaoshi_min1": "小石 1 分钟", "baostock": "Baostock", "tushare_stk_mins": "Tushare stk_mins",
+    "tushare_rt_min": "QuantData rt_min",
+    "baostock": "Baostock", "tushare_stk_mins": "Tushare stk_mins",
     "sina_kline": "新浪分钟", "tencent_mkline": "腾讯分钟", "akshare": "AKShare",
     "eastmoney": "东方财富", "cninfo": "巨潮", "cninfo_search": "巨潮全文检索",
-    "xiaoshi_alt": "小石另类数据", "xiaoshi_quote": "小石", "xiaoshi_kline": "小石",
     "promax": "Promax", "quantdata": "QuantData", "teajoin": "Teajoin",
 }
 # Tushare 路由下游的接口：这些 provider 还受 tushare:<pro>:<api> 路由熔断约束。
@@ -65,9 +64,8 @@ def _wrap_datasets(reg: dict[str, list[str]]) -> list[dict[str, Any]]:
         {"key": "aux.capital_flow", "label": "资金流", "providers": names("capital_flow", "{}_capital_flow")},
         {"key": "aux.dragon_tiger", "label": "龙虎榜", "providers": names("dragon_tiger", "{}_dragon_tiger")},
         {"key": "aux.news", "label": "新闻公告", "providers": names("news", "{}_news")},
-        {"key": "ann.list", "label": "公告补数", "providers": ["eastmoney", "cninfo", "xiaoshi_alt"]},
+        {"key": "ann.list", "label": "公告补数", "providers": ["eastmoney", "cninfo"]},
         {"key": "ann.search.cninfo", "label": "公告全文检索", "providers": ["cninfo_search"]},
-        {"key": "xiaoshi.alt", "label": "另类数据", "providers": ["xiaoshi_alt"]},
         {"key": "fina_indicator", "label": "财务指标补数", "providers": ["promax"]},
     ]
 

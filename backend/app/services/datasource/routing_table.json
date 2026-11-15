@@ -1,21 +1,25 @@
 {
- "generated_from": "2026-10-18T21:20:56+0800",
+ "generated_from": "2026-11-14T11:51:21+0800",
  "apis": {
   "adj_factor": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "promax",
      "quantdata"
     ]
    ]
   },
   "anns_d": {
-   "order": [],
+   "order": [
+    "teajoin"
+   ],
    "unsupported": [
     "promax",
     "quantdata"
@@ -24,21 +28,22 @@
   },
   "block_trade": {
    "order": [
+    "teajoin",
     "quantdata",
     "promax"
    ],
    "unsupported": [],
    "tiers": [
     [
-     "quantdata"
-    ],
-    [
+     "teajoin",
+     "quantdata",
      "promax"
     ]
    ]
   },
   "broker_recommend": {
    "order": [
+    "teajoin",
     "quantdata"
    ],
    "unsupported": [
@@ -46,18 +51,21 @@
    ],
    "tiers": [
     [
+     "teajoin",
      "quantdata"
     ]
    ]
   },
   "cyq_perf": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "promax",
      "quantdata"
     ]
@@ -65,12 +73,14 @@
   },
   "daily": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "promax",
      "quantdata"
     ]
@@ -78,12 +88,14 @@
   },
   "daily_basic": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "promax",
      "quantdata"
     ]
@@ -91,40 +103,48 @@
   },
   "fina_indicator": {
    "order": [
-    "quantdata",
-    "promax"
-   ],
-   "unsupported": [],
-   "tiers": [
-    [
-     "quantdata"
-    ],
-    [
-     "promax"
-    ]
-   ]
-  },
-  "fina_indicator_vip": {
-   "order": [
-    "quantdata"
-   ],
-   "unsupported": [
-    "promax"
-   ],
-   "tiers": [
-    [
-     "quantdata"
-    ]
-   ]
-  },
-  "hk_hold": {
-   "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin"
+    ],
+    [
+     "promax"
+    ],
+    [
+     "quantdata"
+    ]
+   ]
+  },
+  "fina_indicator_vip": {
+   "order": [
+    "quantdata",
+    "teajoin"
+   ],
+   "unsupported": [
+    "promax"
+   ],
+   "tiers": [
+    [
+     "quantdata",
+     "teajoin"
+    ]
+   ]
+  },
+  "hk_hold": {
+   "order": [
+    "teajoin",
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin",
      "promax",
      "quantdata"
     ]
@@ -132,7 +152,8 @@
   },
   "hsgt_top10": {
    "order": [
-    "quantdata"
+    "quantdata",
+    "teajoin"
    ],
    "unsupported": [
     "promax"
@@ -145,12 +166,14 @@
   },
   "index_daily": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "promax",
      "quantdata"
     ]
@@ -158,11 +181,15 @@
   },
   "limit_list_d": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
+    [
+     "teajoin"
+    ],
     [
      "promax",
      "quantdata"
@@ -171,23 +198,29 @@
   },
   "margin": {
    "order": [
+    "teajoin",
     "quantdata",
     "promax"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "quantdata"
     ]
    ]
   },
   "margin_detail": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
+    [
+     "teajoin"
+    ],
     [
      "promax",
      "quantdata"
@@ -196,12 +229,14 @@
   },
   "moneyflow": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "promax",
      "quantdata"
     ]
@@ -209,6 +244,7 @@
   },
   "moneyflow_hsgt": {
    "order": [
+    "teajoin",
     "quantdata"
    ],
    "unsupported": [
@@ -216,17 +252,22 @@
    ],
    "tiers": [
     [
+     "teajoin",
      "quantdata"
     ]
    ]
   },
   "namechange": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
+    [
+     "teajoin"
+    ],
     [
      "promax",
      "quantdata"
@@ -235,42 +276,55 @@
   },
   "pledge_stat": {
    "order": [
-    "quantdata",
-    "promax"
+    "teajoin",
+    "promax",
+    "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
+     "promax",
      "quantdata"
     ]
    ]
   },
   "repurchase": {
    "order": [
+    "quantdata",
     "promax",
-    "quantdata"
+    "teajoin"
    ],
    "unsupported": [],
    "tiers": [
     [
-     "promax",
-     "quantdata"
+     "quantdata",
+     "promax"
+    ],
+    [
+     "teajoin"
     ]
    ]
   },
   "rt_k": {
    "order": [
-    "promax"
+    "promax",
+    "teajoin"
    ],
    "unsupported": [
     "quantdata"
    ],
-   "tiers": []
+   "tiers": [
+    [
+     "promax"
+    ]
+   ]
   },
   "rt_min": {
    "order": [
     "promax",
-    "quantdata"
+    "quantdata",
+    "teajoin"
    ],
    "unsupported": [],
    "tiers": [
@@ -284,12 +338,14 @@
   },
   "share_float": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "promax",
      "quantdata"
     ]
@@ -297,51 +353,58 @@
   },
   "stk_auction": {
    "order": [
+    "teajoin",
     "quantdata",
     "promax"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "quantdata"
     ]
    ]
   },
   "stk_factor": {
    "order": [
-    "quantdata",
+    "teajoin",
+    "quantdata"
+   ],
+   "unsupported": [
     "promax"
    ],
-   "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "quantdata"
     ]
    ]
   },
   "stk_factor_pro": {
    "order": [
-    "quantdata",
-    "promax"
-   ],
-   "unsupported": [],
-   "tiers": [
-    [
-     "quantdata"
-    ],
-    [
-     "promax"
-    ]
-   ]
-  },
-  "stk_holdernumber": {
-   "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
+     "promax",
+     "quantdata"
+    ]
+   ]
+  },
+  "stk_holdernumber": {
+   "order": [
+    "teajoin",
+    "promax",
+    "quantdata"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin",
      "promax",
      "quantdata"
     ]
@@ -349,25 +412,31 @@
   },
   "stk_holdertrade": {
    "order": [
+    "teajoin",
     "quantdata",
     "promax"
    ],
    "unsupported": [],
    "tiers": [
     [
-     "quantdata",
+     "teajoin",
+     "quantdata"
+    ],
+    [
      "promax"
     ]
    ]
   },
   "stk_limit": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "promax",
      "quantdata"
     ]
@@ -375,7 +444,8 @@
   },
   "stk_mins": {
    "order": [
-    "promax"
+    "promax",
+    "teajoin"
    ],
    "unsupported": [
     "quantdata"
@@ -388,11 +458,15 @@
   },
   "stk_surv": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
+    [
+     "teajoin"
+    ],
     [
      "promax",
      "quantdata"
@@ -402,6 +476,7 @@
   "stock_basic": {
    "order": [
     "promax",
+    "teajoin",
     "quantdata"
    ],
    "unsupported": [],
@@ -410,30 +485,36 @@
      "promax"
     ],
     [
+     "teajoin",
      "quantdata"
     ]
    ]
   },
   "suspend_d": {
    "order": [
-    "quantdata",
-    "promax"
+    "promax",
+    "teajoin",
+    "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "promax",
+     "teajoin",
      "quantdata"
     ]
    ]
   },
   "ths_index": {
    "order": [
+    "teajoin",
     "quantdata",
     "promax"
    ],
    "unsupported": [],
    "tiers": [
     [
+     "teajoin",
      "quantdata"
     ]
    ]
@@ -441,23 +522,29 @@
   "ths_member": {
    "order": [
     "promax",
-    "quantdata"
+    "quantdata",
+    "teajoin"
    ],
    "unsupported": [],
    "tiers": [
     [
      "promax",
-     "quantdata"
+     "quantdata",
+     "teajoin"
     ]
    ]
   },
   "top_inst": {
    "order": [
+    "teajoin",
     "promax",
     "quantdata"
    ],
    "unsupported": [],
    "tiers": [
+    [
+     "teajoin"
+    ],
     [
      "promax",
      "quantdata"
@@ -466,52 +553,247 @@
   },
   "top_list": {
    "order": [
-    "quantdata",
-    "promax"
+    "teajoin",
+    "promax",
+    "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
-     "quantdata",
-     "promax"
+     "teajoin"
+    ],
+    [
+     "promax",
+     "quantdata"
     ]
    ]
   },
   "trade_cal": {
    "order": [
-    "quantdata",
-    "promax"
+    "promax",
+    "teajoin",
+    "quantdata"
    ],
    "unsupported": [],
    "tiers": [
     [
-     "quantdata",
-     "promax"
+     "promax",
+     "teajoin"
+    ],
+    [
+     "quantdata"
     ]
    ]
   },
-  "report_rc": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "forecast": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "forecast_vip": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "ths_hot": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "kpl_list": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "limit_list_ths": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "st": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "idx_anns": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "express": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "fina_audit": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "eco_cal": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "cn_schedule": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "stk_alert": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "stk_managers": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "namechange": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "dividend": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "top_list": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "top_inst": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "stk_shock": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "stk_high_shock": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "kpl_concept_cons": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]},
-  "express_vip": {"order": ["teajoin"], "unsupported": [], "tiers": [["teajoin"]]}
+  "report_rc": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "forecast": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "forecast_vip": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "ths_hot": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "kpl_list": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "limit_list_ths": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "st": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "idx_anns": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "express": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "fina_audit": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "eco_cal": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "cn_schedule": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "stk_alert": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "stk_managers": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "dividend": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "stk_shock": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "stk_high_shock": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "kpl_concept_cons": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  },
+  "express_vip": {
+   "order": [
+    "teajoin"
+   ],
+   "unsupported": [],
+   "tiers": [
+    [
+     "teajoin"
+    ]
+   ]
+  }
  },
  "manual": {
   "anns_d": {
@@ -544,28 +826,138 @@
    ],
    "note": "promax 40203「没有接口访问权限」（2026-10-24 探测，2026-10-25 核对）；quantdata 可用"
   },
-  "report_rc": {"first": ["teajoin"], "note": "研报标题和评级进入文本层；目标价不进提示词。表里未探测过的源仍按优先级接在后面，超时或容量忙会降级"},
-  "forecast": {"first": ["teajoin"], "note": "业绩预告 summary/change_reason。日更用 ann_date；forecast_vip 只按股票回补"},
-  "forecast_vip": {"first": ["teajoin"], "note": "与 forecast 同文本，全市场 VIP 过重，不进默认日更"},
-  "ths_hot": {"first": ["teajoin"], "note": "只收 rank_reason；现价不进提示词"},
-  "kpl_list": {"first": ["teajoin"], "note": "涨停原因 lu_desc/theme。lu_time 作精确时点"},
-  "limit_list_ths": {"first": ["teajoin"], "note": "同花顺涨停原因 lu_desc。价格和涨跌幅不进提示词"},
-  "st": {"first": ["teajoin"], "note": "ST 原因和说明，按 pub_date"},
-  "idx_anns": {"first": ["teajoin"], "note": "指数公告标题，无个股代码"},
-  "express": {"first": ["teajoin"], "note": "业绩快报 perf_summary/remark，按 ann_date"},
-  "fina_audit": {"first": ["teajoin"], "note": "审计结论，按 ann_date"},
-  "eco_cal": {"first": ["teajoin"], "note": "宏观日历事件。fore_value 不进提示词"},
-  "cn_schedule": {"first": ["teajoin"], "note": "宏观日程，没有按日参数，每次拉当前窗口"},
-  "stk_alert": {"first": ["teajoin"], "note": "交易异常提示，文本通常只有 type 短码"},
-  "stk_managers": {"first": ["teajoin"], "note": "董监高任职，按 ann_date"},
-  "namechange": {"first": ["teajoin"], "note": "更名原因。没有全市场按日参数，只按股票回补"},
-  "dividend": {"first": ["teajoin"], "note": "分红进度 div_proc。发布日用 ann_date"},
-  "top_list": {"first": ["teajoin"], "note": "龙虎榜上榜原因。收盘价和涨跌幅不进提示词"},
-  "top_inst": {"first": ["teajoin"], "note": "龙虎榜席位和上榜原因"},
-  "stk_shock": {"first": ["teajoin"], "note": "异常波动原因"},
-  "stk_high_shock": {"first": ["teajoin"], "note": "严重异常波动原因"},
-  "kpl_concept_cons": {"first": ["teajoin"], "note": "题材成分说明 desc。个股代码用 con_code"},
-  "express_vip": {"first": ["teajoin"], "note": "业绩快报文本。只按股票回补，不进默认日更"}
+  "report_rc": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "研报标题和评级进入文本层；目标价不进提示词。表里未探测过的源仍按优先级接在后面，超时或容量忙会降级"
+  },
+  "forecast": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "业绩预告 summary/change_reason。日更用 ann_date；forecast_vip 只按股票回补"
+  },
+  "forecast_vip": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "与 forecast 同文本，全市场 VIP 过重，不进默认日更"
+  },
+  "ths_hot": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "只收 rank_reason；现价不进提示词"
+  },
+  "kpl_list": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "涨停原因 lu_desc/theme。lu_time 作精确时点"
+  },
+  "limit_list_ths": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "同花顺涨停原因 lu_desc。价格和涨跌幅不进提示词"
+  },
+  "st": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "ST 原因和说明，按 pub_date"
+  },
+  "idx_anns": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "指数公告标题，无个股代码"
+  },
+  "express": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "业绩快报 perf_summary/remark，按 ann_date"
+  },
+  "fina_audit": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "审计结论，按 ann_date"
+  },
+  "eco_cal": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "宏观日历事件。fore_value 不进提示词"
+  },
+  "cn_schedule": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "宏观日程，没有按日参数，每次拉当前窗口"
+  },
+  "stk_alert": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "交易异常提示，文本通常只有 type 短码"
+  },
+  "stk_managers": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "董监高任职，按 ann_date"
+  },
+  "namechange": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "更名原因。没有全市场按日参数，只按股票回补"
+  },
+  "dividend": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "分红进度 div_proc。发布日用 ann_date"
+  },
+  "top_list": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "龙虎榜上榜原因。收盘价和涨跌幅不进提示词"
+  },
+  "top_inst": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "龙虎榜席位和上榜原因"
+  },
+  "stk_shock": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "异常波动原因"
+  },
+  "stk_high_shock": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "严重异常波动原因"
+  },
+  "kpl_concept_cons": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "题材成分说明 desc。个股代码用 con_code"
+  },
+  "express_vip": {
+   "first": [
+    "teajoin"
+   ],
+   "note": "业绩快报文本。只按股票回补，不进默认日更"
+  }
  },
  "_doc": "Generated by scripts/probe_datasource_capabilities.py --write-routes from the capability matrix; edit only the 'manual' section by hand."
 }

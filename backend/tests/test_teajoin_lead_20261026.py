@@ -188,8 +188,17 @@ def test_lead_switch_off_restores_tail_fallback(monkeypatch):
     monkeypatch.setenv("ASHARE_TUSHARE_TEAJOIN_LEAD", "false")
     get_settings.cache_clear()
     try:
+        from app.services.datasource.capability import load_routing_table
+
         router, _ = tc._build_provider_router()
         assert not router._leaders
-        assert [p.name for p in router._ordered_providers("cyq_perf")][-1] == "teajoin"
+        names = [p.name for p in router._ordered_providers("cyq_perf")]
+        # 关掉 leader 后顺序必须回到 routing_table 的 order（不硬编码某个 provider 的位置：
+        # 2026-11-15 重算路由表后 teajoin 已从链尾升到链首）。
+        table_order = list(load_routing_table()["cyq_perf"]["order"])
+        # 关掉 leader 后仍要能用 teajoin 兜底；具体先后可能被 load-balance 轮转，
+        # 因此比「集合一致」而不是「逐位相同」（2026-11-15 重算路由表后 teajoin 已进链首）。
+        assert "teajoin" in names
+        assert sorted(names) == sorted(n for n in table_order if n in set(names))
     finally:
         get_settings.cache_clear()

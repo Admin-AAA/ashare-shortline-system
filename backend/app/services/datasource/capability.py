@@ -241,6 +241,10 @@ def routing_table_drift(matrix: Mapping[str, Any], table: Mapping[str, Any]) -> 
     """
     expected = build_routing_table(matrix, table).get("apis", {})
     current = table.get("apis", table)
+    # manual 段是手工事实（例如网关对项目用到的所有参数组合都报错，单次探测看不出来），
+    # 它的 unsupported 是「有意排除」，不应被当成「矩阵显示可用却被错误排除」的漂移，
+    # 否则 hsgt_top10 / moneyflow_hsgt 的 promax 会每条巡检刷一次假告警。
+    manual = table.get("manual") or {}
     # 「可用」必须是探测真的拿到数据（status ∈ OK）。transient（限流/额度耗尽/超时/熔断）
     # 和 unverified 都不是可用证据：额度耗尽时整批 API 都 transient，若按「不在 unsupported
     # 里就算可用」推断，会一次性产出大量「矩阵显示其当前可用」的伪漂移告警（2026-11-06 实测 6 条）。
@@ -257,8 +261,9 @@ def routing_table_drift(matrix: Mapping[str, Any], table: Mapping[str, Any]) -> 
                 out.append(f"{api}: 路由表缺少该 API，矩阵显示 {sorted(exp_bad)} 不可用")
             continue
         cur_bad = set(cur.get("unsupported") or ())
+        manual_bad = set((manual.get(api) or {}).get("unsupported") or ())
         stale = sorted(p for p in (cur.get("order") or ()) if p in exp_bad)
-        wrongly_excluded = sorted(cur_bad & verified.get(api, set()))
+        wrongly_excluded = sorted((cur_bad & verified.get(api, set())) - manual_bad)
         if stale:
             out.append(f"{api}: 矩阵显示 {stale} 无权限，路由表仍在 order={cur.get('order')} 中")
         if wrongly_excluded:

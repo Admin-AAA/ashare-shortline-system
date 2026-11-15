@@ -683,7 +683,7 @@ def xiaoshi_min1_latest(root: Path | None = None) -> tuple[str | None, int, int]
     return mx, n_dirs, n_ok
 
 
-RETIRED_KEYS = {"file:xiaoshi_min1"}  # 已退役的数据集：只展示事实，不再告警、不计入健康分扣分
+RETIRED_KEYS = {"file:xiaoshi_min1", "file:xiaoshi_min_all"}  # 已退役的数据集：只展示事实，不再告警、不计入健康分扣分
 
 
 def check_xiaoshi_min1(open_days: list[str], expected: str, root: Path | None = None) -> dict[str, Any]:
@@ -706,6 +706,11 @@ def check_xiaoshi_min_all(open_days: list[str], expected: str, now: datetime | N
     st = state_path or (DATA_DIR / "xiaoshi_min_all" / "state.json")
     key, label = "file:xiaoshi_min_all", "小石全市场分钟线归档 data/xiaoshi_min_all"
     if not st.exists():
+        from app.services.datasource.retired import is_retired
+
+        if is_retired("xiaoshi"):
+            return _item(key, label, "文件数据集", GREEN, kind="file", detail="尚无 state.json；源已退役，不再建立归档",
+                         retired=True, impact="已退役归档：不再更新")
         return _item(key, label, "文件数据集", YELLOW, kind="file", detail="尚无 state.json（补数任务尚未建立归档）",
                      impact="追龙/分钟线研究", provisional=True)
     s = json.loads(st.read_text(encoding="utf-8"))
@@ -744,6 +749,18 @@ def check_xiaoshi_min_all(open_days: list[str], expected: str, now: datetime | N
         item["upstream_error"] = upstream_error
         item["detail"] += (f"；**上游同步失败**：{upstream_error}（本地无法补，"
                            "需上游恢复后重跑 scripts/sync_xiaoshi_min_all.py）")
+    from app.services.datasource.retired import is_retired, retired_note
+
+    if is_retired("xiaoshi"):
+        # 2026-11-15（owner 授权）：源整源退役，归档只保留历史事实 —— 不再增长、不再告警、
+        # 不计健康分；仍如实暴露「冻结在哪一天」，因为研究脚本还在读这份归档。
+        item.update(
+            severity=GREEN, retired=True,
+            detail=(f"【已退役，不再告警】{item['detail']}；源已于 2026-11-15 退役"
+                    f"（{retired_note('xiaoshi')}），归档冻结在上表最新日期，"
+                    "依赖该归档的研究/脚本须改用数据库 minute_kbars 或另接新源"),
+            impact="已退役归档：不再更新；日内研究请改用 minute_kbars（覆盖目标池 300 只）",
+        )
     return item
 
 
@@ -1454,7 +1471,8 @@ def sync_alerts(report: dict[str, Any]) -> dict[str, list[str]]:
     from app.core.alerts import active_alert_records, emit_alert, resolve_alert
 
     emitted, resolved = [], []
-    bad = {i["key"]: i for i in report["items"] if i["severity"] != GREEN}
+    # 已退役项（retired=True）只展示事实：即使实现里给了红黄也不发告警，否则退役等于换一种方式持续打扰。
+    bad = {i["key"]: i for i in report["items"] if i["severity"] != GREEN and not i.get("retired")}
     previous = {str(r["key"]): r for r in active_alert_records(ALERT_KIND)}
     for key, it in bad.items():
         tag = "红" if it["severity"] == RED else "黄"

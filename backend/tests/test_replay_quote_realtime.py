@@ -32,6 +32,9 @@ def env(monkeypatch):
 
     monkeypatch.setattr(tc, "get_pro", lambda: Pro())
     monkeypatch.setattr(gw, "_db_disabled_keys", lambda: set())
+    # 固定为「没开任何可选 flag」：本机 .env 开了腾讯行情，否则链上会多出 tencent_qt，
+    # 断言随机器漂移（这是本测试长期在本地失败、CI 通过的原因）。
+    monkeypatch.setattr(gw, "_flag_set", lambda attr: set())
     monkeypatch.setattr(qr, "_GATEWAY", None)
     monkeypatch.setattr("app.engine.trading_calendar.latest_allowed_quote_date", lambda today=None: "2026-10-16")
     rq._cache.update(fetched_at=0.0, rows={})

@@ -1529,13 +1529,17 @@ def _run_data_sync(db, payload: dict, *, task_type: str = "data_sync") -> dict:
         summary_parts.append(_sync_step_summary("辅助数据补数完成", auxiliary))
         result["steps"].append({"name": "auxiliary", "status": auxiliary.get("status")})
         step_timings["auxiliary"] = _lap()
-        # xiaoshi 另类数据回退（margin_detail 缺口 / 解禁日历）；按日各一次分页调用，失败不影响主流程。
-        try:
-            from app.services.xiaoshi_alt_data import sync_xiaoshi_alt_data
+        # 小石另类数据回退（margin_detail 缺口 / 解禁日历）已于 2026-11-15 随该源退役停止：
+        # 端点不可达，每日调用只是把失败写进 result。恢复订阅后从 retired.py 去掉即可。
+        from app.services.datasource.retired import is_retired
 
-            result["xiaoshi_alt"] = sync_xiaoshi_alt_data(db)
-        except Exception as exc:  # pragma: no cover - 防御  # noqa: BLE001
-            result["xiaoshi_alt"] = {"errors": [str(exc)[:160]]}
+        if not is_retired("xiaoshi"):
+            try:
+                from app.services.xiaoshi_alt_data import sync_xiaoshi_alt_data
+
+                result["xiaoshi_alt"] = sync_xiaoshi_alt_data(db)
+            except Exception as exc:  # pragma: no cover - 防御  # noqa: BLE001
+                result["xiaoshi_alt"] = {"errors": [str(exc)[:160]]}
         step_timings["xiaoshi_alt"] = _lap()
         # 东财另类数据备份（margin_detail 缺口 / 未来解禁日历），flag eastmoney.alt 默认关闭。
         try:

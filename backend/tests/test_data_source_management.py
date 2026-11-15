@@ -248,7 +248,11 @@ def test_list_data_sources_excludes_provider_history(db_session, monkeypatch):
     assert all(row["source"] != "gw_a" for row in rows)
 
 
-def test_management_sources_include_xiaoshi_market_source(db_session, monkeypatch):
+def test_management_sources_exclude_retired_xiaoshi(db_session, monkeypatch):
+    """小石 2026-11-15 整源退役：即便库里还留着历史 config/health 行，也不再出现在数据源管理列表。
+
+    退役判定的唯一事实源是 app/services/datasource/retired.py；恢复订阅时删掉条目即回到旧行为。
+    """
     db_session.add_all(
         [
             DataSourceConfig(source="xiaoshi", source_type="quote", enabled=True, priority=0),
@@ -260,14 +264,6 @@ def test_management_sources_include_xiaoshi_market_source(db_session, monkeypatc
                 failure_count=1,
                 latency_ms=800.0,
                 last_success_at=datetime(2026, 8, 16, 10, 0, 0),
-            ),
-            DataSourceHealth(
-                source="xiaoshi",
-                source_type="kline",
-                success_count=2,
-                failure_count=0,
-                latency_ms=900.0,
-                last_success_at=datetime(2026, 8, 16, 10, 1, 0),
             ),
         ]
     )
@@ -285,20 +281,13 @@ def test_management_sources_include_xiaoshi_market_source(db_session, monkeypatc
     )
 
     rows = ds.list_management_sources(db_session)
-    xiaoshi = next(row for row in rows if row["provider_name"] == "xiaoshi")
 
-    assert xiaoshi["source_type"] == "market_data_provider"
-    assert xiaoshi["configured"] is True
-    assert xiaoshi["enabled"] is True
-    assert xiaoshi["status"] == "healthy"
-    assert xiaoshi["success_count"] == 5
-    assert xiaoshi["failure_count"] == 1
-    assert xiaoshi["latency_ms"] == 900.0
-    assert "分钟历史:R2" in xiaoshi["apis"]
-    assert not any("全市场快照" in api for api in xiaoshi["apis"])  # 能力已声明不可用（L-155）
+    assert [row["provider_name"] for row in rows] == ["promax"]
+    assert not any("xiaoshi" in str(row.get("provider_name")) for row in rows)
 
 
-def test_set_provider_enabled_toggles_xiaoshi_quote_and_kline(db_session, monkeypatch):
+def test_set_provider_enabled_rejects_retired_xiaoshi(db_session, monkeypatch):
+    """退役源不可启停：返回 None，且不写任何 config 行（避免残留「已启用」的错觉）。"""
     db_session.add_all(
         [
             DataSourceConfig(source="xiaoshi", source_type="quote", enabled=True, priority=0),
@@ -313,17 +302,14 @@ def test_set_provider_enabled_toggles_xiaoshi_quote_and_kline(db_session, monkey
         lambda: SimpleNamespace(xiaoshi_api_key="configured", xiaoshi_max_qps=30),
     )
 
-    result = ds.set_provider_enabled(db_session, "xiaoshi", False)
-
-    assert result is not None
-    assert result["provider_name"] == "xiaoshi"
-    assert result["enabled"] is False
+    assert ds.set_provider_enabled(db_session, "xiaoshi", False) is None
+    assert ds.set_provider_enabled(db_session, "xiaoshi", True) is None
     for source_type in ("quote", "kline"):
         row = db_session.get(
             DataSourceConfig,
             {"source": "xiaoshi", "source_type": source_type},
         )
-        assert row is not None and row.enabled is False
+        assert row is not None and row.enabled is True  # 未被改动
 
 
 def test_admin_management_api_uses_unified_source_projection(db_session, monkeypatch):

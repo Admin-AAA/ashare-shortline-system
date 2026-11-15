@@ -27,6 +27,7 @@ from app.services.indicator_computer import (
     upper_shadow_count as _upper_shadow_count,
 )
 from app.services.outcome_service import DEFAULT_STOP_LOSS_PCT, DEFAULT_TAKE_PROFIT_PCT
+from app.services.datasource import retired as _retired
 
 # ── 候选召回/打分：权威实现已收口到 candidates/screening.py（任务 4.3），
 # 以下为兼容 re-export，保持 `from app.services.market_data import _candidate_score`
@@ -294,8 +295,8 @@ def _fetch_quotes(source: str, settings: Any) -> list[dict[str, Any]]:
     # result and fallback order unchanged, total failure still raises MarketDataError upstream.
     if source == "tushare":
         return gw_call("quote.daily", "tushare_quote", _fetch_tushare_quotes, settings)
-    if source == "xiaoshi":
-        return gw_call("quote.daily", "xiaoshi_quote", _fetch_xiaoshi_quotes, settings)
+    if _retired.is_retired(source):
+        raise MarketDataError(f"行情源已退役: {source}（{_retired.retired_note(source)}）")
     raise MarketDataError(f"未知行情源: {source}")
 
 
@@ -309,8 +310,8 @@ def _fetch_kline(
     from app.services.datasource.wrap import gw_call
 
     # Step 4: bar.daily via gateway when cut over; parquet cache/adjustment/readiness untouched.
-    if source == "xiaoshi":
-        return gw_call("bar.daily", "xiaoshi_kline", _fetch_xiaoshi_kline, quote, settings, start_date=start_date, end_date=end_date)
+    if _retired.is_retired(source):
+        raise MarketDataError(f"日线源已退役: {source}（{_retired.retired_note(source)}）")
     return gw_call("bar.daily", "tushare_kline", _fetch_tushare_kline, quote, settings, start_date=start_date, end_date=end_date)
 
 
@@ -998,11 +999,14 @@ def _quote_sources(settings: Any) -> list[str]:
     sources = [s for s in _parse_source_list(getattr(settings, "quote_sources", "tushare"))
                if s not in _QUOTE_CAPABILITY_MISSING]
     # 配成只有缺能力的源时（如 QUOTE_SOURCES=xiaoshi）回落到 tushare，而不是让全市场快照无源可用。
-    return sources or ["tushare"]
+    return _retired.filter_active(sources) or ["tushare"]
 
 
 def _kline_sources(settings: Any) -> list[str]:
-    return _parse_source_list(getattr(settings, "kline_sources", "tushare"))
+    # 已退役的源（当前为 xiaoshi，端点不可达）即便 .env 里仍写着也不再进链。
+    return _retired.filter_active(
+        _parse_source_list(getattr(settings, "kline_sources", "tushare"))
+    ) or ["tushare"]
 
 
 def _parse_source_list(value: Any) -> list[str]:

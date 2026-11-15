@@ -96,4 +96,6 @@ def test_metrics_recorded(stub):
     metrics.reset()
     bar_minute.fetch("000001", "2026-10-16", "2026-10-16", "1min")
     names = {(c["name"], c["labels"]["provider"]) for c in metrics.snapshot()["counters"]}
-    assert ("dataset_requests", "xiaoshi_min1") in names
+    # 小石已退役（2026-11-15），1min 的 1 分钟数据由 Tushare stk_mins 承接
+    assert ("dataset_requests", "tushare_stk_mins") in names
+    assert not any(prov.startswith("xiaoshi") for _, prov in names)

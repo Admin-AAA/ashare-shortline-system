@@ -93,10 +93,15 @@ _GATEWAY: DatasetGateway | None = None
 def gateway() -> DatasetGateway:
     global _GATEWAY
     if _GATEWAY is None:
-        _GATEWAY = DatasetGateway([
+        from app.services.datasource import retired as _retired
+
+        providers = [
             XiaoshiMinuteProvider(), BaostockMinuteProvider(), TushareStkMinsProvider(),
             *_web_backups(),  # flags bar.minute.sina / bar.minute.tencent (default off)
-        ])
+        ]
+        # 退役源不进链：小石端点不可达时它是链首，每次空耗 6~16 秒，8 线程并发补数会撞
+        # 网关 120s deadline 成批放弃（L-200）。类保留，恢复订阅时删掉这行过滤即可复活。
+        _GATEWAY = DatasetGateway([p for p in providers if not _retired.provider_retired(p.name)])
     return _GATEWAY
 
 

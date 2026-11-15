@@ -924,6 +924,12 @@ def list_management_sources(db: Session) -> list[dict[str, Any]]:
 
 
 def _xiaoshi_management_row(db: Session) -> dict[str, Any] | None:
+    from app.services.datasource.retired import is_retired
+
+    if is_retired("xiaoshi"):
+        # 2026-11-15 退役（端点不可达）：不再出现在数据源管理列表里，配置行由
+        # sync_data_source_configs 的孤儿清理删除。恢复订阅时从 retired.py 去掉即可。
+        return None
     sync_data_source_configs(db)
     configs = {
         source_type: db.get(
@@ -1021,6 +1027,10 @@ def set_provider_enabled(db: Session, provider_name: str, enabled: bool) -> dict
     返回更新后的 provider 条目；provider 未接入返回 None。
     """
     if provider_name == "xiaoshi":
+        from app.services.datasource.retired import is_retired
+
+        if is_retired("xiaoshi"):
+            return None  # 已退役，不可启停
         sync_data_source_configs(db)
         rows = [
             db.get(

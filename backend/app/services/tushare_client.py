@@ -2223,7 +2223,11 @@ def _legacy_fetch_minute_kbars(
     target_trade_date = _normalize_trade_date(trade_date)
     normalized_freq = str(freq or "1min").lower()
 
-    if target_trade_date:
+    # 退役源（小石）在 legacy 路径里同样不再尝试：网关链已移除它，两条路径必须同源同结果，
+    # 否则「legacy vs gateway 逐字节对照」会因源集合不同而假性不一致（L-200）。
+    xiaoshi_retired = _minute_source_retired()
+
+    if target_trade_date and not xiaoshi_retired:
         xiaoshi_rows = _fetch_xiaoshi_minute_kbars(
             code,
             start_date=target_trade_date,
@@ -2242,7 +2246,7 @@ def _legacy_fetch_minute_kbars(
         # 未指定日期：抓近 10 天窗口，取最近一个有数据的交易日
         end_day = date.today()
         start_day = end_day - timedelta(days=10)
-        xiaoshi_rows = _fetch_xiaoshi_minute_kbars(
+        xiaoshi_rows = [] if xiaoshi_retired else _fetch_xiaoshi_minute_kbars(
             code,
             start_date=start_day.isoformat(),
             end_date=end_day.isoformat(),
@@ -2284,7 +2288,7 @@ def fetch_recent_minute_kbars(
         return _recent_minute_kbars_gateway(code, ndays, trace)
     end_day = date.today()
     start_day = end_day - timedelta(days=max(10, int(ndays or 5) * 3))
-    xiaoshi_rows = _fetch_xiaoshi_minute_kbars(
+    xiaoshi_rows = [] if _minute_source_retired() else _fetch_xiaoshi_minute_kbars(
         code,
         start_date=start_day.isoformat(),
         end_date=end_day.isoformat(),
@@ -2373,6 +2377,13 @@ def _minute_query_windows(start_time: str, end_time: str) -> list[tuple[str, str
     return windows
 
 
+def _minute_source_retired() -> bool:
+    """小石（minute 历史源）是否已退役 —— legacy 与 gateway 两条路径共用同一判定。"""
+    from app.services.datasource.retired import is_retired
+
+    return is_retired("xiaoshi")
+
+
 def _fetch_xiaoshi_minute_kbars(
     code: str,
     *,
@@ -2382,6 +2393,12 @@ def _fetch_xiaoshi_minute_kbars(
     trace: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Read completed A-share minute history from Xiaoshi's cached R2 files."""
+    from app.services.datasource.retired import is_retired
+
+    if is_retired("xiaoshi"):
+        # 源已退役（端点不可达，2026-11-15）：直接返回空，让调用方走 Tushare stk_mins，
+        # 不再为每次取数空耗 6~16 秒并撞 120s deadline（L-200）。
+        return []
     try:
         from app.services.xiaoshi_client import get_xiaoshi_client
         from app.services.xiaoshi_minute_source import (

@@ -61,8 +61,11 @@ def fetch_day(day: str, codes: set[str] | None = None, *, client: Any = None) ->
 
 
 def fetch_range(start: str, end: str, codes: set[str], **kw: Any) -> list[dict[str, Any]]:
+    from app.services.datasource import retired as _retired
     from app.services.datasource.wrap import gw_call
 
+    if _retired.is_retired("xiaoshi"):
+        return []  # 源已退役：调用方按「无补充」处理，不再打不可达端点（L-200）
     lo, hi = date.fromisoformat(start[:10]), date.fromisoformat(end[:10])
     lo = max(lo, hi - timedelta(days=MAX_DAYS - 1))
     out: list[dict[str, Any]] = []

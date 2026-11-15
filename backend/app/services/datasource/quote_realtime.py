@@ -166,9 +166,11 @@ _GATEWAY: DatasetGateway | None = None
 def gateway() -> DatasetGateway:
     global _GATEWAY
     if _GATEWAY is None:
-        _GATEWAY = DatasetGateway([
-            RtkProvider(), _sina(), _tdx(), _tencent(), _akshare(), RtMinProvider(), XiaoshiSnapshotProvider(),
-        ])
+        from app.services.datasource import retired as _retired
+
+        providers = [RtkProvider(), _sina(), _tdx(), _tencent(), _akshare(), RtMinProvider(), XiaoshiSnapshotProvider()]
+        # 退役源（小石端点不可达）不进链；类保留，恢复订阅时去掉过滤即可复活。
+        _GATEWAY = DatasetGateway([p for p in providers if not _retired.provider_retired(p.name)])
     return _GATEWAY
 
 

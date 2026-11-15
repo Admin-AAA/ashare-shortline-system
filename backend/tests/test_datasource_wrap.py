@@ -49,15 +49,26 @@ def test_market_data_step4_identical_under_cutover(monkeypatch):
     from app.services import market_data as md
 
     bars = [{"trade_date": f"2026-01-{i:02d}"} for i in range(1, 31)]
-    monkeypatch.setattr(md, "_fetch_xiaoshi_kline", lambda q, s, start_date=None, end_date=None: bars)
-    monkeypatch.setattr(md, "_fetch_tushare_kline", lambda q, s, start_date=None, end_date=None: (_ for _ in ()).throw(RuntimeError("x")))
+    monkeypatch.setattr(md, "_fetch_tushare_kline", lambda q, s, start_date=None, end_date=None: bars)
     for flag in (False, True):
         monkeypatch.setattr(gw, "is_cutover", lambda d, f=flag: f)
         wrap._breakers.clear()
-        assert md._fetch_first_kline({"code": "000001"}, ["tushare", "xiaoshi"], None) == (bars, "xiaoshi", ["tushare: x"])
-    monkeypatch.setattr(gw, "_db_disabled_keys", lambda: {("xiaoshi", "kline")})
-    got = md._fetch_first_kline({"code": "000001"}, ["xiaoshi"], None)
-    assert got[0] == [] and "disabled" in got[2][0]  # explicit missing, never stale
+        assert md._fetch_first_kline({"code": "000001"}, ["tushare"], None) == (bars, "tushare", [])
+
+
+def test_retired_source_never_returns_silently(monkeypatch):
+    """退役源（小石）必须报明确错误，不能返回空当成功，也不能再进网关调用。"""
+    from app.services import market_data as md
+
+    monkeypatch.setattr(md, "_fetch_tushare_kline", lambda q, s, start_date=None, end_date=None: (_ for _ in ()).throw(RuntimeError("x")))
+
+    got = md._fetch_first_kline({"code": "000001"}, ["tushare", "xiaoshi"], None)
+    assert got[0] == [] and got[1] == ""
+    assert any("tushare: x" in e for e in got[2])
+    assert any("已退役" in e for e in got[2])
+
+    with pytest.raises(md.MarketDataError, match="已退役"):
+        md._fetch_kline("xiaoshi", {"code": "000001"}, None)
 
 
 def test_xiaoshi_ann_rows_filter_codes():
@@ -70,10 +81,13 @@ def test_xiaoshi_ann_rows_filter_codes():
     assert [(r["code"], r["article_id"], r["is_risk_warning"], r["announce_date"]) for r in rows] == [("600000", "e1:600000", True, "2026-10-16")]
 
 
-def test_every_routed_dataset_is_gateway_only():
+def test_every_routed_dataset_is_gateway_only(monkeypatch):
+    # 固定为「没开任何可选 flag」：本机 .env 开了腾讯行情，不能让断言随机器漂移。
+    monkeypatch.setattr(gw, "_flag_set", lambda attr: set())
     # 2026-10-21: 所有路由数据类型都走网关，不再依赖 ASHARE_DATASOURCE_CUTOVER。
+    # xiaoshi.alt 于 2026-11-15 随数据源退役移除，不再有该数据集。
     for ds in ("quote.daily", "bar.daily", "aux.limit_up", "aux.concept_sector", "aux.capital_flow",
-               "aux.dragon_tiger", "aux.news", "ann.list", "xiaoshi.alt", "fina_indicator", "quote.snapshot"):
+               "aux.dragon_tiger", "aux.news", "ann.list", "fina_indicator", "quote.snapshot"):
         assert gw.is_cutover(ds), ds
     # 加备用源的 flag 仍然显式开启
     assert not gw.is_cutover("quote.realtime.tencent")

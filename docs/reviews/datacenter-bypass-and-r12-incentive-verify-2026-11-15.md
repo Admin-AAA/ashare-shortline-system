@@ -97,3 +97,39 @@ PY
 # 找 + 补腰斩日（只读扫描 → 真补）
 NUMBA_CACHE_DIR=/tmp/nbcache_sirf ./.venv/bin/python scripts/repair_thin_minute_days.py --days 120 --dry-run
 ```
+
+## 6. 小石整源退役（2026-11-15，owner 授权）
+
+判定收口在 `app/services/datasource/retired.py`（`RETIRED_SOURCES = {"xiaoshi"}`），
+所有对外暴露「有哪些数据源」的入口都过 `is_retired` / `provider_retired`，不再各写一份 if。
+
+| 层 | 处理 |
+| --- | --- |
+| 源注册表 | `market_data._quote_sources/_kline_sources` 过滤退役源（`.env` 仍写 xiaoshi 也不生效） |
+| 网关链 | `bar_minute.gateway()` / `quote_realtime.gateway()` 构建时剔除；`wrap.PROVIDERS` 移除 `xiaoshi_quote/kline/alt`，`ann.list` 去掉 xiaoshi_alt，`xiaoshi.alt` 数据集删除 |
+| 数据源管理页 | `_xiaoshi_management_row` 直接返回 None；`set_provider_enabled("xiaoshi")` 拒绝 |
+| 网关拓扑/开关 | `LABELS` 去掉小石；`gateway_config_keys()` 不再含 xiaoshi → 旧开关行被孤儿清理删除 |
+| DB | `data_source_config` / `data_source_health` 的 xiaoshi 行已删（对账清理） |
+| 巡检 | `file:xiaoshi_min_all` 改 `retired=True`（只在版面报「冻结在 2026-10-12、源已退役」，不告警不计分）；`sync_alerts` 显式跳过 retired 项 |
+| 调度 | `post_sync` 里 `sync_xiaoshi_alt_data` 跳过；launchd `com.wangao.ashare-xiaoshi-min-sync.plist` 已卸载并改名 `*.retired-20261115` |
+| legacy 路径 | `tushare_client` 的 legacy/gateway 两条分钟取数路径共用 `_minute_source_retired()`，保证同源同结果（否则「逐字节对照」会假性不一致） |
+
+**恢复方式**（对方端点恢复后）：删掉 `retired.py` 里那一行 → 把 `wrap.PROVIDERS` 三行加回 →
+`ann.list`/`xiaoshi.alt` 数据集加回 → 把 launchd plist 改回 `.plist` 并 `launchctl load`。
+代码模块与本地 parquet 存档都保留，没有删除。
+
+## 7. 路由表重生成（2026-11-15）
+
+- 生成方式：`scripts/probe_datasource_capabilities.py --from-existing --write-routes`
+  （复用 2026-11-14 11:51 的能力矩阵，不重新打上游、不烧额度）。
+- 变更面：**57 个 API 中 38 个换了链路**，主要是把 `teajoin` 从「未列入→追加在链尾」提到链首
+  （quantdata 自 10-27 额度耗尽被禁用，teajoin 是当前唯一有额度的源）；
+  `margin_detail` order 变为 `teajoin → promax → quantdata`，`stk_mins` 变为 `promax → teajoin`
+  且 `quantdata` 标 unsupported。`manual` 段原样保留。
+- 漂移清零：`routing_table_drift()` 现在把 `manual.unsupported` 当成「有意排除」，
+  不再把 hsgt_top10 / moneyflow_hsgt 的 promax 报成「矩阵显示可用却被错误排除」（这两条会每天刷假告警）。
+- 连带修正：`data_gap_remediation_service._tushare_api_has_supported_provider` 改为直接问
+  路由器的 `_ordered_providers`，不再用「order 是否为空」猜——重生成后 `anns_d` 的 order 里
+  出现了 teajoin，但 teajoin 的 `excluded_apis` 排除了它，按表猜会把补数计划带偏。
+- 实测（新表生效）：`daily` 5571 行 2.5s、`daily_basic` 5571 行 3.3s、`margin_detail` 2019 行 0.8s、
+  `stk_mins` 241 根 0.8s。

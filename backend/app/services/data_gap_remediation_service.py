@@ -120,16 +120,12 @@ logger = logging.getLogger(__name__)
 
 
 def _tushare_api_has_supported_provider(api: str) -> bool:
-    """False when datasource/routing_table.json marks every configured provider unsupported for `api`."""
-    import json as _json
-    from pathlib import Path as _Path
+    """是否有「已启用且真的声明支持该接口」的 Tushare provider。
 
-    try:
-        table = _json.loads((_Path(__file__).parent / "datasource" / "routing_table.json").read_text())
-        entry = (table.get("apis") or table).get(api) or {}
-    except Exception:  # noqa: BLE001 - unknown -> keep legacy behaviour
-        return True
-    unsupported = set(entry.get("unsupported") or [])
+    直接问路由器的 `_ordered_providers`，不再用「routing_table 的 order 是否为空」来猜：
+    2026-11-15 重生成路由表后 `anns_d` 的 order 里出现了 teajoin，但 teajoin 的
+    excluded_apis 排除了它，按表猜会得到「有源可用」的错结论，补数计划会白白尝试。
+    """
     try:
         from app.services.datasource.akshare_backup import AKSHARE_BACKUP_APIS, backup_enabled
 
@@ -137,7 +133,16 @@ def _tushare_api_has_supported_provider(api: str) -> bool:
             return True  # akshare backup behind tushare (gateway) can still serve it
     except Exception:  # noqa: BLE001
         pass
-    return not (unsupported and not (entry.get("order") or []) and unsupported >= {"promax", "quantdata"})
+    try:
+        from app.services.tushare_client import get_pro
+
+        session = get_pro()
+        router = getattr(session, "_router", None)
+        if router is None:  # 兼容不同包装层
+            return True
+        return bool(router._ordered_providers(api))
+    except Exception:  # noqa: BLE001 - 未知一律按「有源」保持旧行为，不在补数计划里误跳过
+        return True
 
 
 def _refresh_auxiliary_dataset(

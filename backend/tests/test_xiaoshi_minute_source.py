@@ -212,7 +212,7 @@ def test_xiaoshi_minute_source_rejects_invalid_ohlc(tmp_path: Path) -> None:
         r2_client.close()
 
 
-def test_unified_minute_entry_prefers_xiaoshi_before_tushare(monkeypatch) -> None:
+def test_unified_minute_entry_skips_retired_xiaoshi(monkeypatch) -> None:
     from app.services.tushare_client import fetch_minute_kbars
 
     rows = [
@@ -229,13 +229,14 @@ def test_unified_minute_entry_prefers_xiaoshi_before_tushare(monkeypatch) -> Non
             "source": "xiaoshi_min1",
         }
     ]
+    # 小石 2026-11-15 退役：即便它的取数函数仍能返回数据，统一入口也不得再用它，
+    # 必须落到 Tushare stk_mins（链上已无 xiaoshi_min1）。
     monkeypatch.setattr("app.services.tushare_client._fetch_xiaoshi_minute_kbars", lambda *args, **kwargs: rows)
     monkeypatch.setattr(
         "app.services.tushare_client._fetch_tushare_minute_kbars",
-        lambda *args, **kwargs: pytest.fail("Tushare should not be called when Xiaoshi returns rows"),
+        lambda *args, **kwargs: [dict(r, source="tushare_stk_mins") for r in rows],
     )
 
     result = fetch_minute_kbars("000001", trade_date="20260701")
 
-    assert result[0]["source"] == "xiaoshi_min1"
-    assert result[0]["pre_close"] == pytest.approx(10.05)
+    assert result and result[0]["source"] == "tushare_stk_mins"

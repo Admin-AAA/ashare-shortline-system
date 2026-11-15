@@ -143,19 +143,26 @@ def test_quality_score_penalty_rules():
     assert dq.quality_score_penalty(None)["penalty"] == 0
 
 
-def test_xiaoshi_min_all_is_provisional_and_capped(tmp_path):
+def test_xiaoshi_min_all_retired_is_informational_not_yellow(tmp_path):
+    """小石整源退役（2026-11-15）后：仍如实报「冻结在哪一天」，但降为 green + retired，
+    不发告警、不计健康分 —— 否则退役等于换一种方式天天报黄。"""
     import json
 
     st = tmp_path / "state.json"
     st.write_text(json.dumps({"files": {"a": {"last_date": "2026-10-09"}},
                               "last_run": {"ts": "2026-10-26 13:38:27", "downloaded": 12, "errors": 0}}))
     it = dq.check_xiaoshi_min_all(OPEN, "2026-10-23", _t("2026-10-26 14:00"), st)
-    assert it["severity"] == dq.YELLOW and it["provisional"] is True and it["latest"] == "2026-10-09"
-    assert dq.check_xiaoshi_min_all(OPEN, "2026-10-23", None, tmp_path / "missing.json")["provisional"] is True
+    assert it["severity"] == dq.GREEN and it["retired"] is True
+    assert it["latest"] == "2026-10-09"
+    assert "已退役" in it["detail"] and "2026-11-15" in it["detail"]
+    assert "file:xiaoshi_min_all" in dq.RETIRED_KEYS
+    # 没有 state.json 时也只报事实，不再升黄
+    missing = dq.check_xiaoshi_min_all(OPEN, "2026-10-23", None, tmp_path / "missing.json")
+    assert missing["retired"] is True and missing["severity"] == dq.GREEN
 
 
-def test_xiaoshi_min_all_exposes_upstream_outage_not_just_lag(tmp_path):
-    """上游 catalog 连续 fatal 时，巡检必须点名上游故障，而不是只报「滞后 N 天」。"""
+def test_xiaoshi_min_all_still_exposes_upstream_outage_while_retired(tmp_path):
+    """退役不等于掩盖事实：上游 catalog 连续 fatal 仍要写进 detail/upstream_error，只是不再告警。"""
     import json
 
     st = tmp_path / "state.json"
@@ -168,7 +175,7 @@ def test_xiaoshi_min_all_exposes_upstream_outage_not_just_lag(tmp_path):
             json.dumps({"ts": "2026-11-14 19:42:22", "fatal": "Xiaoshi 网络请求失败: /api/v3/history/catalog"}),
         ]) + "\n", encoding="utf-8")
     it = dq.check_xiaoshi_min_all(OPEN, "2026-11-13", _t("2026-11-14 20:00"), st)
-    assert it["severity"] == dq.YELLOW and it["provisional"] is True  # 不因标注而降级/升级
+    assert it["severity"] == dq.GREEN and it["retired"] is True
     assert "/api/v3/history/catalog" in it["upstream_error"]
     assert "2026-11-14 19:42:22" in it["upstream_error"]
     assert "上游同步失败" in it["detail"] and "sync_xiaoshi_min_all.py" in it["detail"]
