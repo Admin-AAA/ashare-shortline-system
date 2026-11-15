@@ -181,7 +181,6 @@ def test_every_current_scheduler_task_type_has_an_explicit_business_identity() -
         "data_backfill",
         "pool_refresh",
         "outcome_label",
-        "preset_matrix_run",
     }
 
     result = build_business_identity_contracts(current_types)

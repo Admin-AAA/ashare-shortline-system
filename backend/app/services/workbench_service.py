@@ -112,21 +112,10 @@ from app.services.registry.data_source import (
     DATA_SOURCE_LOCAL_POOL_PREFERRED,
     DATA_SOURCE_LOCAL_POOL_REALTIME,
     DATA_SOURCE_REALTIME,
-    DEFAULT_PRESETS,
     DEFAULT_RECOMMENDATION_DATA_SOURCE,
     normalize_data_source,
 )
-from app.services.registry.presets import (
-    _serialize_preset,
-    create_preset,
-    delete_preset,
-    list_presets,
-    update_preset,
-)
-from app.services.registry.diagnostics import (
-    UnknownRegistryValueError,
-    build_registry_diagnostics,
-)
+from app.services.registry.errors import UnknownRegistryValueError
 from app.services.registry.skills import (
     backtest_skill,
     batch_skill_performance_summaries,
@@ -255,11 +244,11 @@ _trigger_recommendation = trigger_recommendation
 
 
 def _canonical_workbench_request(params: dict[str, Any], payload: dict[str, Any]) -> RunRequest:
-    """Freeze one legacy/preset merge into the only durable RunRequest form.
+    """Freeze the merged run params into the only durable RunRequest form.
 
     The parser owns the formal default.  An explicit caller value is copied exactly
     once, so malformed values fail validation and a preselected experiment/backtest
-    mode cannot be silently replaced during a preset merge.
+    mode cannot be silently replaced during the merge.
     """
     validate_run_request_no_credentials(payload)
     document = dict(params)
@@ -455,8 +444,6 @@ def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
     t0 = time.perf_counter()
     sync_skills(db)
     t1 = time.perf_counter()
-    presets = list_presets(db)
-    t2 = time.perf_counter()
     latest_row = _select_latest_bootstrap_run(db)
     if latest_row is not None:
         _auto_recover_stale_runs(db, [latest_row])
@@ -472,11 +459,10 @@ def bootstrap_workbench_state(db: Session) -> dict[str, Any]:
     skills = list_skills(db)
     t5 = time.perf_counter()
     logger.info(
-        "bootstrap timing: sync_skills=%.0fms list_presets=%.0fms list_runs=%.0fms market_snapshot=%.0fms list_skills=%.0fms total=%.0fms",
-        (t1 - t0) * 1000, (t2 - t1) * 1000, (t3 - t2) * 1000, (t4 - t3) * 1000, (t5 - t4) * 1000, (t5 - t0) * 1000,
+        "bootstrap timing: sync_skills=%.0fms list_runs=%.0fms market_snapshot=%.0fms list_skills=%.0fms total=%.0fms",
+        (t1 - t0) * 1000, (t3 - t1) * 1000, (t4 - t3) * 1000, (t5 - t4) * 1000, (t5 - t0) * 1000,
     )
     state = {
-        "presets": presets,
         "recent_runs": {
             "latest": latest_run,
         },
@@ -540,8 +526,6 @@ def get_initial_workbench_state(db: Session, *, detail: str = "summary") -> dict
     t0 = time.perf_counter()
     home_state = bootstrap_workbench_state(db)
     t1 = time.perf_counter()
-    presets = list_presets(db)
-    t2 = time.perf_counter()
     runs = list_runs(db, limit=100 if include_full_detail else 20)
     t3 = time.perf_counter()
     task_runs = list_scheduled_task_runs(
@@ -556,17 +540,15 @@ def get_initial_workbench_state(db: Session, *, detail: str = "summary") -> dict
     t5 = time.perf_counter()
     payload = {
         "home": home_state,
-        "presets": presets,
         "runs": runs,
         "task_runs": task_runs,
         "skills": skills,
         "data_sources": data_sources,
     }
     logger.info(
-        "initial_state timing: home=%.0fms presets=%.0fms runs=%.0fms task_runs=%.0fms skills=%.0fms data_sources=%.0fms total=%.0fms",
+        "initial_state timing: home=%.0fms runs=%.0fms task_runs=%.0fms skills=%.0fms data_sources=%.0fms total=%.0fms",
         (t1 - t0) * 1000,
-        (t2 - t1) * 1000,
-        (t3 - t2) * 1000,
+        (t3 - t1) * 1000,
         (t35 - t3) * 1000,
         (t4 - t35) * 1000,
         (t5 - t4) * 1000,
@@ -583,30 +565,7 @@ def _prepare_workbench_run(
     """Resolve the canonical request and execution audit without creating a run."""
     skills = sync_skills(db)
     skill_map = {skill.skill_id: skill for skill in skills}
-    preset = db.get(Preset, payload["preset_id"]) if payload.get("preset_id") else None
-    if payload.get("preset_id") and preset is None:
-        available_preset_ids = tuple(
-            sorted(
-                {
-                    *(
-                        str(value)
-                        for value in db.scalars(select(Preset.preset_id)).all()
-                        if value
-                    ),
-                    *(
-                        str(item["preset_id"])
-                        for item in DEFAULT_PRESETS
-                        if item.get("preset_id")
-                    ),
-                }
-            )
-        )
-        raise UnknownRegistryValueError(
-            "preset",
-            str(payload["preset_id"]),
-            available_preset_ids,
-        )
-    params = _merge_run_params(db, preset, payload)
+    params = _merge_run_params(payload)
     request = _canonical_workbench_request(params, payload)
     params["run_mode"] = request.run_mode.value
     selected_skills = _select_skills_for_run(
@@ -614,11 +573,10 @@ def _prepare_workbench_run(
         skill_map,
         params["skills"],
         run_mode=request.run_mode.value,
-        preset_id=params.get("preset_id"),
         raw_skills=skills,
     )
     if not selected_skills:
-        raise ValueError("没有可运行的 Skill，请检查预设配置或 Skill 状态")
+        raise ValueError("没有可运行的 Skill，请检查 Skill 状态")
     execution_version, execution_audit = _execution_version_identity(
         request,
         selected_skills,
@@ -2475,9 +2433,9 @@ def _historical_recommendations(db: Session, code: str, exclude_recommendation_i
     ]
 
 
-def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any]) -> dict[str, Any]:
-    preset_data = _serialize_preset(db, preset) if preset else {}
-    skills = payload.get("skills") or preset_data.get("skills") or []
+def _merge_run_params(payload: dict[str, Any]) -> dict[str, Any]:
+    """把一次运行请求合并成规范参数。预设层已退役：口径只来自 payload 与默认值。"""
+    skills = payload.get("skills") or []
     # SkillSelection only accepts skill_id/weight/sort_order; strip extra fields
     skills = [
         {k: v for k, v in s.items() if k in ("skill_id", "weight", "sort_order")}
@@ -2487,40 +2445,28 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
     if payload.get("single_skill_id"):
         single_weight = float(payload.get("single_skill_weight") or 1.0)
         skills = [{"skill_id": str(payload["single_skill_id"]), "weight": single_weight, "sort_order": 0}]
-    skip_aux_refresh = bool(
-        payload.get("skip_aux_refresh")
-        if "skip_aux_refresh" in payload
-        else preset_data.get("skip_aux_refresh", False)
-    )
+    skip_aux_refresh = bool(payload.get("skip_aux_refresh", False))
     params = {
-        "preset_id": preset_data.get("preset_id"),
-        "run_name": str(payload.get("run_name") or preset_data.get("name") or "临时运行"),
-        "market_scope": str(payload.get("market_scope") or preset_data.get("market_scope") or "all"),
-        "market_scope_value": payload.get("market_scope_value", preset_data.get("market_scope_value")),
-        "risk_template": str(payload.get("risk_template") or preset_data.get("risk_template") or "balanced"),
-        "score_line": float(payload.get("score_line") or preset_data.get("score_line") or 72.0),
-        "output_count": int(payload.get("output_count") or preset_data.get("output_count") or 6),
-        "data_source": normalize_data_source(payload.get("data_source") or preset_data.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE),
+        "preset_id": None,
+        "run_name": str(payload.get("run_name") or "临时运行"),
+        "market_scope": str(payload.get("market_scope") or "all"),
+        "market_scope_value": payload.get("market_scope_value"),
+        "risk_template": str(payload.get("risk_template") or "balanced"),
+        "score_line": float(payload.get("score_line") or 72.0),
+        "output_count": int(payload.get("output_count") or 6),
+        "data_source": normalize_data_source(payload.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE),
         "skip_aux_refresh": skip_aux_refresh,
         "disable_agent_review": bool(payload.get("disable_agent_review", False)),
         "agent_review_limit": int(payload.get("agent_review_limit") or 0),
         "agent_review_concurrency": int(payload.get("agent_review_concurrency") or 0),
-        "hide_recent_repeats": bool(
-            payload.get("hide_recent_repeats")
-            if "hide_recent_repeats" in payload
-            else preset_data.get("hide_recent_repeats", True)
-        ),
-        "dedup_same_day": bool(
-            payload.get("dedup_same_day")
-            if "dedup_same_day" in payload
-            else preset_data.get("dedup_same_day", True)
-        ),
+        "hide_recent_repeats": bool(payload.get("hide_recent_repeats", True)),
+        "dedup_same_day": bool(payload.get("dedup_same_day", True)),
         "skills": skills,
     }
     for key in ("matrix_batch_id", "matrix_batch_name", "matrix_run", "trade_date_override"):
         if key in payload:
             params[key] = payload.get(key)
-    # formal 模式 score_line 硬地板（与 RunRequest 契约一致）：matrix/手动降线不得
+    # formal 模式 score_line 硬地板（与 RunRequest 契约一致）：手动降线不得
     # 污染 LIVE formal 推荐口径。run_mode 在 payload 显式给出时立刻夹；未给出时由
     # parse_run_request 默认 formal 再夹一次（契约层兜底）。
     from app.services.runs.contracts import FORMAL_SCORE_LINE_FLOOR, RunMode
@@ -2529,10 +2475,9 @@ def _merge_run_params(db: Session, preset: Preset | None, payload: dict[str, Any
     if run_mode_raw is None or str(run_mode_raw).lower() == RunMode.FORMAL.value:
         if float(params["score_line"]) < FORMAL_SCORE_LINE_FLOOR:
             logger.warning(
-                "formal score_line %.1f < floor %.1f，抬到地板（preset=%s run_name=%s）",
+                "formal score_line %.1f < floor %.1f，抬到地板（run_name=%s）",
                 float(params["score_line"]),
                 FORMAL_SCORE_LINE_FLOOR,
-                params.get("preset_id"),
                 params.get("run_name"),
             )
             params["score_line"] = float(FORMAL_SCORE_LINE_FLOOR)
@@ -2558,18 +2503,8 @@ def _select_skills_for_run(
     requested_skills: list[dict[str, Any]],
     *,
     run_mode: str | None = None,
-    preset_id: str | None = None,
     raw_skills: list[StrategySkill] | tuple[StrategySkill, ...] | None = None,
 ) -> list[dict[str, Any]]:
-    # 预设级注册诊断只对挂了预设的 formal run 生效；单策略独立 run（无 preset）由
-    # standalone_strategy_ids 保证 enabled/executable/非退役。
-    if str(run_mode or "").lower() == "formal" and preset_id:
-        report = build_registry_diagnostics(
-            tuple(raw_skills) if raw_skills is not None else tuple(skill_map.values()),
-            list_presets(db),
-        )
-        report.require_executable(preset_id)
-
     selected: list[dict[str, Any]] = []
     available_strategy_ids = tuple(sorted(skill_map))
     for item in requested_skills:

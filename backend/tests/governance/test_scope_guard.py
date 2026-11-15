@@ -242,7 +242,6 @@ def test_prefect_payload_flows_deny_brokerage_before_dispatch():
     from app.orchestration import flows
 
     for flow_obj in (
-        flows.manual_preset_matrix_flow,
         flows.manual_data_health_remediation_flow,
     ):
         with pytest.raises(ScopeViolation) as excinfo:
@@ -259,7 +258,7 @@ def test_prefect_flow_guard_runs_before_service_resolution(monkeypatch):
 
     monkeypatch.setattr(flows, "assert_no_brokerage_access", _sentinel)
     with pytest.raises(ScopeViolation, match="sentinel"):
-        flows.manual_preset_matrix_flow.fn("task_run_scope_guard_probe", {"preset_ids": []})
+        flows.manual_data_health_remediation_flow.fn("task_run_scope_guard_probe", {"tables": []})
 
 
 def _test_client():

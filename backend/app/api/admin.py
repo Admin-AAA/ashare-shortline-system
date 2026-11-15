@@ -428,13 +428,11 @@ def _upsert_task_from_payload(db: Session, payload: dict) -> dict:
         raise HTTPException(status_code=400, detail="task_id is required")
 
     task_type = str(payload.get("task_type") or "").strip()
-    if task_type not in {"data_sync", "recommendation_run", "preset_matrix_run", "pool_refresh", "data_backfill", "formal_safety_net"}:
+    if task_type not in {"data_sync", "recommendation_run", "pool_refresh", "data_backfill", "formal_safety_net"}:
         raise HTTPException(status_code=400, detail="task_type is invalid")
 
     payload_data = dict(payload.get("payload") or {})
     enabled = bool(payload.get("enabled", True))
-    if task_type == "recommendation_run" and enabled and not payload_data.get("preset_id"):
-        raise HTTPException(status_code=400, detail="preset_id is required")
 
     cron_expression = str(payload.get("cron_expression") or "").strip()
     if not cron_expression:

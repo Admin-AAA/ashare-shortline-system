@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from app.api import midterm
-from app.api import admin, backtests, benchmarks, dashboard, data_sources, frontend_logs, home, llm, metrics, outcomes, presets, records, recommendations, runs, skills, stats, strategies
+from app.api import admin, backtests, benchmarks, dashboard, data_sources, frontend_logs, home, llm, metrics, outcomes, records, recommendations, runs, skills, stats, strategies
 from app.core.config import get_settings
 from app.core.logger import setup_logging
 from app.db.init_db import init_db
@@ -492,7 +492,6 @@ app.include_router(records.router)
 app.include_router(dashboard.router)
 app.include_router(data_sources.router)
 app.include_router(home.router)
-app.include_router(presets.router)
 app.include_router(runs.router)
 app.include_router(backtests.router)
 app.include_router(skills.router)

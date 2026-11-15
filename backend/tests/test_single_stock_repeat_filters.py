@@ -2,8 +2,8 @@ import app.services.single_stock_analysis as m
 
 
 def test_single_stock_request_disables_repeat_filters(db):
-    request, _ = m._single_stock_run_request(
-        db, trade_date="2026-10-15", include_llm=False, skill_id="chen-xiaoqun-skill", preset_id=None
+    request = m._single_stock_run_request(
+        db, trade_date="2026-10-15", include_llm=False, skill_id="chen-xiaoqun-skill"
     )
     assert request.hide_recent_repeats is False
     assert request.dedup_same_day is False

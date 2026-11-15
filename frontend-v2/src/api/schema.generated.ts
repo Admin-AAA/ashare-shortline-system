@@ -41,6 +41,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/data-gateway": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Data Gateway Topology Api
+         * @description 数据网关拓扑：数据类型 → 有序 provider → 开关 + live 熔断状态。
+         */
+        get: operations["data_gateway_topology_api_api_admin_data_gateway_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/data-gateway/item-switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Data Gateway Item Switch Api
+         * @description 只在一个数据类型里启停一个 provider {dataset, provider, enabled}（写 data_gateway_item_switch，
+         *     不动共用的源总开关；各进程 5s 内生效）。
+         */
+        post: operations["data_gateway_item_switch_api_api_admin_data_gateway_item_switch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/data-gateway/switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Data Gateway Switch Api
+         * @description 启停一个网关开关 {source, source_type, enabled}（写 data_source_config，各进程 5s 内生效）。
+         */
+        post: operations["data_gateway_switch_api_api_admin_data_gateway_switch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/data-health": {
         parameters: {
             query?: never;
@@ -98,6 +159,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/data-health/snapshots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Data Health Snapshots
+         * @description 每日 18:40 健康快照：近 N 个交易日健康分均值、盘后出票成功率、有红项的天数（只读文件）。
+         */
+        get: operations["get_data_health_snapshots_api_admin_data_health_snapshots_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/data-quality": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Data Quality
+         * @description 统一数据新鲜度与质量巡检结果（数据库表 + 文件数据集 + research 静态文件 + 调度任务 + 日志静默失败）。
+         *
+         *     默认读最近一次巡检落盘的报告（盘前 08:50 / 18:00 / 21:40 定时跑）；refresh=true 立即重跑一次（只读、不改告警登记）。
+         */
+        get: operations["get_data_quality_api_admin_data_quality_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/data-sources": {
         parameters: {
             query?: never;
@@ -107,7 +210,7 @@ export interface paths {
         };
         /**
          * List Data Sources Api
-         * @description 列出当前配置并接入的 Tushare Provider 运行状态。
+         * @description 列出配置页可管理的 Tushare Provider 与独立市场数据源。
          */
         get: operations["list_data_sources_api_api_admin_data_sources_get"];
         put?: never;
@@ -132,7 +235,7 @@ export interface paths {
          * @description 重排当前 Tushare Pro Provider 的路由优先级（运行时即时生效，不动 config）。
          *
          *     payload: {"provider_names": ["promax", "quantdata"]}（主源在前）。
-         *     realtime_quote 是独立爬虫、不在路由链里，传入会被忽略。
+         *     不在路由链里的名字传入会被忽略。
          */
         post: operations["reorder_providers_api_api_admin_data_sources_reorder_post"];
         delete?: never;
@@ -266,6 +369,29 @@ export interface paths {
         head?: never;
         /** Update Model Route Api */
         patch: operations["update_model_route_api_api_admin_model_routes__route_id__patch"];
+        trace?: never;
+    };
+    "/api/admin/orchestration/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Orchestration Status
+         * @description 只读诊断：Prefect 客户端当前指向哪个 server。
+         *
+         *     ``mode=ephemeral_fallback`` 或 ``api_url=None`` 意味着每次触发都会自建临时
+         *     server，与常驻 server 抢同一个 SQLite（database is locked / 502）。
+         */
+        get: operations["orchestration_status_api_admin_orchestration_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/admin/readiness": {
@@ -671,6 +797,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/benchmarks/hs300": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Hs300 Daily Curve
+         * @description 区间内沪深300交易日累计收益，首个交易日归 0% / 净值 1。
+         */
+        get: operations["hs300_daily_curve_api_benchmarks_hs300_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/benchmarks/hs300/aligned": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hs300 Aligned Curve
+         * @description 按收益曲线的日期对齐沪深300累计收益。点的顺序与请求 dates 一致。
+         */
+        post: operations["hs300_aligned_curve_api_benchmarks_hs300_aligned_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/dashboard/overview": {
         parameters: {
             query?: never;
@@ -697,6 +863,32 @@ export interface paths {
         };
         /** List Sources */
         get: operations["list_sources_api_data_sources_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-sources/limits": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Data Source Limits
+         * @description 数据源实时配额 / 限频总览（只读观测，绝不触发上游请求）。
+         *
+         *     回答四个此前无处可查的问题：
+         *     1. 每个限流 key 当前窗口用了多少、还剩多少（优先取共享库，即 backend + Prefect 合计用量）；
+         *     2. 日额度用了多少（teajoin / promax / quantdata）；
+         *     3. promax 的「声明 180/min」与「实际生效 5min/1h 滚动窗口」差多少倍；
+         *     4. 哪些 provider 正在熔断、近 N 小时谁的空返回率高到不值得再给配额。
+         */
+        get: operations["data_source_limits_api_data_sources_limits_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -824,6 +1016,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/data-sources/traces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Traces
+         * @description 统一数据源请求 trace 查询（含 fallback attempt 链，安全摘要不含 credential）。
+         */
+        get: operations["list_traces_api_data_sources_traces_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-sources/traces/fallback-chains": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Fallback Chains
+         * @description 最近发生过 fallback 的请求链（promax→quantdata→... / tushare→baostock）。
+         */
+        get: operations["fallback_chains_api_data_sources_traces_fallback_chains_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/data-sources/traces/health": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Trace Health
+         * @description 从统一 trace 聚合 success/fallback/valid-empty/breaker-skip/p95。
+         */
+        get: operations["trace_health_api_data_sources_traces_health_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/data-sources/{source_type}/{source}/enabled": {
         parameters: {
             query?: never;
@@ -912,6 +1164,173 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/horizons/long/picks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Long Picks */
+        get: operations["long_picks_api_horizons_long_picks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/horizons/long/strategies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Long Strategies */
+        get: operations["long_strategies_api_horizons_long_strategies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/horizons/mid/picks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Mid Picks */
+        get: operations["mid_picks_api_horizons_mid_picks_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/horizons/mid/strategies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Mid Strategies */
+        get: operations["mid_strategies_api_horizons_mid_strategies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/horizons/{horizon}/metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Horizon Metrics
+         * @description 诊断 / 研究：总览 KPI、按策略、批内排名 Top-K、按信号月、实盘 vs 回放。
+         *
+         *     portrait_realized_12m 另给策略画像「回放已平仓」：按信号日近 365 天，不随 window_days 改变。
+         */
+        get: operations["horizon_metrics_api_horizons__horizon__metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/horizons/{horizon}/picks/{strategy_id}/{signal_date}/{code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Horizon Pick Detail */
+        get: operations["horizon_pick_detail_api_horizons__horizon__picks__strategy_id___signal_date___code__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/horizons/{horizon}/run": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Run Horizon
+         * @description 手动出票/续跑：{as_of: YYYY-MM-DD, force?: bool, strategy_ids?: [..]}；同日重跑覆盖同日文件（幂等）。
+         */
+        post: operations["run_horizon_api_horizons__horizon__run_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/horizons/{horizon}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Horizon Runs
+         * @description 运行记录：每日盘后各策略的出票结果（出票/无信号/仓位已满/非选股日/数据异常）。
+         */
+        get: operations["horizon_runs_api_horizons__horizon__runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/horizons/{horizon}/trades": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Horizon Trades
+         * @description 交易明细：所有批次个股平铺（一行一笔），口径与按批次复盘相同。
+         */
+        get: operations["horizon_trades_api_horizons__horizon__trades_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/llm/review-health": {
         parameters: {
             query?: never;
@@ -928,7 +1347,8 @@ export interface paths {
          *       - recent_count_24h：近 24h 成功审查次数
          *       - total_entries：缓存总条数
          *       - model：最近一次审查使用的模型
-         *       - status：ok / stale / never（见 llm_review_cache_service._llm_health_status）
+         *       - status：ok / stale / never / disabled（停用时固定 disabled，见 _llm_health_status）
+         *       - enabled：是否启用 AI 风险审查（与 async_llm_risk_notes.LLM_RISK_NOTES_ENABLED 同源）
          *       - checked_at：本端点查询时间
          *       - call_health：最近5个全市场 formal run 的 skill_review 调用成功率 + 失败原因
          *         （run 级过程健康，与缓存新鲜度正交：缓存命中旧 cache 时新鲜度 ok 但新 run
@@ -1090,6 +1510,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/metrics/exit-ambiguity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Exit Ambiguity */
+        get: operations["exit_ambiguity_api_metrics_exit_ambiguity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/metrics/filter-effectiveness": {
         parameters: {
             query?: never;
@@ -1099,6 +1536,26 @@ export interface paths {
         };
         /** Metric Filter Effectiveness */
         get: operations["metric_filter_effectiveness_api_metrics_filter_effectiveness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/metrics/live-breakdown": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Live Breakdown
+         * @description 实盘分口径：组合时代与单策略分开；成交分「确认买入」与「开盘模拟（未确认）」两栏。
+         */
+        get: operations["live_breakdown_api_metrics_live_breakdown_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1133,6 +1590,26 @@ export interface paths {
         };
         /** Metric Precision At K */
         get: operations["metric_precision_at_k_api_metrics_precision_at_k_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/metrics/runtime": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Runtime Metrics
+         * @description Process-local observability: provider success/fallback/ratelimit wait, LLM latency, stage durations.
+         */
+        get: operations["runtime_metrics_api_metrics_runtime_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1212,42 +1689,6 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
-        trace?: never;
-    };
-    "/api/presets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get Presets */
-        get: operations["get_presets_api_presets_get"];
-        put?: never;
-        /** Post Preset */
-        post: operations["post_preset_api_presets_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/presets/{preset_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Delete */
-        delete: operations["delete_api_presets__preset_id__delete"];
-        options?: never;
-        head?: never;
-        /** Patch Preset */
-        patch: operations["patch_preset_api_presets__preset_id__patch"];
         trace?: never;
     };
     "/api/recommendations/execution-confirmations": {
@@ -1525,6 +1966,10 @@ export interface paths {
         /**
          * Run Records
          * @description 推荐运行记录列表（轻量摘要，不含推荐股票明细）。
+         *
+         *     兼容：不带 page/page_size 时与旧版完全一致（返回数组，前 limit 条）。
+         *     带 page 或 page_size 时在最近 500 条内按筛选条件服务端分页，按创建时间倒序，
+         *     返回 {items, total, page, page_size}；total 为筛选后总数。
          */
         get: operations["run_records_api_records_runs_get"];
         put?: never;
@@ -1590,7 +2035,7 @@ export interface paths {
          *         code: str           # 股票代码（必填）
          *         trade_date: str     # 分析日期 YYYY-MM-DD（默认最近交易日）
          *         include_llm: bool   # 是否允许正式管线触发 LLM skill 深审（会消耗 LLM 额度）
-         *         skill_id: str       # 指定 skill（默认 daily-stock-analysis-skill）
+         *         skill_id: str       # 指定 skill（默认炒股养家 chao-gu-yang-jia-skill）
          */
         post: operations["analyze_single_stock_api_runs_analyze_stock_post"];
         delete?: never;
@@ -1648,7 +2093,7 @@ export interface paths {
          *         horizon_days: int (默认 5)
          *         baseline_score_line: float (默认 72.0)
          *         candidate_score_line: float (默认 65.0)
-         *         strategy_id: str (默认 daily-stock-analysis-skill)
+         *         strategy_id: str (默认炒股养家 chao-gu-yang-jia-skill)
          */
         post: operations["create_backtest_comparison_api_runs_backtest_comparison_post"];
         delete?: never;
@@ -1700,40 +2145,6 @@ export interface paths {
         };
         /** Backtest Detail */
         get: operations["backtest_detail_api_runs_backtests__backtest_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/runs/matrix": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create Matrix Run */
-        post: operations["create_matrix_run_api_runs_matrix_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/runs/matrix/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Matrix Run Status */
-        get: operations["matrix_run_status_api_runs_matrix_status_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1805,7 +2216,7 @@ export interface paths {
         put?: never;
         /**
          * Resume
-         * @description Resume only an interrupted run with a valid persisted lifecycle checkpoint.
+         * @description Dispatch completion of one database-verified persistence collection.
          */
         post: operations["resume_api_runs__run_id__resume_post"];
         delete?: never;
@@ -2112,14 +2523,77 @@ export interface paths {
         };
         /**
          * List Strategies
-         * @description 全部策略清单（含调用覆盖与胜率指标）。
+         * @description 全部策略清单（当前版本半年 canonical 回测，缺失时明确 pending）。
          *
          *     返回固定顺序：已调用（有样本）的策略在前、按胜率降序；从未调用的策略在后。
-         *     performance=None 表示该项目前无任何推荐历史（未覆盖）。
-         *     时间窗口：window_days/start_date/end_date 透传给 metrics_by_strategy，
-         *     与 /api/metrics/by-strategy 口径一致，便于策略清单页与指标页跨页对照。
+         *     performance=None 表示当前版本、参数与窗口尚无正式画像；不会读取历史推荐补位。
          */
         get: operations["list_strategies_api_strategies_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/strategies/data-readiness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Strategy Data Readiness
+         * @description 每个现役策略（短/中/长）依赖的数据现在是否最新，以及最近一次出票时数据闸门的记录。
+         *
+         *     live：按巡检的期望交易日现查（60 秒缓存）；recorded：最近一个出票日 output/strategy_readiness/<日期>.json。
+         *     前端在推荐卡片/策略页显示「缺数据：XX 最新 10-23，应为 11-04」。只读。
+         */
+        get: operations["strategy_data_readiness_api_strategies_data_readiness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/strategies/rolling-r12": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Rolling R12
+         * @description 现役策略近12个月扣成本后每笔（每月第一个交易日 22:30 滚动重算；cutoff=截止日）。还没算过返回 available=false。
+         */
+        get: operations["rolling_r12_api_strategies_rolling_r12_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/strategies/standalone-metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Standalone Metrics
+         * @description 每日独立运行策略的单策略口径指标（scripts/compute_standalone_metrics.py 落盘）。
+         *
+         *     清单以当前 standalone_strategy_ids 为准；落盘里没有的策略标 pending，已退役的不返回。
+         */
+        get: operations["standalone_metrics_api_strategies_standalone_metrics_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2137,6 +2611,23 @@ export interface paths {
         };
         /** Strategy Detail */
         get: operations["strategy_detail_api_strategies__strategy_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/text-events/labels": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Text Event Labels */
+        get: operations["get_text_event_labels_api_text_events_labels_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2321,6 +2812,10 @@ export interface components {
             data_health?: {
                 [key: string]: unknown;
             };
+            /** Hardening */
+            hardening?: {
+                [key: string]: unknown;
+            };
             market: components["schemas"]["MarketTemperature"];
             /** Quality Scorecard */
             quality_scorecard?: {
@@ -2383,7 +2878,7 @@ export interface components {
         };
         /**
          * ExecutionPolicyRequest
-         * @description Explicit, bounded execution economics passed to the immutable domain DTO.
+         * @description Flat API projection whose defaults come from the current immutable artifact.
          */
         ExecutionPolicyRequest: {
             /**
@@ -2393,7 +2888,7 @@ export interface components {
             commission_rate: number;
             /**
              * Entry Lookahead Days
-             * @default 1
+             * @default 2
              */
             entry_lookahead_days: number;
             /**
@@ -2419,7 +2914,7 @@ export interface components {
             intraday_exit_priority: "stop_loss" | "take_profit";
             /**
              * Max Entry Gap Pct
-             * @default 10
+             * @default 6
              */
             max_entry_gap_pct: number | null;
             /**
@@ -2445,14 +2940,11 @@ export interface components {
             stamp_tax_rate: number;
             /**
              * Stop Loss Pct
-             * @default 5
+             * @default 5.5
              */
             stop_loss_pct: number | null;
-            /**
-             * Take Profit Pct
-             * @default 10
-             */
-            take_profit_pct: number | null;
+            /** Take Profit Pct */
+            take_profit_pct?: number | null;
         };
         /**
          * ExperimentAcceptanceRequest
@@ -2521,6 +3013,11 @@ export interface components {
             };
             /** Ok */
             ok: boolean;
+        };
+        /** Hs300AlignedRequest */
+        Hs300AlignedRequest: {
+            /** Dates */
+            dates?: string[];
         };
         /**
          * JsonResponse
@@ -2815,6 +3312,96 @@ export interface operations {
             };
         };
     };
+    data_gateway_topology_api_api_admin_data_gateway_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+        };
+    };
+    data_gateway_item_switch_api_api_admin_data_gateway_item_switch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    data_gateway_switch_api_api_admin_data_gateway_switch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_data_health_api_admin_data_health_get: {
         parameters: {
             query?: {
@@ -2897,6 +3484,68 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+        };
+    };
+    get_data_health_snapshots_api_admin_data_health_snapshots_get: {
+        parameters: {
+            query?: {
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_data_quality_api_admin_data_quality_get: {
+        parameters: {
+            query?: {
+                refresh?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -3233,6 +3882,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    orchestration_status_api_admin_orchestration_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -3897,6 +4566,71 @@ export interface operations {
             };
         };
     };
+    hs300_daily_curve_api_benchmarks_hs300_get: {
+        parameters: {
+            query: {
+                start: string;
+                end: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hs300_aligned_curve_api_benchmarks_hs300_aligned_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Hs300AlignedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     overview_api_dashboard_overview_get: {
         parameters: {
             query?: never;
@@ -3933,6 +4667,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+        };
+    };
+    data_source_limits_api_data_sources_limits_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -4125,6 +4890,104 @@ export interface operations {
             };
         };
     };
+    list_traces_api_data_sources_traces_get: {
+        parameters: {
+            query?: {
+                operation_name?: string | null;
+                provider?: string | null;
+                final_outcome?: string | null;
+                failure_category?: string | null;
+                correlation_id?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    fallback_chains_api_data_sources_traces_fallback_chains_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trace_health_api_data_sources_traces_health_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     set_enabled_api_data_sources__source_type___source__enabled_post: {
         parameters: {
             query?: never;
@@ -4267,6 +5130,289 @@ export interface operations {
             };
         };
     };
+    long_picks_api_horizons_long_picks_get: {
+        parameters: {
+            query?: {
+                strategy_id?: string | null;
+                limit?: number;
+                page?: number | null;
+                page_size?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    long_strategies_api_horizons_long_strategies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+        };
+    };
+    mid_picks_api_horizons_mid_picks_get: {
+        parameters: {
+            query?: {
+                strategy_id?: string | null;
+                limit?: number;
+                page?: number | null;
+                page_size?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mid_strategies_api_horizons_mid_strategies_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+        };
+    };
+    horizon_metrics_api_horizons__horizon__metrics_get: {
+        parameters: {
+            query?: {
+                origin?: string;
+                window_days?: number | null;
+            };
+            header?: never;
+            path: {
+                horizon: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    horizon_pick_detail_api_horizons__horizon__picks__strategy_id___signal_date___code__get: {
+        parameters: {
+            query?: {
+                before?: number;
+                after?: number;
+            };
+            header?: never;
+            path: {
+                horizon: string;
+                strategy_id: string;
+                signal_date: string;
+                code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    run_horizon_api_horizons__horizon__run_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                horizon: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    horizon_runs_api_horizons__horizon__runs_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                horizon: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    horizon_trades_api_horizons__horizon__trades_get: {
+        parameters: {
+            query?: {
+                origin?: string;
+                strategy_id?: string | null;
+            };
+            header?: never;
+            path: {
+                horizon: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_llm_review_health_api_llm_review_health_get: {
         parameters: {
             query?: never;
@@ -4316,6 +5462,8 @@ export interface operations {
                 start_date?: string | null;
                 /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
                 end_date?: string | null;
+                /** @description 样本口径：live_forward=前瞻正式证据；historical_replay=显式历史重建研究证据 */
+                sample_scope?: "live_forward" | "historical_replay";
             };
             header?: never;
             path?: never;
@@ -4352,6 +5500,8 @@ export interface operations {
                 start_date?: string | null;
                 /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
                 end_date?: string | null;
+                /** @description 样本口径：live_forward=前瞻正式证据；historical_replay=显式历史重建研究证据 */
+                sample_scope?: "live_forward" | "historical_replay";
             };
             header?: never;
             path?: never;
@@ -4388,6 +5538,8 @@ export interface operations {
                 start_date?: string | null;
                 /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
                 end_date?: string | null;
+                /** @description 样本口径：live_forward=前瞻正式证据；historical_replay=显式历史重建研究证据 */
+                sample_scope?: "live_forward" | "historical_replay";
             };
             header?: never;
             path?: never;
@@ -4464,6 +5616,44 @@ export interface operations {
                 start_date?: string | null;
                 /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
                 end_date?: string | null;
+                /** @description 样本口径：live_forward=前瞻正式证据；historical_replay=显式历史重建研究证据 */
+                sample_scope?: "live_forward" | "historical_replay";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    exit_ambiguity_api_metrics_exit_ambiguity_get: {
+        parameters: {
+            query?: {
+                /** @description 显式起始日期 YYYY-MM-DD（window_days 优先） */
+                start_date?: string | null;
+                /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
+                end_date?: string | null;
+                /** @description 样本口径：live_forward=前瞻正式证据；historical_replay=显式历史重建研究证据 */
+                sample_scope?: "live_forward" | "historical_replay";
             };
             header?: never;
             path?: never;
@@ -4496,6 +5686,42 @@ export interface operations {
             query?: {
                 /** @description 滚动窗口天数，如 30/90；设置后自动截到已结算截止日 */
                 window_days?: number | null;
+                /** @description 显式起始日期 YYYY-MM-DD（window_days 优先） */
+                start_date?: string | null;
+                /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
+                end_date?: string | null;
+                /** @description 样本口径：live_forward=前瞻正式证据；historical_replay=显式历史重建研究证据 */
+                sample_scope?: "live_forward" | "historical_replay";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    live_breakdown_api_metrics_live_breakdown_get: {
+        parameters: {
+            query?: {
                 /** @description 显式起始日期 YYYY-MM-DD（window_days 优先） */
                 start_date?: string | null;
                 /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
@@ -4536,6 +5762,10 @@ export interface operations {
                 start_date?: string | null;
                 /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
                 end_date?: string | null;
+                /** @description 样本口径：live_forward=前瞻正式证据；historical_replay=显式历史重建研究证据 */
+                sample_scope?: "live_forward" | "historical_replay";
+                /** @description 实盘时代：single=现行单策略（默认）；combo=已删除的旧组合方案；all=不分时代（旧口径，会混算） */
+                era?: "single" | "combo" | "all";
             };
             header?: never;
             path?: never;
@@ -4572,6 +5802,8 @@ export interface operations {
                 start_date?: string | null;
                 /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
                 end_date?: string | null;
+                /** @description 样本口径：live_forward=前瞻正式证据；historical_replay=显式历史重建研究证据 */
+                sample_scope?: "live_forward" | "historical_replay";
             };
             header?: never;
             path?: never;
@@ -4595,6 +5827,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    runtime_metrics_api_metrics_runtime_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -4688,129 +5940,6 @@ export interface operations {
             header?: never;
             path: {
                 recommendation_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JsonResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_presets_api_presets_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JsonResponse"];
-                };
-            };
-        };
-    };
-    post_preset_api_presets_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                };
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JsonResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_api_presets__preset_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                preset_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JsonResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    patch_preset_api_presets__preset_id__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                preset_id: string;
             };
             cookie?: never;
         };
@@ -5327,6 +6456,19 @@ export interface operations {
         parameters: {
             query?: {
                 limit?: number;
+                /** @description 给出 page/page_size 时返回 {items,total,page,page_size} */
+                page?: number | null;
+                page_size?: number | null;
+                run_mode?: string | null;
+                status?: string | null;
+                trade_date_from?: string | null;
+                trade_date_to?: string | null;
+                preset_id?: string | null;
+                fields?: string | null;
+                /** @description 分页模式：recommended_count >= N */
+                min_picks?: number | null;
+                sort?: string;
+                order?: string;
             };
             header?: never;
             path?: never;
@@ -5390,6 +6532,8 @@ export interface operations {
             query?: {
                 limit?: number;
                 run_mode?: string | null;
+                /** @description slim：去掉体积最大的 result_summary（默认 full，返回不变） */
+                fields?: string | null;
             };
             header?: never;
             path?: never;
@@ -5654,61 +6798,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    create_matrix_run_api_runs_matrix_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: {
-            content: {
-                "application/json": {
-                    [key: string]: unknown;
-                } | null;
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JsonResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    matrix_run_status_api_runs_matrix_status_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["JsonResponse"];
                 };
             };
         };
@@ -6112,7 +7201,16 @@ export interface operations {
     };
     alpha_decay_api_stats_alpha_decay_get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description 滚动窗口天数；设置后自动截到已结算截止日 */
+                window_days?: number | null;
+                /** @description 显式起始日期 YYYY-MM-DD（window_days 优先） */
+                start_date?: string | null;
+                /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
+                end_date?: string | null;
+                /** @description 样本口径：LIVE 前瞻或显式历史重建研究证据 */
+                sample_scope?: "live_forward" | "historical_replay";
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -6126,6 +7224,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -6301,12 +7408,8 @@ export interface operations {
     list_strategies_api_strategies_get: {
         parameters: {
             query?: {
-                /** @description 滚动窗口天数，如 30/90；设置后自动截到已结算截止日 */
-                window_days?: number | null;
-                /** @description 显式起始日期 YYYY-MM-DD（window_days 优先） */
-                start_date?: string | null;
-                /** @description 显式截止日期 YYYY-MM-DD（window_days 优先） */
-                end_date?: string | null;
+                /** @description true 时返回全部注册策略（含已退役/停用） */
+                include_retired?: boolean;
             };
             header?: never;
             path?: never;
@@ -6334,6 +7437,66 @@ export interface operations {
             };
         };
     };
+    strategy_data_readiness_api_strategies_data_readiness_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+        };
+    };
+    rolling_r12_api_strategies_rolling_r12_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+        };
+    };
+    standalone_metrics_api_strategies_standalone_metrics_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+        };
+    };
     strategy_detail_api_strategies__strategy_id__get: {
         parameters: {
             query?: {
@@ -6344,6 +7507,38 @@ export interface operations {
             path: {
                 strategy_id: string;
             };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsonResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_text_event_labels_api_text_events_labels_get: {
+        parameters: {
+            query: {
+                code: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;

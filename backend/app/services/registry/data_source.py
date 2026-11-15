@@ -1,9 +1,11 @@
-"""推荐运行的数据源模式常量与默认预设配置。
+"""推荐运行的数据源模式常量。
 
 任务 7.4（需求 6.1）落地：把散落在 `workbench_service.py` 里的
-`DATA_SOURCE_*` / `ALLOWED_DATA_SOURCES` / `DEFAULT_RECOMMENDATION_DATA_SOURCE` /
-`DEFAULT_PRESETS` 收口到本模块，供编排层（`workbench_service.py`）与
-`registry/presets.py` 共用，避免二者相互 import 造成循环依赖。
+`DATA_SOURCE_*` / `ALLOWED_DATA_SOURCES` / `DEFAULT_RECOMMENDATION_DATA_SOURCE`
+收口到本模块，供编排层（`workbench_service.py`）与各注册表模块共用。
+
+预设（preset）管理层已于 2026-11-15 退役：正式推荐改为单策略独立 run，
+运行口径由 `standalone_strategies.py` 定义，不再有默认预设。
 """
 from __future__ import annotations
 
@@ -28,64 +30,6 @@ ALLOWED_DATA_SOURCES = {
     DATA_SOURCE_REALTIME,
     DATA_SOURCE_AUTO,
 }
-
-DEFAULT_PRESETS: list[dict[str, Any]] = [
-    {
-        "preset_id": "preset_formal_opening",
-        "name": "全策略组合",
-        "description": "全部在跑策略的组合预设，盘前 formal run 使用（API 按成员数动态生成）。",
-        "data_source": DEFAULT_RECOMMENDATION_DATA_SOURCE,
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "balanced",
-        "score_line": 72.0,
-        "output_count": 6,
-        "hide_recent_repeats": True,
-        "dedup_same_day": True,
-        "skip_aux_refresh": False,
-        "skill_groups": ["formal_opening"],
-    },
-    {
-        "preset_id": "preset_formal_trend_core",
-        "name": "趋势龙头组合",
-        "description": "适合主线趋势票，偏重龙头和大局观。",
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "aggressive",
-        "score_line": 70.0,
-        "output_count": 5,
-        "hide_recent_repeats": True,
-        "dedup_same_day": True,
-        "skip_aux_refresh": False,
-        "skill_groups": ["formal_trend_core"],
-    },
-    {
-        "preset_id": "preset_experiment_high_range_breakout",
-        "name": "突破动量",
-        "description": "单策略预设：阶段新高突破动量。",
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "balanced",
-        "score_line": 66.0,
-        "output_count": 5,
-        "hide_recent_repeats": False,
-        "skip_aux_refresh": True,
-        "skill_groups": ["experiment_high_range_breakout"],
-    },
-    {
-        "preset_id": "preset_experiment_sector_relative_strength",
-        "name": "主线相对强度龙头",
-        "description": "单独验证行业动量与主线龙头相对强度规则。",
-        "market_scope": "all",
-        "market_scope_value": None,
-        "risk_template": "balanced",
-        "score_line": 66.0,
-        "output_count": 5,
-        "hide_recent_repeats": False,
-        "skip_aux_refresh": True,
-        "skill_groups": ["experiment_sector_relative_strength"],
-    },
-]
 
 
 def normalize_data_source(value: Any) -> str:

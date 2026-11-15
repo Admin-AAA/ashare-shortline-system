@@ -44,7 +44,6 @@ class ProductionSkillResolution(SkillResolutionPort):
         *,
         skill_ids: Sequence[dict[str, Any]],
         run_mode: str | None = None,
-        preset_id: str | None = None,
     ) -> tuple[tuple[StageMapping, ...], dict[str, Any]]:
         from app.services.registry.skills import sync_skills
         from app.services.workbench_service import _select_skills_for_run
@@ -56,7 +55,6 @@ class ProductionSkillResolution(SkillResolutionPort):
             skill_map,
             list(skill_ids),
             run_mode=run_mode,
-            preset_id=preset_id,
             raw_skills=skills,
         )
         return tuple(selected), skill_map

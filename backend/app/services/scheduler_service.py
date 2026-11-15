@@ -3,8 +3,7 @@
 本模块不创建 scheduler、worker 或后台调度线程。
 支持任务类型:
   - data_sync: 同步行情数据（刷新报价池 + 按日批量日K + 健康补数 + 辅助数据）
-  - recommendation_run: 执行推荐流水线
-  - preset_matrix_run: 盘后批量执行全部启用预设，用于预设矩阵对比
+  - recommendation_run: 执行推荐流水线（单策略独立正式推荐）
   - midterm_block_trade_backup: 08:03 盘前大宗交易溢价备份出票（主触发为 21:00 晚间补数钩子）
 """
 
@@ -24,7 +23,6 @@ from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.models.tables import (
-    Preset,
     RecommendationRun,
     ScheduledTask,
     ScheduledTaskRun,
@@ -69,7 +67,6 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     LOCK_SETTLE_CRON,
     LOCK_SETTLE_TASK_ID,
     MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID,
-    MANUAL_PRESET_MATRIX_TASK_ID,
     POSTCLOSE_LATE_DATA_REPAIR_CRON,
     POSTCLOSE_LATE_DATA_REPAIR_TASK_ID,
     POSTCLOSE_PIPELINE_CRON,
@@ -82,7 +79,6 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     TASK_TYPE_FORMAL_SAFETY_NET,
     TASK_TYPE_INTRADAY_LOCK_SHADOW,
     TASK_TYPE_OUTCOME_LABEL,
-    TASK_TYPE_PRESET_MATRIX_RUN,
     TASK_TYPE_STRATEGY_EXPOSURE_RUN,
     _AUXILIARY_TRADE_DATE_BATCH_DATASETS,
     _KNOWN_AUX_SOURCE_GAPS,
@@ -94,7 +90,6 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     _classify_postclose_blockers,
     _data_health_remediation_summary,
     _default_data_health_remediation_payload,
-    _default_matrix_payload,
     _default_sync_scope,
     _is_task_running,
     _late_data_repair_payload,
@@ -114,7 +109,6 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     _to_float,
     _to_int,
     _try_mark_running_memory,
-    _update_matrix_progress,
 )
 
 from app.core import metrics as _metrics  # noqa: E402
@@ -814,8 +808,8 @@ def _run_strategy_profile_refresh(db, payload: dict | None = None) -> dict:
 
     max_runs = max(0, int((payload or {}).get("max_runs", 1)))
     profiles = StrategyBacktestProfiles(db)
-    # 缺 manifest.json 的策略目录（退役残留空壳/半成品，2026-10-26 main-line-leader-resonance 曾令整个任务 failed 并让
-    # /api/presets 500）：本任务里跳过并告警，其余策略照常补画像；主链路加载器的严格契约不变。
+    # 缺 manifest.json 的策略目录（退役残留空壳/半成品，2026-10-26 main-line-leader-resonance 曾令整个任务 failed）：
+    # 本任务里跳过并告警，其余策略照常补画像；主链路加载器的严格契约不变。
     skipped_dirs: list[str] = []
     with lenient_missing_manifest(skipped_dirs):
         pending = [t for t in profiles.current_targets() if profiles.read_rolled(t) is None]
@@ -1064,10 +1058,10 @@ def _execute_task(
                     result = asyncio.run(
                         _run_postclose_pipeline(db, payload)
                         if payload.get("pre_run_full_sync")
-                        else _run_recommendation(db, payload)
+                        else _run_standalone_recommendation_task(db, payload)
                     )
                 except ValueError as ve:
-                    # 预设下 Skill 全部被禁用 → 优雅跳过而非报错。其它 ValueError 透传。
+                    # 无可运行 Skill（全部禁用/退役）→ 优雅跳过而非报错。其它 ValueError 透传。
                     skip = _recommendation_run_error_to_skip(task_id, payload, ve)
                     if skip is not None:
                         result = skip
@@ -1075,8 +1069,6 @@ def _execute_task(
                         raise
             elif task_type == TASK_TYPE_FORMAL_SAFETY_NET:
                 result = asyncio.run(_safety_net_run(db, payload))
-            elif task_type == TASK_TYPE_PRESET_MATRIX_RUN:
-                result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
             elif task_type == TASK_TYPE_BLOCK_TRADE_BACKUP:
                 # 实际出票由下方 BLOCK_TRADE_HOOK_TASK_IDS 钩子完成（T=上一交易日，幂等）。
                 result = {"summary_text": "盘前大宗交易备份出票"}
@@ -1170,95 +1162,6 @@ def _execute_task(
     finally:
         db.close()
         _mark_done(task_id)
-
-
-def start_preset_matrix_now(payload: dict | None = None) -> dict:
-    """异步启动一次手工预设矩阵批次，立即返回任务运行状态。"""
-    if not _try_mark_running_memory(MANUAL_PRESET_MATRIX_TASK_ID):
-        running = get_latest_preset_matrix_task_run()
-        if running and running.get("status") == "running":
-            return {"started": False, "task_run": running}
-        raise RuntimeError("预设矩阵正在执行中，请等待当前批次完成")
-
-    run_payload = _default_matrix_payload(payload or {})
-    db = SessionLocal()
-    task_run_id: str | None = None
-    try:
-        existing_running = _latest_running_preset_matrix_task_run(db)
-        if existing_running is not None:
-            _mark_done_memory(MANUAL_PRESET_MATRIX_TASK_ID)
-            return {"started": False, "task_run": serialize_scheduled_task_run(existing_running)}
-
-        task = _manual_preset_matrix_task(run_payload)
-        task_run = start_task_run(db, task, trigger_source="manual")
-        task_run_id = task_run.task_run_id
-    except Exception:
-        _mark_done_memory(MANUAL_PRESET_MATRIX_TASK_ID)
-        raise
-    finally:
-        db.close()
-
-    from app.orchestration import trigger_manual_matrix
-    trigger_manual_matrix(task_run_id, run_payload)
-    latest = get_latest_preset_matrix_task_run()
-    return {"started": True, "task_run": latest}
-
-
-def get_latest_preset_matrix_task_run() -> dict | None:
-    db = SessionLocal()
-    try:
-        run = db.scalars(
-            select(ScheduledTaskRun)
-            .where(ScheduledTaskRun.task_type == TASK_TYPE_PRESET_MATRIX_RUN)
-            .order_by(ScheduledTaskRun.started_at.desc())
-            .limit(1)
-        ).first()
-        return serialize_scheduled_task_run(run) if run is not None else None
-    finally:
-        db.close()
-
-
-def _latest_running_preset_matrix_task_run(db) -> ScheduledTaskRun | None:
-    return db.scalars(
-        select(ScheduledTaskRun)
-        .where(
-            ScheduledTaskRun.task_type == TASK_TYPE_PRESET_MATRIX_RUN,
-            ScheduledTaskRun.status == "running",
-            ScheduledTaskRun.finished_at.is_(None),
-        )
-        .order_by(ScheduledTaskRun.started_at.desc())
-        .limit(1)
-    ).first()
-
-
-def _execute_manual_preset_matrix(task_run_id: str, payload: dict) -> None:
-    db = SessionLocal()
-    try:
-        result = asyncio.run(_run_preset_matrix(db, payload, task_run_id=task_run_id))
-        finish_task_run(
-            db,
-            task_run_id,
-            status=_task_result_status(result),
-            summary=str(result.get("summary_text") or ""),
-            result=result,
-        )
-    except Exception as exc:
-        logger.exception("手工预设矩阵运行失败")
-        db.rollback()
-        try:
-            finish_task_run(
-                db,
-                task_run_id,
-                status="failed",
-                error=str(exc),
-                summary=str(exc),
-                result={"summary_text": str(exc)},
-            )
-        except Exception:
-            logger.exception("手工预设矩阵失败状态写入失败")
-    finally:
-        db.close()
-        _mark_done_memory(MANUAL_PRESET_MATRIX_TASK_ID)
 
 
 def start_data_health_remediation_now(payload: dict | None = None) -> dict:
@@ -1379,17 +1282,6 @@ def _manual_data_health_remediation_task(payload: dict) -> ScheduledTask:
     task = ScheduledTask(task_id=MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID)
     task.name = "手动数据补数"
     task.task_type = "data_backfill"
-    task.cron_expression = "0 0 * * *"
-    task.payload_json = json.dumps(payload, ensure_ascii=False)
-    task.enabled = False
-    task.is_running = True
-    return task
-
-
-def _manual_preset_matrix_task(payload: dict) -> ScheduledTask:
-    task = ScheduledTask(task_id=MANUAL_PRESET_MATRIX_TASK_ID)
-    task.name = str(payload.get("matrix_batch_name") or payload.get("run_name_prefix") or "手工预设矩阵")
-    task.task_type = TASK_TYPE_PRESET_MATRIX_RUN
     task.cron_expression = "0 0 * * *"
     task.payload_json = json.dumps(payload, ensure_ascii=False)
     task.enabled = False
@@ -2472,12 +2364,11 @@ async def _run_recommendation(db, payload: dict) -> dict:
     from app.services.workbench_service import enqueue_workbench_run
 
     run_payload: dict[str, Any] = {
-        "preset_id": payload.get("preset_id"),
         "run_name": payload.get("run_name", f"定时推荐 {datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d')}"),
     }
     # Preserve every explicitly scheduled RunRequest input.  Defaults remain owned
-    # by the canonical parser/preset merge, but a scheduler must never silently
-    # discard an explicitly selected review, date, scope, or matrix policy.
+    # by the canonical parser, but a scheduler must never silently discard an
+    # explicitly selected review, date, scope, or matrix policy.
     for key in (
         "data_source",
         "risk_template",
@@ -2502,8 +2393,7 @@ async def _run_recommendation(db, payload: dict) -> dict:
         if key in payload:
             run_payload[key] = payload.get(key)
 
-    # Scheduler emits the same immutable request shape as API callers.  Keep the
-    # no-preset in-process fallback below, but never let it bypass request parsing.
+    # Scheduler emits the same immutable request shape as API callers.
     from app.services.runs.contracts import parse_run_request, validate_run_request_no_credentials
 
     validate_run_request_no_credentials(payload)
@@ -2514,7 +2404,7 @@ async def _run_recommendation(db, payload: dict) -> dict:
             if str(skill_id).strip()
         ]
     # Validate the durable shape, but keep only explicitly scheduled fields in
-    # ``run_payload`` so Pydantic defaults never overwrite a preset during merge.
+    # ``run_payload`` so Pydantic defaults never overwrite an explicit value.
     # ``RunRequest`` owns the formal default; an explicitly supplied value must
     # survive unchanged so invalid values are rejected rather than silently
     # rewritten and experiment/backtest modes cross every dispatch boundary.
@@ -2525,25 +2415,9 @@ async def _run_recommendation(db, payload: dict) -> dict:
     if "run_mode" in payload:
         run_payload["run_mode"] = payload["run_mode"]
 
-    # 无 preset_id 时无法入队独立子进程（enqueue 前置条件），退化为原 in-process 执行，
-    # 保留历史行为，避免破坏潜在的非预设触发路径。
-    if not run_payload.get("preset_id") and not run_payload.get("single_skill_id"):
-        from app.services.workbench_service import run_workbench
-
-        logger.warning("定时推荐缺少 preset_id，退化为进程内执行: %s", run_payload)
-        result = await run_workbench(db, run_payload)
-        run = result.get("run") or {}
-        related_run_id = str(run.get("run_id") or "")
-        recommended_count = int(run.get("recommended_count") or result.get("recommended_count") or 0)
-        return {
-            "related_run_id": related_run_id,
-            "recommended_count": recommended_count,
-            "summary_text": (
-                f"关联 Run {related_run_id}，推荐 {recommended_count} 条（进程内）"
-                if related_run_id
-                else f"自动推荐 {recommended_count} 条（进程内）"
-            ),
-        }
+    # 预设层已退役：单策略 run 必须显式带 single_skill_id（或 skills），否则视为无可运行策略。
+    if not run_payload.get("single_skill_id") and not run_payload.get("skills"):
+        raise ValueError("没有可运行的 Skill（缺少 single_skill_id）")
 
     result = enqueue_workbench_run(db, run_payload)
     run = result.get("run") or {}
@@ -2558,6 +2432,21 @@ async def _run_recommendation(db, payload: dict) -> dict:
             if related_run_id
             else "已触发推荐（独立子进程）"
         ),
+    }
+
+
+async def _run_standalone_recommendation_task(db, payload: dict) -> dict:
+    """recommendation_run 定时任务（不带盘后全量同步）：跑全部单策略独立推荐。
+
+    预设组合已退役，这里与盘后流水线推荐阶段同口径，复用 _run_standalone_recommendations，
+    并把 final_run 状态提升为顶层 status，供调度任务状态判定。
+    """
+    recommendation = await _run_standalone_recommendations(db, payload)
+    final_run = recommendation.get("final_run") or {}
+    return {
+        **recommendation,
+        "status": str(final_run.get("status") or "failed"),
+        "error": final_run.get("error"),
     }
 
 
@@ -3096,146 +2985,3 @@ def ensure_formal_recommendation_safely() -> dict:
     finally:
         db.close()
 
-
-async def _run_preset_matrix(db, payload: dict, task_run_id: str | None = None) -> dict:
-    """串行执行全部启用预设，并给每个推荐 Run 写入同一个矩阵批次标签。
-
-    若提供 task_run_id，会在每个预设开始时更新 ScheduledTaskRun.summary，
-    供前端矩阵页轮询显示阶段进度（已完成 N/M 预设: 当前预设名）。
-    """
-    from app.services.workbench_service import run_workbench
-
-    presets = db.scalars(
-        select(Preset)
-        .where(Preset.status == "active")
-        .order_by(Preset.created_at.asc(), Preset.name.asc())
-    ).all()
-    matrix_batch_id = str(
-        payload.get("matrix_batch_id")
-        or f"matrix_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d_%H%M%S')}"
-    )
-    matrix_batch_name = str(payload.get("matrix_batch_name") or "盘后预设矩阵")
-    run_name_prefix = str(payload.get("run_name_prefix") or matrix_batch_name)
-    data_source = payload.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE
-    stop_on_error = bool(payload.get("stop_on_error", False))
-
-    total = len(presets)
-    rows: list[dict[str, object]] = []
-    recommended_total = 0
-    for index, preset in enumerate(presets, start=1):
-        if task_run_id:
-            _update_matrix_progress(
-                db,
-                task_run_id,
-                summary=f"执行预设 {index}/{total}: {preset.name}（已完成 {index - 1}/{total}）",
-            )
-        run_payload = {
-            "preset_id": preset.preset_id,
-            "run_name": f"{run_name_prefix} · {preset.name}",
-            "data_source": data_source,
-            "matrix_batch_id": matrix_batch_id,
-            "matrix_batch_name": matrix_batch_name,
-            "matrix_run": True,
-        }
-        for key in (
-            "risk_template",
-            "score_line",
-            "output_count",
-            "selected_skill_ids",
-            "skip_aux_refresh",
-            "disable_agent_review",
-            "agent_review_limit",
-            "agent_review_concurrency",
-            "run_mode",
-        ):
-            if key in payload:
-                run_payload[key] = payload.get(key)
-        try:
-            result = await run_workbench(db, run_payload)
-            run = result.get("run") or {}
-            run_summary = run.get("result_summary") or {}
-            recommended_count = int(run.get("recommended_count") or 0)
-            recommended_total += recommended_count
-            _slm = run_summary.get("score_line_meta") or {}
-            _pipeline = run_summary.get("pipeline") or {}
-            _scored = (
-                _pipeline.get("scored_count")
-                or _pipeline.get("skill_pass_count")
-                or _pipeline.get("skill_gate_candidate_count")
-                or _pipeline.get("actual_scan_count")
-            )
-            rows.append(
-                {
-                    "preset_id": preset.preset_id,
-                    "preset_name": preset.name,
-                    "run_id": str(run.get("run_id") or ""),
-                    "status": "completed",
-                    "recommended_count": recommended_count,
-                    "universe_count": int(run.get("universe_count") or 0),
-                    "scored_count": int(_scored) if _scored is not None else None,
-                    "effective_score_line": _slm.get("effective_score_line"),
-                    "market_base": _slm.get("market_base"),
-                    "market_sentiment": _slm.get("market_sentiment"),
-                    "top_candidate_score": run_summary.get("top_candidate_score"),
-                    "climax_watchlist": run_summary.get("climax_watchlist") or [],
-                    "result_summary": run_summary,
-                }
-            )
-        except Exception as exc:
-            logger.exception("预设矩阵批次 %s 运行失败: %s", matrix_batch_id, preset.preset_id)
-            db.rollback()
-            rows.append(
-                {
-                    "preset_id": preset.preset_id,
-                    "preset_name": preset.name,
-                    "status": "failed",
-                    "error": str(exc),
-                }
-            )
-            if stop_on_error:
-                break
-
-    completed_count = sum(1 for row in rows if row.get("status") == "completed")
-    failed_count = sum(1 for row in rows if row.get("status") == "failed")
-    # 聚合行情状态与观察池，供前端矩阵报告展示「正确静默」而非误判为 bug
-    _regime_rows = [r for r in rows if r.get("market_base")]
-    market_base = _regime_rows[0]["market_base"] if _regime_rows else None
-    market_sentiment = _regime_rows[0]["market_sentiment"] if _regime_rows else None
-    market_regime = f"{market_base}·{market_sentiment}" if market_base and market_sentiment else None
-    aggregated_watchlist: list[dict[str, object]] = []
-    _seen_codes: set[str] = set()
-    for r in rows:
-        for c in (r.get("climax_watchlist") or []):
-            code = c.get("code")
-            if code and code not in _seen_codes:
-                _seen_codes.add(code)
-                aggregated_watchlist.append(c)
-    aggregated_watchlist.sort(key=lambda x: float(x.get("final_score") or 0), reverse=True)
-    top_candidate_score = max(
-        (float(c.get("final_score") or 0) for c in aggregated_watchlist), default=0.0
-    )
-    if not top_candidate_score:
-        top_candidate_score = max(
-            (float(r.get("top_candidate_score") or 0) for r in rows if r.get("top_candidate_score")),
-            default=0.0,
-        )
-    return {
-        "matrix_batch_id": matrix_batch_id,
-        "matrix_batch_name": matrix_batch_name,
-        "preset_count": len(presets),
-        "run_count": len(rows),
-        "completed_count": completed_count,
-        "failed_count": failed_count,
-        "recommended_count": recommended_total,
-        "runs": rows,
-        "market_regime": market_regime,
-        "market_base": market_base,
-        "market_sentiment": market_sentiment,
-        "top_candidate_score": round(top_candidate_score, 2) if top_candidate_score else None,
-        "aggregated_watchlist": aggregated_watchlist,
-        "all_zero": recommended_total == 0,
-        "summary_text": (
-            f"矩阵批次 {completed_count}/{len(presets)} 个预设完成，"
-            f"失败 {failed_count} 个，推荐合计 {recommended_total} 条"
-        ),
-    }

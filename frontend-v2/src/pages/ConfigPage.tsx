@@ -1,18 +1,17 @@
 import { useState } from "react";
-import { BarChart3, Clock, Database, Layers, Plug, Server } from "lucide-react";
+import { BarChart3, Clock, Database, Plug, Server } from "lucide-react";
 import { ModelRoutesSection } from "../components/ModelRoutesSection";
-import { PresetsSection } from "../components/PresetsSection";
 import { SchedulerTasksSection } from "../components/SchedulerTasksSection";
 import { DataSourcesSection } from "../components/DataSourcesSection";
 import { DataHealthSection } from "./DataHealthPage";
 import { SystemStatsSection } from "../components/SystemStatsSection";
 
-type ConfigTab = "scheduler" | "llm" | "presets" | "data-health" | "data-sources" | "stats";
+type ConfigTab = "scheduler" | "llm" | "data-health" | "data-sources" | "stats";
 
 export function ConfigPage() {
   const [tab, setTab] = useState<ConfigTab>(() => {
     const q = new URLSearchParams(window.location.search).get("tab");
-    return q === "scheduler" || q === "llm" || q === "presets" || q === "stats" || q === "data-sources" ? q : "data-health";
+    return q === "scheduler" || q === "llm" || q === "stats" || q === "data-sources" ? q : "data-health";
   });
 
   return (
@@ -38,15 +37,10 @@ export function ConfigPage() {
           <Plug size={14} />
           LLM 接口
         </SubTab>
-        <SubTab active={tab === "presets"} onClick={() => setTab("presets")}>
-          <Layers size={14} />
-          预设管理
-        </SubTab>
       </div>
 
       {tab === "scheduler" && <SchedulerTasksSection />}
       {tab === "llm" && <ModelRoutesSection />}
-      {tab === "presets" && <PresetsSection />}
       {tab === "data-health" && <DataHealthSection />}
       {tab === "data-sources" && <DataSourcesSection />}
       {tab === "stats" && <SystemStatsSection />}

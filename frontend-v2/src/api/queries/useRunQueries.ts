@@ -4,8 +4,8 @@ import { queryKeys } from "../queryKeys";
 
 const ACTIVE_RUN_STATUSES = new Set(["queued", "pending", "running"]);
 
-export function usePresetsQuery() {
-  return useQuery({ queryKey: queryKeys.presets(), queryFn: () => api.presets() });
+export function useStrategiesQuery() {
+  return useQuery({ queryKey: queryKeys.strategies(), queryFn: () => api.strategies() });
 }
 
 export function useRunsQuery(limit?: number, slim = false) {

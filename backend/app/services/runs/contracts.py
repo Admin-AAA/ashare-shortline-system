@@ -818,18 +818,6 @@ def _upgrade_v0_to_v1(document: Mapping[str, Any]) -> dict[str, Any]:
     ):
         _move_alias(upgraded, alias=alias, canonical=canonical)
 
-    # Old clients used ``preset`` as either a string ID or a tiny serialized preset.
-    if "preset" in upgraded:
-        legacy_preset = upgraded.pop("preset")
-        if isinstance(legacy_preset, Mapping):
-            legacy_preset = legacy_preset.get("preset_id")
-        if legacy_preset is None:
-            raise RunContractError(
-                RunErrorCode.INVALID_REQUEST_SCHEMA.value,
-                "旧字段 preset 必须包含 preset_id",
-            )
-        _set_legacy_alias(upgraded, alias="preset", canonical="preset_id", value=legacy_preset)
-
     # ``review``/``refresh`` were positive flags; V1 stores the explicit disable/skip
     # flags so the canonical JSON never relies on a caller-side default.
     if "review" in upgraded:

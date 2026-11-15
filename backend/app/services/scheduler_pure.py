@@ -9,11 +9,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from sqlalchemy import select
 from app.db.session import SessionLocal
-from app.models.tables import Preset, RecommendationRun, ScheduledTask, ScheduledTaskRun
+from app.models.tables import RecommendationRun, ScheduledTask, ScheduledTaskRun
 from app.services.cost_service import finish_task_run, serialize_scheduled_task_run, start_task_run
 from app.engine.trading_calendar import latest_allowed_bar_date as _latest_allowed_bar_date
 from app.engine.trading_calendar import previous_weekday
-from app.services.registry.data_source import DATA_SOURCE_LOCAL_POOL, DEFAULT_RECOMMENDATION_DATA_SOURCE
+from app.services.registry.data_source import DATA_SOURCE_LOCAL_POOL
 import logging
 
 logger = logging.getLogger('app.services.scheduler_service')
@@ -25,9 +25,6 @@ _running_lock = threading.Lock()
 _running_tasks: set[str] = set()
 
 
-TASK_TYPE_PRESET_MATRIX_RUN = "preset_matrix_run"
-
-
 TASK_TYPE_FORMAL_SAFETY_NET = "formal_safety_net"
 
 
@@ -35,9 +32,6 @@ TASK_TYPE_STRATEGY_EXPOSURE_RUN = "strategy_exposure_run"
 
 
 TASK_TYPE_OUTCOME_LABEL = "outcome_label"
-
-
-MANUAL_PRESET_MATRIX_TASK_ID = "manual_preset_matrix_run"
 
 
 MANUAL_DATA_HEALTH_REMEDIATION_TASK_ID = "manual_data_health_remediation"
@@ -206,7 +200,6 @@ def _postclose_pipeline_payload(existing: dict[str, Any] | None = None) -> dict[
         {
             "pre_run_full_sync": True,
             "sync_scope": "all",
-            "preset_id": None,  # 单策略独立 run 不挂组合预设（preset_formal_opening 已删除）
             "run_name": payload.get("run_name") or "盘后全量同步后正式推荐",
             "run_mode": "formal",
             # 同步和健康闸门已在推荐前完成；正式推荐只读本地池，
@@ -255,27 +248,26 @@ def _late_data_repair_payload(existing: dict[str, Any] | None = None) -> dict[st
 SAFETY_NET_CRON = "30 8 * * mon-fri"
 
 
-# 预设下的 Skill 全部被禁用时，enqueue_workbench_run 抛出的错误文案。
+# 无可运行策略（全部禁用/退役）时抛出的错误文案。
 # 这是「预期跳过」而非「故障」：定时任务不应因此污染 ERROR 日志或标记为 failed。
 _NO_RUNNABLE_SKILL_MSG = "没有可运行的 Skill"
 
 
 def _recommendation_run_error_to_skip(task_id: str, payload: dict, exc: Exception) -> dict | None:
-    """将『预设无可用 Skill』的 ValueError 转化为优雅跳过结果。
+    """将『无可用 Skill』的 ValueError 转化为优雅跳过结果。
 
     返回 skip 结果 dict（调用方应直接使用），或 None（表示异常需继续抛出）。
     仅匹配无可用 Skill 这一特定、可预期的配置态；其它 ValueError 一律透传。
     """
     if isinstance(exc, ValueError) and _NO_RUNNABLE_SKILL_MSG in str(exc):
-        preset_id = payload.get("preset_id")
         logger.warning(
-            "调度任务 %s 跳过：预设 %s 下无可用(已启用) Skill，属预期跳过而非故障",
-            task_id, preset_id,
+            "调度任务 %s 跳过：无可用(已启用) Skill，属预期跳过而非故障",
+            task_id,
         )
         return {
             "status": "skipped",
             "skipped": True,
-            "summary_text": f"预设 {preset_id} 无可用 Skill（已禁用），已跳过",
+            "summary_text": "无可用 Skill（已禁用/退役），已跳过",
         }
     return None
 
@@ -312,20 +304,6 @@ def _data_health_remediation_summary(result: dict) -> str:
         unresolved_suffix = f"，仍缺 {unresolved}" if unresolved else ""
         return f"数据补数完成 {action_count} 项，修复缺口 {resolved}/{target}{unresolved_suffix}，失败 {failed_count}{empty_suffix}"
     return f"数据补数完成 {action_count} 项，失败 {failed_count}{empty_suffix}"
-
-
-def _default_matrix_payload(payload: dict) -> dict:
-    result = {
-        "matrix_batch_name": str(payload.get("matrix_batch_name") or "手工预设矩阵"),
-        "run_name_prefix": str(payload.get("run_name_prefix") or payload.get("matrix_batch_name") or "手工预设矩阵"),
-        "data_source": payload.get("data_source") or DEFAULT_RECOMMENDATION_DATA_SOURCE,
-    }
-    for key, value in payload.items():
-        if key not in result:
-            result[key] = value
-    return result
-
-
 
 
 # Restored helpers (dropped by 9c308a6 while still referenced -> NameError at runtime).
@@ -618,25 +596,3 @@ def _classify_postclose_blockers(
 
 # 单策略独立运行：同时最多并发几个全市场扫描子进程（避免 CPU 争用/心跳超时）。
 STANDALONE_BATCH_SIZE = 4
-
-
-
-
-def _update_matrix_progress(db, task_run_id: str, summary: str) -> None:
-    """更新矩阵任务的阶段进度摘要，供前端轮询显示。
-
-    单独 commit 避免长事务占着连接；失败只记日志，不中断矩阵运行。
-    """
-    try:
-        run = db.get(ScheduledTaskRun, task_run_id)
-        if run is None or run.status != "running":
-            return
-        run.summary = summary[:500]
-        run.finished_at = run.finished_at  # 触发 ORM 脏标记
-        db.commit()
-    except Exception:
-        logger.exception("更新矩阵进度失败: %s", task_run_id)
-        try:
-            db.rollback()
-        except Exception as exc:  # noqa: BLE001 - intentionally non-blocking
-            logger.debug("_update_matrix_progress: ignored non-fatal error: %s", exc)

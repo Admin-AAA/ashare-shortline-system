@@ -402,11 +402,18 @@ def serialize_run_summary(
     progress_total = int(_get(run, "progress_total", 0) or 0)
     progress_pct = round(min(100.0, max(0.0, progress_current * 100 / progress_total)), 2) if progress_total else None
     status = _get(run, "status")
+    _selected_skills = loads_json(_get(run, "selected_skills_json"), [])
+    _skill_ids = [
+        str(item.get("skill_id"))
+        for item in _selected_skills
+        if isinstance(item, dict) and item.get("skill_id")
+    ]
     return {
         "run_id": _get(run, "run_id"),
         "run_name": _get(run, "run_name"),
         "preset_id": _get(run, "preset_id"),
         "preset_name": _get(preset, "name", "临时运行") if preset else "临时运行",
+        "skill_id": _skill_ids[0] if len(_skill_ids) == 1 else None,
         "trade_date": _get(run, "trade_date"),
         "run_mode": _get(run, "run_mode"),
         "evaluation_scope": _get(run, "evaluation_scope") or "historical_replay",
@@ -433,7 +440,7 @@ def serialize_run_summary(
         "progress_pct": progress_pct,
         "progress_message": _get(run, "progress_message"),
         "interrupted_at": _isoformat_or_none(_get(run, "interrupted_at")),
-        "skill_count": len(loads_json(_get(run, "selected_skills_json"), [])),
+        "skill_count": len(_selected_skills),
         "hit_rate": hit_rate,
         "result_summary": _result_summary_for_run(run, slim_result_summary),
         "checkpoint_phase": _get(run, "checkpoint_phase"),

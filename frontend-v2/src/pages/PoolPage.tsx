@@ -404,7 +404,7 @@ function RunDrawerBody({ run, kind }: { run: RunSummary; kind: PoolRunKind }) {
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: "var(--space-2)", flexWrap: "wrap" }}>
           {detailButton}
-          <button className="btn btn--primary" onClick={() => navigate("/run", { params: { preset_id: run.preset_id } })}>按原预设重新运行</button>
+          <button className="btn btn--primary" onClick={() => navigate("/run", { params: run.skill_id ? { skill_id: run.skill_id } : {} })}>重新运行</button>
         </div>
       </div>
     );

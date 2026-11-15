@@ -11,8 +11,8 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api/client";
-import { RISK_TEMPLATE_MAP, DATA_SOURCE_MAP } from "../utils/riskTemplates";
-import type { Preset, ScheduledTask, ScheduledTaskType } from "../types";
+import { DATA_SOURCE_MAP } from "../utils/riskTemplates";
+import type { ScheduledTask, ScheduledTaskType } from "../types";
 import { CardSkeleton, EmptyState, ErrorPage } from "./StateViews";
 import { Panel } from "./Panel";
 import { formatBj } from "../utils/time";
@@ -62,7 +62,6 @@ const STATUS_COLOR: Record<string, string> = {
 const ALL_TASK_TYPES: ScheduledTaskType[] = [
   "recommendation_run",
   "formal_safety_net",
-  "preset_matrix_run",
   "data_sync",
   "pool_refresh",
   "data_backfill",
@@ -95,19 +94,10 @@ function cronToHuman(cron: string): string {
 
 // ── payload 表单类型 ─────────────────────────────────────────────
 type PayloadForm = {
-  // recommendation_run
-  preset_id?: string;
+  // recommendation_run（单策略独立运行，口径由后端 standalone_strategies 定义）
   run_name?: string;
-  run_mode?: string;
   data_source?: string;
-  risk_template?: string;
-  score_line?: number;
-  output_count?: number;
   skip_aux_refresh?: boolean;
-  // preset_matrix_run
-  matrix_batch_name?: string;
-  run_name_prefix?: string;
-  stop_on_error?: boolean;
   // data_sync / data_backfill
   sync_scope?: string;
   auxiliary_remediation_tables?: string[];
@@ -166,21 +156,9 @@ function emptyPayload(taskType: ScheduledTaskType): PayloadForm {
   switch (taskType) {
     case "recommendation_run":
       return {
-        preset_id: "",
         run_name: "",
-        run_mode: "formal",
         data_source: "local_pool_realtime",
-        risk_template: "balanced",
-        score_line: 72,
-        output_count: 6,
         skip_aux_refresh: true,
-      };
-    case "preset_matrix_run":
-      return {
-        matrix_batch_name: "盘后预设矩阵",
-        run_name_prefix: "",
-        data_source: "local_pool_realtime",
-        stop_on_error: false,
       };
     case "data_sync":
       return { sync_scope: "all" };
@@ -220,7 +198,6 @@ function emptyForm(): TaskForm {
 // ── 组件 ──────────────────────────────────────────────────────────
 export function SchedulerTasksSection() {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
-  const [presets, setPresets] = useState<Preset[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -240,9 +217,8 @@ export function SchedulerTasksSection() {
     setLoading(true);
     setError(null);
     try {
-      const [ts, ps] = await Promise.all([api.scheduledTasks(), api.presets()]);
+      const ts = await api.scheduledTasks();
       setTasks(ts);
-      setPresets(ps);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -360,10 +336,6 @@ export function SchedulerTasksSection() {
       showToast("任务名不能为空");
       return;
     }
-    if (createForm.task_type === "recommendation_run" && !createForm.payload.preset_id) {
-      showToast("推荐任务必须选择预设");
-      return;
-    }
     setCreateSaving(true);
     try {
       const taskId =
@@ -433,7 +405,6 @@ export function SchedulerTasksSection() {
         >
           <TaskFormBody
             form={createForm}
-            presets={presets}
             onChange={setCreateForm}
             onTaskTypeChange={(nt) => setCreateForm((f) => (f ? applyTaskTypeChange(f, nt) : f))}
             isNew
@@ -603,7 +574,6 @@ export function SchedulerTasksSection() {
             {isEditing && editForm && editForm.task_id === t.task_id && (
               <TaskFormBody
                 form={editForm}
-                presets={presets}
                 onChange={setEditForm}
                 onTaskTypeChange={undefined}
                 isNew={false}
@@ -658,13 +628,11 @@ export function SchedulerTasksSection() {
 // ── 表单主体（按 task_type 渲染）──────────────────────────────────
 function TaskFormBody({
   form,
-  presets,
   onChange,
   onTaskTypeChange,
   isNew,
 }: {
   form: TaskForm;
-  presets: Preset[];
   onChange: (f: TaskForm) => void;
   onTaskTypeChange?: (nt: ScheduledTaskType) => void;
   isNew: boolean;
@@ -733,20 +701,6 @@ function TaskFormBody({
       {/* payload 字段（按 task_type） */}
       {form.task_type === "recommendation_run" && (
         <>
-          <Field label="预设" hint="必选">
-            <select
-              className="cfg-input"
-              value={form.payload.preset_id ?? ""}
-              onChange={(e) => setPayload("preset_id", e.target.value)}
-            >
-              <option value="">— 选择预设 —</option>
-              {presets.map((p) => (
-                <option key={p.preset_id} value={p.preset_id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </Field>
           <Field label="运行名称">
             <input
               className="cfg-input"
@@ -755,16 +709,6 @@ function TaskFormBody({
               placeholder="留空则自动生成"
             />
           </Field>
-          <Field label="运行模式">
-            <select
-              className="cfg-input"
-              value={form.payload.run_mode ?? "formal"}
-              onChange={(e) => setPayload("run_mode", e.target.value)}
-            >
-              <option value="formal">formal（实盘）</option>
-              <option value="backtest">backtest（回测）</option>
-            </select>
-          </Field>
           <Field label="数据源">
             <select
               className="cfg-input"
@@ -777,83 +721,12 @@ function TaskFormBody({
                 </option>
               ))}
             </select>
-          </Field>
-          <Field label="风险模板">
-            <select
-              className="cfg-input"
-              value={form.payload.risk_template ?? "balanced"}
-              onChange={(e) => setPayload("risk_template", e.target.value)}
-            >
-              {Object.entries(RISK_TEMPLATE_MAP).map(([v, label]) => (
-                <option key={v} value={v}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="分数线" hint="0-100">
-            <input
-              className="cfg-input"
-              type="number"
-              min={0}
-              max={100}
-              value={form.payload.score_line ?? 72}
-              onChange={(e) => setPayload("score_line", Number(e.target.value))}
-            />
-          </Field>
-          <Field label="输出数量（另受每策略每日上限约束）">
-            <input
-              className="cfg-input"
-              type="number"
-              min={1}
-              value={form.payload.output_count ?? 6}
-              onChange={(e) => setPayload("output_count", Number(e.target.value))}
-            />
           </Field>
           <ToggleField
             label="跳过辅助数据刷新"
             hint="skip_aux_refresh"
             checked={form.payload.skip_aux_refresh ?? true}
             onChange={(v) => setPayload("skip_aux_refresh", v)}
-          />
-        </>
-      )}
-
-      {form.task_type === "preset_matrix_run" && (
-        <>
-          <Field label="矩阵批次名">
-            <input
-              className="cfg-input"
-              value={form.payload.matrix_batch_name ?? ""}
-              onChange={(e) => setPayload("matrix_batch_name", e.target.value)}
-            />
-          </Field>
-          <Field label="运行名前缀">
-            <input
-              className="cfg-input"
-              value={form.payload.run_name_prefix ?? ""}
-              onChange={(e) => setPayload("run_name_prefix", e.target.value)}
-              placeholder="留空则用批次名"
-            />
-          </Field>
-          <Field label="数据源">
-            <select
-              className="cfg-input"
-              value={form.payload.data_source ?? "local_pool_realtime"}
-              onChange={(e) => setPayload("data_source", e.target.value)}
-            >
-              {DATA_SOURCES.map((v) => (
-                <option key={v} value={v}>
-                  {DATA_SOURCE_MAP[v]}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <ToggleField
-            label="出错即停止"
-            hint="stop_on_error"
-            checked={form.payload.stop_on_error ?? false}
-            onChange={(v) => setPayload("stop_on_error", v)}
           />
         </>
       )}

@@ -11,7 +11,6 @@ from app.core.alerts import emit_alert
 from app.core.prefect_bootstrap import require_resident_prefect_client
 from app.orchestration.contracts import OrchestrationRunRef, OrchestrationRunView
 from app.orchestration.deployments import (
-    MANUAL_MATRIX_DEPLOYMENT_NAME,
     MANUAL_REMEDIATION_DEPLOYMENT_NAME,
     RECOMMENDATION_DEPLOYMENT_NAME,
     SCHEDULED_DEPLOYMENT_PREFIX,
@@ -76,10 +75,6 @@ def _trigger_manual(name: str, task_run_id: str, payload: dict) -> Orchestration
         parameters={"task_run_id": task_run_id, "payload": payload},
     )
     return OrchestrationRunRef(str(run.id), name)
-
-
-def trigger_manual_matrix(task_run_id: str, payload: dict) -> OrchestrationRunRef:
-    return _trigger_manual(MANUAL_MATRIX_DEPLOYMENT_NAME, task_run_id, payload)
 
 
 def trigger_manual_remediation(task_run_id: str, payload: dict) -> OrchestrationRunRef:
