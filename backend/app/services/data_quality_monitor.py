@@ -1341,7 +1341,14 @@ def check_provider_gateway(now: datetime | None = None, *, providers: tuple[str,
         elif q and used >= QUOTA_WARN_RATIO * q:
             warn.append(f"{p} 已用 {used}/{q}")
     now_ts = (now or _now()).timestamp()
-    open_live = [b for b in breakers_fn() if str(b.get("key", "")).startswith("live:") and float(b.get("open_until") or 0) > now_ts]
+    # 2026-11-15：限频改为「暂停+降级」，暂停行不是熔断（只是这一分钟跳过本源），
+    # 不能算进「熔断打开」去扣健康分，否则一次正常限频就报红。
+    open_live = [
+        b for b in breakers_fn()
+        if str(b.get("key", "")).startswith("live:")
+        and not str(b.get("key", "")).endswith("|pause")
+        and float(b.get("open_until") or 0) > now_ts
+    ]
     sev = GREEN
     notes = ["今日请求 " + "，".join(rows) if rows else "无已配置的上游"]
     if names and len(exhausted) == len(names):

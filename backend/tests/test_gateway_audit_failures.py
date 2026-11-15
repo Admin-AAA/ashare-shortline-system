@@ -15,6 +15,7 @@ def _store(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "_store_path", lambda: tmp_path / "rt.sqlite")
     monkeypatch.setenv(sb.BREAKER_NAMESPACE_ENV, "live")
     sb._cache.clear()
+    sb._pause_cache.clear()
 
 
 class Faulty:
@@ -42,6 +43,11 @@ def _open_left(name, ds):
     return sb.shared_open_until(f"live:gw:{name}:{ds}") - time.time()
 
 
+def _paused_left(name, ds):
+    sb._pause_cache.clear()
+    return sb.shared_paused_until(f"live:gw:{name}:{ds}") - time.time()
+
+
 def test_timeout_opens_after_two(monkeypatch, tmp_path):
     _store(monkeypatch, tmp_path)
     p = Faulty("t", exc=TimeoutError("slow"))
@@ -65,26 +71,74 @@ def test_bad_data_opens_after_three(monkeypatch, tmp_path):
     assert _open_left("b", "ds") > 290
 
 
-def test_rate_limit_uses_upstream_retry_after(monkeypatch, tmp_path):
-    """2026-11-15：rate_limit 改为「连续 2 次才熔断」，单次限频不再整源停摆。"""
+def test_rate_limit_pauses_and_falls_back_instead_of_tripping_breaker(monkeypatch, tmp_path):
+    """2026-11-15 重设：命中上游次数上限**不熔断**，只暂停本源 + 立即降级到下一个源。
+
+    网关职责是「尽量少熔断」：限频是额度信号，等 retry-after 就能用；把它记成熔断会顺带
+    降权健康分、触发半开探针与告警，把一个「等 20 秒」的源变成长期垫底源。
+    """
     _store(monkeypatch, tmp_path)
     exc = DataSourceError(ErrorKind.RATE_LIMIT, "429")
     exc.retry_after_seconds = 20.0
-    gw = _gw(Faulty("r", exc=exc))
-    gw.fetch_first("ds", {})
-    assert _open_left("r", "ds") <= 0            # 单次不熔断
-    gw.fetch_first("ds", {})
-    assert 15 < _open_left("r", "ds") <= 20.5    # 第二次熔断，冷却听上游 retry-after
+    primary = Faulty("r", exc=exc)
+    backup = Faulty("r_backup", rows=[{"x": 1}])
+    gw = DatasetGateway([primary, backup], enabled=lambda x: True, failure_threshold=10)
+
+    assert gw.fetch_first("ds", {}).rows == [{"x": 1}]   # 当次就换到下一个源
+    assert backup.calls == 1
+    assert _open_left("r", "ds") <= 0               # 熔断状态保持 closed
+    assert 15 < _paused_left("r", "ds") <= 20.5     # 只打暂停，冷却听上游 retry-after
+
+    gw.fetch_first("ds", {})                        # 暂停期内该源被跳过
+    assert primary.calls == 1
+    assert backup.calls == 2
+    assert _open_left("r", "ds") <= 0               # 连续限频也不熔断
 
 
-def test_rate_limit_without_hint_defaults_minute_scale(monkeypatch, tmp_path):
-    """无 retry-after 时用分钟级专用冷却 90s（旧行为 300s 把 1 分钟恢复的额度惩罚 5 分钟）。"""
+def test_rate_limit_without_hint_pauses_minute_scale(monkeypatch, tmp_path):
+    """无 retry-after 时用分钟级暂停（60s，不再是 90s 熔断冷却，更不走 300s 探测间隔）。"""
     _store(monkeypatch, tmp_path)
     gw = _gw(Faulty("r2", exc=DataSourceError(ErrorKind.RATE_LIMIT)))
     gw.fetch_first("ds", {})
     assert _open_left("r2", "ds") <= 0
+    assert 55 < _paused_left("r2", "ds") <= 60.5
+
+
+def test_pause_expires_then_source_is_used_again(monkeypatch, tmp_path):
+    """暂停到期即自动恢复，无需半开探测；探测失败计数不受影响。"""
+    _store(monkeypatch, tmp_path)
+    p = Faulty("r3", exc=DataSourceError(ErrorKind.RATE_LIMIT))
+    gw = _gw(p)
     gw.fetch_first("ds", {})
-    assert 80 < _open_left("r2", "ds") <= 95
+    key = "live:gw:r3:ds"
+    conn = sb._conn()
+    with conn:
+        conn.execute("UPDATE breaker_state SET open_until=? WHERE key=?", (time.time() - 1, key + sb.PAUSE_KEY_SUFFIX))
+    conn.close()
+    sb._pause_cache.clear()
+
+    p.exc, p.rows = None, [{"y": 2}]
+    assert gw.fetch_first("ds", {}).rows == [{"y": 2}]
+    assert p.calls == 2
+    assert _paused_left("r3", "ds") <= 0            # 成功后暂停被清除
+    assert sb._get_streak(f"{key}") == 0             # 限频不累加半开探测 streak
+
+
+def test_quota_exhausted_still_trips_a_real_breaker(monkeypatch, tmp_path):
+    """日额度耗尽属「当天不可再用」，仍走真熔断（默认 1h），与分钟级限频区分。"""
+    _store(monkeypatch, tmp_path)
+    gw = _gw(Faulty("q", exc=DataSourceError(ErrorKind.QUOTA_EXHAUSTED)))
+    gw.fetch_first("ds", {})
+    assert _open_left("q", "ds") > 3500
+    assert _paused_left("q", "ds") <= 0
+
+
+def test_rate_limit_does_not_penalise_health_score(monkeypatch, tmp_path):
+    """限频不扣健康分：暂停结束后本源立即回到原排序，不被长期排到链尾。"""
+    _store(monkeypatch, tmp_path)
+    gw = _gw(Faulty("h", exc=DataSourceError(ErrorKind.RATE_LIMIT)))
+    gw.fetch_first("ds", {})
+    assert g._HEALTH.snapshot("h", "ds")[0] == 0
 
 
 def test_thresholds_configurable(monkeypatch, tmp_path):

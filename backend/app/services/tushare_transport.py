@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextvars
 import logging
 import random
+import re
 import os
 import threading
 import time
@@ -43,13 +44,37 @@ _RETRYABLE_EXCEPTIONS = (
 # 等待重试没有意义。42901 是 token 当日配额耗尽，等到配额重置即可恢复。
 _PERMISSION_BUSINESS_CODES = frozenset({"40203"})
 _RATE_LIMIT_BUSINESS_CODES = frozenset({"42901"})
+# 上游过载/限流型业务码：quantdata 并发打满时返回 {"code":50302,"msg":"service temporarily
+# unavailable"}。它不是参数错也不是权限错，正确反应是「换源 + 短暂停」，不该按故障熔断。
+_CAPACITY_BUSINESS_CODES = frozenset({"50302"})
 # HTTP 200 但业务层报「上游容量忙」的措辞（teajoin: "query capacity busy"）。
-_BUSINESS_CAPACITY_TERMS = ("capacity busy", "capacity_busy", "pool_exhausted", "pool exhausted", "server busy", "系统繁忙", "服务繁忙")
+_BUSINESS_CAPACITY_TERMS = (
+    "capacity busy", "capacity_busy", "pool_exhausted", "pool exhausted", "server busy",
+    "系统繁忙", "服务繁忙",
+    # 2026-11-15 quantdata 实测：并发打满时上游回 "service temporarily unavailable"（业务码 50302）。
+    "temporarily unavailable", "service unavailable", "try again later", "请稍后",
+)
 # 批量/补数进程遇到「容量忙」：就地重试 BUSY_BATCH_ATTEMPTS 次，间隔 BUSY_BATCH_WAIT 秒 × 次数（带 ±25% 抖动），不开熔断。
 BUSY_BATCH_ATTEMPTS = 5
 BUSY_BATCH_WAIT = (2.0, 5.0)
 _PERMISSION_MESSAGE_TERMS = ("权限", "未开通", "积分", "permission", "unauthorized")
-_RATE_LIMIT_MESSAGE_TERMS = ("频率", "频次", "rate limit", "请求速度", "limit exceeded")
+_RATE_LIMIT_MESSAGE_TERMS = (
+    "频率", "频次", "rate limit", "rate_limited", "请求速度", "limit exceeded", "too many requests",
+)
+# 上游在文案里给出的等待提示，例如 promax「请在 56 秒后重试」/ "retry after 56 seconds"。
+_RETRY_HINT_RE = re.compile(r"(\d{1,5})\s*(?:秒|s\b|seconds?)", re.IGNORECASE)
+
+
+def _retry_hint_seconds(text: str) -> float | None:
+    """从错误文案里取上游建议的等待秒数；取不到就返回 None（走默认暂停时长）。"""
+    match = _RETRY_HINT_RE.search(text or "")
+    if not match:
+        return None
+    try:
+        value = float(match.group(1))
+    except (TypeError, ValueError):
+        return None
+    return value if 0 < value <= 3600 else None
 
 # 代理型数据源在自身容量耗尽时会返回 5xx 并在响应体里给出标识，例如
 # `{"ok":false,"error":"upstream_pool_exhausted"}`。这类失败的正确反应是立刻换源并让
@@ -63,6 +88,10 @@ _CAPACITY_EXHAUSTED_TERMS = (
     "too many",
     "busy",
     "quota",
+    # quantdata：HTTP 5xx + {"code":50302,"msg":"service temporarily unavailable"}。
+    "temporarily unavailable",
+    "service unavailable",
+    "try again later",
 )
 # 5xx 响应体里承载错误标识的常见字段名，按优先级取第一个非空值。
 _UPSTREAM_ERROR_FIELDS = ("error", "msg", "message", "detail", "reason")
@@ -577,10 +606,11 @@ class LeaderSpec:
 
 def _breaker_kind(category: "FailureCategory") -> str | None:
     """FailureCategory -> SharedCircuitBreaker failure kind (per-kind thresholds)."""
-    if category in (
-        FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT, FailureCategory.QUOTA_EXHAUSTED
-    ):
+    # 分钟级限频 vs 日额度耗尽必须分开：前者只暂停+换源，后者（当天已无额度）才真熔断。
+    if category in (FailureCategory.HTTP_RATE_LIMIT, FailureCategory.BUSINESS_RATE_LIMIT):
         return "rate_limit"
+    if category is FailureCategory.QUOTA_EXHAUSTED:
+        return "quota_exhausted"
     if category is FailureCategory.TIMEOUT:
         return "timeout"
     if category in (FailureCategory.MALFORMED_RESPONSE, FailureCategory.NON_JSON):
@@ -952,12 +982,9 @@ class TushareHttpProvider:
         try:
             return retrying(_once)
         except ProviderFailure as failure:
-            force_open = failure.category in {
-                FailureCategory.BUSINESS_RATE_LIMIT,
-                FailureCategory.QUOTA_EXHAUSTED,
-                FailureCategory.HTTP_RATE_LIMIT,
-                FailureCategory.PERMISSION,
-            }
+            # 只有 PERMISSION 走 force_open；限频由 SharedCircuitBreaker 转成「暂停+降级」，
+            # 日额度耗尽走 quota_exhausted 长冷却，均不再由这里硬开熔断。
+            force_open = failure.category is FailureCategory.PERMISSION
             if failure.capacity_busy and _is_research_namespace():
                 # 批量/补数遇到上游容量忙：已就地重试过；不计熔断失败（否则 3 次忙 = 5 分钟起的停摆），
                 # 由路由器换下一家；只留指标，监控可见。
@@ -1181,8 +1208,11 @@ class TushareHttpProvider:
                 raise self._malformed_failure(api_name)
 
     def _business_failure(self, api_name: str, envelope: Mapping[str, Any]) -> ProviderFailure:
-        code = str(envelope.get("code") or "")
-        raw_message = str(envelope.get("msg") or "").strip()
+        # 兼容两种失败信封：tushare/teajoin 的 {"code":..,"msg":..} 与 promax 的
+        # {"ok":false,"error":"ip_rate_limited","message":"当前IP请求频率超过限制，请在 56 秒后重试"}。
+        # 不认 promax 这套字段时，一次「每分钟 200 次」的限频会被当成 provider_error 去累计熔断。
+        code = str(envelope.get("code") or envelope.get("error") or "")
+        raw_message = str(envelope.get("msg") or envelope.get("message") or "").strip()
         message = raw_message.lower()
         # 上游业务错误码与原文一起保留，例如「40203: 抱歉，您没有接口(cyq_perf)访问权限」。
         upstream_detail = (f"{code}: {raw_message}" if code else raw_message)[:_UPSTREAM_DETAIL_MAX_CHARS] or None
@@ -1233,10 +1263,10 @@ class TushareHttpProvider:
                 category=FailureCategory.BUSINESS_RATE_LIMIT,
                 retryable=False,
                 fallback_allowed=True,
-                retry_after_seconds=60.0,
+                retry_after_seconds=_retry_hint_seconds(raw_message) or 60.0,
                 upstream_detail=upstream_detail,
             )
-        if any(term in message for term in _BUSINESS_CAPACITY_TERMS):
+        if code in _CAPACITY_BUSINESS_CODES or any(term in message for term in _BUSINESS_CAPACITY_TERMS):
             # 2026-10-26 teajoin：HTTP 200 + 业务码非 0 + "query capacity busy"（重查询时上游并发满）。
             # 不是参数/权限错误，也不是日额度：短冷却后换源/重试，别把它当 provider_error 反复打。
             batch = _is_research_namespace()

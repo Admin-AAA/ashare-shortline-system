@@ -100,12 +100,15 @@ def test_quota_flag_is_per_day(quota_env, monkeypatch):
     assert tt.provider_exhausted_today("quantdata") is False
 
 
-def test_gateway_classifies_quota_as_rate_limit():
-    from app.services.datasource.gateway import ErrorKind, classify_exception
+def test_gateway_classifies_quota_as_own_kind():
+    """日额度耗尽单独成类（2026-11-15）：分钟级限频走「暂停+降级」，额度耗尽才真熔断。"""
+    from app.services.datasource.gateway import BREAKER_KIND, ErrorKind, classify_exception
 
     f = tt.ProviderFailure(provider="quantdata", api_name="x", category=FailureCategory.QUOTA_EXHAUSTED,
                            retryable=False, fallback_allowed=True)
-    assert classify_exception(f) is ErrorKind.RATE_LIMIT
+    assert classify_exception(f) is ErrorKind.QUOTA_EXHAUSTED
+    assert BREAKER_KIND[ErrorKind.QUOTA_EXHAUSTED] == "quota_exhausted"
+    assert BREAKER_KIND[ErrorKind.RATE_LIMIT] == "rate_limit"
 
 
 def test_em_repurchase_mapping_and_window():

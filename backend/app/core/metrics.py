@@ -263,9 +263,13 @@ def snapshot(include_processes: bool = True) -> dict[str, Any]:
         try:
             from app.core.shared_breaker import shared_breaker_states
 
-            out["open_breakers"] = shared_breaker_states()
+            states = shared_breaker_states()
+            # 限频只暂停不熔断：暂停行单独列，避免监控把一次正常限频当成源故障。
+            out["open_breakers"] = [s for s in states if s.get("kind") != "pause"]
+            out["rate_limit_pauses"] = [s for s in states if s.get("kind") == "pause"]
         except Exception:  # noqa: BLE001
             out["open_breakers"] = []
+            out["rate_limit_pauses"] = []
     return out
 
 

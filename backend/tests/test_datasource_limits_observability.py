@@ -429,51 +429,56 @@ def test_limits_section_marks_dead_limiter():
     limiter_registry.reset()
 
 
-# ── 6. 限频熔断阈值与冷却（2026-11-15 实测标定）──────────────────────────────
+# ── 6. 限频只暂停、不熔断（2026-11-15 二次重设：网关职责是尽量少熔断）────────
 
 def _isolated_breaker(monkeypatch, key="gw:teajoin:trade_cal"):
-    """把共享状态（SQLite）隔离掉，只测本进程内的阈值/冷却决策。"""
+    """把共享状态（SQLite）隔离掉，只测本进程内的阈值/暂停/冷却决策。"""
     from app.core import shared_breaker as sb
 
     published: list[tuple[str, float, str]] = []
+    pauses: list[tuple[str, float, float]] = []
     monkeypatch.setattr(sb, "shared_open_until", lambda k: 0.0)
+    monkeypatch.setattr(sb, "shared_paused_until", lambda k: 0.0)
     monkeypatch.setattr(sb, "_publish_open", lambda k, until, reason="": published.append((k, until, reason)))
     monkeypatch.setattr(sb, "_publish_closed", lambda k: None)
+    monkeypatch.setattr(sb, "publish_pause", lambda k, secs: pauses.append((k, time.time() + float(secs), float(secs))))
+    monkeypatch.setattr(sb, "clear_pause", lambda k: None)
     monkeypatch.setattr(sb, "_provider_overrides", lambda: {})
     breaker = sb.SharedCircuitBreaker(key, failure_threshold=3, recovery_seconds=60)
-    return sb, breaker, published
+    return sb, breaker, published, pauses
 
 
-def test_rate_limit_opens_only_after_threshold(monkeypatch):
-    sb, breaker, published = _isolated_breaker(monkeypatch)
-    assert sb.kind_threshold("rate_limit") == 2  # 默认连续 2 次
+def test_rate_limit_only_pauses_never_opens_breaker(monkeypatch):
+    """限频再多次也只暂停；熔断状态必须是 closed（网关靠暂停换源，不靠熔断）。"""
+    sb, breaker, published, pauses = _isolated_breaker(monkeypatch)
+    for _ in range(5):
+        breaker.record_failure(kind="rate_limit")
+    assert published == [], "限频不得写熔断状态"
+    assert breaker.state == "closed"
+    assert len(pauses) == 5, "每次都只打一次暂停标记"
+    assert sb.kind_threshold("rate_limit") == 2  # 向后兼容旧配置项，已不参与判定
+
+
+def test_rate_limit_pause_defaults_one_minute(monkeypatch):
+    sb, breaker, _, pauses = _isolated_breaker(monkeypatch)
     breaker.record_failure(kind="rate_limit")
-    assert breaker.state == "closed", "单次限频（免费额度下的常态噪音）不应直接熔断"
-    breaker.record_failure(kind="rate_limit")
-    assert breaker.state == "open"
-    assert published and "rate_limitx2" in published[-1][2]
+    assert sb.PAUSE_BASE_SECONDS == 60
+    assert pauses[-1][2] == 60.0
 
 
-def test_rate_limit_threshold_configurable(monkeypatch):
-    sb, breaker, _ = _isolated_breaker(monkeypatch, key="gw:promax:rt_k")
-    monkeypatch.setattr(sb, "_provider_overrides", lambda: {"promax": {"rate_limit": 1}})
-    breaker.record_failure(kind="rate_limit")
-    assert breaker.state == "open", "旧行为（1 次即熔断）应可通过 overrides 恢复"
-
-
-def test_rate_limit_cooldown_uses_minute_scale(monkeypatch):
-    sb, breaker, published = _isolated_breaker(monkeypatch)
-    breaker.record_failure(kind="rate_limit")
-    breaker.record_failure(kind="rate_limit")
-    # 无 retry-after：用分钟级专用冷却 90s，而不是通用 300s 探测间隔
-    delay = published[-1][1] - __import__("time").time()
-    assert 80 <= delay <= 95, delay
-    assert sb.RATE_LIMIT_COOLDOWN_SECONDS == 90
-
-
-def test_rate_limit_cooldown_honours_retry_after(monkeypatch):
-    _, breaker, published = _isolated_breaker(monkeypatch)
-    breaker.record_failure(kind="rate_limit")
+def test_rate_limit_pause_honours_retry_after(monkeypatch):
+    _, breaker, _, pauses = _isolated_breaker(monkeypatch)
     breaker.record_failure(kind="rate_limit", recovery_seconds=56.0)  # promax 实测「请在 56 秒后重试」
-    delay = published[-1][1] - __import__("time").time()
-    assert 50 <= delay <= 61, delay
+    assert pauses[-1][2] == 56.0
+
+
+def test_quota_exhausted_opens_long_cooldown(monkeypatch):
+    """日额度耗尽 ≠ 限频：当天不可再用，必须真熔断（默认 1h）。"""
+    sb, breaker, published, pauses = _isolated_breaker(monkeypatch, key="gw:quantdata:rt_k")
+    breaker.record_failure(kind="quota_exhausted")
+    assert pauses == []
+    assert published and published[-1][2] == "quota_exhausted"
+    left = published[-1][1] - time.time()
+    assert left > sb.QUOTA_EXHAUSTED_SECONDS - 5
+
+

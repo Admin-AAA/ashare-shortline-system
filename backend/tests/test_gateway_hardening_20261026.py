@@ -26,6 +26,7 @@ def _store(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "_store_path", lambda: tmp_path / "rt.sqlite")
     monkeypatch.setenv(sb.BREAKER_NAMESPACE_ENV, "live")
     sb._cache.clear()
+    sb._pause_cache.clear()
 
 
 def test_repeated_probe_failures_lengthen_cooldown_and_success_resets(monkeypatch, tmp_path):
@@ -221,6 +222,7 @@ def test_http_429_capacity_busy_live_is_not_retried(monkeypatch, tmp_path):
 
 
 def test_http_429_without_busy_text_is_still_plain_rate_limit(monkeypatch, tmp_path):
+    """纯限频（非容量忙）：不重试、立即 fallback；且只暂停不熔断（2026-11-15）。"""
     import pytest
 
     _store(monkeypatch, tmp_path)
@@ -228,6 +230,11 @@ def test_http_429_without_busy_text_is_still_plain_rate_limit(monkeypatch, tmp_p
     with pytest.raises(tt.ProviderFailure) as ei:
         p.request("limit_list_d", params={})
     assert not ei.value.capacity_busy and not ei.value.retryable and len(posts) == 1
+    assert ei.value.fallback_allowed
+    # 限频只留暂停标记，不进熔断状态机
+    assert sb.shared_open_until(p._breaker("limit_list_d").key) <= 0
+    sb._pause_cache.clear()
+    assert sb.shared_paused_until(p._breaker("limit_list_d").key) > time.time()
 
 
 # ── 2026-10-26 21:00：teajoin 偶发整段 403 "invalid api key"（同一把 key 几十秒后恢复）按瞬时拥塞处理 ──

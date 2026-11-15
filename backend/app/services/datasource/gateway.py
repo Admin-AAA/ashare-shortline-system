@@ -50,12 +50,15 @@ class ErrorKind(StrEnum):
     CIRCUIT_OPEN = "circuit_open"
     CONTRACT = "contract"
     BAD_DATA = "bad_data"  # empty where data is expected (e.g. realtime quotes in session)
+    QUOTA_EXHAUSTED = "quota_exhausted"  # daily quota used up: real breaker, not a rate-limit pause
 
 
 # breaker failure kind per ErrorKind (thresholds in shared_breaker.kind_threshold)
 BREAKER_KIND: dict[ErrorKind, str] = {
     ErrorKind.RATE_LIMIT: "rate_limit", ErrorKind.TIMEOUT: "timeout",
     ErrorKind.CONTRACT: "bad_data", ErrorKind.BAD_DATA: "bad_data",
+    # 日额度耗尽当天不可恢复：走真熔断（长冷却），与分钟级限频的「暂停+降级」区分开。
+    ErrorKind.QUOTA_EXHAUSTED: "quota_exhausted",
 }
 # Not provider faults: never count toward a breaker.  CIRCUIT_OPEN = an upstream (Tushare router)
 # breaker already refused the call; counting it here would keep this breaker open for another
@@ -90,7 +93,7 @@ def classify_exception(exc: BaseException) -> ErrorKind:
     cat = str(getattr(getattr(exc, "category", None), "value", getattr(exc, "category", "")) or "")
     table = {
         "http_rate_limit": ErrorKind.RATE_LIMIT, "business_rate_limit": ErrorKind.RATE_LIMIT,
-        "quota_exhausted": ErrorKind.RATE_LIMIT,
+        "quota_exhausted": ErrorKind.QUOTA_EXHAUSTED,
         "permission": ErrorKind.NO_PERMISSION, "invalid_request": ErrorKind.INVALID_REQUEST,
         "http_client": ErrorKind.INVALID_REQUEST, "network": ErrorKind.NETWORK,
         "timeout": ErrorKind.TIMEOUT, "data_pending": ErrorKind.DATA_PENDING,
@@ -554,7 +557,10 @@ class DatasetGateway:
             rows = self._fetch_with_retry(p, dataset, query, budget, cap)
         except Exception as exc:  # noqa: BLE001 - classified, recorded, next provider tried
             kind = classify_exception(exc)
-            _HEALTH.record_failure(p.name, dataset)
+            # 限频（RATE_LIMIT）不扣健康分：breaker 侧只做「暂停 + 降级到下一个源」，暂停
+            # 结束即恢复原排序；若同时扣健康分，一次额度抖动会把这个源长期排到链尾。
+            if kind is not ErrorKind.RATE_LIMIT:
+                _HEALTH.record_failure(p.name, dataset)
             if kind not in NON_BREAKER_KINDS:
                 breaker.record_failure(
                     kind=BREAKER_KIND.get(kind), recovery_seconds=getattr(exc, "retry_after_seconds", None)

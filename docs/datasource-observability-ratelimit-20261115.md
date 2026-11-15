@@ -141,7 +141,7 @@ ASHARE_BREAKER_THRESHOLD_OVERRIDES={"teajoin":{"timeout":4},"promax":{"timeout":
 ```
 
 取值逻辑：`key` 按 `:` 分段匹配 provider 命名空间（兼容 `gw:promax:rt_k` 这类），未命中回落全局默认
-（timeout=2、bad_data=3）。`rate_limit` 仍是立即熔断（上游已明确拒绝，重试只会更糟）。
+（timeout=2、bad_data=3）。~~`rate_limit` 仍是立即熔断~~ → **已被第 12 节取代：限频不再熔断，只暂停并降级**。
 
 依据：promax 是实时行情主源，超时应立刻切换（阈值收紧到 1）；teajoin 覆盖 205 个接口、
 偶发超时不代表不可用（放宽到 4），避免频繁熔断导致大面积降级。
@@ -218,8 +218,8 @@ curl -s 'http://127.0.0.1:8765/api/admin/data-quality?refresh=true' | jq '.items
 | `quantdata` 限速 | 120/min | **90/min** | 高并发即 503，属低并发高延迟源 |
 | `promax` 限速 | 180/min | 180/min（不变） | 对 200 硬顶留 10% 余量 |
 | `promax` research 硬窗口 | 5min 300 / 1h 2400（盘中 20/min） | **60s 160 / 1h 9600（盘中 160/min）** | 旧值比上游低约 10 倍，"5min 100 次"来自代理连接池耗尽，与 IP 计数限频是两件事 |
-| 限频熔断阈值 | 1 次即熔断 | **连续 2 次**（`ASHARE_BREAKER_THRESHOLD_*` / overrides 可配 1 复原） | 免费额度下限频是常态噪音，单发停摆 5 分钟代价大于限频本身 |
-| 限频熔断冷却 | 300s（无 retry-after 时） | **90s**，有 retry-after 用上游值 | 上游窗口都是分钟级；promax 直接给 56s |
+| 限频熔断阈值 | 1 次即熔断 | ~~连续 2 次~~ → **不再熔断**（第 12 节） | 免费额度下限频是常态噪音，单发停摆 5 分钟代价大于限频本身 |
+| 限频熔断冷却 | 300s（无 retry-after 时） | ~~90s~~ → **暂停 60s**（有 retry-after 用上游值，第 12 节） | 上游窗口都是分钟级；promax 直接给 56s |
 | 半开探测封顶 | 1200s | **600s** | 实测上游恢复都在 60~90s 量级 |
 
 ### 11.3 验证
@@ -227,4 +227,50 @@ curl -s 'http://127.0.0.1:8765/api/admin/data-quality?refresh=true' | jq '.items
 - `.env` 三处显式覆盖同步更新（`QUANTDATA=90` / `TEAJOIN=480` / 窗口表注释）。
 - 重启 `com.wangao.ashare-backend` 后 `GET /api/data-sources/limits`：`teajoin(480)`、`quantdata(90)`、`promax(180)`；`promax.tightest_effective_per_minute=160`、`declared_vs_effective_ratio=1.12`，**原"口径差 4.5 倍"告警已消失**。
 - 全量测试 **4285 passed / 24 skipped**（新增 4 条限频熔断用例）。
+## 12. 限频不再熔断：改为「暂停 + 降级」（2026-11-15 二次重设）
+
+用户指令：**命中上游次数上限时不允许熔断该数据源，应立刻走下一个源；只有真故障才熔断并冷却。**
+网关的职责是尽可能少熔断——熔断是故障兜底，不是限频的处理方式。
+
+### 12.1 语义拆分
+
+| 失败类型 | 旧行为 | 新行为 |
+| --- | --- | --- |
+| 分钟级限频（429 / `ip_rate_limited` / `rate limit exceeded` / 容量忙） | 达阈值开熔断，冷却 60~90s，期间源被整体停摆、进半开探测、降健康权重 | **只写暂停标记**（默认 60s，有 retry-after 用上游值），当次请求立即降级到下一个 provider；熔断状态保持 `closed` |
+| 日额度耗尽（`42901`、`quota_exhausted`） | 与限频混在一起 | **单独 `quota_exhausted`**，真熔断 1h（`ASHARE_QUOTA_EXHAUSTED_SECONDS`） |
+| 超时 / 坏数据 / 5xx / 无权限 | 熔断 | 不变（这才是熔断该管的事） |
+
+实现要点（`app/core/shared_breaker.py`）：
+
+- 新增 `PAUSE_KEY_SUFFIX="|pause"`、`PAUSE_BASE_SECONDS`（`ASHARE_RATE_LIMIT_PAUSE_SECONDS`，默认 60）、
+  `PAUSE_MAX_SECONDS=300`、`QUOTA_EXHAUSTED_SECONDS`（默认 3600）。
+- `record_failure(kind="rate_limit")` **不再调用 `_open`**，只写跨进程暂停行；`allow_request()` 先查暂停，
+  命中即返回 False（等价"这一次跳过本源"）。
+- 暂停不写探针记录、不累加 `probe_streak`、不改健康权重、不进半开状态机；`record_success()` 顺带清除。
+- `shared_breaker_states()` 每行带 `kind: pause|breaker`，展示层据此分离。
+
+### 12.2 分类补齐（否则策略失效）
+
+三个上游的限频形态各不相同，任一形态被误判成 `provider_error`/`server_error` 都会退回按次数熔断：
+
+| 上游 | 实测失败形态 | 补丁 |
+| --- | --- | --- |
+| promax | `{"ok":false,"error":"ip_rate_limited","message":"…请在 56 秒后重试"}` | `_business_failure` 兼容 `error`/`message` 字段；`_RATE_LIMIT_MESSAGE_TERMS` 加 `rate_limited`/`too many requests`；新增 `_retry_hint_seconds()` 解析"56 秒后重试" |
+| teajoin | `{"code":-1,"msg":"rate limit exceeded"}` | 同上的 `rate_limited` 词表 |
+| quantdata | `{"code":50302,"msg":"service temporarily unavailable"}` | 新增 `_CAPACITY_BUSINESS_CODES={"50302"}`；`_BUSINESS_CAPACITY_TERMS` / `_CAPACITY_EXHAUSTED_TERMS` 加 `temporarily unavailable` 等措辞 → 判为容量忙（短冷却+换源），不再判 `PROVIDER_ERROR` |
+
+### 12.3 展示与告警口径
+
+- `/api/data-sources/limits` 的 `breakers` 每项新增 `kind`；
+- `/api/metrics/runtime` 把暂停从 `open_breakers` 拆到 `rate_limit_pauses`；
+- 数据源管理页 `_breaker_rows()` 排除 `%|pause`，健康巡检 `open_live` 不再把暂停算作"熔断打开"。
+
+### 12.4 验证
+
+- 新增 `tests/test_rate_limit_pause_semantics_20261115.py`（9 条）：三类限频形态分类、连续 4 次限频仍 `closed`、
+  暂停到期不触发半开探测、日额度仍真熔断、暂停不出现在熔断视图。
+- 改写旧语义用例：`test_datasource_limits_observability.py` 第 6 节、`test_quota_exhausted_skip.py` 分类断言、
+  `test_gateway_audit_failures.py` 限频用例（暂停 + 当次降级）。
+- 全量测试 **4296 passed / 24 skipped**。
+
 *（内容由AI生成，仅供参考）*

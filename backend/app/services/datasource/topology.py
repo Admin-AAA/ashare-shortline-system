@@ -85,7 +85,10 @@ def _breaker_rows() -> list[tuple[str, float, str]]:
         if conn is None:
             return []
         rows = conn.execute(
-            "SELECT key, open_until, reason FROM breaker_state WHERE key LIKE ?", (f"{LIVE_NAMESPACE}:%",)
+            # key 以 |pause 结尾的是「限频暂停」行，不是熔断（2026-11-15 起限频不再开熔断）。
+            "SELECT key, open_until, reason FROM breaker_state "
+            "WHERE key LIKE ? AND key NOT LIKE ?",
+            (f"{LIVE_NAMESPACE}:%", "%|pause"),
         ).fetchall()
         conn.close()
     except Exception:  # noqa: BLE001 - 熔断库不可用时按全部关闭展示

@@ -280,6 +280,8 @@ def _breakers_section() -> list[dict[str, Any]]:
             "seconds_remaining": _num(max(0.0, float(s.get("open_until") or 0) - now), 0),
             "reason": s.get("reason"),
             "role": s.get("role"),
+            # pause = 限频引起的短时跳过（不熔断）；breaker = 真熔断进入冷却。
+            "kind": s.get("kind") or "breaker",
         })
     return out
 
@@ -429,7 +431,11 @@ def collect(db=None, *, hours: int = 24) -> dict[str, Any]:
     limiters = _limiters_section(db_path)
     daily = _daily_section()
     promax = _promax_section(cfg)
-    breakers = _breakers_section()
+    # 限频暂停 ≠ 熔断：暂停只是「这一段窗口跳过本源、换下一个源」，按用户口径要尽量少熔断。
+    # 两个口径分开暴露，避免前端/告警把暂停读成"源熔断"。
+    states = _breakers_section()
+    breakers = [b for b in states if b.get("kind") != "pause"]
+    pauses = [b for b in states if b.get("kind") == "pause"]
     quality = quality_by_provider(db, hours=hours)
 
     for item in daily:
@@ -445,6 +451,7 @@ def collect(db=None, *, hours: int = 24) -> dict[str, Any]:
             )
     for item in breakers:
         warnings.append(f"熔断开启：{item['key']}（还剩 {int(item['seconds_remaining'] or 0)}s，原因 {item['reason']}）")
+    # 限频暂停不进 warnings：那是正常降级路径（换源继续），报成告警就成了噪音。
     if promax.get("warning"):
         warnings.append(promax["warning"])
 
@@ -459,6 +466,7 @@ def collect(db=None, *, hours: int = 24) -> dict[str, Any]:
         "daily": daily,
         "promax": promax,
         "breakers": breakers,
+        "rate_limit_pauses": pauses,
         "direct_sources": _direct_section(),
         "rates": _rates_section(),
         "quality": quality,

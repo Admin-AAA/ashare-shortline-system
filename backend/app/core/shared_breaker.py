@@ -84,6 +84,85 @@ def _publish_open(key: str, open_until: float, reason: str = "") -> None:
         logger.debug("shared breaker publish failed %s: %s", key, exc)
 
 
+_pause_cache: dict[str, tuple[float, float]] = {}
+_pause_lock = threading.Lock()
+
+
+def _pause_key(key: str) -> str:
+    return f"{key}{PAUSE_KEY_SUFFIX}"
+
+
+def publish_pause(key: str, seconds: float) -> float:
+    """给某个 provider×dataset 打一个「限频暂停」标记，返回恢复时间戳。
+
+    暂停**不是熔断**：只让 allow_request 在窗口内拒绝该源，网关据此立刻降级到下一个源；
+    不写探针记录、不累加 probe streak、不改健康权重、不出熔断告警。到期自动失效。
+    """
+    now = time.time()
+    until = now + max(1.0, float(seconds))
+    pkey = _pause_key(key)
+    try:
+        conn = _conn()
+        if conn is None:
+            return until
+        import os
+
+        from app.core import metrics
+
+        with conn:
+            conn.execute(
+                "INSERT INTO breaker_state (key, open_until, updated_at, role, pid, reason) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET open_until=MAX(open_until, excluded.open_until), "
+                "updated_at=excluded.updated_at, role=excluded.role, pid=excluded.pid, reason=excluded.reason",
+                (pkey, until, now, metrics._process_role(), os.getpid(), "rate_limit_pause"),
+            )
+        conn.close()
+        with _pause_lock:
+            _pause_cache[pkey] = (time.monotonic(), until)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("shared breaker pause publish failed %s: %s", pkey, exc)
+    return until
+
+
+def shared_paused_until(key: str) -> float:
+    pkey = _pause_key(key)
+    now_m = time.monotonic()
+    with _pause_lock:
+        cached = _pause_cache.get(pkey)
+        if cached is not None and now_m - cached[0] < SHARED_READ_TTL:
+            return cached[1]
+    value = 0.0
+    try:
+        conn = _conn()
+        if conn is not None:
+            row = conn.execute("SELECT open_until FROM breaker_state WHERE key=?", (pkey,)).fetchone()
+            conn.close()
+            value = float(row[0]) if row else 0.0
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("shared breaker pause read failed %s: %s", pkey, exc)
+    with _pause_lock:
+        _pause_cache[pkey] = (now_m, value)
+    return value
+
+
+def clear_pause(key: str) -> None:
+    pkey = _pause_key(key)
+    with _pause_lock:
+        cached = _pause_cache.get(pkey)
+        _pause_cache[pkey] = (time.monotonic(), 0.0)
+    if cached is not None and cached[1] <= 0:
+        return  # 已知未暂停，成功请求不必每次都写盘
+    try:
+        conn = _conn()
+        if conn is None:
+            return
+        with conn:
+            conn.execute("DELETE FROM breaker_state WHERE key=?", (pkey,))
+        conn.close()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("shared breaker pause clear failed %s: %s", pkey, exc)
+
+
 def probe_backoff_delay(streak: int, *, base: float | None = None, cap: float | None = None, rng=None) -> float:
     """半开探测失败后的下一次冷却：base × 2^streak，封顶 cap，再加 0–10% 抖动（避免多进程同一秒一起探）。
 
@@ -164,7 +243,11 @@ def shared_open_until(key: str) -> float:
 
 
 def shared_breaker_states() -> list[dict[str, Any]]:
-    """For /api/metrics/runtime: currently open shared breakers."""
+    """For /api/metrics/runtime: currently open shared breakers.
+
+    ``kind`` 区分 ``breaker``（真熔断，走冷却/半开探测）与 ``pause``（限频暂停，仅跳过本源、
+    网关立即降级），供前端与管理页分开呈现，避免把「限额等 60 秒」误报成「源挂了」。
+    """
     try:
         conn = _conn()
         if conn is None:
@@ -176,10 +259,22 @@ def shared_breaker_states() -> list[dict[str, Any]]:
         conn.close()
     except Exception:  # noqa: BLE001
         return []
-    return [
-        {"key": r[0], "open_until": r[1], "updated_at": r[2], "role": r[3], "pid": r[4], "reason": r[5]}
-        for r in rows
-    ]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        key = str(r[0])
+        paused = key.endswith(PAUSE_KEY_SUFFIX)
+        out.append(
+            {
+                "key": key[: -len(PAUSE_KEY_SUFFIX)] if paused else key,
+                "open_until": r[1],
+                "updated_at": r[2],
+                "role": r[3],
+                "pid": r[4],
+                "reason": r[5],
+                "kind": "pause" if paused else "breaker",
+            }
+        )
+    return out
 
 
 # Unified cooldown / half-open policy (user, 2026-10-19): an open breaker stays open at least
@@ -188,17 +283,32 @@ def shared_breaker_states() -> list[dict[str, Any]]:
 # another PROBE_INTERVAL_SECONDS. A crashed prober's claim expires after PROBE_LEASE_SECONDS.
 PROBE_INTERVAL_SECONDS = 300.0
 PROBE_LEASE_SECONDS = 60.0
-# 限频类熔断的专用冷却（2026-11-15 实测）：上游限频窗口实测都是「分钟级滑动窗」——
-# promax 直接回 `请在 56 秒后重试`（IP 200/min 硬窗），teajoin 在 550 次/分钟处回
-# `rate limit exceeded`，quantdata 高并发 2.6s 就 503 但低并发即恢复。
-# 旧逻辑一律 300s（PROBE_INTERVAL_SECONDS），等于把「1 分钟就恢复的额度」惩罚 5 分钟，
-# 免费版额度小、限频更频繁，会被这条放大成大段空窗。改为 90s，上游给 retry-after 就用上游的。
-RATE_LIMIT_COOLDOWN_SECONDS = float(
-    __import__("os").environ.get("ASHARE_BREAKER_RATE_LIMIT_COOLDOWN_SECONDS", "90") or 90
-)
+def _env_float(name: str, default: float) -> float:
+    """读数值型开关：进程环境变量 → backend/.env（pydantic 不会把 .env 导出到 os.environ）。"""
+    from app.core.runtime_env import env_value
+
+    try:
+        return float(env_value(name, default=str(default)) or default)
+    except (TypeError, ValueError):
+        return default
+
+
+# ── 限频暂停（2026-11-15 二次重设，用户指令）──────────────────────────────
+# 命中上游次数上限时**不熔断数据源**，只做「暂停 + 降级到下一个源」：不动熔断状态、不进半开
+# 探测、不累加 probe streak、不影响健康权重。真正熔断只由故障类失败（timeout / bad_data / 5xx /
+# permission）与日额度耗尽触发。理由：限频是额度信号而非故障，而熔断的副作用（健康降权、半开
+# 探针、告警、长冷却）会把「一分钟后就能恢复的额度」放大成整个源停摆——免费额度下尤其明显。
+# 实测三个源的上游窗口都是分钟级：promax 直接回「请在 56 秒后重试」（IP 200/min 硬窗）、
+# teajoin 在 550 次/分钟处回 `rate limit exceeded`、quantdata 高并发 2.6s 即 50302。
+# 上游给了 retry-after / 文案里给了秒数，就用上游的；否则用下面的默认值。
+PAUSE_KEY_SUFFIX = "|pause"
+PAUSE_BASE_SECONDS = _env_float("ASHARE_RATE_LIMIT_PAUSE_SECONDS", 60.0)
+PAUSE_MAX_SECONDS = 300.0
+# 日额度耗尽不适用上面的短暂停：当天已无额度，按「故障级」长冷却处理。
+QUOTA_EXHAUSTED_SECONDS = _env_float("ASHARE_QUOTA_EXHAUSTED_SECONDS", 3600.0)
 # 探测连续失败时冷却指数拉长的上限（默认 10 分钟）。原 1200s（20min）在免费/小窗口额度下过长：
 # 实测上游恢复都在 60~90s 量级，指数退避封顶压到 600s 即可防抖又不过度停摆。
-PROBE_MAX_SECONDS = float(__import__("os").environ.get("ASHARE_BREAKER_PROBE_MAX_SECONDS", "600") or 600)
+PROBE_MAX_SECONDS = _env_float("ASHARE_BREAKER_PROBE_MAX_SECONDS", 600.0)
 
 
 def _try_claim_probe(key: str) -> bool | None:
@@ -275,6 +385,8 @@ def kind_threshold(kind: str | None, key: str | None = None) -> int | None:
     # rate_limit 也纳入可配阈值（2026-11-15 实测）：旧逻辑「1 次限频即熔断」，而上游限频在
     # 免费/小额度下是常态噪音（teajoin 550/min、quantdata 并发抖动都只影响单次请求），
     # 单发就整源停摆 5 分钟比限频本身代价更大。默认连续 2 次才熔断，需要旧行为可配 1。
+    # 注意：rate_limit 已改为「暂停+降级」，不再有熔断阈值；此处保留其读取路径仅为向后兼容
+    # 旧配置项（breaker_threshold_rate_limit / .env 里的 provider overrides），实际不再生效。
     if kind not in ("timeout", "bad_data", "rate_limit"):
         return None
     default = {"timeout": 2, "bad_data": 3, "rate_limit": 2}[kind]
@@ -311,6 +423,9 @@ class SharedCircuitBreaker:
         self._kind_lock = threading.Lock()
 
     def allow_request(self) -> bool:
+        # 限频暂停优先：只跳过本源的这一段窗口，让网关换下一个源，不进入熔断/半开状态机。
+        if shared_paused_until(self.key) > time.time():
+            return False
         open_until = shared_open_until(self.key)
         if open_until > time.time():
             return False
@@ -330,13 +445,18 @@ class SharedCircuitBreaker:
             self._kind_counts.clear()
         self._local.record_success()
         _publish_closed(self.key)
+        clear_pause(self.key)
 
     def record_failure(
         self, *, force_open: bool = False, recovery_seconds: float | None = None, kind: str | None = None
     ) -> None:
-        """Per-kind thresholds (audit item 1): rate_limit opens immediately for the upstream
-        retry-after (else PROBE_INTERVAL_SECONDS); timeout / bad_data open after their own
-        configurable counts; anything else uses the breaker's failure_threshold."""
+        """按失败类型分流（2026-11-15 重设）：
+
+        - ``rate_limit``：**不熔断**，只打限频暂停（默认 60s 或上游 retry-after），窗口内
+          allow_request 拒绝本源的请求，网关立即降级到下一个源；到期自动恢复，无需半开探测。
+        - ``quota_exhausted``：日额度耗尽属「当天不可再用」，按故障级长冷却（默认 1h）真熔断。
+        - ``timeout`` / ``bad_data``：按各自可配阈值熔断；其他走 force_open / failure_threshold。
+        """
         kind = (kind or "").lower() or None
         if self._probing:
             self._probing = False
@@ -344,18 +464,17 @@ class SharedCircuitBreaker:
             self._open(probe_backoff_delay(streak - 1 if streak > 0 else 0), f"probe_failed#{streak}")
             return
         if kind == "rate_limit":
-            # 上游给了 retry-after 就听上游；否则用分钟级限频的专用冷却（不再用 300s 的通用探测间隔）。
+            # 关键：不调用 _open。限频是额度信号而非故障，熔断会顺带降权健康分、触发半开探针
+            # 与告警，把一个「等 60 秒就能用」的源变成「每分钟被降级一次」的坏源。
             delay = (
                 float(recovery_seconds)
                 if recovery_seconds and recovery_seconds > 0
-                else RATE_LIMIT_COOLDOWN_SECONDS
+                else PAUSE_BASE_SECONDS
             )
-            threshold = kind_threshold("rate_limit", self.base_key) or 1
-            with self._kind_lock:
-                n = self._kind_counts.get(kind, 0) + 1
-                self._kind_counts[kind] = n
-            if n >= threshold:
-                self._open(delay, f"rate_limitx{n}")
+            publish_pause(self.key, delay)
+            return
+        if kind == "quota_exhausted":
+            self._open(max(float(recovery_seconds or 0.0), QUOTA_EXHAUSTED_SECONDS), "quota_exhausted")
             return
         if force_open:
             self._open(max(self._recovery, float(recovery_seconds or 0.0)), "force_open")
