@@ -216,10 +216,12 @@ def _promax_section(cfg) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         intraday = False
     try:
-        from app.core.runtime_env import env_value
+        from app.core.runtime_env import env_flag, env_value
 
         insights["rt_k_live_open_until"] = _num(promax_window._rt_k_live_open_until(), 0)
-        insights["research_enabled"] = env_value("ASHARE_TUSHARE_PROMAX_RESEARCH_ENABLED") or None
+        # 用布尔解析而不是原样回显字符串：否则 .env 里写 0/false 会被当成"已启用"，
+        # 空值时也应是明确的 False 而不是 null（前端不该自己猜）。
+        insights["research_enabled"] = env_flag("ASHARE_TUSHARE_PROMAX_RESEARCH_ENABLED", False)
     except Exception:  # noqa: BLE001
         pass
     windows = []
