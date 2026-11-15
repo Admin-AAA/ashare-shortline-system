@@ -3,7 +3,7 @@
 用法（cd backend）：
   PYTHONPATH=. .venv/bin/python scripts/shortline_research/lhd_s327_predict.py tier1   # 全市场 2020-2026 日线+limit_list_d
   PYTHONPATH=. .venv/bin/python scripts/shortline_research/lhd_s327_predict.py tier2   # 230 只分钟样本
-  PYTHONPATH=. .venv/bin/python scripts/shortline_research/lhd_s327_predict.py tier3   # 小石全市场 3 个月（描述性）
+  # tier3 已废弃：小石分钟存档 2026-11-15 删除；分钟类研究改用 minute_kbars
 输出 output/research/s327/*.json"""
 from __future__ import annotations
 import json, sys, glob, gc, bisect
@@ -418,9 +418,11 @@ def tier2():
 
 # ---------------- Tier 3 ----------------
 def tier3():
-    import polars as pl
-    import pandas as pd
-    import sync_xiaoshi_min_all as S
+    """小石全市场分钟档（data/xiaoshi_min_all）已于 2026-11-15 随整源退役删除，本 tier 永久不可用。"""
+    raise SystemExit("tier3 已废弃：小石分钟存档已删除（2026-11-15），分钟类研究请改用数据库 minute_kbars")
+    import polars as pl  # noqa: F401  (保留原实现供 git 历史查阅)
+    import pandas as pd  # noqa: F401
+    S = None
     OUT.mkdir(parents=True, exist_ok=True)
     ev = load_events("2026-07-14")
     ev = ev[ev["trade_date"] <= "2026-10-09"].reset_index(drop=True)

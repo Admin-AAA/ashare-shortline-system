@@ -1,16 +1,14 @@
-"""回归：ERROR 日志口径 + 小石上游失败时的巡检文案。
+"""回归：ERROR 日志口径（告警通知不计入错误条数）。
 
 背景（2026-11-15）：alerts.emit_alert 用 logger.error 落盘，scan_log_signals 曾把所有
 ERROR 行计入 error_count。近 24h 35 条 ERROR 里 31 条是 [ALERT:*] 告警通知，真实应用异常只有 4 条
 （11-13 机器离线留下的 Prefect 崩溃）。结果 log:error_volume 实际在数告警条数：告警越多越容易
 顶破 >30 阈值变黄，黄项又发一轮告警，形成自激，同时把真实异常淹没。
 
-另一处：小石分钟线巡检在已确认「上游 catalog 不可达」时仍固定追加「另一补数任务建设中」，
-两条互斥的处置路径写在同一条 detail 里，排查时会被带偏。
+小石分钟线巡检已随该源退役删除（2026-11-15），本文件只保留日志口径回归。
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 
 from app.services import data_quality_monitor as dq
@@ -59,36 +57,3 @@ def test_real_error_volume_still_flags_yellow(tmp_path):
     f.write_text("\n".join(_real_line(i) for i in range(31)))
     items = {i["key"]: i for i in dq.check_log_signals(_NOW, f)}
     assert items["log:error_volume"]["severity"] == dq.YELLOW
-
-
-def _xiaoshi_state(tmp_path, sync_log: str | None):
-    d = tmp_path / "xiaoshi_min_all"
-    d.mkdir()
-    (d / "state.json").write_text(json.dumps({
-        "files": {"a": {"last_date": "2026-11-13"}},
-        "last_run": {"ts": "2026-11-09 20:43:09", "downloaded": 30, "errors": 4},
-    }), encoding="utf-8")
-    if sync_log is not None:
-        (d / "sync.log").write_text(sync_log, encoding="utf-8")
-    return d / "state.json"
-
-
-def test_xiaoshi_upstream_failure_uses_unambiguous_wording(tmp_path):
-    st = _xiaoshi_state(tmp_path, json.dumps({
-        "ts": "2026-11-14 20:40:09", "fatal": "Xiaoshi 网络请求失败: /api/v3/history/catalog"}) + "\n")
-    item = dq.check_xiaoshi_min_all(["2026-11-13"], "2026-11-13", now=_NOW, state_path=st)
-    assert item["upstream_error"]
-    assert "临时阈值" not in item["detail"]
-    assert "另一补数任务" not in item["detail"]
-    assert "本地补数任务无法回补" in item["detail"]
-    assert "上游同步失败" in item["detail"]
-    assert "最近一次成功同步" in item["detail"]
-
-
-def test_xiaoshi_without_upstream_failure_keeps_provisional_wording(tmp_path):
-    st = _xiaoshi_state(tmp_path, json.dumps({
-        "ts": "2026-11-13 20:40:09", "downloaded": 5, "errors": 0}) + "\n")
-    item = dq.check_xiaoshi_min_all(["2026-11-13"], "2026-11-13", now=_NOW, state_path=st)
-    assert item.get("upstream_error") is None
-    assert "临时阈值" in item["detail"]
-    assert "本地补数任务无法回补" not in item["detail"]

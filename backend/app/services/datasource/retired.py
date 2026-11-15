@@ -10,10 +10,15 @@
 * **一处判定，处处生效**：所有对外暴露「有哪些数据源」的入口（数据源管理页、网关拓扑、
   数据集开关、能力探测、同步任务）都过 :func:`is_retired` / :func:`provider_retired`，
   不再各写一份 if。
-* **不删代码、不删数据**：适配器模块与本地 parquet 存档保留（恢复订阅时可原地复活），
-  但任何运行时链路都不会再调到它们。
-* 退役是数据源级别的，不是数据集级别的：小石同时供 quote/kline/alt 三类能力，
-  按源退役才能保证不会从另一条链路漏出来。
+* **2026-11-15 追加（owner 决定「以后也不会接入」）**：本地历史存档
+  （`data/xiaoshi_min1` 4.6G、`data/xiaoshi_min_all` 525M、`data/xiaoshi_daily` 31M）已删除，
+  专用同步/回填脚本（`sync_xiaoshi_min_all.py`、`backfill_xiaoshi_announcements.py`、
+  `ingest_event_timeline.py`）与两项文件巡检已移除，launchd 定时作业已卸载。
+  **本模块的条目从此是「永久退役」，不再有复活路径**；如需重接，按新源重新接入并单独立项。
+* 适配器模块（`xiaoshi_client` / `xiaoshi_minute_source` / `xiaoshi_alt_data` /
+  `xiaoshi_market_source` / `datasource/xiaoshi_ann`）暂留但已不在任何运行时链路上，
+  仅作为「读本地表的历史回退」（如 `auxiliary/application` 的 share_float 只读本地库）依赖，
+  属只读残留，不会发起网络请求。
 """
 from __future__ import annotations
 

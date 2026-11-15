@@ -1,6 +1,6 @@
 """统一数据新鲜度与质量监控（只读）：数据库表 + data/ 下的文件数据集 + 研究静态文件 + 调度任务 + 日志静默失败。
 
-2026-10-26 背景：data/xiaoshi_min1 停在 2026-08-07 两个多月没人发现——原有巡检（data_freshness.py / data_health_service.py）
+2026-10-26 背景（该数据源已于 2026-11-15 整源退役并删除本地存档，相关检查项已移除）：data/xiaoshi_min1 停在 2026-08-07 两个多月没人发现——原有巡检（data_freshness.py / data_health_service.py）
 只看 MySQL 表和少数 parquet，data/ 下的文件型数据集（分钟K缓存、research 静态文件、涨停榜缓存、event parquet…）完全没有
 覆盖；MySQL minute_kbars 也只查「最大日期」不查每日覆盖股票数。本模块补齐这些盲区，**沿用现有告警机制**：
 结果写入 data/runtime/data_quality_report.json，红/黄项走 emit_alert("data_quality", <key>, …)，恢复后 resolve_alert，
@@ -659,130 +659,6 @@ def check_age_file(spec: dict[str, Any], now: datetime | None = None, base: Path
                  detail=f"文件修改于 {age:.0f} 天前（黄>{spec['yellow_days']} 红>{spec['red_days']}）", impact=spec["impact"])
 
 
-def xiaoshi_min1_latest(root: Path | None = None) -> tuple[str | None, int, int]:
-    """data/xiaoshi_min1/<code>/<year>/update.parquet 的最新 date（全部股票取最大）、股票目录数、有数据的股票数。只读 date 列。"""
-    import pandas as pd
-
-    root = root or (DATA_DIR / "xiaoshi_min1")
-    mx, n_dirs, n_ok = None, 0, 0
-    if not root.exists():
-        return None, 0, 0
-    for sd in sorted(p for p in root.iterdir() if p.is_dir()):
-        n_dirs += 1
-        ups = sorted(sd.glob("[0-9][0-9][0-9][0-9]/update.parquet"))
-        if not ups:
-            continue
-        try:
-            s = pd.read_parquet(ups[-1], columns=["date"])["date"]
-        except Exception:  # noqa: BLE001
-            continue
-        m = norm_date(s.max()) if len(s) else None
-        if m:
-            n_ok += 1
-            mx = m if mx is None or m > mx else mx
-    return mx, n_dirs, n_ok
-
-
-RETIRED_KEYS = {"file:xiaoshi_min1", "file:xiaoshi_min_all"}  # 已退役的数据集：只展示事实，不再告警、不计入健康分扣分
-
-
-def check_xiaoshi_min1(open_days: list[str], expected: str, root: Path | None = None) -> dict[str, Any]:
-    """2026-10-26 退役（owner 授权）：旧 230 只固定股票的分钟缓存不再维护，新来源是 data/xiaoshi_min_all（全市场、每日增量）。
-
-    仍然读出最新日期供查看，但严重度恒为 green（retired=True），不发告警、不扣健康分。
-    线上分钟线走数据库 minute_kbars，不依赖这个缓存。"""
-    mx, n_dirs, n_ok = xiaoshi_min1_latest(root)
-    lag = trade_lag(open_days, mx, expected)
-    detail = (f"【已退役，不再告警】{n_dirs} 只股票目录（{n_ok} 只有数据），最新 {mx}，滞后 {lag} 个交易日；"
-              "替代数据源 data/xiaoshi_min_all（全市场分钟线归档）")
-    return _item("file:xiaoshi_min1", "小石1分钟旧缓存 data/xiaoshi_min1（230只，已退役）", "文件数据集", GREEN, kind="file",
-                 latest=mx, expected=expected, lag=lag, detail=detail, retired=True,
-                 impact="已退役：研究脚本请改读数据库 minute_kbars（覆盖目标池 300 只）；"
-                        "data/xiaoshi_min_all 同样随整源退役冻结，不要再作为增量来源")
-
-
-def check_xiaoshi_min_all(open_days: list[str], expected: str, now: datetime | None = None,
-                          state_path: Path | None = None) -> dict[str, Any]:
-    st = state_path or (DATA_DIR / "xiaoshi_min_all" / "state.json")
-    key, label = "file:xiaoshi_min_all", "小石全市场分钟线归档 data/xiaoshi_min_all"
-    if not st.exists():
-        from app.services.datasource.retired import is_retired
-
-        if is_retired("xiaoshi"):
-            return _item(key, label, "文件数据集", GREEN, kind="file", detail="尚无 state.json；源已退役，不再建立归档",
-                         retired=True, impact="已退役归档：不再更新")
-        return _item(key, label, "文件数据集", YELLOW, kind="file", detail="尚无 state.json（补数任务尚未建立归档）",
-                     impact="追龙/分钟线研究", provisional=True)
-    s = json.loads(st.read_text(encoding="utf-8"))
-    files = s.get("files") or {}
-    last_dates = [d for d in (norm_date(v.get("last_date")) for v in files.values() if isinstance(v, dict)) if d]
-    mx = max(last_dates) if last_dates else None
-    run = s.get("last_run") or {}
-    age_h = None
-    try:
-        age_h = ((now or _now()) - datetime.strptime(run["ts"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_CST)).total_seconds() / 3600
-    except Exception:  # noqa: BLE001
-        pass
-    lag = trade_lag(open_days, mx, expected)
-    sev = lag_severity(lag, 0)
-    errs = int(run.get("errors") or 0)
-    # last_run 只在成功同步时更新；上游失败的日子只有 sync.log 里的 fatal。写「最近一次同步」会
-    # 让人以为好几天没跑，写「最近一次成功同步」才与事实一致。
-    detail = (f"已登记 {len(files)} 个文件，数据最新 {mx}，期望 {expected}，滞后 {lag}；最近一次成功同步 {run.get('ts')}"
-              f"（{'%.0f 小时前' % age_h if age_h is not None else '未知'}，下载 {run.get('downloaded')}，错误 {errs}）")
-    if errs:
-        sev = _worse(sev, YELLOW)
-    # 同步日志里的 fatal 是「上游不可达」，不是「本地漏跑」。此前巡检显示滞后天数 +
-    # 「另一补数任务建设中」，让人误以为补个任务就能好；实际 2026-11-11 起小石
-    # /api/v3/history/catalog 连续多日 TLS/网络失败，本地做什么都补不回，必须显式暴露。
-    upstream_error = _xiaoshi_last_sync_error(st.parent / "sync.log")
-    if upstream_error:
-        # 已确认上游不可达时不能再写「另一补数任务建设中」：那是两种互斥的处置路径，
-        # 同时出现在一条 detail 里会互相矛盾、把排查带偏。
-        detail += "（滞后由上游不可达造成，本地补数任务无法回补）"
-    else:
-        detail += "（临时阈值：另一补数任务回补/每日增量建设中，待其完成后复核）"
-    item = _item(key, label, "文件数据集", cap_severity(sev, YELLOW), kind="file", latest=mx, expected=expected, lag=lag,
-                 detail=detail,
-                 impact="追龙/连板研究的全市场分钟线（小石只保留最近约3个月，需每日增量保存）", provisional=True)
-    if upstream_error:
-        item["upstream_error"] = upstream_error
-        item["detail"] += (f"；**上游同步失败**：{upstream_error}（本地无法补，"
-                           "需上游恢复后重跑 scripts/sync_xiaoshi_min_all.py）")
-    from app.services.datasource.retired import is_retired, retired_note
-
-    if is_retired("xiaoshi"):
-        # 2026-11-15（owner 授权）：源整源退役，归档只保留历史事实 —— 不再增长、不再告警、
-        # 不计健康分；仍如实暴露「冻结在哪一天」，因为研究脚本还在读这份归档。
-        item.update(
-            severity=GREEN, retired=True,
-            detail=(f"【已退役，不再告警】{item['detail']}；源已于 2026-11-15 退役"
-                    f"（{retired_note('xiaoshi')}），归档冻结在上表最新日期，"
-                    "依赖该归档的研究/脚本须改用数据库 minute_kbars 或另接新源"),
-            impact="已退役归档：不再更新；日内研究请改用 minute_kbars（覆盖目标池 300 只）",
-        )
-    return item
-
-
-def _xiaoshi_last_sync_error(log_path: Path) -> str | None:
-    """读 sync.log 最近 10 行，返回最近一条失败摘要；文件不存在/损坏时返回 None。"""
-    try:
-        lines = [x for x in log_path.read_text(encoding="utf-8").splitlines() if x.strip()]
-    except (OSError, UnicodeError):
-        return None
-    for raw in reversed(lines[-10:]):
-        try:
-            row = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        fatal = str(row.get("fatal") or "").strip()
-        if fatal:
-            return f"{row.get('ts', '?')} {fatal[:160]}"
-        if int(row.get("errors") or 0) > 0:
-            return f"{row.get('ts', '?')} 同步有 {row['errors']} 个文件下载失败"
-    return None
-
-
 def check_capability_matrix(now: datetime | None = None, path: Path | None = None) -> dict[str, Any]:
     p = path or (DATA_DIR / "runtime" / "datasource_capability_matrix.json")
     key, label = "file:runtime/datasource_capability_matrix.json", "数据源能力探测矩阵"
@@ -1300,9 +1176,6 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
         _rollback(db)
         for spec in AGE_FILES:
             items += _safe(spec["label"], spec["key"], "文件数据集", "file", lambda s=spec: [check_age_file(s, now)])
-        items += _safe("xiaoshi_min1", "file:xiaoshi_min1", "文件数据集", "file", lambda: [check_xiaoshi_min1(open_days, expected)])
-        items += _safe("xiaoshi_min_all", "file:xiaoshi_min_all", "文件数据集", "file",
-                       lambda: [check_xiaoshi_min_all(open_days, expected, now)])
         items += _safe("capability_matrix", "file:runtime/datasource_capability_matrix.json", "文件数据集", "file",
                        lambda: [check_capability_matrix(now)])
         items += _safe("st_hist", "research:st_hist", "研究静态文件", "research", lambda: [st_hist_vs_db(db, expected)])

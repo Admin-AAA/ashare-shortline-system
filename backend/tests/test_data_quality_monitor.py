@@ -115,20 +115,6 @@ def test_file_dataset_seasonal_quiet_month_releases_but_never_hides_skipped_wind
     assert sev("20261001", "2026-11-06") == dq.GREEN
 
 
-def test_xiaoshi_min1_is_retired_and_never_alerts(tmp_path):
-    root = tmp_path / "xiaoshi_min1"
-    for code, d in (("000001", "2026-08-07"), ("000002", "2026-08-05")):
-        p = root / code / "2026" / "update.parquet"
-        p.parent.mkdir(parents=True)
-        pd.DataFrame({"date": ["2026-08-01", d]}).to_parquet(p, index=False)
-    (root / "000003" / "base").mkdir(parents=True)  # 只有 base、没有 update 的股票目录
-    mx, n_dirs, n_ok = dq.xiaoshi_min1_latest(root)
-    assert (mx, n_dirs, n_ok) == ("2026-08-07", 3, 2)
-    it = dq.check_xiaoshi_min1(OPEN, "2026-10-23", root)
-    # 已退役：虽然落后很多，但恒为 green、标记 retired，不告警、不扣分
-    assert it["severity"] == dq.GREEN and it["retired"] is True and it["latest"] == "2026-08-07"
-    assert "file:xiaoshi_min1" in dq.RETIRED_KEYS
-
 
 def test_quality_score_penalty_rules():
     mk = lambda sev, **k: {"key": "x", "severity": sev, **k}  # noqa: E731
@@ -143,46 +129,6 @@ def test_quality_score_penalty_rules():
     assert dq.quality_score_penalty(None)["penalty"] == 0
 
 
-def test_xiaoshi_min_all_retired_is_informational_not_yellow(tmp_path):
-    """小石整源退役（2026-11-15）后：仍如实报「冻结在哪一天」，但降为 green + retired，
-    不发告警、不计健康分 —— 否则退役等于换一种方式天天报黄。"""
-    import json
-
-    st = tmp_path / "state.json"
-    st.write_text(json.dumps({"files": {"a": {"last_date": "2026-10-09"}},
-                              "last_run": {"ts": "2026-10-26 13:38:27", "downloaded": 12, "errors": 0}}))
-    it = dq.check_xiaoshi_min_all(OPEN, "2026-10-23", _t("2026-10-26 14:00"), st)
-    assert it["severity"] == dq.GREEN and it["retired"] is True
-    assert it["latest"] == "2026-10-09"
-    assert "已退役" in it["detail"] and "2026-11-15" in it["detail"]
-    assert "file:xiaoshi_min_all" in dq.RETIRED_KEYS
-    # 没有 state.json 时也只报事实，不再升黄
-    missing = dq.check_xiaoshi_min_all(OPEN, "2026-10-23", None, tmp_path / "missing.json")
-    assert missing["retired"] is True and missing["severity"] == dq.GREEN
-
-
-def test_xiaoshi_min_all_still_exposes_upstream_outage_while_retired(tmp_path):
-    """退役不等于掩盖事实：上游 catalog 连续 fatal 仍要写进 detail/upstream_error，只是不再告警。"""
-    import json
-
-    st = tmp_path / "state.json"
-    st.write_text(json.dumps({"files": {"a": {"last_date": "2026-10-12"}},
-                              "last_run": {"ts": "2026-11-09 20:43:09", "downloaded": 30, "errors": 4}}))
-    (tmp_path / "sync.log").write_text(
-        "\n".join([
-            json.dumps({"ts": "2026-11-12 20:40:11", "fatal": "Xiaoshi 网络请求失败: /api/v3/history/catalog"}),
-            json.dumps({"ts": "2026-11-13 21:32:42", "fatal": "Xiaoshi 网络请求失败: /api/v3/history/catalog"}),
-            json.dumps({"ts": "2026-11-14 19:42:22", "fatal": "Xiaoshi 网络请求失败: /api/v3/history/catalog"}),
-        ]) + "\n", encoding="utf-8")
-    it = dq.check_xiaoshi_min_all(OPEN, "2026-11-13", _t("2026-11-14 20:00"), st)
-    assert it["severity"] == dq.GREEN and it["retired"] is True
-    assert "/api/v3/history/catalog" in it["upstream_error"]
-    assert "2026-11-14 19:42:22" in it["upstream_error"]
-    assert "上游同步失败" in it["detail"] and "sync_xiaoshi_min_all.py" in it["detail"]
-
-    # 没有 sync.log（或日志全绿）时不得编造上游故障
-    it2 = dq.check_xiaoshi_min_all(OPEN, "2026-11-13", _t("2026-11-14 20:00"), tmp_path / "clean" / "state.json")
-    assert it2.get("upstream_error") is None
 
 
 def test_dir_and_age_file_and_capability_matrix(tmp_path):
@@ -460,9 +406,9 @@ def test_freshness_task_quality_red_marks_partial_failed(monkeypatch):
 
     monkeypatch.setattr(dq, "run_data_quality_check", lambda *a, **k: {
         "overall": "red", "summary": {"red": 1, "yellow": 2, "green": 3}, "expected_trade_date": "2026-10-23",
-        "items": [{"key": "file:xiaoshi_min1", "severity": "red"}]})
+        "items": [{"key": "db:daily_kbars", "severity": "red"}]})
     out = scheduler_service._run_data_freshness_check(SimpleNamespace(), {"quality_only": True})
-    assert out["status"] == "partial_failed" and out["data_quality"]["red"] == ["file:xiaoshi_min1"]
+    assert out["status"] == "partial_failed" and out["data_quality"]["red"] == ["db:daily_kbars"]
     assert "数据质量巡检 红 1 / 黄 2 / 绿 3" in out["summary_text"]
 
 

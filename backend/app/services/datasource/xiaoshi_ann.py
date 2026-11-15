@@ -1,8 +1,8 @@
 """xiaoshi event-timeline announcement partition (full market per day, source 巨潮).
 
-Last-resort ``ann.list`` fallback after eastmoney/cninfo (cutover flag
-``ann.list.xiaoshi``, default off).  One download session per day; rows use the same
-mapping as ``scripts/backfill_xiaoshi_announcements.py`` (source='xiaoshi_cninfo').
+**已随数据源永久退役（2026-11-15）**：模块保留仅因 `ann.list` 的 cutover flag 与历史调用点
+还引用它，`fetch_range()` 会直接返回空，不会发出任何网络请求。下游公告统一走
+eastmoney / cninfo（`scripts/backfill_xiaoshi_announcements.py` 已删除）。
 """
 from __future__ import annotations
 
