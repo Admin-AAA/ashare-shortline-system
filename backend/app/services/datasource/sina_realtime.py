@@ -37,8 +37,13 @@ def _raw_frame_unbounded(ts_codes: list[str]) -> pd.DataFrame:
 
 
 def _raw_frame(ts_codes: list[str]) -> pd.DataFrame:
-    from app.services.datasource.gateway import _call_with_timeout
+    from app.services.datasource.gateway import _call_with_timeout, in_fetch_worker
 
+    # gateway 已经在 fetch worker 内用整次请求的 deadline 包住了 provider.fetch；
+    # worker 内再提交一次内层任务会多占一个线程，池满时所有外层 worker 都卡在
+    # 等内层调度上。直接调用即可，超时由外层 2s deadline 兜底（fetch_frame）。
+    if in_fetch_worker():
+        return _raw_frame_unbounded(ts_codes)
     return _call_with_timeout(lambda: _raw_frame_unbounded(ts_codes), SINA_TIMEOUT_SECONDS)
 
 
@@ -113,7 +118,8 @@ def gateway() -> DatasetGateway:
 
 def fetch_frame(ts_codes: list[str]) -> pd.DataFrame:
     """Gateway path for one ≤50-code chunk; raises like legacy when every provider failed."""
-    res = gateway().fetch_first(FRAME_DATASET, {"ts_codes": ts_codes})
+    # 与改造前的分片 2s 超时保持一致：由 gateway 整体 deadline 兜底，而不是嵌套线程池。
+    res = gateway().fetch_first(FRAME_DATASET, {"ts_codes": ts_codes}, deadline_s=SINA_TIMEOUT_SECONDS)
     if res.provider is None:
         errors = [a for a in res.attempts if a["outcome"] not in ("empty",)]
         if errors:

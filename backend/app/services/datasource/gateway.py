@@ -259,6 +259,7 @@ _POOL_WORKERS = 32
 ABANDONED_LIMIT = 24  # 留 8 个线程给正常请求
 _ABANDONED: set = set()
 _ABANDONED_LOCK = threading.Lock()
+_FETCH_WORKER = threading.local()
 
 
 def _forget_abandoned(fut: Any) -> None:
@@ -269,6 +270,25 @@ def _forget_abandoned(fut: Any) -> None:
 def abandoned_call_count() -> int:
     with _ABANDONED_LOCK:
         return len(_ABANDONED)
+
+
+def in_fetch_worker() -> bool:
+    """当前线程是否正作为网关 fetch worker 执行 provider.fetch。
+
+    provider 内部若再向同一个 32 线程池提交并等待（例如 sina 分片自己的
+    ``_call_with_timeout``），并发升高时会出现"32 个外层 worker 全在等内层任务"
+    的池饥饿：内层排不到线程，只能等超时，所有请求一起失败。provider 看到这个
+    标记后应直接调用，由外层 gateway deadline 统一兜底。
+    """
+    return bool(getattr(_FETCH_WORKER, "active", False))
+
+
+def _run_fetch(fn: Callable[[], Any]) -> Any:
+    _FETCH_WORKER.active = True
+    try:
+        return fn()
+    finally:
+        _FETCH_WORKER.active = False
 
 
 def _call_with_timeout(fn: Callable[[], Any], timeout: float) -> Any:
@@ -285,7 +305,7 @@ def _call_with_timeout(fn: Callable[[], Any], timeout: float) -> Any:
             f"gateway fetch pool saturated: {abandoned} timed-out calls still running (limit {ABANDONED_LIMIT})",
         )
     ctx = contextvars.copy_context()
-    fut = _pool().submit(ctx.run, fn)
+    fut = _pool().submit(ctx.run, _run_fetch, fn)
     try:
         return fut.result(timeout=max(0.001, timeout))
     except FutTimeout:

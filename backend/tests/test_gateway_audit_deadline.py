@@ -1,6 +1,7 @@
 """Audit item 2: whole-request deadline, tenacity retry budget, Sina timeout (fault injection)."""
 import time
 
+import pandas as pd
 import pytest
 
 import app.services.datasource.gateway as g
@@ -89,3 +90,39 @@ def test_sina_chunk_timeout(monkeypatch):
     with pytest.raises(DataSourceError) as ei:
         s._raw_frame(["600000.SH"])
     assert ei.value.kind is ErrorKind.TIMEOUT and time.perf_counter() - t0 < 1.0
+
+
+def test_in_fetch_worker_marker_is_scoped_to_pool_worker():
+    assert g.in_fetch_worker() is False
+    assert g._call_with_timeout(g.in_fetch_worker, 1.0) is True
+    assert g.in_fetch_worker() is False
+
+
+def test_sina_inside_gateway_worker_skips_nested_pool_submission(monkeypatch):
+    """provider.fetch 已在 gw-fetch worker 内：sina 分片不得再向同一线程池嵌套提交。"""
+    import app.services.datasource.sina_realtime as s
+
+    seen: list[bool] = []
+    pool_calls: list[float] = []
+    real_call = g._call_with_timeout
+
+    def counting_call(fn, timeout):
+        pool_calls.append(timeout)
+        return real_call(fn, timeout)
+
+    def fake_unbounded(codes):
+        seen.append(g.in_fetch_worker())
+        return pd.DataFrame([{"TS_CODE": codes[0], "PRICE": 10.0, "DATE": "20261106"}])
+
+    monkeypatch.setattr(g, "_call_with_timeout", counting_call)
+    monkeypatch.setattr(s, "_raw_frame_unbounded", fake_unbounded)
+
+    s._raw_frame(["600000.SH"])          # 独立调用：仍走线程池兜底（1 次）
+    assert seen == [True]                # 本身即在该次池任务里执行
+    assert len(pool_calls) == 1
+
+    # 经 gateway 调用：外层 gateway 提交 1 次；worker 内不再嵌套提交
+    res = s.gateway().fetch_first(s.FRAME_DATASET, {"ts_codes": ["600000.SH"]}, deadline_s=1.0)
+    assert res.provider == "sina_realtime"
+    assert seen == [True, True]
+    assert len(pool_calls) == 2          # 只多了 gateway 外层那一次

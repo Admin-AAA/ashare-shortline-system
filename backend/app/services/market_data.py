@@ -586,8 +586,29 @@ def _fetch_tushare_realtime_quotes(
 
     realtime_map: dict[str, dict[str, Any]] = {}
     chunk_size = 50  # realtime_quote sina 源单次最多 50 只
+    total_chunks = (len(ts_codes) + chunk_size - 1) // chunk_size
+    failed_chunks = 0
+    consecutive_failures = 0
     for start in range(0, len(ts_codes), chunk_size):
-        frame = _fetch_tushare_realtime_frame(ts_codes[start:start + chunk_size], settings)
+        chunk_index = start // chunk_size + 1
+        try:
+            frame = _fetch_tushare_realtime_frame(ts_codes[start:start + chunk_size], settings)
+        except Exception as exc:  # noqa: BLE001 - one bad chunk must not discard the whole snapshot
+            failed_chunks += 1
+            consecutive_failures += 1
+            if consecutive_failures <= 3:
+                logger.warning(
+                    "Tushare 实时快照分片失败（第 %d/%d 片）: %s",
+                    chunk_index, total_chunks, exc,
+                )
+            if consecutive_failures >= 3:
+                logger.warning(
+                    "Tushare 实时快照连续 %d 个分片失败，放弃实时快照并回退日线批量",
+                    consecutive_failures,
+                )
+                break
+            continue
+        consecutive_failures = 0
         if frame is None or frame.empty:
             continue
         for _, row in frame.iterrows():
@@ -596,6 +617,11 @@ def _fetch_tushare_realtime_quotes(
             if code:
                 realtime_map[code] = item
 
+    if failed_chunks:
+        logger.warning(
+            "Tushare 实时快照 %d/%d 个分片失败，已构建 %d 只股票的实时快照",
+            failed_chunks, total_chunks, len(realtime_map),
+        )
     if not realtime_map:
         return []
 
@@ -745,6 +771,18 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
     if batch_quotes is None or batch_quotes.empty:
         detail = "；".join(batch_quote_errors) if batch_quote_errors else "batch quote empty"
         raise MarketDataError(f"Tushare 批量行情拉取失败: {detail}")
+
+    # 17:35 盘后首跑时当日日线往往还没发布：批量回退到 T-1 后，快照仍会被当作
+    # "最新"落库（stock_quotes 的 trade_date 取自行情行），健康门禁再把它判成
+    # table_not_current，整条盘后流水线硬失败（2026-11-06 事故）。这里显式留痕，
+    # 便于从日志直接看出快照滞后而不是误以为刷新成功。
+    if selected_trade_date and latest_open_trade_date and selected_trade_date < latest_open_trade_date:
+        logger.warning(
+            "行情批量回退到较早交易日 %s（期望 %s），行情快照滞后；回退证据: %s",
+            selected_trade_date,
+            latest_open_trade_date,
+            "；".join(batch_quote_errors) if batch_quote_errors else "无",
+        )
 
     batch_quote_map: dict[str, dict[str, Any]] = {}
     for _, row in batch_quotes.iterrows():

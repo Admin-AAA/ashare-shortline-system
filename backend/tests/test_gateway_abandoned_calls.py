@@ -6,6 +6,16 @@ import pytest
 from app.services.datasource import gateway as gw
 
 
+@pytest.fixture(autouse=True)
+def _isolate_abandoned_tracking():
+    """别的测试模块的超时调用可能还占着 worker（如 sina 5s sleep），把全局计数清掉再断言。"""
+    with gw._ABANDONED_LOCK:
+        gw._ABANDONED.clear()
+    yield
+    with gw._ABANDONED_LOCK:
+        gw._ABANDONED.clear()
+
+
 def test_timed_out_calls_are_tracked_and_released():
     release = threading.Event()
     with pytest.raises(gw.DataSourceError) as ei:
