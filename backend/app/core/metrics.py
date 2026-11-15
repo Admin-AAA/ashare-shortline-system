@@ -18,6 +18,7 @@ import sqlite3
 import sys
 import threading
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import contextmanager
@@ -26,6 +27,59 @@ from typing import Any, Iterator
 _lock = threading.Lock()
 _counters: dict[tuple[str, tuple[tuple[str, str], ...]], float] = {}
 _timings: dict[tuple[str, tuple[tuple[str, str], ...]], list[float]] = {}  # [count, sum, max]
+
+# Sliding-window rates (2026-11-15): counters are process-lifetime totals, so a restart zeroes
+# them and "requests today" is unknowable. Per-counter 1-second buckets keep the last
+# RATE_WINDOW_SECONDS so the ops view can answer "现在每分钟打了多少次" — the number that
+# actually matters against a provider's RPM budget. Bounded: one deque (maxlen 130) per counter.
+RATE_WINDOW_SECONDS = 60.0
+_recent: dict[tuple[str, tuple[tuple[str, str], ...]], "deque[list[float]]"] = {}
+_RATE_MAX_BUCKETS = 130
+
+
+def _rate_bump_locked(k: tuple[str, tuple[tuple[str, str], ...]], value: float) -> None:
+    """Append ``value`` to the current second's bucket (caller holds ``_lock``)."""
+    if value <= 0:
+        return
+    sec = int(time.time())
+    dq = _recent.get(k)
+    if dq is None:
+        dq = _recent[k] = deque(maxlen=_RATE_MAX_BUCKETS)
+    if dq and dq[-1][0] == sec:
+        dq[-1][1] += value
+    else:
+        dq.append([sec, value])
+    cutoff = sec - RATE_WINDOW_SECONDS - 2
+    while dq and dq[0][0] < cutoff:
+        dq.popleft()
+
+
+def _rates_locked(window_seconds: float = RATE_WINDOW_SECONDS) -> list[dict[str, Any]]:
+    """Per-counter rate over the trailing window (caller holds ``_lock``)."""
+    now = time.time()
+    floor = now - window_seconds
+    out: list[dict[str, Any]] = []
+    for (name, labels), dq in _recent.items():
+        while dq and dq[0][0] < floor - 2:
+            dq.popleft()
+        total = sum(v for sec, v in dq if sec >= floor - 1)
+        out.append({
+            "name": name,
+            "labels": dict(labels),
+            "count": round(total, 3),
+            "per_minute": round(total * 60.0 / window_seconds, 3),
+        })
+    out.sort(key=lambda i: (i["name"], str(sorted(i["labels"].items()))))
+    return out
+
+
+def rates(window_seconds: float = RATE_WINDOW_SECONDS) -> list[dict[str, Any]]:
+    """Trailing-window (default 60s) rate per counter, sorted by name."""
+    try:
+        with _lock:
+            return _rates_locked(window_seconds)
+    except Exception:  # noqa: BLE001 - metrics must never break callers
+        return []
 
 
 def _key(name: str, labels: dict[str, Any]) -> tuple[str, tuple[tuple[str, str], ...]]:
@@ -39,6 +93,7 @@ def inc(name: str, value: float = 1.0, **labels: Any) -> None:
         k = _key(name, labels)
         with _lock:
             _counters[k] = _counters.get(k, 0.0) + value
+            _rate_bump_locked(k, value)
     except Exception:  # noqa: BLE001 - metrics must never break callers
         return
 
@@ -85,7 +140,8 @@ def _local_snapshot() -> dict[str, Any]:
                     "avg_seconds": round(s[1] / s[0], 6) if s[0] else 0.0, "max_seconds": round(s[2], 6)}
                    for (n, l), s in sorted(_timings.items())]
         gauges = [{"name": n, "labels": dict(l), "value": round(v, 4)} for (n, l), v in sorted(_gauges.items())]
-    return {"counters": counters, "timings": timings, "gauges": gauges}
+        rates = _rates_locked()
+    return {"counters": counters, "timings": timings, "gauges": gauges, "rates": rates}
 
 
 _PROCESS_STARTED_AT = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -218,3 +274,4 @@ def reset() -> None:
         _counters.clear()
         _timings.clear()
         _gauges.clear()
+        _recent.clear()

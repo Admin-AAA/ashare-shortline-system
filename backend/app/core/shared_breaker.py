@@ -230,16 +230,57 @@ def is_open(key: str) -> bool:
 
 
 # Per-kind thresholds (configurable: ASHARE_BREAKER_THRESHOLD_TIMEOUT / _BAD_DATA).
-def kind_threshold(kind: str | None) -> int | None:
+# Per-provider overrides (2026-11-15): one global 2/3 fits nobody — teajoin (primary, 98.6% success)
+# should not trip on two transient timeouts, while promax (pool-exhaustion failures, 79.9% empty on
+# eastmoney) needs to open fast. ASHARE_BREAKER_THRESHOLD_OVERRIDES='{"promax":{"timeout":1}}'.
+def _provider_overrides() -> dict[str, dict[str, int]]:
+    try:
+        from app.core.config import get_settings
+
+        raw = getattr(get_settings(), "breaker_threshold_overrides", None) or {}
+        if isinstance(raw, dict):
+            return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _provider_of(key: str | None) -> str | None:
+    """Breaker key 里的 provider 段：``gw:teajoin:bar.minute`` → ``teajoin``。
+
+    兼容 ``{namespace}:{provider}:...``（SharedCircuitBreaker 会拼上命名空间前缀）
+    和裸 key（``promax``），取第一个能命中覆盖表的分段。
+    """
+    if not key:
+        return None
+    overrides = _provider_overrides()
+    if not overrides:
+        return None
+    for part in str(key).split(":"):
+        if part in overrides:
+            return part
+    return None
+
+
+def kind_threshold(kind: str | None, key: str | None = None) -> int | None:
     if kind not in ("timeout", "bad_data"):
         return None
     default = 2 if kind == "timeout" else 3
     try:
         from app.core.config import get_settings
 
-        return max(1, int(getattr(get_settings(), f"breaker_threshold_{kind}", default)))
+        base = max(1, int(getattr(get_settings(), f"breaker_threshold_{kind}", default)))
     except Exception:  # noqa: BLE001
-        return default
+        base = default
+    try:
+        provider = _provider_of(key)
+        if provider:
+            spec = _provider_overrides().get(provider) or {}
+            if kind in spec:
+                return max(1, int(spec[kind]))
+    except Exception:  # noqa: BLE001
+        pass
+    return base
 
 
 class SharedCircuitBreaker:
@@ -297,7 +338,7 @@ class SharedCircuitBreaker:
         if force_open:
             self._open(max(self._recovery, float(recovery_seconds or 0.0)), "force_open")
             return
-        threshold = kind_threshold(kind)
+        threshold = kind_threshold(kind, self.base_key)
         if threshold is None:
             before = self._local.state
             self._local.record_failure(recovery_seconds=recovery_seconds)

@@ -89,6 +89,10 @@ class Settings(BaseSettings):
     ths_password: str = Field(default="", repr=False)  # ASHARE_THS_PASSWORD
     ths_mac: str = ""                           # ASHARE_THS_MAC；账号绑定设备时必填
     ths_min_interval_seconds: float = 0.06      # 官方限频 20ms/次，留 3 倍余量
+    # thsdk 每分钟额度（2026-11-15 参数化）：0 = 只按 min_interval 串行（现状，理论上限 1000/min，
+    # 但全局单锁串行实际约 16.7 QPS）。>0 时叠加一个经过注册表的限流器，把"实际打出去的速率"
+    # 约束到明确数值，并能在 /api/data-sources/limits 里看到窗口用量。
+    ths_rate_limit_per_minute: int = 0
     ths_timeout_seconds: float = 5.0            # 单次调用超时；超过按 TIMEOUT 交给网关熔断
     tushare_teajoin_intraday_yield: bool = False
     tushare_teajoin_intraday_read_timeout_seconds: float = 15.0
@@ -120,6 +124,11 @@ class Settings(BaseSettings):
     # 熔断阈值按失败类型（网关审计 1）：超时 N 次、错误数据（空/缺字段）N 次熔断；限流按上游等待时间。
     breaker_threshold_timeout: int = 2
     breaker_threshold_bad_data: int = 3
+    # 熔断阈值按 provider 差异化（2026-11-15）：统一 2/3 对谁都别扭——teajoin（主源、98.6% 成功率）
+    # 被两次偶发超时熔断会白白丢掉主力；eastmoney（79.9% 空返回）该更早开闸。
+    # 键为 provider 名（对应 breaker key 里的 provider 段），值可含 timeout / bad_data。
+    # ASHARE_BREAKER_THRESHOLD_OVERRIDES='{"teajoin":{"timeout":4},"eastmoney":{"bad_data":1}}'
+    breaker_threshold_overrides: dict[str, dict[str, int]] = Field(default_factory=dict)
     # 网关整体截止时间与重试预算（网关审计 2）
     datasource_deadline_realtime_seconds: float = 3.0
     datasource_deadline_default_seconds: float = 120.0

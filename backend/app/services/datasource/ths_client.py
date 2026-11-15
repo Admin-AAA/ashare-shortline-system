@@ -137,8 +137,40 @@ def close() -> None:
             pass
 
 
+_THS_LIMITER: list = []
+
+
+def _ths_limiter():
+    """可选的分钟级限流器（``ASHARE_THS_RATE_LIMIT_PER_MINUTE`` > 0 时才建）。"""
+    if _THS_LIMITER:
+        return _THS_LIMITER[0]
+    lim = None
+    try:
+        rpm = int(getattr(_settings(), "ths_rate_limit_per_minute", 0) or 0)
+    except Exception:  # noqa: BLE001
+        rpm = 0
+    if rpm > 0:
+        from app.services.tushare_transport import _make_limiter
+
+        lim = _make_limiter("gateway:ths", rpm)
+    _THS_LIMITER.append(lim)
+    return lim
+
+
+def reset_limiter_cache() -> None:
+    """测试用：配置变化后重建限流器。"""
+    _THS_LIMITER.clear()
+
+
 def _throttle() -> None:
-    """全局最小调用间隔，防「兄弟，太快啦」。"""
+    """全局最小调用间隔，防「兄弟，太快啦」。
+
+    两层：① 配置的 ``ths_min_interval_seconds``（默认 0.06s，官方 20ms 的 3 倍余量）；
+    ② 若配了 ``ths_rate_limit_per_minute``，再叠加分钟窗口限流（跨进程，见 shared_rate_limiter）。
+    """
+    lim = _ths_limiter()
+    if lim is not None:
+        lim.acquire()
     global _LAST_CALL
     try:
         gap = float(getattr(_settings(), "ths_min_interval_seconds", 0.06) or 0.0)

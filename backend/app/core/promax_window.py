@@ -82,11 +82,50 @@ def reset_streak(api_name: str) -> None:
 
 # ---- research 令牌桶（按窗口）----
 # (窗口秒, 盘外上限, 盘中上限)。实测 5 分钟 579 / 60 分钟 4028 次无成片失败。
-WINDOWS: tuple[tuple[float, int, int], ...] = ((300.0, 300, 100), (3600.0, 2400, 900))
+DEFAULT_WINDOWS: tuple[tuple[float, int, int], ...] = ((300.0, 300, 100), (3600.0, 2400, 900))
+# 向后兼容旧引用；**实际生效值走 window_table()**（可用 env 覆盖，见下）。
+WINDOWS: tuple[tuple[float, int, int], ...] = DEFAULT_WINDOWS
 RT_K_LIVE_KEY = "live:tushare:promax:rt_k"
 RT_K_MAX_YIELD_SECONDS = 120.0
 _limiters: dict[tuple[float, bool], Any] = {}
 _lim_lock = threading.Lock()
+_table_cache: list[Any] = []
+
+
+def window_table() -> tuple[tuple[float, int, int], ...]:
+    """research 补数的真实硬窗口 ``((window_s, 非盘中限额, 盘中限额), ...)``。
+
+    2026-11-15：从常量改为可覆盖（``ASHARE_PROMAX_WINDOW_TABLE`` = JSON，如
+    ``[[300,300,100],[3600,2400,900]]``）。原因：config 里的
+    ``tushare_promax_rate_limit_per_minute=180`` 是"每分钟"口径，而生效的是
+    "5 分钟 / 1 小时"两个滚动窗口（盘中 100 次/5min = 20/min、900 次/1h = 15/min），
+    两者差约 9 倍，读配置的人会高估可用额度。默认值不变（沿用实测结论），
+    只是让"想对齐上游新口径"时不必改代码。
+    """
+    if _table_cache:
+        return _table_cache[0]
+    table = DEFAULT_WINDOWS
+    try:
+        from app.core.runtime_env import env_value
+
+        raw = env_value("ASHARE_PROMAX_WINDOW_TABLE", "TUSHARE_PROMAX_WINDOW_TABLE")
+        if raw:
+            parsed = json.loads(raw)
+            rows = []
+            for item in parsed:
+                window, off_limit, in_limit = (float(item[0]), int(item[1]), int(item[2]))
+                if window > 0 and off_limit > 0 and in_limit > 0:
+                    rows.append((window, off_limit, in_limit))
+            if rows:
+                table = tuple(rows)
+    except Exception:  # noqa: BLE001 - 配错就用默认，限流本身不能因此失效
+        table = DEFAULT_WINDOWS
+    _table_cache.append(table)
+    return table
+
+
+def reset_window_table_cache() -> None:
+    _table_cache.clear()
 
 
 def _limiter(window: float, limit: int, intraday: bool):
@@ -94,26 +133,35 @@ def _limiter(window: float, limit: int, intraday: bool):
     with _lim_lock:
         lim = _limiters.get(key)
         if lim is None:
+            from app.core import limiter_registry
             from app.services.tushare_transport import SlidingWindowLimiter
 
             local = SlidingWindowLimiter(limit, window_seconds=window)
             lim = local
             path = _shared_path()
+            registry_key = f"promax:research:{'intraday' if intraday else 'offhours'}:{int(window)}"
             if path:
                 from app.services.shared_rate_limiter import SharedSlidingWindowLimiter
 
                 lim = SharedSlidingWindowLimiter(
-                    f"promax:research:{'intraday' if intraday else 'offhours'}:{int(window)}",
-                    limit, path, window_seconds=window, fallback=local,
+                    registry_key, limit, path, window_seconds=window, fallback=local,
                 )
+            limiter_registry.register(registry_key, lim, limit, window_seconds=window, kind="promax_window")
             _limiters[key] = lim
         return lim
 
 
 def _shared_path() -> str | None:
-    raw = os.environ.get("TUSHARE_SHARED_LIMITER_DB", "").strip()
-    if raw:
-        return raw
+    # 与网关限流器共用同一份 shared_limiter_db_path 解析（相对路径按 backend 根目录归一），
+    # 否则 promax 窗口会在 worker 的 CWD 下另建一个库，"共享"变成两份独立配额。
+    try:
+        from app.services.tushare_transport import shared_limiter_db_path
+
+        raw = shared_limiter_db_path()
+        if raw:
+            return raw
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from app.core import metrics
 
@@ -142,7 +190,7 @@ def research_acquire(api_name: str, *, intraday: bool, sleep=time.sleep) -> None
         if wait > 0:
             logger.info("promax research yields to live rt_k for %.0fs", wait)
             sleep(wait)
-    for window, off_limit, in_limit in WINDOWS:
+    for window, off_limit, in_limit in window_table():
         _limiter(window, in_limit if intraday else off_limit, intraday).acquire()
 
 

@@ -378,15 +378,75 @@ class SlidingWindowLimiter:
                 wait_seconds = max(self._min_wait, self._timestamps[0] + self._window - now + self._pad)
             time.sleep(wait_seconds)
 
+    def usage(self) -> tuple[int, int, float]:
+        """(used, limit, window_seconds) in the current window; observational, never blocks."""
+        with self._lock:
+            cutoff = time.monotonic() - self._window
+            used = sum(1 for t in self._timestamps if t > cutoff)
+            return used, self._limit, self._window
+
+
+def shared_limiter_db_path() -> str:
+    """共享限频 SQLite 路径：``os.environ`` 或 ``backend/.env``（含 ASHARE_ 前缀别名）。
+
+    走 ``runtime_env`` 而不是 ``os.environ.get``：Settings 读 .env 但不导出到进程环境，
+    直接读 os.environ 会让 .env 里配了也静默失效（跨进程限频长期未生效的根因）。
+
+    相对路径一律按 **backend 根目录**解析：backend 与 Prefect worker 的 CWD 不同，
+    若各自按 CWD 解释会各自建一个库，"共享"限频就变成两份独立配额，静默失效。
+
+    pytest 进程**不认 .env 里的值**：否则跑测试会把生产限频库当成共享库，测试既写入真实
+    hits 表（污染线上窗口），又读到历史残留导致 headroom 断言随机失败。注意 `scripts/` 下
+    的回测脚本带 ``load_dotenv()``，被测试 import 后会把 .env 全量灌进 ``os.environ``，
+    因此不能只看 os.environ：**与 .env 值相同**的一律视为泄漏、不予采信；测试若要验证跨进程
+    行为，用 ``monkeypatch.setenv`` 指向 tmp_path（值不同即生效）。
+    """
+    from pathlib import Path
+
+    from app.core.runtime_env import dotenv_value
+
+    names = ("TUSHARE_SHARED_LIMITER_DB", "ASHARE_TUSHARE_SHARED_LIMITER_DB")
+    raw = ""
+    for n in names:
+        raw = (os.environ.get(n) or "").strip()
+        if raw:
+            break
+    try:
+        from app.core import metrics
+
+        under_pytest = metrics._process_role() == "pytest" or os.environ.get("ASHARE_UNDER_PYTEST") == "1"
+    except Exception:  # noqa: BLE001
+        under_pytest = False
+    if raw and under_pytest and raw == dotenv_value(*names):
+        raw = ""
+    if not raw and not under_pytest:
+        raw = dotenv_value(*names)
+    if not raw:
+        return ""
+    p = Path(raw).expanduser()
+    if not p.is_absolute():
+        p = Path(__file__).resolve().parents[2] / p
+    return str(p)
+
 
 def _make_limiter(key: str, requests_per_minute: int):
-    """In-process limiter, or a cross-process one when TUSHARE_SHARED_LIMITER_DB is set."""
+    """In-process limiter, or a cross-process one when TUSHARE_SHARED_LIMITER_DB is set.
+
+    所有网关限流器都经此处创建，因此在这里统一登记到 ``limiter_registry``，
+    供 ``GET /api/data-sources/limits`` 只读展示窗口用量。
+    """
+    from app.core import limiter_registry
+
     local = SlidingWindowLimiter(requests_per_minute)
-    db_path = os.environ.get("TUSHARE_SHARED_LIMITER_DB", "").strip()
+    db_path = shared_limiter_db_path()
     if not db_path:
+        limiter_registry.register(key, local, requests_per_minute, kind="gateway")
         return local
     from app.services.shared_rate_limiter import SharedSlidingWindowLimiter
-    return SharedSlidingWindowLimiter(key, requests_per_minute, db_path, fallback=local)
+
+    lim = SharedSlidingWindowLimiter(key, requests_per_minute, db_path, fallback=local)
+    limiter_registry.register(key, lim, requests_per_minute, kind="gateway")
+    return lim
 
 
 # Promax quota reservation (owner, 2026-10-19): during the trading session (Mon-Fri

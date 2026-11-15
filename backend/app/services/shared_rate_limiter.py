@@ -93,6 +93,29 @@ class SharedSlidingWindowLimiter:
         except Exception:  # noqa: BLE001 - observational only
             return self._fallback.headroom() if self._fallback is not None else 1.0
 
+    def usage(self) -> tuple[int, int, float]:
+        """(used, limit, window_seconds) read straight from the shared hits table.
+
+        Cross-process truth for the ops view: unlike ``headroom()`` this exposes the raw count
+        so ``/api/data-sources/limits`` can show "used 118 / limit 420". Read-only, never blocks,
+        and falls back to the in-process limiter when SQLite is unavailable.
+        """
+        if self._limit <= 0:
+            return 0, 0, self._window
+        try:
+            now = time.time()
+            (count,) = self._conn().execute(
+                "SELECT COUNT(*) FROM hits WHERE k=? AND ts>?", (self._key, now - self._window)).fetchone()
+            return int(count), self._limit, self._window
+        except Exception:  # noqa: BLE001 - observational only
+            if self._fallback is not None and hasattr(self._fallback, "usage"):
+                return self._fallback.usage()
+            return 0, self._limit, self._window
+
+    @property
+    def key(self) -> str:
+        return self._key
+
     def acquire(self) -> None:
         if self._limit <= 0:
             return

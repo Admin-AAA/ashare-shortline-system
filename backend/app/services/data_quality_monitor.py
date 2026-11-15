@@ -1025,6 +1025,100 @@ def check_datasource_all_failed(now: datetime | None = None) -> dict[str, Any]:
                  impact="对应接口的补数/实时行情当时没拿到数据")
 
 
+def check_provider_empty_rate(db, now: datetime | None = None, hours: int = 24) -> dict[str, Any]:
+    """provider 级空返回率（请求层成功率）：近 N 小时样本里"应答了但没数据"的比例。
+
+    为什么单列一项：``check_db_dataset`` 只看数据集最后一根 K 线的日期新鲜度，一个 provider
+    哪怕 80% 请求返回空、每天都在兜底，只要主源还新鲜就永远绿。eastmoney 实测 606 次里
+    484 次空返回（79.9%），在这套规则下却一直是绿的——真实额度全被它白吃了。
+    阈值：样本 <50 不判定（样本不足），≥60% 红，≥30% 黄。
+    """
+    from app.services.datasource import quota_view
+
+    now = now or _now()
+    key, label = "gateway:provider_empty_rate", "数据源空返回率"
+    try:
+        rows = quota_view.quality_by_provider(db, hours=hours)
+    except Exception:  # noqa: BLE001
+        logger.debug("provider empty-rate check failed", exc_info=True)
+        rows = []
+    judged = [r for r in rows if r.get("attempts", 0) >= quota_view.MIN_SAMPLE_FOR_VERDICT]
+    red = [r for r in judged if (r.get("empty_rate") or 0) >= quota_view.EMPTY_RATE_RED]
+    yellow = [
+        r for r in judged
+        if quota_view.EMPTY_RATE_YELLOW <= (r.get("empty_rate") or 0) < quota_view.EMPTY_RATE_RED
+    ]
+    if red:
+        sev = RED
+    elif yellow:
+        sev = YELLOW
+    else:
+        sev = GREEN
+
+    def _fmt(r: dict[str, Any]) -> str:
+        return f"{r['provider']} {r['empty_count'] if 'empty_count' in r else r['empty']}/{r['attempts']}" \
+               f"（{round((r.get('empty_rate') or 0) * 100, 1)}%，均延迟 {r.get('avg_latency_seconds')}s）"
+
+    if not judged:
+        detail = f"近 {hours} 小时没有 provider 达到 {quota_view.MIN_SAMPLE_FOR_VERDICT} 次样本，暂不判定"
+    elif red or yellow:
+        detail = "；".join(_fmt(r) for r in (red + yellow)[:5])
+    else:
+        worst = max(judged, key=lambda r: r.get("empty_rate") or 0)
+        detail = f"近 {hours} 小时各源空返回率正常，最高 {worst['provider']} {round((worst.get('empty_rate') or 0) * 100, 1)}%"
+    return _item(
+        key, label, "数据网关", sev, kind="gateway",
+        latest=now.strftime("%Y-%m-%d %H:%M"), detail=detail,
+        impact="空返回率高的源在吃掉限频额度却拿不到数据，应降级/摘除；否则表现为「明明还没打满额度却一直没数据」",
+        empty_rate_rows=[{k: r.get(k) for k in ("provider", "attempts", "empty", "empty_rate", "success_rate")} for r in judged[:10]],
+    )
+
+
+def check_provider_limits(db, now: datetime | None = None) -> dict[str, Any]:
+    """配额与限频健康：跨进程限频开关、当前熔断、日额度水位。"""
+    from app.services.datasource import quota_view
+
+    now = now or _now()
+    key, label = "gateway:quota_limits", "数据源配额与限频"
+    try:
+        view = quota_view.collect(db, hours=6)
+    except Exception:  # noqa: BLE001
+        logger.debug("quota view failed in monitor", exc_info=True)
+        return _item(key, label, "数据网关", GREEN, kind="gateway",
+                     latest=now.strftime("%Y-%m-%d %H:%M"), detail="配额视图不可用，跳过（不影响其它检查）",
+                     impact="无")
+
+    problems: list[str] = []
+    sev = GREEN
+    if not (view.get("shared_limiter") or {}).get("enabled"):
+        sev = YELLOW
+        problems.append("跨进程限频未启用：backend 与 Prefect worker 各持一份配额，合计可打满双倍上限")
+    for b in view.get("breakers") or []:
+        sev = YELLOW if sev == GREEN else sev
+        problems.append(f"熔断开启 {b.get('key')}（剩 {int(b.get('seconds_remaining') or 0)}s，{b.get('reason')}）")
+    for d in view.get("daily") or []:
+        if d.get("exhausted_today"):
+            sev = RED
+            problems.append(f"{d['provider']} 今日额度已耗尽（{d['used_today']}/{d['daily_quota']}）")
+        elif (d.get("used_pct") or 0) >= 80:
+            sev = YELLOW if sev == GREEN else sev
+            problems.append(f"{d['provider']} 日额度已用 {d['used_pct']}%")
+
+    promax = view.get("promax") or {}
+    detail = "；".join(problems) if problems else (
+        f"跨进程限频已启用；无熔断；promax 实际生效 {promax.get('tightest_effective_per_minute')}/min"
+        f"（声明 {promax.get('declared_per_minute')}/min）"
+    )
+    return _item(
+        key, label, "数据网关", sev, kind="gateway",
+        latest=now.strftime("%Y-%m-%d %H:%M"), detail=detail,
+        impact="配额用尽会被 quota_skip 拦下（补数静默少数据）；跨进程限频关闭时会与 Prefect 抢配额",
+        shared_limiter=view.get("shared_limiter"),
+        promax_effective_per_minute=promax.get("tightest_effective_per_minute"),
+        promax_declared_per_minute=promax.get("declared_per_minute"),
+    )
+
+
 def check_confirmation_coverage(db, open_days: list[str], now: datetime | None = None) -> dict[str, Any]:
     """盘中买入确认覆盖率：今天入场窗口内 09:45 后仍没被检查 → 红；近 5 个交易日有入场日没检查就过期 → 黄。"""
     from app.services.execution_confirmation_coverage import (
@@ -1184,6 +1278,14 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
                        lambda: [parquet_vs_db_index(db)])
         _rollback(db)
     items += _safe("gateway", "gateway:providers", "数据网关", "gateway", lambda: [check_provider_gateway(now)])
+    # 请求层健康（2026-11-15）：配额/限频 + 空返回率。dataset 新鲜度管不到这两件事——
+    # 主源还新鲜时，一个 79.9% 空返回的废源永远绿。
+    items += _safe("provider_empty_rate", "gateway:provider_empty_rate", "数据网关", "gateway",
+                   lambda: [check_provider_empty_rate(db, now)])
+    _rollback(db)
+    items += _safe("provider_limits", "gateway:quota_limits", "数据网关", "gateway",
+                   lambda: [check_provider_limits(db, now)])
+    _rollback(db)
     items += _safe("scheduled", "job:*", "调度任务", "job", lambda: check_scheduled_tasks(db, open_days, now))
     _rollback(db)
     items += _safe("daily_output", "formal:daily_output", "盘后出票", "job", lambda: [check_daily_output(db, open_days, now)])

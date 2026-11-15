@@ -67,6 +67,37 @@ def trace_health(hours: int = 24, db: Session = Depends(get_db)):
     return trace_service.health_aggregation(db, hours=hours)
 
 
+@router.get("/limits")
+def data_source_limits(hours: int = 24, db: Session = Depends(get_db)):
+    """数据源实时配额 / 限频总览（只读观测，绝不触发上游请求）。
+
+    回答四个此前无处可查的问题：
+    1. 每个限流 key 当前窗口用了多少、还剩多少（优先取共享库，即 backend + Prefect 合计用量）；
+    2. 日额度用了多少（teajoin / promax / quantdata）；
+    3. promax 的「声明 180/min」与「实际生效 5min/1h 滚动窗口」差多少倍；
+    4. 哪些 provider 正在熔断、近 N 小时谁的空返回率高到不值得再给配额。
+    """
+    from app.services.datasource import quota_view
+
+    try:
+        return quota_view.collect(db, hours=max(1, min(int(hours), 720)))
+    except Exception as exc:  # noqa: BLE001 - 观测接口宁可降级也不 500
+        logger.warning("data-source limits view failed: %r", exc)
+        return {
+            "generated_at": None,
+            "error": f"limits view unavailable: {exc!r}",
+            "shared_limiter": {"enabled": False, "db": None},
+            "limiters": [],
+            "daily": [],
+            "promax": {},
+            "breakers": [],
+            "direct_sources": [],
+            "rates": [],
+            "quality": [],
+            "warnings": ["配额视图内部异常，已降级返回空结构（详见后端日志）"],
+        }
+
+
 @router.get("")
 def list_sources(db: Session = Depends(get_db)):
     try:
