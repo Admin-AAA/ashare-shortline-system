@@ -354,3 +354,29 @@ def test_find_issues_includes_reference_fallback_and_recent_gap_messages():
     assert any("回退到本地关键表最新交易日" in msg for msg in messages)
     assert any("最近 5 个交易日缺失 4 天" in msg for msg in messages)
     assert any("实时快照 未覆盖参考交易日" in msg for msg in messages)
+
+
+def test_incomplete_minute_kbar_dates_flags_thin_coverage_days_only():
+    """分钟线「有行但只补到几只票」必须算不完整：这是 09-04/09-23/10-12 长期没被补的缺口来源。"""
+    db = MagicMock()
+    rows = MagicMock()
+    rows.all.return_value = [("2026-06-09", 300), ("2026-06-10", 3), (None, 19)]
+    db.execute.return_value = rows
+
+    out = data_health_service._incomplete_minute_kbar_dates(
+        db, ["2026-06-09", "2026-06-10", "2026-06-11"]
+    )
+
+    # 300 只达标；3 只腰斩；06-11 完全没有行 → 属于 missing 而不是 incomplete
+    assert out == ["2026-06-10"]
+
+
+def test_incomplete_minute_kbar_dates_merges_date_format_variants():
+    db = MagicMock()
+    rows = MagicMock()
+    rows.all.return_value = [("2026-06-10", 120), ("20260610", 121)]
+    db.execute.return_value = rows
+
+    out = data_health_service._incomplete_minute_kbar_dates(db, ["2026-06-10"])
+
+    assert out == []  # 两种日期格式合计 241 只，刚过 240 门槛，不能误报

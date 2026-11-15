@@ -1,7 +1,14 @@
-"""margin_detail 截断自动补缺（东财 datacenter，经 gw_call 网关）。
+"""margin_detail 截断自动补缺（数据中心 provider 优先级链 + 东财链尾补充）。
 
 背景（2026-10-19）：promax 的 margin_detail 常态只回 2001 行（分页上限，只有沪市），
-10-16 手工用东财只插缺失代码从 4111 行补到 4459 行。本模块把这一步固化为盘后例行：
+10-16 手工用东财只插缺失代码从 4111 行补到 4459 行。本模块把这一步固化为盘后例行。
+
+2026-11-15 修正：此前 `_default_fetch` 硬编码只调东财一家，绕开了数据中心的
+`data_source_config` 启停/优先级、`routing_table.json` 链序与熔断限流。现在改走
+`datasource.complete_rows`：按 router 排好的 provider 顺序逐个 `request_pinned`，
+把「只回半个市场」当作换源信号，按 code 合并去重，东财作为链尾补充源。
+即使所有源都只有沪市（实测 2026-11-13 promax/quantdata/teajoin/东财均 2019 行），
+provenance 也会记下「已穷尽 N 个可用源」，而不是让人以为只试了一家就放弃。
 
 * 截断判定（不写死 2001）：
   1) 主源行数 >= ``min_rows``（默认 2000）且等于某个分页上限或上限+1
@@ -221,10 +228,115 @@ def _backoff_active(trade_date: str, now: datetime | None = None) -> bool:
         return False
 
 
-def _default_fetch(trade_date: str) -> list[dict[str, Any]]:
+def _last_rows_after(trade_date: str) -> int:
+    """该日最近一次 provenance 记录的库内行数（退避探测的比较基线）。"""
+    try:
+        lines = (runtime_dir() / "margin_fill_provenance.jsonl").read_text(encoding="utf-8").splitlines()[-300:]
+    except OSError:
+        return 0
+    for line in reversed(lines):
+        try:
+            rec = json.loads(line)
+        except ValueError:
+            continue
+        if _iso(rec.get("trade_date") or "") == trade_date:
+            return int(rec.get("rows_after") or 0)
+    return 0
+
+
+def _upstream_recovered(trade_date: str, rows_after: int) -> bool:
+    """退避期间轻量探测数据中心链：任一启用源给出比上次更多的行 = 上游开始补发。
+
+    纯读 provenance 的退避看不到上游变化：即使上游在退避第 5 小时补发全量，
+    系统也会白等到 12 小时窗口结束。这里只问数据中心已启用的 provider
+    （不含 promax，也不写库），一次探测约 3 个请求，换来「上游一恢复就补」。
+    """
+    from app.services.datasource.complete_rows import fetch_complete_trade_date
+
+    try:
+        probe = fetch_complete_trade_date("margin_detail", trade_date,
+                                          expected_rows=0, exclude=("promax",))
+    except Exception as exc:  # noqa: BLE001 - 探测失败继续退避，绝不误解除
+        logger.info("margin_detail_fill td=%s 退避探测失败，继续退避: %r", trade_date, exc)
+        return False
+    n = len(probe.get("rows") or [])
+    logger.info("margin_detail_fill td=%s 退避探测 rows=%d vs 库内 %d chain=%s errors=%s",
+                trade_date, n, rows_after, ",".join(probe.get("attempted") or []),
+                probe.get("errors") or [])
+    return n > max(0, rows_after)
+
+
+def _from_provider_row(row: dict[str, Any], trade_date: str) -> dict[str, Any] | None:
+    """Tushare-compatible margin_detail 行 -> 本模块写入契约（6 位 code、金额亿元）。
+
+    与 scripts/backfill_stale_domains.py 的口径一致：金额字段 /1e8，rqyl 是数量不换算。
+    provider 不返回 rzrqye 时留 None，由东财链尾补充的行提供。
+    """
+    code = str(row.get("ts_code") or row.get("code") or "").split(".")[0]
+    if len(code) != 6:
+        return None
+
+    def yi(value: Any) -> float | None:
+        try:
+            return None if value is None else round(float(value) / 1e8, 6)
+        except (TypeError, ValueError):
+            return None
+
+    def num(value: Any) -> float | None:
+        try:
+            return None if value is None else float(value)
+        except (TypeError, ValueError):
+            return None
+
+    return {"code": code, "trade_date": _iso(trade_date),
+            "rzye": yi(row.get("rzye")), "rqye": yi(row.get("rqye")),
+            "rzmre": yi(row.get("rzmre")), "rzche": yi(row.get("rzche")),
+            "rzrqye": yi(row.get("rzrqye")), "rqyl": num(row.get("rqyl"))}
+
+
+def _default_fetch(trade_date: str, expected_rows: int = 0) -> dict[str, Any]:
+    """按数据中心优先级链取当日全市场两融明细；返回 {rows, probe}。
+
+    排除 promax：主表数据本就来自它，再问一次只会重复拿到同一批沪市行，还占实盘额度。
+    expected_rows 由调用方（fill_margin_day）用近 5 日中位数给出，达标即停止问后续源。
+    """
+    from app.services.datasource.complete_rows import fetch_complete_trade_date
     from app.services.datasource.eastmoney import _call, fetch_margin_detail
 
-    return _call("margin.detail", fetch_margin_detail, trade_date)
+    def eastmoney(d: str):
+        return _call("margin.detail", fetch_margin_detail, d)
+
+    # 只让数据中心链取原始行；东财是网站接口、字段单位不同，放在链尾单独补，
+    # 不能塞进 extra_fetchers 与 provider 行混在一起去重（会把亿元再 /1e8）。
+    probe = fetch_complete_trade_date(
+        "margin_detail", trade_date,
+        expected_rows=int(expected_rows or 0),
+        exclude=("promax",),
+    )
+    merged: dict[str, dict[str, Any]] = {}
+    for raw in probe["rows"]:
+        row = _from_provider_row(raw, trade_date)
+        if row and row["code"] not in merged:
+            merged[row["code"]] = row
+    if not probe["complete"]:
+        added = 0
+        try:
+            for row in eastmoney(trade_date) or []:
+                code = str(row.get("code") or "")
+                if len(code) == 6 and code not in merged:
+                    merged[code] = row
+                    added += 1
+            probe["attempted"].append("eastmoney")
+            probe["by_source"]["eastmoney"] = added
+        except Exception as exc:  # noqa: BLE001 - 链尾补充源失败不影响数据中心已取到的行
+            probe["errors"].append(f"eastmoney: {type(exc).__name__}: {str(exc)[:120]}")
+            probe["by_source"]["eastmoney"] = 0
+    return {
+        "rows": list(merged.values()),
+        "probe": {"attempted": probe["attempted"], "by_source": probe["by_source"],
+                  "errors": probe["errors"], "complete": probe["complete"],
+                  "expected_rows": probe["expected_rows"]},
+    }
 
 
 # ── 单日补缺 ─────────────────────────────────────────────────────────────
@@ -258,7 +370,15 @@ def fill_margin_day(
         out["status"] = "deferred_trading_session"
     else:
         try:
-            fetched = list((fetch or _default_fetch)(iso_day.replace("-", "")) or [])
+            fetcher = fetch or (lambda d: _default_fetch(d, det["baseline_median"]))
+            raw = fetcher(iso_day.replace("-", ""))
+            # 新 _default_fetch 返回 {rows, probe}；测试/外部注入的 fetch 仍可只返回行列表。
+            probe = raw.get("probe") if isinstance(raw, dict) else None
+            fetched = list(raw.get("rows") if isinstance(raw, dict) else (raw or []))
+            if probe:
+                out["provider_probe"] = probe
+                logger.info("margin_detail_fill td=%s datacenter_chain=%s by_source=%s errors=%s",
+                            iso_day, ",".join(probe["attempted"]), probe["by_source"], probe["errors"])
             have = _existing_codes(db, iso_day)
             seen: set[str] = set()
             new: list[dict[str, Any]] = []
@@ -334,10 +454,20 @@ def run_margin_detail_fill(
         pending = set(load_pending())
         result["backoffed"] = []
         for d in sorted(set(recent) | pending):
-            if d in pending and _backoff_active(d, now):
-                result["backoffed"].append(d)
-                logger.info("margin_detail_fill td=%s 上游连续未发布全量，退避一次重试", d)
-                continue
+            # 退避只认 provenance（连续 4 次 incomplete 且库内行数不变），不依赖待补清单：
+            # 清单文件被清掉/写失败时若只看 pending，退避失效会退回「每 2 小时白打上游」。
+            if _backoff_active(d, now):
+                baseline = _last_rows_after(d)
+                if _upstream_recovered(d, baseline):
+                    logger.info("margin_detail_fill td=%s 上游行数变化，立即解除退避并补齐", d)
+                    # 写一条非 incomplete 记录打断「连续 4 次 incomplete」的退避判定。
+                    _append_provenance({"ts": datetime.now().isoformat(timespec="seconds"),
+                                        "trade_date": d, "source": SOURCE, "status": "recovered_probe",
+                                        "rows_after": baseline})
+                else:
+                    result["backoffed"].append(d)
+                    logger.info("margin_detail_fill td=%s 上游连续未发布全量，退避一次重试", d)
+                    continue
             result["days"].append(fill_margin_day(db, d, fetch=fetch, now=now))
     except Exception as exc:  # noqa: BLE001
         logger.warning("margin_detail_fill run failed: %s", exc, exc_info=True)

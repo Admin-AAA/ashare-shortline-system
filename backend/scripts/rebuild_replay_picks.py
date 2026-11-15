@@ -240,8 +240,8 @@ def _local_forecast_reader(api_fetch):
     return fetch
 
 
-def _local_incentive_reader(api_fetch):
-    """按披露日期从本地股权激励公告存档取全市场草案；超出本地覆盖才回落在线网关。
+def _load_incentive_store():
+    """一次性把本地股权激励公告存档读入内存索引；没有存档返回 None。
 
     回放历史日时 mid-incentive-option / mid-incentive-vol 每天都要走 cninfo 在线网关
     查约一年的历史公告区间，网关对历史区间持续取不到数 —— 近 12 个月 271 个交易日
@@ -249,6 +249,10 @@ def _local_incentive_reader(api_fetch):
     output/research/sprint4/incentive/*.parquet（2018-01 起）与
     data/midterm/events/incentive_live_*.parquet 本就是同一接口的抓取存档，
     按 ann_date<=as_of 过滤即可保证 PIT，不留未来函数。
+
+    另外 incentive_candidates 每天还要调 _history_dates 独立遍历这 108 个 parquet
+    判断「180 天内首次」，271 天就是近 3 万次文件读。这里建一份共享内存索引，
+    让 fetch 与 history 用同一份去重后的数据，既省 IO 也避免两处口径不一致。
     """
     import pandas as pd
     from app.services import midterm_incentive as mi
@@ -263,18 +267,24 @@ def _local_incentive_reader(api_fetch):
         except Exception as exc:  # noqa: BLE001 - 单个存档坏了就跳过，宁可少数据也不伪造
             print(f"[replay] incentive parquet {f.name} unreadable: {exc!r}", flush=True)
     if not frames:
-        return api_fetch  # CI / 空数据目录：没有本地覆盖，保持原行为
+        return None  # CI / 空数据目录：没有本地覆盖，保持原行为
     df = pd.concat(frames, ignore_index=True)
     df["ann_date"] = df["ann_date"].astype(str).str.strip()
     # HIST 与 LIVE 的区间有重叠；同一公告去重，不同标题（草案/摘要/法律意见书）照原样保留。
     df = df.drop_duplicates(subset=["code", "ann_date", "ann_id", "title"])
-    covered_through = str(df["ann_date"].max())
     by_date = {k: g.to_dict("records") for k, g in df.groupby("ann_date", sort=True)}
-    dates = sorted(by_date)
+    draft = df[df["title"].astype(str).map(mi.is_draft)]
+    by_code = {str(c): sorted(g["ann_date"].astype(str).tolist()) for c, g in draft.groupby("code")}
+    return {"by_date": by_date, "dates": sorted(by_date), "by_code": by_code,
+            "covered_through": str(df["ann_date"].max())}
+
+
+def _incentive_fetch_from_store(store, api_fetch):
+    dates, by_date, covered = store["dates"], store["by_date"], store["covered_through"]
 
     def fetch(start: str, end: str, max_pages: int = 60):
         s, e = start.replace("-", ""), end.replace("-", "")
-        if e > covered_through:
+        if e > covered:
             # 本地存档没覆盖到当前回放日就诚实回落网关，绝不拿旧事件冒充新公告。
             return api_fetch(start, end, max_pages)
         lo, hi = bisect.bisect_left(dates, s), bisect.bisect_right(dates, e)
@@ -283,19 +293,49 @@ def _local_incentive_reader(api_fetch):
     return fetch
 
 
+def _incentive_history_from_store(store):
+    """等价替代 mi._history_dates：各股票 before 之前最近一次草案公告日。
+
+    原实现每天读全部 parquet 再 groupby max；这里在内存里按已排序日期二分。
+    """
+    by_code = store["by_code"]
+
+    def history_dates(codes, before: str):
+        out = {}
+        for c in codes:
+            ds = by_code.get(str(c))
+            if not ds:
+                continue
+            i = bisect.bisect_left(ds, str(before))
+            if i > 0:
+                out[str(c)] = ds[i - 1]
+        return out
+
+    return history_dates
+
+
+def _local_incentive_reader(api_fetch):
+    store = _load_incentive_store()
+    return _incentive_fetch_from_store(store, api_fetch) if store else api_fetch
+
+
 def install_offline_incentive() -> Callable[[], None]:
-    """回放期间把激励公告源换成本地存档并禁止回写实盘事件库；返回无条件还原回调。
+    """回放期间把激励公告源与首次判定都换成本地内存索引，并禁止回写实盘事件库。
 
     只看回放进程内的模块全局，实盘进程不受影响；退出时（含异常）必须调用回调还原。
+    没有本地存档时仍要禁写 live 事件库，但 fetch/history 保持原行为（回落网关）。
     """
     from app.services import midterm_incentive as mi
 
-    orig_fetch, orig_store = mi.fetch_range, mi._store_live
-    mi.fetch_range = _local_incentive_reader(orig_fetch)
+    orig_fetch, orig_hist, orig_store = mi.fetch_range, mi._history_dates, mi._store_live
+    store = _load_incentive_store()
+    if store:
+        mi.fetch_range = _incentive_fetch_from_store(store, orig_fetch)
+        mi._history_dates = _incentive_history_from_store(store)
     mi._store_live = lambda new: None  # 回放不得把历史公告再写进 live 事件库
 
     def restore() -> None:
-        mi.fetch_range, mi._store_live = orig_fetch, orig_store
+        mi.fetch_range, mi._history_dates, mi._store_live = orig_fetch, orig_hist, orig_store
 
     return restore
 

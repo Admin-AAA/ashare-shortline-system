@@ -1146,7 +1146,9 @@ def _build_remediation_plan(
 
     if "minute_kbar" in requested_tables:
         target_dates = _target_dates_with_closed_reference_gap(
-            (recent_tables.get("minute_kbar") or {}).get("missing_dates") or [],
+            # 只取 missing_dates 会把「该日存在但只补到 3~20 只票」的日期当成已覆盖，
+            # 缺口永久留着（见 data_health_service._incomplete_minute_kbar_dates）。
+            _gap_dates(recent_tables.get("minute_kbar") or {}, include_incomplete=True),
             lag_days=lag_days,
             table_key="minute_kbar",
             reference_trade_date=reference_trade_date,

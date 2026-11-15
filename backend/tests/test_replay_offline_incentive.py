@@ -84,14 +84,35 @@ def test_deduplicates_hist_and_live_overlap(incentive_dirs):
 def test_install_offline_incentive_restores_globals_and_disables_live_write(incentive_dirs):
     hist, live = incentive_dirs
     _write(hist, "202501.parquet", [_row("000001", "20250110")])
-    orig_fetch, orig_store = mi.fetch_range, mi._store_live
+    orig_fetch, orig_hist, orig_store = mi.fetch_range, mi._history_dates, mi._store_live
     restore = rp.install_offline_incentive()
     try:
         assert mi.fetch_range is not orig_fetch
+        assert mi._history_dates is not orig_hist
         assert mi.fetch_range("2025-01-01", "2025-01-10")[0]["code"] == "000001"
         mi._store_live([_row("000009", "20250110")])  # 回放不得污染实盘事件库
         assert list(live.glob("*.parquet")) == []
     finally:
         restore()
     assert mi.fetch_range is orig_fetch
+    assert mi._history_dates is orig_hist
     assert mi._store_live is orig_store
+
+
+def test_history_from_store_matches_file_scanning_original(incentive_dirs):
+    """内存二分必须与原 _history_dates 的 groupby max 逐日等价（含 BAD 标题过滤）。"""
+    hist, live = incentive_dirs
+    _write(hist, "202501.parquet", [
+        _row("000001", "20250110", "股权激励计划（草案）"),
+        _row("000001", "20250315", "股权激励计划（草案）"),
+    ])
+    _write(live, "incentive_live_2025.parquet", [
+        _row("000001", "20250401", "股权激励计划（草案）修订"),  # 修订不算草案
+        _row("000002", "20250220", "股权激励计划（草案）"),
+    ])
+    store = rp._load_incentive_store()
+    local = rp._incentive_history_from_store(store)
+    codes = ["000001", "000002", "000003"]
+    for before in ("20250110", "20250220", "20250401", "20260101"):
+        assert local(codes, before) == mi._history_dates(codes, before), before
+    assert local(codes, "20260101")["000001"] == "20250315"

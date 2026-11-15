@@ -69,6 +69,11 @@ _RECENT_REFERENCE_WINDOW = 10
 _RECENT_WARN_MISSING_DAYS = 2
 _RECENT_HIGH_MISSING_DAYS = 4
 _MIN_RECENT_DAILY_KBAR_CODES = 3000
+# 分钟线日更目标是市值/成交额前 300 只（scheduler minute_kbar_code_limit 默认 300）。
+# 允许 20% 的个别停牌/接口失败，低于 240 只即视为「当日覆盖被腰斩」，必须重补。
+# 实测 2026-09-04 只有 12 只、09-23 只有 3 只、10-12 只有 19 只，此前按「该日有行即覆盖」
+# 判定，自愈永远不会补，日内策略样本被静默削掉。
+_MIN_RECENT_MINUTE_KBAR_CODES = 240
 
 # ── 数据域（指标级）覆盖目录 ─────────────────────────────────────────
 # 与 provider 级「数据源接入」不同，这里站在「数据域 / 指标」维度，
@@ -550,6 +555,8 @@ def _recent_trade_day_coverage(
                 if tdef["key"] == "daily_kbar"
                 else _incomplete_capital_flow_dates(db, ordered_days)
                 if tdef["key"] == "capital_flow"
+                else _incomplete_minute_kbar_dates(db, ordered_days)
+                if tdef["key"] == "minute_kbar"
                 else []
             )
             tolerated_gap_dates = _realtime_tolerated_gap_dates(
@@ -1353,6 +1360,28 @@ def _incomplete_capital_flow_dates(db: Session, ordered_days: list[str]) -> list
     ).all()
     counts = {_fmt_date(trade_date): int(count or 0) for trade_date, count in rows}
     return [day for day in ordered_days if 0 < counts.get(day, 0) < floor]
+
+
+def _incomplete_minute_kbar_dates(db: Session, ordered_days: list[str]) -> list[str]:
+    """分钟线当日有行但覆盖股票数远少于目标池，按不完整处理。
+
+    与 daily_kbar / capital_flow 同一类缺陷：只看「该日有没有行」，一天只补到 3 只票也算
+    覆盖完成，自愈循环永远不会重补。这里要求当日覆盖股票数不低于目标池的 80%。
+    """
+    if not ordered_days:
+        return []
+    target_values = sorted({variant for day in ordered_days for variant in _date_variants(day)})
+    rows = db.execute(
+        select(MinuteKbar.trade_date, func.count(distinct(MinuteKbar.code)))
+        .where(MinuteKbar.trade_date.in_(target_values))
+        .group_by(MinuteKbar.trade_date)
+    ).all()
+    counts: dict[str, int] = {}
+    for trade_date, count in rows:
+        normalized = _fmt_date(trade_date)
+        if normalized in ordered_days:
+            counts[normalized] = counts.get(normalized, 0) + int(count or 0)
+    return [day for day in ordered_days if 0 < counts.get(day, 0) < _MIN_RECENT_MINUTE_KBAR_CODES]
 
 
 def _coverage_gap_count(coverage: dict[str, Any], reference_trade_date: str | None = None) -> int:

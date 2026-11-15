@@ -67,9 +67,10 @@ def test_topology_reflects_switch_and_breakers(db_session, monkeypatch):
     assert by["quote.realtime"]["sina_realtime"]["breaker"]["state"] == "closed"
     assert by["tushare.*"]["quantdata"]["breaker"]["state"] == "half_open"
     assert by["tushare.*"]["promax"]["breaker"]["state"] == "open"
-    # 同一开关的所有使用位置都反映禁用
+    # 同一开关的使用位置都要反映禁用。xiaoshi 已因「公开接口没有全市场报价端点」
+    # 从 quote 源注册表剔除（market_data._QUOTE_CAPABILITY_MISSING），quote.daily 里
+    # 不再有 xiaoshi_quote —— 只断言仍然在链上的实时快照这一处。
     assert by["quote.realtime"]["xiaoshi_snapshot"]["switches"][0]["enabled"] is False
-    assert by["quote.daily"]["xiaoshi_quote"]["switches"][0]["enabled"] is False
     # 腾讯行情受 cutover flag 控制，默认不在链上
     assert by["quote.realtime"]["tencent_qt"]["active"] is False
 

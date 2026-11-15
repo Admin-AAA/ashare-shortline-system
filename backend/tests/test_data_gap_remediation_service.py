@@ -16,6 +16,7 @@ from app.services.data_gap_remediation_service import (
     _backfill_index_daily_dates,
     _backfill_minute_kbar_date,
     _backfill_news_announcements,
+    _build_remediation_plan,
     _candidate_quote_date,
     _chip_target_dates,
     _daily_kbar_target_codes,
@@ -1454,3 +1455,36 @@ def test_backfill_news_announcements_uses_cninfo_when_eastmoney_blocked(monkeypa
     assert result["eastmoney_blocked"] is True
     assert result["cninfo_ok_codes"] == 1
     assert result["row_count"] == 1
+
+
+def test_minute_kbar_plan_includes_incomplete_days_not_just_missing_dates(monkeypatch):
+    """分钟线「有行但只有几只票」的日期必须进补数计划。
+
+    旧实现只读 missing_dates，而 data_health 的 missing_dates 是「该日完全没有行」，
+    于是 2026-09-23（3 只）、10-12（19 只）这类腰斩日永远不补。
+    """
+    db = MagicMock()
+    diagnosis = {
+        "score": 90,
+        "reference_trade_date": "2026-06-10",
+        "lag_days": {"minute_kbar": 0},
+        "tables": {"minute_kbar": {"max_date": "2026-06-10"}},
+        "recent_trade_day_coverage": {
+            "tables": {
+                "minute_kbar": {"missing_dates": [], "incomplete_dates": ["2026-06-09"]},
+            },
+        },
+    }
+    monkeypatch.setattr("app.services.data_gap_remediation_service._latest_allowed_bar_date", lambda: "2026-06-10")
+    monkeypatch.setattr(
+        "app.services.data_gap_remediation_service._minute_kbar_target_codes",
+        lambda _db, trade_date, limit: ["000001", "600000"],
+    )
+
+    plan = _build_remediation_plan(
+        db, diagnosis, requested_tables=["minute_kbar"],
+        capital_flow_code_limit=200, daily_kbar_code_limit=100, minute_kbar_code_limit=300,
+    )
+
+    assert [item["trade_date"] for item in plan] == ["2026-06-09"]
+    assert plan[0]["codes"] == ["000001", "600000"]
