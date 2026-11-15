@@ -1,4 +1,4 @@
-"""Dataset ``quote.realtime``: promax rt_k -> sina realtime_quote -> tdx hq (pytdx) -> tencent (flag) -> akshare snapshot -> quantdata rt_min -> xiaoshi snapshot.
+"""Dataset ``quote.realtime``: promax rt_k -> ths market_data_cn -> sina realtime_quote -> tdx hq (pytdx) -> tencent (flag) -> akshare snapshot -> quantdata rt_min -> xiaoshi snapshot.
 
 Fill mode: each provider is asked only for codes still missing.  Every adapter
 returns ``{code6: row}`` normalized to ``SCHEMAS["quote.realtime"]``.
@@ -22,16 +22,16 @@ _RTK_POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="rtk-fast")
 
 
 def _f(v: Any) -> float:
-    try:
-        return float(v) if v is not None and v == v else 0.0
-    except (TypeError, ValueError):
-        return 0.0
+    """归一化委托到 :mod:`datasource.adapter`（架构优化项①：同一逻辑不再各写一份）。"""
+    from app.services.datasource.adapter import to_float
+
+    return to_float(v)
 
 
 def _ts(code6: str) -> str:
-    from app.services.tushare_client import ts_code
+    from app.services.datasource.adapter import to_ts_code
 
-    return ts_code(code6)
+    return to_ts_code(code6)
 
 
 class RtkProvider:
@@ -74,6 +74,59 @@ class RtkProvider:
                 "low": _f(r.get("low")), "volume": _f(r.get("vol")), "amount": _f(r.get("amount")),
                 "source": self.name,
             }
+        return out
+
+
+class ThsRealtimeProvider:
+    """同花顺 ``market_data_cn`` 基础数据：rt_k 之后的实时行情冗余（P0，2026-11-15 接入）。
+
+    定位是**修 rt_k 单点**，不是替换主源：rt_k 仍然排第一，本条只在 rt_k 失败 / 熔断 /
+    额度耗尽时补位，所以它在链上紧跟 RtkProvider。
+
+    * ``market_data_cn`` 一次只能查同一市场的代码（混沪深直接报「一次性查询多支股票必须市场
+      代码相同」），按 USHA/USZA/USTM 分组，最多 3 次调用。
+    * 返回不带交易日，用 ``latest_allowed_quote_date`` 补齐（与 rt_k 同口径，周末安全）。
+    * 限频与重连由 ``ths_client`` 的全局节流负责；单次失败按 DataSourceError 交给网关熔断。
+    """
+
+    name = "ths_realtime"
+    config_keys = (("ths", "quote"),)
+
+    def supports(self, dataset: str, query: Mapping[str, Any]) -> bool:
+        return dataset == DATASET
+
+    def fetch(self, dataset: str, query: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+        from app.engine.trading_calendar import latest_allowed_quote_date
+        from app.services.datasource import ths_client
+
+        groups: dict[str, list[str]] = {}
+        for code6 in query["keys"]:
+            venue = ths_client.venue_for(code6)
+            if venue:
+                groups.setdefault(venue, []).append(str(code6))
+        if not groups:
+            return {}
+        quote_date = latest_allowed_quote_date(date.today())
+        out: dict[str, dict[str, Any]] = {}
+        for venue, codes in groups.items():
+            rows = ths_client.call(
+                "market_data_cn", [f"{venue}{c}" for c in codes], "基础数据", dataset=dataset
+            )
+            for raw in rows:
+                code6 = str(raw.get("代码") or "")[len(venue):]
+                price = _f(raw.get("价格"))
+                if not code6 or price <= 0:
+                    continue
+                out[code6] = {
+                    "code": code6, "ts_code": _ts(code6), "name": str(raw.get("名称") or "").strip(),
+                    "trade_date": quote_date, "quote_time": "", "price": price,
+                    "open": _f(raw.get("开盘价")), "pre_close": _f(raw.get("昨收价")),
+                    "high": _f(raw.get("最高价")), "low": _f(raw.get("最低价")),
+                    "volume": _f(raw.get("成交量")), "amount": _f(raw.get("总金额")),
+                    "source": self.name,
+                }
+        if not out:
+            raise DataSourceError(ErrorKind.BAD_DATA, "ths 实时行情为空", provider=self.name, dataset=dataset)
         return out
 
 
@@ -136,6 +189,15 @@ class XiaoshiSnapshotProvider:
         return out
 
 
+def _ths():
+    """同花顺 thsdk 实时行情（P0 冗余，ASHARE_THS_ENABLED=false 关闭；见 datasource/ths_client.py）。"""
+    from app.services.datasource import ths_client
+
+    if not ths_client.is_enabled():
+        return None
+    return ThsRealtimeProvider()
+
+
 def _sina():
     from app.services.datasource.sina_realtime import SinaProvider
 
@@ -168,9 +230,9 @@ def gateway() -> DatasetGateway:
     if _GATEWAY is None:
         from app.services.datasource import retired as _retired
 
-        providers = [RtkProvider(), _sina(), _tdx(), _tencent(), _akshare(), RtMinProvider(), XiaoshiSnapshotProvider()]
+        providers = [RtkProvider(), _ths(), _sina(), _tdx(), _tencent(), _akshare(), RtMinProvider(), XiaoshiSnapshotProvider()]
         # 退役源（小石端点不可达）不进链；类保留，恢复订阅时去掉过滤即可复活。
-        _GATEWAY = DatasetGateway([p for p in providers if not _retired.provider_retired(p.name)])
+        _GATEWAY = DatasetGateway([p for p in providers if p is not None and not _retired.provider_retired(p.name)])
     return _GATEWAY
 
 

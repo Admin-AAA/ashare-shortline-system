@@ -58,6 +58,11 @@ def test_rt_min_fills_codes_rt_k_missed(env, monkeypatch):
     monkeypatch.setattr(tc, "get_pro", lambda: Pro())
     # sina / akshare 快照 off -> rt_min fills（akshare 快照是 2026-10-26 新增的第二备份，会真去翻新浪页，测试里关掉）
     monkeypatch.setattr(gw, "_db_disabled_keys", lambda: {("sina", "quote"), ("akshare", "quote")})
+    # ths 实时行情（2026-11-15 接入，紧跟 rt_k）会去连同花顺，这里关掉以固定本测试的 rt_min 填坑路径
+    from app.services.datasource import ths_client
+
+    monkeypatch.setattr(ths_client, "is_enabled", lambda: False)
+    monkeypatch.setattr(qr, "_GATEWAY", None)
     monkeypatch.setattr(tc, "fetch_realtime_minute_kbar", lambda code: {"close": 9.9, "trade_date": "2026-10-16", "trade_time": "14:59", "ts_code": code})
     rows = fetch_realtime_quotes(CODES, use_cache=False)
     first = str(_rtk_df().iloc[0]["ts_code"]).split(".")[0]

@@ -36,3 +36,8 @@ tenacity==9.1.2
 cachetools==7.1.6
 diskcache==5.6.3
 polars==2.0.0
+# 分钟线按需缓存（minute_cache.py）按月落 parquet，需 pyarrow
+pyarrow==21.0.0
+# 同花顺 thsdk：三条 P0 数据源接入（板块广度 / 实时行情冗余 / 个股快讯），见
+# backend/app/services/datasource/ths_client.py。游客账户可用，生产建议配 ths_username/password/mac。
+thsdk==1.7.18

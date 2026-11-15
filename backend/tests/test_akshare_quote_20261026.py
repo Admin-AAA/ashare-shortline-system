@@ -200,5 +200,9 @@ def test_chain_position_is_after_tencent_before_rt_min():
     qr._GATEWAY = None
     names = [p.name for p in qr.gateway()._providers]
     # 小石快照 2026-11-15 退役，链末不再有它
-    assert names == ["tushare_rt_k", "sina_realtime", "tdx_quote", "tencent_qt", "akshare_snapshot", "tushare_rt_min"]
+    # 同花顺实时（ths_realtime）2026-11-15 接入，紧跟 rt_k 之后做冗余，见 tests/test_ths_p0_20261115.py
+    assert names == [
+        "tushare_rt_k", "ths_realtime", "sina_realtime", "tdx_quote", "tencent_qt",
+        "akshare_snapshot", "tushare_rt_min",
+    ]
     qr._GATEWAY = None

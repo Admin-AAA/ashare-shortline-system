@@ -32,6 +32,9 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "cninfo": ProviderSpec((("cninfo", "news"),), 60),
     # 巨潮全文检索（ann.search.cninfo）：独立低速桶，礼貌访问；HTTP 403/429/5xx 触发熔断计数
     "cninfo_search": ProviderSpec((("cninfo", "news"),), 20, ("CninfoBlockedError",)),
+    # 同花顺 7x24 快讯（aux.news 独立备源，2026-11-15 接入）：限频由 ths_client 的全局节流
+    # （ths_min_interval_seconds）负责，这里不再套桶，否则会和实时行情那条通道重复排队。
+    "ths_news": ProviderSpec((("ths", "news"),), 0),
     # QVIX 期权隐含波动率（market.qvix）：akshare 无 token，低频日更，共用 akshare 源总开关；
     # 上游是 options.qvix 主机（非 push2his 东财），实测稳定。见 app/services/datasource/qvix.py。
     "akshare_qvix": ProviderSpec((("akshare", "tushare_provider"),), 20),

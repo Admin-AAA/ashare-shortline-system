@@ -47,10 +47,10 @@ def _call(dataset: str, fn, *a, **kw):
 
 
 def _f(v: Any) -> float:
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return 0.0
+    """归一化委托到 :mod:`datasource.adapter`（架构优化项①：同一逻辑不再各写一份）。"""
+    from app.services.datasource.adapter import to_float
+
+    return to_float(v)
 
 
 def _hms(v: Any) -> str:

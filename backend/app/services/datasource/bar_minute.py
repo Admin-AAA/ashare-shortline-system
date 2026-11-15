@@ -105,7 +105,29 @@ def gateway() -> DatasetGateway:
     return _GATEWAY
 
 
-def fetch(code: str, start_date: str, end_date: str, freq: str, trace: Any = None) -> GatewayResult:
+def fetch(
+    code: str, start_date: str, end_date: str, freq: str, trace: Any = None, *, use_cache: bool = True
+) -> GatewayResult:
+    """ ``bar.minute`` 唯一入口。
+
+    ``use_cache=True``（默认）时先走本地按月 parquet 缓存（优化项③）：命中直接返回、缺失才
+    向上游补并落盘——回测/复盘重复取同一段历史不会再打上游。内部 ``minute_cache`` 补数时
+    传 ``use_cache=False`` 走纯网关，避免自己调自己。
+    """
+    if use_cache:
+        from app.services.datasource import minute_cache
+
+        cached, meta, upstream = minute_cache.serve(code, start_date, end_date, freq, trace)
+        if cached:
+            return GatewayResult(
+                cached, "minute_cache",
+                [{"provider": "minute_cache", "outcome": "success", "rows": len(cached),
+                  "months_cached": len(meta.get("months_cached") or []),
+                  "months_fetched": len(meta.get("months_fetched") or []),
+                  "empty_months": meta.get("empty_months") or []}],
+            )
+        if upstream is not None:
+            return upstream   # 上游确实没数据：直接透传它的 attempts，避免再打一次
     return gateway().fetch_first(DATASET, {
         "code": code, "start_date": start_date, "end_date": end_date, "freq": freq, "trace": trace,
     })

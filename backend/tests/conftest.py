@@ -157,15 +157,39 @@ class ProductionPrefectDispatchBlocked(RuntimeError):
 @pytest.fixture(autouse=True)
 def _reset_gateway_breakers():
     """Gateway breakers are module-level singletons: isolate per test (failure kinds now accumulate)."""
+    try:
+        from app.services.datasource.gateway import _HEALTH
+
+        _HEALTH.reset()
+    except Exception:  # noqa: BLE001
+        pass
     yield
     try:
         from app.services.datasource.cache import clear_fresh
-        from app.services.datasource.gateway import reset_all_breakers
+        from app.services.datasource.gateway import _HEALTH, reset_all_breakers
 
         reset_all_breakers()
         clear_fresh()
+        _HEALTH.reset()   # 自适应路由的健康档案同样是模块级状态，必须逐测隔离
     except Exception:  # noqa: BLE001
         pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_minute_cache(tmp_path, monkeypatch):
+    """分钟线缓存默认关闭：它是"落盘的持久状态"，开着会让不同测试互相污染真实数据目录。
+
+    确需验证缓存行为的测试显式 ``monkeypatch.setattr(minute_cache, "enabled", lambda: True)``
+    并把 ``cache_root`` 指到 tmp_path（见 tests/test_datasource_optimization_20261115.py 的 cache_dir）。
+    """
+    try:
+        from app.services.datasource import minute_cache
+
+        monkeypatch.setattr(minute_cache, "enabled", lambda: False)
+        monkeypatch.setattr(minute_cache, "cache_root", lambda: tmp_path / "minute_cache")
+    except Exception:  # noqa: BLE001
+        pass
+    yield
 
 
 @pytest.fixture(autouse=True)

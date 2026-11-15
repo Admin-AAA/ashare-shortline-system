@@ -27,8 +27,12 @@ def _frame():
 def env(monkeypatch):
     import tushare as ts
 
+    from app.services.datasource import ths_client
+
     monkeypatch.setattr(ts, "realtime_quote", lambda ts_code: _frame()[_frame()["TS_CODE"].isin(ts_code.split(","))].reset_index(drop=True), raising=False)
     monkeypatch.setattr(gw, "_db_disabled_keys", lambda: set())
+    # ths 实时行情 2026-11-15 接入（紧跟 rt_k），本文件回放的是 ths 之前的链，统一关掉
+    monkeypatch.setattr(ths_client, "is_enabled", lambda: False)
     monkeypatch.setattr(sr, "_GATEWAY", None)
     monkeypatch.setattr(qr, "_GATEWAY", None)
 

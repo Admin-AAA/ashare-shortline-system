@@ -246,6 +246,63 @@ def default_deadline(dataset: str) -> float:
     return _setting("datasource_deadline_default_seconds", 120.0)
 
 
+class _ProviderHealth:
+    """进程内 provider 健康档案：连续失败次数 + 成功延迟 EWMA。
+
+    只做两件事，都很保守：
+
+    * **失败后置**（优化项②）：一个源连续失败后，下次不再排在链首空耗超时，直接挪到
+      队尾；一旦成功立刻清零恢复原位。默认顺序因此保持不变 —— 没历史记录时所有源同分，
+      排序退化为稳定排序，"测试里锁定的链顺序"不会被悄悄改掉。
+    * **延迟观测**：仅记录、供日志排查，不参与排序（rt_k 比 sina 慢但字段全，不能因为
+      延迟把它挤到后面）。
+
+    ``ttl`` 内的记录才算数，避免一次故障永久改变链路。
+    """
+
+    ttl_seconds = 300.0
+
+    def __init__(self) -> None:
+        self._data: dict[tuple[str, str], dict[str, float]] = {}
+
+    def ttl(self) -> float:
+        """当前 TTL：``datasource_health_ttl_seconds`` 优先，读不到配置就用类默认值。"""
+        return float(_setting("datasource_health_ttl_seconds", self.ttl_seconds))
+
+    def record_success(self, provider: str, dataset: str, latency_s: float) -> None:
+        key = (provider, dataset)
+        prev = self._data.get(key) or {}
+        ewma = float(prev.get("ewma") or 0.0)
+        alpha = 0.3
+        self._data[key] = {
+            "fails": 0.0,
+            "ewma": latency_s if ewma <= 0 else (alpha * latency_s + (1 - alpha) * ewma),
+            "ts": time.monotonic(),
+        }
+
+    def record_failure(self, provider: str, dataset: str) -> None:
+        key = (provider, dataset)
+        prev = self._data.get(key) or {}
+        self._data[key] = {
+            "fails": min(float(prev.get("fails") or 0.0) + 1.0, 9.0),
+            "ewma": float(prev.get("ewma") or 0.0),
+            "ts": time.monotonic(),
+        }
+
+    def snapshot(self, provider: str, dataset: str) -> tuple[int, float]:
+        """``(连续失败数, 成功延迟 EWMA)``；过期记录视为健康。"""
+        item = self._data.get((provider, dataset))
+        if not item or (time.monotonic() - float(item.get("ts") or 0.0)) > self.ttl():
+            return 0, 0.0
+        return int(item.get("fails") or 0), float(item.get("ewma") or 0.0)
+
+    def reset(self) -> None:  # 测试/排障用
+        self._data.clear()
+
+
+_HEALTH = _ProviderHealth()
+
+
 class _Budget:
     def __init__(self, dataset: str, deadline_s: float | None) -> None:
         self.until = time.monotonic() + (default_deadline(dataset) if deadline_s is None else float(deadline_s))
@@ -253,6 +310,36 @@ class _Budget:
 
     def remaining(self) -> float:
         return self.until - time.monotonic()
+
+    def step_timeout(self, index: int, total: int) -> float:
+        """单跳预算上限（优化项②）：首选 provider 拿满剩余预算，后备按候选数均分。
+
+        原先是"所有 provider 共享一个 deadline"：链首一个慢源（如退役前的小石、限流的
+        promax）吃掉 2.5s，后面的快源还没被调用就整链超时。加上单跳上限后，慢源最多耗掉
+        自己那一份，剩下的预算一定留给后备源。
+
+        首选源拿 ``datasource_first_step_share``（默认 60%）—— 不能拿满：链首恰好是最慢的那个
+        源时，"主源优先"会退化成"主源独占"，后备源一个都轮不上（rt_k 自身硬截止 1.5s，
+        实时行情 3s 预算下 60% 即 1.8s，够用）。后备源按剩余候选均分，但单跳不超过剩余预算的
+        ``datasource_backup_step_share``（默认 50%），保证后面还有源拿得到时间；下限
+        ``datasource_step_min_seconds``，且不低于 actual remaining。
+
+        以实时行情 3s / 三源全挂为例：1.8s → 0.8s → 剩下 0.4s 仍然调用第三源（改动前第三源
+        拿 0 剩余直接记 deadline，整单返回空）。
+        """
+        remaining = self.remaining()
+        if remaining <= 0 or total <= 1:
+            return remaining
+        floor = min(float(_setting("datasource_step_min_seconds", 0.8)), remaining)
+        if index <= 0:
+            share = remaining * float(_setting("datasource_first_step_share", 0.6))
+        else:
+            left = max(1, total - index)
+            share = min(
+                remaining / left * float(_setting("datasource_step_share", 2.0)),
+                remaining * float(_setting("datasource_backup_step_share", 0.5)),
+            )
+        return max(floor, min(remaining, share))
 
 
 _POOL_WORKERS = 32
@@ -396,10 +483,29 @@ class DatasetGateway:
                 _metrics.inc("dataset_requests", dataset=dataset, provider=p.name, outcome=ErrorKind.DISABLED.value)
                 continue
             out.append(p)
-        return out
+        return self._order(dataset, out)
 
-    def _fetch_once(self, p: DataProvider, dataset: str, query: Mapping[str, Any], budget: _Budget) -> Any:
+    def _order(self, dataset: str, providers: list[DataProvider]) -> list[DataProvider]:
+        """失败过的 provider 后置，其余保持声明顺序（优化项②）。
+
+        没历史记录时 ``snapshot`` 返回 ``(0, 0.0)``，排序 key 全是 ``(0, 原下标)``，等价于
+        原顺序 —— 所以首次调用、单测锁定顺序都不受影响。用 ``datasource_adaptive_routing=false``
+        可整体关掉。
+        """
+        if len(providers) <= 1 or not _setting("datasource_adaptive_routing", True):
+            return providers
+        position = {id(p): i for i, p in enumerate(providers)}
+        return sorted(
+            providers,
+            key=lambda p: (1 if _HEALTH.snapshot(p.name, dataset)[0] else 0, position[id(p)]),
+        )
+
+    def _fetch_once(
+        self, p: DataProvider, dataset: str, query: Mapping[str, Any], budget: _Budget, cap: float | None = None
+    ) -> Any:
         remaining = budget.remaining()
+        if cap is not None and cap < remaining:
+            remaining = cap
         if remaining <= 0:
             raise DataSourceError(ErrorKind.TIMEOUT, "request deadline exhausted", provider=p.name, dataset=dataset)
         rows = _call_with_timeout(lambda: p.fetch(dataset, query), remaining)
@@ -409,7 +515,9 @@ class DatasetGateway:
             raise DataSourceError(ErrorKind.BAD_DATA, "empty during trading session", provider=p.name, dataset=dataset)
         return rows
 
-    def _fetch_with_retry(self, p: DataProvider, dataset: str, query: Mapping[str, Any], budget: _Budget) -> Any:
+    def _fetch_with_retry(
+        self, p: DataProvider, dataset: str, query: Mapping[str, Any], budget: _Budget, cap: float | None = None
+    ) -> Any:
         """tenacity retry for transient kinds, bounded by the shared per-request retry budget and deadline."""
         import tenacity
 
@@ -425,10 +533,11 @@ class DatasetGateway:
             wait=tenacity.wait_exponential(multiplier=0.1, max=1.0),
             reraise=True,
         )
-        return retrying(lambda: self._fetch_once(p, dataset, query, budget))
+        return retrying(lambda: self._fetch_once(p, dataset, query, budget, cap))
 
     def _attempt(
-        self, p: DataProvider, dataset: str, query: Mapping[str, Any], attempts: list, budget: _Budget | None = None
+        self, p: DataProvider, dataset: str, query: Mapping[str, Any], attempts: list,
+        budget: _Budget | None = None, cap: float | None = None,
     ) -> Any:
         budget = budget or _Budget(dataset, None)
         if budget.remaining() <= 0:
@@ -442,9 +551,10 @@ class DatasetGateway:
             return None
         t0 = time.perf_counter()
         try:
-            rows = self._fetch_with_retry(p, dataset, query, budget)
+            rows = self._fetch_with_retry(p, dataset, query, budget, cap)
         except Exception as exc:  # noqa: BLE001 - classified, recorded, next provider tried
             kind = classify_exception(exc)
+            _HEALTH.record_failure(p.name, dataset)
             if kind not in NON_BREAKER_KINDS:
                 breaker.record_failure(
                     kind=BREAKER_KIND.get(kind), recovery_seconds=getattr(exc, "retry_after_seconds", None)
@@ -457,10 +567,12 @@ class DatasetGateway:
             _metrics.inc("dataset_requests", dataset=dataset, provider=p.name, outcome="empty")
             return rows
         breaker.record_success()
+        elapsed = time.perf_counter() - t0
+        _HEALTH.record_success(p.name, dataset, elapsed)
         outcome = "success"
         attempts.append({"provider": p.name, "outcome": outcome, "rows": len(rows or ())})
         _metrics.inc("dataset_requests", dataset=dataset, provider=p.name, outcome=outcome)
-        _metrics.observe("dataset_latency", time.perf_counter() - t0, dataset=dataset, provider=p.name)
+        _metrics.observe("dataset_latency", elapsed, dataset=dataset, provider=p.name)
         return rows
 
     def fetch_first(
@@ -498,8 +610,9 @@ class DatasetGateway:
         """First provider returning a non-empty answer wins (whole call bounded by deadline_s)."""
         attempts: list[dict[str, Any]] = []
         budget = _Budget(dataset, deadline_s)
-        for p in self._candidates(dataset, query):
-            rows = self._attempt(p, dataset, query, attempts, budget)
+        cands = self._candidates(dataset, query)
+        for i, p in enumerate(cands):
+            rows = self._attempt(p, dataset, query, attempts, budget, cap=budget.step_timeout(i, len(cands)))
             if rows:
                 return GatewayResult(rows, p.name, attempts)
         return GatewayResult([], None, attempts)
@@ -561,11 +674,15 @@ class DatasetGateway:
         budget = _Budget(dataset, deadline_s)
         merged: dict[str, Any] = {}
         used: list[str] = []
-        for p in self._candidates(dataset, query):
+        cands = self._candidates(dataset, query)
+        for i, p in enumerate(cands):
             missing = [k for k in keys if k not in merged]
             if not missing:
                 break
-            rows = self._attempt(p, dataset, {**query, "keys": missing}, attempts, budget) or {}
+            rows = self._attempt(
+                p, dataset, {**query, "keys": missing}, attempts, budget,
+                cap=budget.step_timeout(i, len(cands)),
+            ) or {}
             added = False
             for k in missing:
                 if k in rows:

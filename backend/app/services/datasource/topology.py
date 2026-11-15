@@ -24,6 +24,7 @@ LABELS: dict[str, str] = {
     "sina_kline": "新浪分钟", "tencent_mkline": "腾讯分钟", "akshare": "AKShare",
     "eastmoney": "东方财富", "cninfo": "巨潮", "cninfo_search": "巨潮全文检索",
     "akshare_qvix": "QVIX波动率",
+    "ths_realtime": "同花顺实时", "ths_block": "同花顺板块广度", "ths_news": "同花顺快讯",
     "promax": "Promax", "quantdata": "QuantData", "teajoin": "Teajoin",
 }
 # Tushare 路由下游的接口：这些 provider 还受 tushare:<pro>:<api> 路由熔断约束。
@@ -35,7 +36,7 @@ _SAMPLE_QUERIES = ({}, {"freq": "1min"}, {"freq": "5min"})
 
 
 def _gateway_datasets() -> list[dict[str, Any]]:
-    from app.services.datasource import akshare_backup, bar_minute, quote_realtime, sina_realtime
+    from app.services.datasource import akshare_backup, bar_minute, quote_realtime, sector_breadth, sina_realtime
 
     return [
         {"key": "quote.realtime", "label": "实时行情", "mode": "fill", "gw": quote_realtime.gateway()},
@@ -43,6 +44,8 @@ def _gateway_datasets() -> list[dict[str, Any]]:
         {"key": "bar.minute", "label": "分钟 K 线", "mode": "first", "gw": bar_minute.gateway()},
         {"key": akshare_backup.BACKUP_ITEM_KEY, "label": "Tushare 灾备", "mode": "first", "gw": akshare_backup.backup_gateway(),
          "breaker_prefix": "tushare.", "note": "Tushare 路由全部失败时的兜底（日线/交易日历等）"},
+        {"key": sector_breadth.DATASET, "label": "板块广度", "mode": "first", "gw": sector_breadth.gateway(),
+         "note": "同花顺板块上涨/下跌/涨停/跌停家数与领涨股；按需传板块代码，不传则扫行业板块（约 90 个）"},
     ]
 
 

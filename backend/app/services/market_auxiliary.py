@@ -166,6 +166,8 @@ def _fetch_news(source: str, code: str, settings: Any, trade_date: str | None = 
         return _fetch_tushare_news(code, settings, trade_date=trade_date)
     if source == "eastmoney":
         return _fetch_eastmoney_news(code, settings)
+    if source == "ths":
+        return _fetch_ths_news(code, settings)
     return []
 
 
@@ -451,6 +453,75 @@ def _fetch_tushare_news(code: str, settings: Any, trade_date: str | None = None)
 def _stable_article_id(source: str, code: str, announce_date: str, title: str, url: str) -> str:
     raw = "|".join([source, code, announce_date, title, url])
     return sha1(raw.encode("utf-8")).hexdigest()[:40]
+
+
+# ── 同花顺快讯（P0 独立新闻源，2026-11-15 接入） ────────────────────────
+
+_THS_PROPS_RE = None  # 延迟编译，模块导入不引入 re
+
+
+def _ths_properties(raw: str) -> dict[str, str]:
+    global _THS_PROPS_RE
+    import re
+
+    if _THS_PROPS_RE is None:
+        _THS_PROPS_RE = re.compile(r"(\w+)=([^\n]+)")
+    return dict(_THS_PROPS_RE.findall(str(raw or "")))
+
+
+def _fetch_ths_news(code: str, settings: Any) -> list[dict[str, Any]]:
+    """同花顺 7x24 快讯（``thsdk.news``）。
+
+    ⚠️ 实测限制：``news(code=..., market=...)`` 返回的是**最近 20 条 7x24 市场快讯**，``code`` 只影响
+    返回码值、不做真正过滤（实测查 600519 拿到的是联合国气候大会、乌克兰等宏观快讯）。所以它
+    **不能替代东财的个股公告**，只适合当「市场级突发/政策面」的补充源。
+
+    因此本分支默认**不在** ``news_sources`` 默认链里（默认仍是 tushare,eastmoney）；需要时应显式配置
+    ``ASHARE_NEWS_SOURCES=tushare,eastmoney,ths``，并自行评估对 ``news_risk_count`` 的影响。
+    """
+    from app.services.datasource import ths_client
+
+    if not ths_client.is_enabled():
+        return []
+    try:  # 「系统 → 配置」里关掉 同花顺/资讯 时不取数
+        from app.services.datasource.gateway import _db_disabled_keys
+
+        if ("ths", "news") in _db_disabled_keys():
+            return []
+    except Exception:  # noqa: BLE001 - 开关读取失败按开启处理，与网关语义一致
+        pass
+
+    venue = ths_client.venue_for(code)
+    if not venue:
+        return []
+    rows = ths_client.call("news", code=code, market=venue, dataset="aux.news")
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        title = str(row.get("Title") or "").strip()
+        if not title:
+            continue
+        props = _ths_properties(row.get("Properties", ""))
+        stamp = props.get("ctime") or row.get("Time")
+        announce_date = ""
+        try:
+            from datetime import datetime
+
+            announce_date = datetime.fromtimestamp(int(stamp)).strftime("%Y-%m-%d")
+        except (TypeError, ValueError, OSError):
+            announce_date = ""
+        sentiment = listed_sentiment(title, NEWS_NEGATIVE, NEWS_POSITIVE)
+        items.append({
+            "source": "ths",
+            "article_id": f"ths-{row.get('ID') or sha1(title.encode()).hexdigest()[:16]}",
+            "code": code,
+            "announce_date": announce_date,
+            "title": title,
+            "summary": str(props.get("summ") or ""),
+            "category": "news",
+            "sentiment": sentiment,
+            "is_risk_warning": sentiment == "negative",
+        })
+    return items
 
 
 # ── 东方财富新闻 ──────────────────────────────────────────────────────

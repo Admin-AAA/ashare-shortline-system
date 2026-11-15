@@ -82,6 +82,14 @@ class Settings(BaseSettings):
     # 通达信公开 HQ（quote.realtime，新浪之后；见 datasource/tdx_quote.py）。无密钥。
     tdx_quote_enabled: bool = True              # ASHARE_TDX_QUOTE_ENABLED=false 整体关闭
     tdx_quote_hosts: str = ""                   # ASHARE_TDX_QUOTE_HOSTS=ip:port,ip:port；空=内置公开列表
+    # 同花顺 thsdk（三条 P0 接入点：板块广度 / 实时行情冗余 / 个股快讯，见 datasource/ths_client.py）。
+    # 游客账户自动可用，但官方明确「可能随时失效，不适合生产环境」；生产请配账号三件套。
+    ths_enabled: bool = True                    # ASHARE_THS_ENABLED=false 整体关闭（三条接入点同时失效）
+    ths_username: str = ""                      # ASHARE_THS_USERNAME；留空 = 临时游客账户
+    ths_password: str = Field(default="", repr=False)  # ASHARE_THS_PASSWORD
+    ths_mac: str = ""                           # ASHARE_THS_MAC；账号绑定设备时必填
+    ths_min_interval_seconds: float = 0.06      # 官方限频 20ms/次，留 3 倍余量
+    ths_timeout_seconds: float = 5.0            # 单次调用超时；超过按 TIMEOUT 交给网关熔断
     tushare_teajoin_intraday_yield: bool = False
     tushare_teajoin_intraday_read_timeout_seconds: float = 15.0
     # * promax 额度专留实时行情（rt_k/rt_min）：其余接口的链路里只要还有别的上游，就不把 promax 放进去；
@@ -116,6 +124,18 @@ class Settings(BaseSettings):
     datasource_deadline_realtime_seconds: float = 3.0
     datasource_deadline_default_seconds: float = 120.0
     datasource_retry_budget: int = 2
+    # 链路自适应（优化②）：失败过的 provider 在 TTL 内排到队尾；单跳预算按候选数分配，
+    # 避免链首慢源独占整链 deadline。三项 share 都是"占当前剩余预算的比例"。
+    datasource_adaptive_routing: bool = True
+    datasource_health_ttl_seconds: float = 300.0
+    datasource_first_step_share: float = 0.6
+    datasource_backup_step_share: float = 0.5
+    datasource_step_share: float = 2.0
+    datasource_step_min_seconds: float = 0.8
+    # 分钟线按需缓存（优化③）：按月 parquet 落在 backend/data/minute_cache，只缓存已走完的月份；
+    # 不囤全市场，回测前用 ``python -m app.services.datasource.minute_cache --codes ...`` 预热。
+    minute_cache_enabled: bool = True
+    minute_cache_dir: str = ""
     # 按数据集覆盖缓存 TTL（秒），如 "quote.realtime=5,bar.minute=60"；默认见 datasource/cache.py
     datasource_cache_ttl: str = ""
     tushare_provider_max_attempts: int = 2
@@ -174,6 +194,8 @@ class Settings(BaseSettings):
     concept_sector_sources: str = "tushare"
     capital_flow_sources: str = "tushare"
     dragon_tiger_sources: str = "tushare"
+    # ths 只提供「7x24 市场级快讯」，与个股无关（实测查询 600519 返回的是宏观快讯），不并入默认链，
+    # 避免污染 news_risk_count；需要时显式配置 news_sources="tushare,eastmoney,ths" 或 "ths"。
     news_sources: str = "tushare,eastmoney"
     limit_up_cache_ttl_seconds: int = 3600
     concept_sector_cache_ttl_seconds: int = 3600

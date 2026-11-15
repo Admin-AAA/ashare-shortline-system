@@ -34,14 +34,19 @@ def test_default_deadlines():
 
 
 def test_realtime_whole_request_under_3s(monkeypatch):
+    """整链仍压在 3s 内；单跳预算（2026-11-15 优化②）让三个源都真正被尝试，而不是前两跳吃光。"""
     monkeypatch.setattr(g, "in_trading_session", lambda now=None: False)
+    g._HEALTH.reset()
     hang = lambda n, q: time.sleep(10)
     a, b, c = P("a", hang), P("b", hang), P("c", lambda n, q: {"600000": ROW})
     t0 = time.perf_counter()
     r = _gw(a, b, c).fetch_fill("quote.realtime", {}, ["600000"])
     dt = time.perf_counter() - t0
     assert dt < 3.3
-    assert [x["outcome"] for x in r.attempts][:2] == ["timeout", "deadline"]
+    # 改动前：a 独占 3s → b 拿 0 剩余记 "deadline"、c 根本没被调用、整单返回空。
+    assert [x["outcome"] for x in r.attempts] == ["timeout", "timeout", "success"]
+    assert r.provider == "c" and r.rows["600000"] is ROW
+    g._HEALTH.reset()
 
 
 def test_explicit_deadline_override():

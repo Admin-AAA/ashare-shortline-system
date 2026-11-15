@@ -48,10 +48,10 @@ def _raw_frame(ts_codes: list[str]) -> pd.DataFrame:
 
 
 def _f(v: Any) -> float:
-    try:
-        return float(v) if v is not None and v == v else 0.0
-    except (TypeError, ValueError):
-        return 0.0
+    """归一化委托到 :mod:`datasource.adapter`（架构优化项①：同一逻辑不再各写一份）。"""
+    from app.services.datasource.adapter import to_float
+
+    return to_float(v)
 
 
 def normalize_rows(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
