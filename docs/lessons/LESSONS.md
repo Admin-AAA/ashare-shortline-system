@@ -2060,3 +2060,38 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 自动护栏：`tests/test_datacenter_complete_rows.py`（链序/换源/半量合并/退避探测）、`tests/test_data_health_service.py::test_incomplete_minute_kbar_dates_*`、`tests/test_data_gap_remediation_service.py::test_minute_kbar_plan_includes_incomplete_days_not_just_missing_dates`、`tests/test_margin_detail_fill.py`；巡检项 `db:*` 的行数 cliff 判定。
 - 吸收位置：`app/services/datasource/complete_rows.py`、`app/services/margin_detail_fill.py`、`app/services/data_health_service.py::_incomplete_minute_kbar_dates`、`app/services/data_gap_remediation_service.py::_build_remediation_plan`、`backend/scripts/repair_thin_minute_days.py`。
 - 相关：L-096（canonical 证据口径）、L-166（capital_flow 只补前 N 只同类缺陷）、`docs/reviews/datasource-availability-map-2026-09-14.md`（xiaoshi 在 09-14 仍可用，说明这是后续失效）。
+
+## L-201 右尾驱动的中线策略：止盈/止损只改路径、不改期望；「达到平均收益就走」和「紧移动止损」都在系统性砍利润
+
+- 状态：active
+- 适用：所有中线/中长线持仓期策略（固定持有 15~60 日、事件驱动、收益由极少数大赢家贡献）的任何离场规则改动；以及「用历史平均收益当止盈线」「加移动保护止损提升收益」这两类提案。
+- 证据（`backend/output/research/exit_target/`、`backend/output/research/exit_stop/`，脚本 `exit_target_research.py` / `exit_stop_research.py` / `exit_target_engine_check.py`；同笔配对，唯一差别是离场时点，成本 0.3%，T+1，日内 low 触发、跳空按开盘、跌停封死顺延，峰值只用当日及以前收盘）：
+  - 样本：75 个中线策略前缀 / 42,753 条逐笔 / 15,490 条唯一持仓路径，2019-01~2026-10；基准（固定持 20 交易日）全样本 +1.96%/笔、样本外（2024+）+3.31%、波动 15.85%、P10 −13.84%。
+  - **达标离场（浮盈首次达自身历史均值当日尾盘卖）：75/75 个策略全部变差，0 个变好**，中位数 −1.08pp；样本外 75 个里仅 1 个为正且只有 +0.04pp；持有日中位数 20 日 → 8.7 日。用户直觉中的「稳定策略」同样变差（RPU20 −1.55pp、FTZ −1.70pp、IO −1.62pp、DINCVOL −1.49pp）。阈值 1%→20% 扫描，每笔均值从 +0.59% 单调升到 +1.51%，**任何 <15% 的固定止盈线都低于持满基准**。
+  - **21 条止损规则（固定/保本/移动，含开发期选参）没有一条提高样本外每笔收益**：基准 3.31 → 保本10% 3.27（−0.04）→ 移动8%/8% 3.12 → 移动5%/5% 2.62 → 固定−8% 1.99 → 移动3%/3% 1.80，单调权衡：越紧波动/P10/持有期降得越多、每笔均值掉得越多。逐策略开发期选参后样本外仍为正仅 11/75，提升 >0.5pp 仅 1 个。
+  - 严格口径（开发期正 + 样本外正 + 样本外三个分段全正）只剩 **5 个「策略×规则」/2 个策略**（NCSTDVOL、ROASUEGVOL）。随机期望：若三项条件近似独立、各 1/2，则 75×21×(1/2)³ ≈ **197 个**；即便按最保守的 5%~8% 折算也有 75~125 个。实际 5 个远低于该量级，应判为**系统性负效应**而非发现。
+  - 机制：FA 基准去掉最高 5% 的交易，每笔从 +1.38% 掉到 −1.02%（去 10% → −2.32%，去 20% → −4.37%）；已触发样本锁定 +3.63%，同批若持到第 20 日 +5.26%（每笔少赚 1.63pp）；未触发的 719 笔平均 −11.76% 且完全没被处理 —— 规则只卖赢家、不救输家。且「策略平均收益」本身不稳定：EA 开发期 +0.36%/笔 vs 2024 后 +4.38%/笔（差 12 倍）。
+  - 固定持有期扫描（同一路径池）：3 日 +0.13 / 5 日 +0.29 / 10 日 +0.81 / 15 日 +1.21 / **20 日 +1.70** / 25 日 +1.85 / 30 日 +2.26；但**每持仓日收益在 20 日见顶（0.085%/日）**，25/30 日降到 0.074/0.075。
+- 永久规则：
+  - **(a) 离场规则的收益类提案必须先看右尾依赖度：报告「去掉最高 5%/10%/20% 后每笔均值」。若去尾后转负，则该策略的一切提前离场/紧止损都只能用「风险预算」论证，禁止用「提高收益/提高稳定性=更好」表述。**
+  - **(b) 评价止损只能按两个独立维度分别判：期望收益（每笔均值/样本外）与风险（波动/回撤/P10/持有期）。「波动下降」不能抵扣「每笔均值下降」，两者不可加权成一个总分。**
+  - **(c) 中线固定持有 20 日不是「平均持有 20 天」，是设计参数，且正好落在单位持仓时间收益峰值；缩短持有期方向的改动（止盈、达标离场、紧止损）默认预期为负，延长到 25~30 日换绝对收益才是有利方向。**
+  - **(d) 任何「某策略×某参数变好」的结论，必须过「开发期选参 + 样本外 + 全分段同号 + 相邻参数同时成立」四关，并与随机期望数量对比；只满足单点的候选只能进候选池，不得上线。**
+- 吸收位置：`backend/scripts/midterm/exit_target_research.py`、`backend/scripts/midterm/exit_stop_research.py`、`backend/scripts/midterm/exit_target_engine_check.py`、`backend/output/research/exit_target/conclusion.md`、`backend/output/research/exit_stop/conclusion.md`。
+- 相关：L-096（canonical 证据口径）、L-109（弱势×低 ivol 否决）、`docs/lessons/VALIDATION.md`（教训可信度分级）。
+
+## L-202 向量化模拟返回的是「逐笔数组」，不得再按路径索引二次索引；研究脚本必须自证两次运行结果一致
+
+- 状态：active
+- 适用：任何「records（逐笔/逐信号）→ paths（去重后的价格路径）→ 向量化模拟」的研究/回测脚本；以及所有会输出「策略×参数」对照表的研究产物。
+- 证据：
+  - `exit_stop_research.py` 首版写 `sims[name] = {k: s[k][hid] for k in ("ret","days","hit")}`。`s[k]` 已按 **records 顺序**算好（长度 = 笔数），`hid` 是 records → 唯一路径的映射（长度 = 笔数但取值是路径号、且大量重复），再索引一次等于**按路径号乱序取值**。症状：同一输入连跑三次，保本止损的开发期每笔均值分别是 2.28 / 2.77 / 2.08，样本外结论随之漂移。
+  - 修复为 `sims[name] = s[k]` 后，连跑两次全部校验和一致；另写一套独立的**慢速逐路径 for 循环实现**做交叉验证，四类规则（固定止损/保本/移动/达标尾盘）的收益、持有日、触发标记逐笔零差异，确认向量化实现本身无误。
+  - 同批缺陷：组合表把「逐笔笔数」当成「组合开仓数」打印（两者在 K=20 名额、每日最多新开 5 只下必然不同），会让人误判名额没生效。
+- 永久规则：
+  - **(a) `hid`/`path_id` 这类索引只能用于「取输入」，不能用于「回写输出」。向量化模拟的返回数组与输入 records 一一对应；任何 `result[hid]` 写法都必须先自问「这个数组已经是 per-record 还是 per-path」。**
+  - **(b) 需要按路径聚合时用 `np.add.reduceat`/`group_by` 显式聚合，并在聚合前后 `assert` 长度与唯一值数量，禁止用花式索引静默实现。**
+  - **(c) 研究脚本交付前必须做两项自检：① 同一命令连跑两次，关键汇总数字完全一致（数据无并行写入时）；② 至少一套规则用独立的朴素实现（逐笔 for 循环）对拍，收益/持有日/触发标记零差异。两项都没做过的研究结论不得写进 docs 或用于上线决策。**
+  - **(d) 表格列名必须写清计数口径（逐笔 n / 唯一路径 n / 组合开仓 n），不同口径不得共用一列。**
+- 吸收位置：`backend/scripts/midterm/exit_stop_research.py`（`sims[name] = s[k]`、组合表拆列）、`backend/scripts/midterm/exit_target_research.py`。
+- 相关：L-201（同一批研究的结论条目）、L-096（证据口径）。
