@@ -83,7 +83,7 @@ def entry_day_unchecked(
     run_ids: tuple[str, ...],
 ) -> list[dict[str, Any]]:
     """今天处于入场窗口（推荐后第 1 个交易日；或第 2 日且第 1 日被回测规则挡住）却还没被检查的未结算推荐。"""
-    from app.services.execution_confirmation import _first_trade_day_status, is_unsettled_formal_rec
+    from app.services.execution_confirmation import day1_status_in_window, is_unsettled_formal_rec
     from app.services.outcome_simulation import _is_intraday_recommendation
 
     if not run_ids:
@@ -101,11 +101,14 @@ def entry_day_unchecked(
             continue
         days = _market_days_after(db, str(rec.trade_date), today)
         age = len(set(days) | {today})
-        if age > entry_window_days_for_rec(rec):
+        window_days = entry_window_days_for_rec(rec)
+        if age > window_days:
             continue
         if age >= 2:
-            day1_status, _day1 = _first_trade_day_status(
-                db, str(rec.code), str(rec.trade_date), today, float(rec.recommend_price or 0)
+            # 与第 1 日状态判定共用同一入口，确保 ST 一字板按 ST 幅度识别（缺 is_st 会把
+            # 第 1 日 5% 一字板误判成可买，从而漏掉第 2 日的覆盖检查）。
+            day1_status, _day1 = day1_status_in_window(
+                db, rec, signal_age_trade_days=age, window_days=window_days, data_as_of=today,
             )
             # 第 1 日可买 → 今天不在窗口；第 1 日缺数据 → 走 entry_day1_bar_missing 告警，不算漏查
             if day1_status not in SKIPPED_STATUSES:
@@ -236,6 +239,12 @@ def annotate_unchecked_expiries(db: Session, assessments: list[dict[str, Any]]) 
             select(RecommendationExecutionState).where(RecommendationExecutionState.recommendation_id.in_(ids))
         ).all()
     }
+    recs = {
+        str(r.recommendation_id): r
+        for r in db.scalars(
+            select(Recommendation).where(Recommendation.recommendation_id.in_(ids))
+        ).all()
+    }
     changed = 0
     for item in expired:
         signal_date = str(item.get("trade_date") or (item.get("original") or {}).get("trade_date") or "")
@@ -245,7 +254,31 @@ def annotate_unchecked_expiries(db: Session, assessments: list[dict[str, Any]]) 
         later = _market_days_after(db, signal_date, data_as_of) or ([data_as_of] if data_as_of > signal_date else [])
         if not later:
             continue
-        entry_day = later[0]
+        rec = recs.get(str(item.get("recommendation_id")))
+        window_days = max(1, entry_window_days_for_rec(rec)) if rec is not None else 1
+        entry_days = later[:window_days]
+        if not entry_days:
+            continue
+        entry_day = entry_days[0]
+        if len(entry_days) >= 2 and rec is not None:
+            # 2 日窗口：第 1 日被一字板/停牌挡住时，真正的入场日是第 2 日。
+            # 只检查第 1 日会把「第 2 日已正常轮询」误报成漏查（2026-10-27 起告警噪音）。
+            from app.services.execution_confirmation import (
+                _first_trade_day_status,
+                _json_mapping,
+                _rec_is_st,
+            )
+
+            day1_status, _day1 = _first_trade_day_status(
+                db,
+                str(rec.code),
+                signal_date,
+                data_as_of,
+                float(rec.recommend_price or 0),
+                is_st=_rec_is_st(rec, _json_mapping(getattr(rec, "feature_snapshot_json", None))),
+            )
+            if day1_status in SKIPPED_STATUSES:
+                entry_day = entry_days[1]
         state = states.get(str(item.get("recommendation_id")))
         already_flagged = has_coverage_gap_flag(state)
         if not already_flagged and state is not None and was_checked_in_session(state, entry_day):

@@ -44,6 +44,13 @@ def test_gap_up_over_limit_blocked():
     assert check.blocked and check.rule_id == "entry_gap_up" and not check.inconclusive
 
 
+def test_gap_up_compares_unrounded_value_but_displays_two_decimals():
+    """6.004% 四舍五入是 6.00%：判定必须用原始值，否则盘中误判可买、结算/回测却按跳空挡掉。"""
+    check = check_entry_bar("600000", _bar(10.6004, 10.8, 10.5, 10.7), 10.0, session_closed=False)
+    assert check.blocked and check.rule_id == "entry_gap_up"
+    assert check.observed["gap_pct"] == 6.0  # 展示口径仍是 6.00%
+
+
 def test_one_word_limit_up_intraday_is_inconclusive_and_final_after_close():
     sealed = _bar(11.0, 11.0, 11.0, 11.0)
     intraday = check_entry_bar("600000", sealed, 10.5, session_closed=False)

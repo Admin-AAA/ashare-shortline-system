@@ -16,6 +16,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.time import bj_now
 from app.engine.skill_loader import load_skills, StrategySkill
 from app.engine.strategy_runner import explain_skill_prefilter, run_strategy
 from app.engine.trading_calendar import latest_allowed_quote_date
@@ -323,7 +324,7 @@ def confirm_with_prepared_context(
     code = str(rec.code)
     data_as_of = str(data_as_of or snapshot.get("trade_date") or current.get("latest_trade_date") or "")
 
-    local_now = datetime.now()
+    local_now = bj_now()
     expected_quote_date = latest_allowed_quote_date()
     fresh = data_as_of == expected_quote_date
     entry_window_closed = _entry_window_closed(data_as_of, local_now)

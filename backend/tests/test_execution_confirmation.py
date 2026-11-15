@@ -472,16 +472,16 @@ def test_condition_summary_records_entry_day_check_only():
 
 def _confirm_oversold(db_session, monkeypatch, current_price: float, open_price: float | None = None):
     import json
+    from datetime import timedelta, timezone
     from types import SimpleNamespace
 
     from app.services import execution_confirmation as ec
 
-    class _Now(datetime):
-        @classmethod
-        def now(cls, tz=None):
-            return datetime(2026, 10, 20, 9, 40)
-
-    monkeypatch.setattr(ec, "datetime", _Now)
+    # 盘中/盘后判断统一走北京时间时钟 bj_now（不再用机器本地时间）
+    monkeypatch.setattr(
+        ec, "bj_now",
+        lambda: datetime(2026, 10, 20, 9, 40, tzinfo=timezone(timedelta(hours=8))),
+    )
     monkeypatch.setattr(ec, "latest_allowed_quote_date", lambda: "2026-10-20")
     rec = SimpleNamespace(
         recommendation_id="rec_x", code="002850", name="科达利", trade_date="2026-10-19",

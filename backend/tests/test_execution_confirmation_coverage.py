@@ -1,4 +1,5 @@
 """盘中买入确认覆盖率：入场日漏查要告警、进数据健康，过期原因写明轮询缺口。"""
+import json
 from datetime import datetime, timezone
 
 import pytest
@@ -228,3 +229,46 @@ def test_coverage_gap_flag_not_overwritten_by_later_writes(db):
     cov.annotate_unchecked_expiries(db, [again])
     assert again["condition_summary"]["coverage_gap"] is True
     assert sum(1 for a in db.info["alerts"] if a[0] == "emit") == emits_before
+
+
+# ── 2 日窗口：第 1 日被挡时，入场日是第 2 日；ST 一字板要按 ST 幅度识别 ──────────
+
+def _add_two_day_st_rec(db):
+    # 2026-07-06 前主板 ST 幅度 5%：缺 is_st 会把 5% 一字板误判成可买
+    for day in (9, 10, 11):
+        db.add(TradeCalendar(exchange="SSE", cal_date=f"202606{day:02d}", is_open=True))
+    db.add(Recommendation(
+        recommendation_id="rec_st", run_id="run_a", trade_date="2026-06-09", code="600555",
+        name="*ST测试", recommend_price=10.0, final_score=70.0, bucket="daily-stock-analysis-skill",
+        feature_snapshot_json=json.dumps({"is_st": True, "entry_mode": "target_touch"}),
+        recommended_at=datetime(2026, 6, 9, 23, 0),
+    ))
+    # 第 1 日（06-10）ST 一字涨停 +5%：按 ST 幅度被挡，真正的入场日顺延到 06-11
+    db.add(DailyKbar(code="600555", trade_date="2026-06-10", open=10.5, high=10.5, low=10.5, close=10.5,
+                     volume=100, amount=1e6, pct_chg=5.0))
+    db.commit()
+
+
+def test_two_day_window_st_one_word_day1_is_blocked_and_day2_is_checked(db):
+    _add_two_day_st_rec(db)
+    unchecked = cov.entry_day_unchecked(db, "2026-06-11", run_ids=("run_a",))
+    assert [u["recommendation_id"] for u in unchecked] == ["rec_st"]
+    # 第 2 日（真实入场日）盘中已有检查 → 不再算漏查
+    db.add(RecommendationExecutionState(recommendation_id="rec_st", latest_decision_code="wait",
+                                        latest_checked_at=datetime(2026, 6, 11, 2, 0)))  # 10:00 北京
+    db.commit()
+    assert cov.entry_day_unchecked(db, "2026-06-11", run_ids=("run_a",)) == []
+
+
+def test_expiry_annotation_checks_actual_second_entry_day(db):
+    _add_two_day_st_rec(db)
+    db.add(RecommendationExecutionState(recommendation_id="rec_st", latest_decision_code="wait",
+                                        latest_checked_at=datetime(2026, 6, 11, 2, 0)))  # 第 2 日 10:00 北京
+    db.commit()
+    item = {"recommendation_id": "rec_st", "code": "600555", "trade_date": "2026-06-09",
+            "data_as_of": "2026-06-11",
+            "entry_decision": {"code": "expired", "label": "盘中买点已过执行窗口", "reason": "今日已收盘"},
+            "condition_summary": {"scope": "entry_day"}}
+    # 旧口径只看第 1 日（06-10 没检查）→ 误报轮询缺口；第 2 日已检查过，不该改原因
+    assert cov.annotate_unchecked_expiries(db, [item]) == 0
+    assert item["entry_decision"]["reason"] == "今日已收盘"

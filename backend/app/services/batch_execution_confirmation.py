@@ -28,6 +28,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.time import bj_now
 from app.engine.skill_loader import load_skills
 from app.engine.trading_calendar import latest_allowed_quote_date, normalize_trade_date
 from app.models.tables import Recommendation, RecommendationOutcome, RecommendationRun
@@ -404,7 +405,7 @@ def _compute_batch(
         # 过滤后无可计算记录：直接返回，不调行情数据源（Spec 4.2）。
         return _empty_response(requested_count, settled_skipped, started)
 
-    local_now = datetime.now()
+    local_now = bj_now()
     expected_quote_date = latest_allowed_quote_date()
 
     # 3. 预判 expired：用 expected_quote_date 作为 data_as_of 上界，一次 SQL 批量算

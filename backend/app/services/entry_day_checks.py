@@ -110,7 +110,8 @@ def check_entry_bar(
     pre_close = _f(get("pre_close"))
     if pre_close <= 0 and close > 0:
         pre_close = previous_close_from_price(close, get("pct_chg") or 0)
-    gap_pct = round((open_price / recommend_price - 1) * 100, 2) if recommend_price > 0 and open_price > 0 else None
+    raw_gap_pct = (open_price / recommend_price - 1) * 100 if recommend_price > 0 and open_price > 0 else None
+    gap_pct = round(raw_gap_pct, 2) if raw_gap_pct is not None else None
     observed = {"open": open_price, "high": high, "low": low, "close": close, "pre_close": pre_close,
                 "recommend_price": recommend_price, "gap_pct": gap_pct, "max_entry_gap_pct": MAX_ENTRY_GAP_PCT}
 
@@ -124,7 +125,9 @@ def check_entry_bar(
         if session_closed:
             return EntryDayCheck(True, RULE_ONE_WORD, "入场日一字涨停，回测口径买不进", observed=observed)
         return EntryDayCheck(True, RULE_ONE_WORD, "开盘封涨停尚未开板，回测口径一字板买不进；开板前不确认", inconclusive=True, observed=observed)
-    if gap_pct is not None and MAX_ENTRY_GAP_PCT > 0 and gap_pct > MAX_ENTRY_GAP_PCT:
+    # 与结算/回测同一口径：用未取整的原始跳空幅度比较阈值；取整只用于展示，
+    # 否则 6.0001%~6.0049% 会被四舍五入成 6.00%，盘中误判可买、结算却记 gap_up_blocked。
+    if raw_gap_pct is not None and MAX_ENTRY_GAP_PCT > 0 and raw_gap_pct > MAX_ENTRY_GAP_PCT:
         return EntryDayCheck(True, RULE_GAP_UP, f"开盘价高于推荐价 {gap_pct:.2f}%（> {MAX_ENTRY_GAP_PCT:.0f}%），回测口径当日不买", observed=observed)
     gap_text = f"{gap_pct:+.2f}%" if gap_pct is not None else "—"
     return EntryDayCheck(False, RULE_PASS, f"入场日检查通过：非一字涨停、可成交、开盘相对推荐价 {gap_text}（≤{MAX_ENTRY_GAP_PCT:.0f}%）", observed=observed)
