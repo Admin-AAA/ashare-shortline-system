@@ -66,18 +66,25 @@ def test_bad_data_opens_after_three(monkeypatch, tmp_path):
 
 
 def test_rate_limit_uses_upstream_retry_after(monkeypatch, tmp_path):
+    """2026-11-15：rate_limit 改为「连续 2 次才熔断」，单次限频不再整源停摆。"""
     _store(monkeypatch, tmp_path)
     exc = DataSourceError(ErrorKind.RATE_LIMIT, "429")
     exc.retry_after_seconds = 20.0
     gw = _gw(Faulty("r", exc=exc))
     gw.fetch_first("ds", {})
-    assert 15 < _open_left("r", "ds") <= 20.5
+    assert _open_left("r", "ds") <= 0            # 单次不熔断
+    gw.fetch_first("ds", {})
+    assert 15 < _open_left("r", "ds") <= 20.5    # 第二次熔断，冷却听上游 retry-after
 
 
-def test_rate_limit_without_hint_defaults_5min(monkeypatch, tmp_path):
+def test_rate_limit_without_hint_defaults_minute_scale(monkeypatch, tmp_path):
+    """无 retry-after 时用分钟级专用冷却 90s（旧行为 300s 把 1 分钟恢复的额度惩罚 5 分钟）。"""
     _store(monkeypatch, tmp_path)
-    _gw(Faulty("r2", exc=DataSourceError(ErrorKind.RATE_LIMIT))).fetch_first("ds", {})
-    assert _open_left("r2", "ds") > 290
+    gw = _gw(Faulty("r2", exc=DataSourceError(ErrorKind.RATE_LIMIT)))
+    gw.fetch_first("ds", {})
+    assert _open_left("r2", "ds") <= 0
+    gw.fetch_first("ds", {})
+    assert 80 < _open_left("r2", "ds") <= 95
 
 
 def test_thresholds_configurable(monkeypatch, tmp_path):

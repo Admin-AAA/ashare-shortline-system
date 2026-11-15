@@ -82,7 +82,15 @@ def reset_streak(api_name: str) -> None:
 
 # ---- research 令牌桶（按窗口）----
 # (窗口秒, 盘外上限, 盘中上限)。实测 5 分钟 579 / 60 分钟 4028 次无成片失败。
-DEFAULT_WINDOWS: tuple[tuple[float, int, int], ...] = ((300.0, 300, 100), (3600.0, 2400, 900))
+DEFAULT_WINDOWS: tuple[tuple[float, int, int], ...] = ((60.0, 160, 160), (3600.0, 9600, 9600))
+# 2026-11-15 实测重标定（旧值 ((300,300,100),(3600,2400,900))，盘中仅 20/min，比上游低约 10 倍）：
+# - 上游真实硬窗由响应头给出且只有 IP 维度：`X-Ratelimit-Ip-Limit: 200`（每分钟），
+#   12 线程并发在第 4.36s、累计 200 次成功时被拒，返回
+#   `{"ok":false,"error":"ip_rate_limited","message":"当前IP请求频率超过限制，请在 56 秒后重试"}`。
+# - 串行 133/min 跑 130 次全绿、IP-Remaining 从 190 递减到 126，证明 200/min 窗口是硬顶且按分钟回补。
+# => 生效值改为 60s 窗 160 次（对 200 硬顶留 20% 余量）；1h 窗放到 9600（=160/min，只作上位保险，
+#    不让它成为比分钟窗更紧的约束）。旧「5min 100 次」结论来自代理侧连接池耗尽（upstream_pool_exhausted），
+#    与 IP 计数限频是两件事，不再用连接池结论压缩额度。
 # 向后兼容旧引用；**实际生效值走 window_table()**（可用 env 覆盖，见下）。
 WINDOWS: tuple[tuple[float, int, int], ...] = DEFAULT_WINDOWS
 RT_K_LIVE_KEY = "live:tushare:promax:rt_k"

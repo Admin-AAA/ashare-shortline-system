@@ -188,8 +188,17 @@ def shared_breaker_states() -> list[dict[str, Any]]:
 # another PROBE_INTERVAL_SECONDS. A crashed prober's claim expires after PROBE_LEASE_SECONDS.
 PROBE_INTERVAL_SECONDS = 300.0
 PROBE_LEASE_SECONDS = 60.0
-# 探测连续失败时冷却指数拉长的上限（默认 20 分钟；实时源恢复不会被拖到小时级）。
-PROBE_MAX_SECONDS = float(__import__("os").environ.get("ASHARE_BREAKER_PROBE_MAX_SECONDS", "1200") or 1200)
+# 限频类熔断的专用冷却（2026-11-15 实测）：上游限频窗口实测都是「分钟级滑动窗」——
+# promax 直接回 `请在 56 秒后重试`（IP 200/min 硬窗），teajoin 在 550 次/分钟处回
+# `rate limit exceeded`，quantdata 高并发 2.6s 就 503 但低并发即恢复。
+# 旧逻辑一律 300s（PROBE_INTERVAL_SECONDS），等于把「1 分钟就恢复的额度」惩罚 5 分钟，
+# 免费版额度小、限频更频繁，会被这条放大成大段空窗。改为 90s，上游给 retry-after 就用上游的。
+RATE_LIMIT_COOLDOWN_SECONDS = float(
+    __import__("os").environ.get("ASHARE_BREAKER_RATE_LIMIT_COOLDOWN_SECONDS", "90") or 90
+)
+# 探测连续失败时冷却指数拉长的上限（默认 10 分钟）。原 1200s（20min）在免费/小窗口额度下过长：
+# 实测上游恢复都在 60~90s 量级，指数退避封顶压到 600s 即可防抖又不过度停摆。
+PROBE_MAX_SECONDS = float(__import__("os").environ.get("ASHARE_BREAKER_PROBE_MAX_SECONDS", "600") or 600)
 
 
 def _try_claim_probe(key: str) -> bool | None:
@@ -263,9 +272,12 @@ def _provider_of(key: str | None) -> str | None:
 
 
 def kind_threshold(kind: str | None, key: str | None = None) -> int | None:
-    if kind not in ("timeout", "bad_data"):
+    # rate_limit 也纳入可配阈值（2026-11-15 实测）：旧逻辑「1 次限频即熔断」，而上游限频在
+    # 免费/小额度下是常态噪音（teajoin 550/min、quantdata 并发抖动都只影响单次请求），
+    # 单发就整源停摆 5 分钟比限频本身代价更大。默认连续 2 次才熔断，需要旧行为可配 1。
+    if kind not in ("timeout", "bad_data", "rate_limit"):
         return None
-    default = 2 if kind == "timeout" else 3
+    default = {"timeout": 2, "bad_data": 3, "rate_limit": 2}[kind]
     try:
         from app.core.config import get_settings
 
@@ -332,8 +344,18 @@ class SharedCircuitBreaker:
             self._open(probe_backoff_delay(streak - 1 if streak > 0 else 0), f"probe_failed#{streak}")
             return
         if kind == "rate_limit":
-            delay = float(recovery_seconds) if recovery_seconds and recovery_seconds > 0 else PROBE_INTERVAL_SECONDS
-            self._open(delay, "rate_limit")
+            # 上游给了 retry-after 就听上游；否则用分钟级限频的专用冷却（不再用 300s 的通用探测间隔）。
+            delay = (
+                float(recovery_seconds)
+                if recovery_seconds and recovery_seconds > 0
+                else RATE_LIMIT_COOLDOWN_SECONDS
+            )
+            threshold = kind_threshold("rate_limit", self.base_key) or 1
+            with self._kind_lock:
+                n = self._kind_counts.get(kind, 0) + 1
+                self._kind_counts[kind] = n
+            if n >= threshold:
+                self._open(delay, f"rate_limitx{n}")
             return
         if force_open:
             self._open(max(self._recovery, float(recovery_seconds or 0.0)), "force_open")

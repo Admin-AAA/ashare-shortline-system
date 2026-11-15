@@ -58,11 +58,15 @@ class Settings(BaseSettings):
     # anns_d/rt_k/stk_mins 未购买（走 per-API 路由链自动 fallback）。平滑限速，稳态 6rps 无限制。
     tushare_quantdata_url: str = "https://quantdata888.duckdns.org"
     tushare_quantdata_token: str = Field(default="", repr=False)
-    tushare_quantdata_rate_limit_per_minute: int = 120
+    # 2026-11-15 实测：单请求延迟约 5s，64 并发 2.6s 就回 50302 service temporarily unavailable，
+    # 低压下 131 次后即被拒；属「低并发 + 高延迟」型，不是能靠加线程压上去的源。降到 90 留余量。
+    tushare_quantdata_rate_limit_per_minute: int = 90
     # teajoin（DaoShare）：第三方 tushare pro 协议代理（JSON token，POST 根路径）。卖家口径 500 次/分钟（2026-10-26 19:32），我们默认只用 420。
     tushare_teajoin_url: str = "https://teajoin.com"
     tushare_teajoin_token: str = Field(default="", repr=False)
-    tushare_teajoin_rate_limit_per_minute: int = 420  # 卖家口径 500 次/分钟，留约 15% 余量
+    # 2026-11-15 实测：450 次/分钟（8 线程 25s）全绿；550 次/分钟后固定出现 rate limit exceeded
+    # （两次独立压测都在第 550 次失败），即真实软顶约 550/min。取 480，对硬顶留约 13% 余量。
+    tushare_teajoin_rate_limit_per_minute: int = 480  # 实测软顶 550/min，留约 13% 余量
     # research 命名空间盘中（工作日 09:15–15:05）对非 promax 源的限速（次/分钟）；0=不限。给 live 链路留额度。
     tushare_teajoin_research_intraday_rpm: int = 30
     # 单进程对 teajoin 的并发上限（上游「query capacity busy」多发生在多路同时重查询时）

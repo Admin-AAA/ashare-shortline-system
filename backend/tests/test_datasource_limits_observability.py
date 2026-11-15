@@ -165,9 +165,13 @@ def test_promax_section_flags_declared_vs_effective(monkeypatch):
     section = quota_view._promax_section(_Cfg())
     assert section["declared_per_minute"] == 180
     assert section["windows"], "必须暴露实际生效的滚动窗口"
-    # 生效口径必然小于声明口径（180/min 是上游健康信息，不是实际约束）
-    assert section["tightest_effective_per_minute"] < 180
-    assert section["warning"] and "高估" in section["warning"]
+    # 2026-11-15 实测重标定后：生效口径来自上游 IP 硬窗（200/min），取 160/min 留 20% 余量，
+    # 与声明口径 180 已经同量级（旧值 20/min 是连接池耗尽的误判，比上游低约 10 倍）。
+    tightest = section["tightest_effective_per_minute"]
+    assert 150 <= tightest <= 180, tightest
+    assert abs(section["declared_vs_effective_ratio"] - 180 / tightest) < 0.5
+    if section["warning"]:
+        assert "高估" in section["warning"]
 
 
 # ── 5. 熔断阈值按 provider 差异化 ─────────────────────────────────────────────
@@ -185,8 +189,11 @@ def test_kind_threshold_per_provider(monkeypatch):
     # 无覆盖的 provider 回落全局默认（timeout=2 / bad_data=3）
     assert sb.kind_threshold("timeout", "gw:sina_realtime:quote") == 2
     assert sb.kind_threshold("bad_data", "gw:sina_realtime:quote") == 3
-    # 不支持的类型
-    assert sb.kind_threshold("rate_limit", "gw:promax:rt_k") is None
+    # rate_limit 已纳入可配阈值（2026-11-15）：默认连续 2 次才熔断，per-provider 可覆盖
+    assert sb.kind_threshold("rate_limit", "gw:sina_realtime:quote") == 2
+    assert sb.kind_threshold("rate_limit", "gw:promax:rt_k") == 2
+    # 其它未知类型仍不支持
+    assert sb.kind_threshold("permission", "gw:promax:rt_k") is None
     # key 为空时不能炸
     assert sb.kind_threshold("timeout", None) >= 1
 
@@ -420,3 +427,53 @@ def test_limits_section_marks_dead_limiter():
         assert rows["gateway:ghost"]["used"] is None
         assert rows["gateway:ghost"]["note"]
     limiter_registry.reset()
+
+
+# ── 6. 限频熔断阈值与冷却（2026-11-15 实测标定）──────────────────────────────
+
+def _isolated_breaker(monkeypatch, key="gw:teajoin:trade_cal"):
+    """把共享状态（SQLite）隔离掉，只测本进程内的阈值/冷却决策。"""
+    from app.core import shared_breaker as sb
+
+    published: list[tuple[str, float, str]] = []
+    monkeypatch.setattr(sb, "shared_open_until", lambda k: 0.0)
+    monkeypatch.setattr(sb, "_publish_open", lambda k, until, reason="": published.append((k, until, reason)))
+    monkeypatch.setattr(sb, "_publish_closed", lambda k: None)
+    monkeypatch.setattr(sb, "_provider_overrides", lambda: {})
+    breaker = sb.SharedCircuitBreaker(key, failure_threshold=3, recovery_seconds=60)
+    return sb, breaker, published
+
+
+def test_rate_limit_opens_only_after_threshold(monkeypatch):
+    sb, breaker, published = _isolated_breaker(monkeypatch)
+    assert sb.kind_threshold("rate_limit") == 2  # 默认连续 2 次
+    breaker.record_failure(kind="rate_limit")
+    assert breaker.state == "closed", "单次限频（免费额度下的常态噪音）不应直接熔断"
+    breaker.record_failure(kind="rate_limit")
+    assert breaker.state == "open"
+    assert published and "rate_limitx2" in published[-1][2]
+
+
+def test_rate_limit_threshold_configurable(monkeypatch):
+    sb, breaker, _ = _isolated_breaker(monkeypatch, key="gw:promax:rt_k")
+    monkeypatch.setattr(sb, "_provider_overrides", lambda: {"promax": {"rate_limit": 1}})
+    breaker.record_failure(kind="rate_limit")
+    assert breaker.state == "open", "旧行为（1 次即熔断）应可通过 overrides 恢复"
+
+
+def test_rate_limit_cooldown_uses_minute_scale(monkeypatch):
+    sb, breaker, published = _isolated_breaker(monkeypatch)
+    breaker.record_failure(kind="rate_limit")
+    breaker.record_failure(kind="rate_limit")
+    # 无 retry-after：用分钟级专用冷却 90s，而不是通用 300s 探测间隔
+    delay = published[-1][1] - __import__("time").time()
+    assert 80 <= delay <= 95, delay
+    assert sb.RATE_LIMIT_COOLDOWN_SECONDS == 90
+
+
+def test_rate_limit_cooldown_honours_retry_after(monkeypatch):
+    _, breaker, published = _isolated_breaker(monkeypatch)
+    breaker.record_failure(kind="rate_limit")
+    breaker.record_failure(kind="rate_limit", recovery_seconds=56.0)  # promax 实测「请在 56 秒后重试」
+    delay = published[-1][1] - __import__("time").time()
+    assert 50 <= delay <= 61, delay

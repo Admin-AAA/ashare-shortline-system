@@ -11,7 +11,10 @@ def test_probe_backoff_grows_and_caps():
     d = [sb.probe_backoff_delay(n, rng=rng) for n in range(6)]
     assert 300 <= d[0] <= 330                     # 第一次失败≈5 分钟（兼容旧行为）
     assert 540 <= d[1] <= 660                     # 第二次≈10 分钟
-    assert d[2] > d[1]
+    # 2026-11-15：封顶从 1200s 压到 600s（实测上游恢复都在 60~90s 量级），因此 5→10→10 已是顶格，
+    # 不再要求 d[2] > d[1]，改为「不下降（含抖动）」+ 封顶断言。
+    assert d[2] >= d[1] * 0.9
+    assert sb.PROBE_MAX_SECONDS == 600
     assert all(x <= sb.PROBE_MAX_SECONDS * 1.1 + 1 for x in d)   # 封顶（含 10% 抖动）
     assert sb.probe_backoff_delay(0, base=300, cap=900, rng=random.Random(2)) >= 300
 
@@ -40,7 +43,8 @@ def test_repeated_probe_failures_lengthen_cooldown_and_success_resets(monkeypatc
         a.record_failure()                      # 探测失败
         sb._cache.clear()
         lefts.append(sb.shared_open_until(a.key) - time.time())
-    assert lefts[0] < lefts[1] < lefts[2] + 1   # 5 → 10 → 20 分钟（含抖动）
+    assert lefts[0] < lefts[1]                 # 5 → 10 分钟
+    assert lefts[2] >= lefts[1] * 0.9          # 第三次起封顶 10 分钟（含抖动）
     assert sb._get_streak(a.key) == 3
     a.record_success()
     assert sb._get_streak(a.key) == 0

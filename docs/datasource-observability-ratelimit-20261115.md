@@ -1,3 +1,14 @@
+---
+AIGC:
+    Label: "1"
+    ContentProducer: 001191440300708461136T1XGW3
+    ProduceID: 1084f7c18024812a92491b2bbef914fe_e59c1829e0d811f18c5752540024e231
+    ReservedCode1: Se8E569jAlFB5rGgppox9SVAfoagQuozDEr7r97rNVqbnZpLY1Am0Szjksy32rxevhO1dBv//OU+7hTw8owsC9MCmGIqiSmkdyBwQZqsGPtP9lhunws9fwVnfS9tbsoq5w5EK4VJKzbIziG+QVrwmYjsv9yhuGWs4yfypdya8PRtm2fUDE6TYVFIUjU=
+    ContentPropagator: 001191440300708461136T1XGW3
+    PropagateID: 1084f7c18024812a92491b2bbef914fe_e59c1829e0d811f18c5752540024e231
+    ReservedCode2: Se8E569jAlFB5rGgppox9SVAfoagQuozDEr7r97rNVqbnZpLY1Am0Szjksy32rxevhO1dBv//OU+7hTw8owsC9MCmGIqiSmkdyBwQZqsGPtP9lhunws9fwVnfS9tbsoq5w5EK4VJKzbIziG+QVrwmYjsv9yhuGWs4yfypdya8PRtm2fUDE6TYVFIUjU=
+---
+
 # 数据源可观测性与限频收口（P0/P1/P2 全 7 项，2026-11-15）
 
 上一轮评估结论：架构无结构性缺陷，短板是「可观测性断层 + 跨进程限频未开」。本次把 7 项全部落地。
@@ -178,3 +189,42 @@ curl -s 'http://127.0.0.1:8765/api/admin/data-quality?refresh=true' | jq '.items
 - **不引入 Prometheus**：当前规模用 SQLite + 自建视图够用，加 exporter 是新的运维面，
   等真要多机聚合再上。
 - **thsdk 跨进程限频**：同一进程内全局锁串行已把并发压到 16.7 QPS，跨进程共享优先级低。
+
+---
+
+## 11. 上游速率峰值实测与限速/熔断重标定（2026-11-15，用户指令：只测峰值）
+
+前提：不再区分付费版/免费版，不设日额度上限，直接并发加压到上游拒绝为止。探测脚本
+`temp/probe_rate_concurrent.py`（多线程、只打 `trade_cal` / `rt_k` 最轻接口、绕开网关）。
+
+### 11.1 实测峰值
+
+| 源 | 并发 | 结果 | 首次拒绝 | 结论（真实峰值） |
+| --- | --- | --- | --- | --- |
+| promax | 12 线程 | 1685 次，ok 200 / bad 1485 | 4.36s | **200 次/分钟硬顶**（IP 维度），响应带 `请在 56 秒后重试` |
+| teajoin | 8 线程 | 911 次，ok 550 / bad 361 | 23.86s | **约 550 次/分钟软顶**，两次独立压测都停在第 550 次 |
+| quantdata | 64 线程 | 3592 次，ok 131 / bad 3461 | 2.63s | **无法靠加线程提升**：单请求约 5s，高并发直接 `50302 service temporarily unavailable` |
+
+补充证据：
+- promax 串行 130 次全 200、133/min；`X-Ratelimit-Ip-Limit: 200` 恒定，`Ip-Remaining` 190→126 递减后按分钟回补 → 滑动分钟窗。总额度 `X-Ratelimit-Limit: 20000`。
+- teajoin 8 线程 25s（1110/min）492 次全绿；延长到 40s 在第 550 次被 `{"code":-1,"msg":"rate limit exceeded"}` 拒。
+- quantdata 16 线程 294/min 全绿且无任何限频头；32 线程仍 294/min（受延迟而非限频约束）；64 线程 2.6s 即崩。
+
+### 11.2 据此重标定
+
+| 项 | 原值 | 新值 | 依据 |
+| --- | --- | --- | --- |
+| `teajoin` 限速 | 420/min | **480/min** | 实测 550 软顶，留 13% 余量 |
+| `quantdata` 限速 | 120/min | **90/min** | 高并发即 503，属低并发高延迟源 |
+| `promax` 限速 | 180/min | 180/min（不变） | 对 200 硬顶留 10% 余量 |
+| `promax` research 硬窗口 | 5min 300 / 1h 2400（盘中 20/min） | **60s 160 / 1h 9600（盘中 160/min）** | 旧值比上游低约 10 倍，"5min 100 次"来自代理连接池耗尽，与 IP 计数限频是两件事 |
+| 限频熔断阈值 | 1 次即熔断 | **连续 2 次**（`ASHARE_BREAKER_THRESHOLD_*` / overrides 可配 1 复原） | 免费额度下限频是常态噪音，单发停摆 5 分钟代价大于限频本身 |
+| 限频熔断冷却 | 300s（无 retry-after 时） | **90s**，有 retry-after 用上游值 | 上游窗口都是分钟级；promax 直接给 56s |
+| 半开探测封顶 | 1200s | **600s** | 实测上游恢复都在 60~90s 量级 |
+
+### 11.3 验证
+
+- `.env` 三处显式覆盖同步更新（`QUANTDATA=90` / `TEAJOIN=480` / 窗口表注释）。
+- 重启 `com.wangao.ashare-backend` 后 `GET /api/data-sources/limits`：`teajoin(480)`、`quantdata(90)`、`promax(180)`；`promax.tightest_effective_per_minute=160`、`declared_vs_effective_ratio=1.12`，**原"口径差 4.5 倍"告警已消失**。
+- 全量测试 **4285 passed / 24 skipped**（新增 4 条限频熔断用例）。
+*（内容由AI生成，仅供参考）*
