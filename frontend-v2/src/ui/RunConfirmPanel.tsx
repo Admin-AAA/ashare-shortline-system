@@ -1,33 +1,33 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, PlayCircle, X } from "lucide-react";
-import { useCreateRunMutation, usePresetsQuery, useRunsQuery } from "../api/queries/useRunQueries";
+import { useCreateRunMutation, useRunsQuery, useStrategiesQuery } from "../api/queries/useRunQueries";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { SHORT_STRATEGIES, pauseReason } from "./strategyRules";
 import { useMarketState } from "./useMarketState";
 
-/** 运行推荐确认面板（POST /api/runs）。文案按 v4 §10。 */
+/** 运行推荐确认面板（POST /api/runs）。预设层已退役：手动运行直接选一个策略（single_skill_id）。 */
 export function RunConfirmPanel({ onClose }: { onClose: () => void }) {
-  const presets = usePresetsQuery();
+  const strategies = useStrategiesQuery();
   const runs = useRunsQuery(100, true); // 与「今日出票」共用 limit=100&fields=slim 缓存
   const { market, tradeDate } = useMarketState();
   const create = useCreateRunMutation();
   const { navigate } = useUrlRoute();
-  const [preset, setPreset] = useState("");
+  const [strategy, setStrategy] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
   useEffect(() => {
-    if (!preset && presets.data?.length) setPreset(presets.data.find((p) => p.status === "active")?.preset_id ?? presets.data[0].preset_id);
-  }, [presets.data, preset]);
+    if (!strategy && strategies.data?.length) setStrategy(strategies.data[0].skill_id);
+  }, [strategies.data, strategy]);
   const todayRuns = useMemo(() => {
     const d = (tradeDate ?? "").replace(/-/g, "");
     const today = new Date();
     const local = `${today.getFullYear()}${String(today.getMonth() + 1).padStart(2, "0")}${String(today.getDate()).padStart(2, "0")}`;
     return (runs.data ?? []).filter((r) => r.run_id.includes(`run_${local}`) || (d && r.run_id.includes(`run_${d}`))).slice(0, 8);
   }, [runs.data, tradeDate]);
-  const sel = presets.data?.find((p) => p.preset_id === preset);
+  const sel = strategies.data?.find((s) => s.skill_id === strategy);
   async function go() {
     setMsg("正在触发…");
     try {
-      const r = await create.mutateAsync({ preset_id: preset, run_name: "手动推荐" });
+      const r = await create.mutateAsync({ single_skill_id: strategy, run_name: "手动推荐" });
       setMsg(`已触发 ${r.run.run_id}`);
       onClose();
       navigate("/run", { params: { run_id: r.run.run_id } });
@@ -44,14 +44,14 @@ export function RunConfirmPanel({ onClose }: { onClose: () => void }) {
           <div className="muted small" style={{ margin: "12px 0 6px" }}>今日已有运行</div>
           {todayRuns.length ? (
             <table className="tbl tbl--mini"><tbody>{todayRuns.map((r) => (
-              <tr key={r.run_id}><td className="mono small">{r.run_id}</td><td>{r.preset_name}</td><td className="n">出票 {r.recommended_count}</td><td><span className="tag">{r.status}</span></td></tr>
+              <tr key={r.run_id}><td className="mono small">{r.run_id}</td><td>{r.preset_name || r.run_name}</td><td className="n">出票 {r.recommended_count}</td><td><span className="tag">{r.status}</span></td></tr>
             ))}</tbody></table>
           ) : <div className="muted small">今日暂无运行</div>}
-          <div className="muted small" style={{ margin: "12px 0 6px" }}>运行预设</div>
-          <select className="inp" value={preset} onChange={(e) => setPreset(e.target.value)} style={{ width: "100%" }}>
-            {(presets.data ?? []).map((p) => <option key={p.preset_id} value={p.preset_id}>{p.name}</option>)}
+          <div className="muted small" style={{ margin: "12px 0 6px" }}>运行策略</div>
+          <select className="inp" value={strategy} onChange={(e) => setStrategy(e.target.value)} style={{ width: "100%" }}>
+            {(strategies.data ?? []).map((s) => <option key={s.skill_id} value={s.skill_id}>{s.name}</option>)}
           </select>
-          {sel && <div className="muted small" style={{ marginTop: 6 }}>{sel.description} · 出票线 {sel.score_line}</div>}
+          {sel && <div className="muted small" style={{ marginTop: 6 }}>{sel.description || sel.skill_id}</div>}
           <div className="muted small" style={{ margin: "12px 0 6px" }}>今日策略状态（按规则推算）</div>
           <div className="chips">{SHORT_STRATEGIES.map((s) => { const w = pauseReason(s.id, market); return (
             <span key={s.id} className={`tag ${w ? "tag--warn" : s.status === "观察" ? "" : "tag--brand"}`}>{s.short}{s.status === "观察" ? "（观察）" : ""}{w ? ` · 暂停：${w}` : ""}</span>
@@ -61,7 +61,7 @@ export function RunConfirmPanel({ onClose }: { onClose: () => void }) {
         </div>
         <div className="modal__ft">
           <button className="btn btn--ghost" onClick={onClose}>取消</button>
-          <button className="btn btn--primary" onClick={go} disabled={!preset || create.isPending}>{create.isPending ? <Loader2 size={14} className="spin" /> : <PlayCircle size={14} />}确认运行</button>
+          <button className="btn btn--primary" onClick={go} disabled={!strategy || create.isPending}>{create.isPending ? <Loader2 size={14} className="spin" /> : <PlayCircle size={14} />}确认运行</button>
         </div>
       </div>
     </div>

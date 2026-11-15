@@ -3,7 +3,6 @@ import type {
   FilterEffectiveness,
   HomeBootstrap,
   MetricsOverview,
-  Preset,
   PrecisionAtKRow,
   PresetStatsRow,
   DataHealthDiagnostic,
@@ -60,10 +59,6 @@ import type {
 import { createDashboardApi } from "./dashboard";
 import { logger } from "../utils/logger";
 import type { StrategyQuality } from "../components/StrategyQuality";
-
-type PresetPayload = Omit<Partial<Preset>, "skills"> & {
-  skills?: Array<{ skill_id: string; weight: number; sort_order?: number }>;
-};
 
 export type AuthStatus = {
   enabled: boolean;
@@ -324,12 +319,6 @@ export const api = {
 
   bootstrap: (options?: RequestOptions) => request<HomeBootstrap>("/api/home/bootstrap", undefined, options),
 
-  presets: () => request<Preset[]>("/api/presets", undefined, { timeoutMs: CONTROL_CONFIG_TIMEOUT_MS }),
-  createPreset: (payload: PresetPayload) =>
-    request<Preset>("/api/presets", json("POST", payload)),
-  updatePreset: (presetId: string, payload: PresetPayload) =>
-    request<Preset>(`/api/presets/${presetId}`, json("PATCH", payload)),
-
   // fields=slim：后端去掉 result_summary（仍为数组），列表场景用
   runs: (limit?: number, fields?: "slim") => {
     const params = new URLSearchParams();
@@ -526,13 +515,11 @@ export const api = {
       avg_return: number;
       errors: string[];
     }>(`/api/skills/${id}/performance-summary`),
-  analyzeStock: (payload: { code: string; trade_date?: string; include_llm?: boolean; skill_id?: string; preset_id?: string }) =>
+  analyzeStock: (payload: { code: string; trade_date?: string; include_llm?: boolean; skill_id?: string }) =>
     requestWithTimeout<SingleStockAnalysis>("/api/runs/analyze-stock", 300_000, json("POST", payload)),
   resumeRun: (id: string) => requestWithTimeout<RunResult>(`/api/runs/${id}/resume`, 300_000, json("POST")),
   deleteRun: (id: string) => request<{ deleted: string }>(`/api/runs/${id}`, json("DELETE")),
   deleteRecommendation: (id: string) => request<{ deleted: string }>(`/api/recommendations/${id}`, json("DELETE")),
-  deletePreset: (id: string, confirmFormal = false) =>
-    request<{ deleted: string }>(`/api/presets/${id}${confirmFormal ? "?confirm_formal=true" : ""}`, json("DELETE")),
 
   // 时间窗口：windowDays=N 取最近 N 天并截到统一结算截止日；不传则全部历史累计。
   // sampleScope 必须显式传给质量指标，避免 LIVE 与历史回放研究证据混算。

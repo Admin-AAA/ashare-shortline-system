@@ -28,8 +28,6 @@ from app.models.tables import (
     DragonTiger,
     MarketSnapshot,
     NewsAnnouncement,
-    Preset,
-    PresetSkill,
     Recommendation,
     RecommendationOutcome,
     RecommendationRun,
@@ -64,7 +62,6 @@ from app.services.workbench_service import (
     get_recommendation_detail,
     get_run_detail,
     invalidate_bootstrap_cache,
-    list_presets,
     list_run_recommendations,
     list_runs,
     recover_interrupted_runs,
@@ -186,29 +183,6 @@ def _mock_market_universe(first_code: str | None = None):
 
 def _unique_stock_code(prefix: str = "98") -> str:
     return f"{prefix}{uuid.uuid4().int % 10000:04d}"
-
-
-def test_list_presets_exposes_output_count(db: Session):
-    db.add(
-        Preset(
-            preset_id="preset_output_count_contract",
-            name="输出数量契约测试",
-            market_scope="all",
-            risk_template="balanced",
-            score_line=72.0,
-            output_count=4,
-            bucket_limits_json="{}",
-            data_source=DATA_SOURCE_LOCAL_POOL_PREFERRED,
-            hide_recent_repeats=True,
-            status="active",
-        )
-    )
-    db.commit()
-
-    presets = list_presets(db)
-    item = next(preset for preset in presets if preset["preset_id"] == "preset_output_count_contract")
-
-    assert item["output_count"] == 4
 
 
 def _mock_skill_reviews(stock, skills, snapshot, rule_signals_by_skill, session_id):
@@ -373,16 +347,14 @@ class TestE2ERecommendationFlow:
         cards = []
 
     def test_merge_run_params_defaults_formal_to_local_pool_realtime(self):
-        params = _merge_run_params(None, None, {"skills": []})
+        params = _merge_run_params({"skills": []})
         assert params["data_source"] == DATA_SOURCE_LOCAL_POOL_REALTIME
 
-        experiment_params = _merge_run_params(None, None, {"skills": []})
+        experiment_params = _merge_run_params({"skills": []})
         assert experiment_params["data_source"] == DATA_SOURCE_LOCAL_POOL_REALTIME
 
     def test_merge_run_params_keeps_formal_auxiliary_refresh_enabled(self):
         params = _merge_run_params(
-            None,
-            None,
             {
                 "skills": [],
                 "disable_agent_review": True,
@@ -399,8 +371,6 @@ class TestE2ERecommendationFlow:
 
     def test_merge_run_params_preserves_experiment_fast_run_controls(self):
         params = _merge_run_params(
-            None,
-            None,
             {
                 "skills": [],
                 "disable_agent_review": True,
@@ -1322,7 +1292,7 @@ class TestE2ERecommendationFlow:
         )
         state = workbench_service.bootstrap_workbench_state(db)
         # Should return a valid state with empty market snapshot
-        assert state["presets"] is not None
+        assert state["recent_runs"] is not None
         assert state["market_snapshot"] is not None
         # Empty pool: sample_count should be 0, not raise
         assert state["market_snapshot"]["sample_count"] == 0
@@ -1372,7 +1342,6 @@ class TestE2ERecommendationFlow:
         def fake_bootstrap(_db):
             calls["count"] += 1
             return {
-                "presets": [],
                 "recent_runs": {"formal": None, "experiment": None},
                 "market_snapshot": {
                     "snapshot_id": f"snap-{calls['count']}",
@@ -1393,7 +1362,6 @@ class TestE2ERecommendationFlow:
             }
 
         monkeypatch.setattr(workbench_service, "bootstrap_workbench_state", fake_bootstrap)
-        monkeypatch.setattr(workbench_service, "list_presets", lambda _db: [{"preset_id": "p1"}])
         monkeypatch.setattr(workbench_service, "list_runs", lambda _db, **_kwargs: [{"run_id": "r1"}])
         monkeypatch.setattr(workbench_service, "list_skills", lambda _db: [{"skill_id": "s1"}])
 

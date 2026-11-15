@@ -1,16 +1,11 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import os
-import shlex
-import subprocess
 import sys
 import time
-import uuid
 from collections.abc import Callable
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import SessionLocal
-from app.models.tables import Preset, Recommendation, RecommendationRun, ReviewNote, WatchItem
+from app.models.tables import Recommendation, ReviewNote, WatchItem
 from app.services.data_gap_remediation_service import (
     DEFAULT_DAILY_KBAR_CODE_LIMIT,
     remediate_recommendation_run_auxiliary_data,
@@ -33,15 +28,12 @@ from app.services.data_sources import get_local_pool_status, list_data_sources
 from app.services.data_source_health import active_alerts, readiness_check
 from app.services.market_pool import refresh_quote_pool
 from app.services.recommendations.projection import build_recommendation_explanation
-from app.services.scheduler_service import _run_preset_matrix
 from app.services.workbench_service import (
     get_recommendation_detail,
     get_run_detail,
     get_run_filter_audit,
-    list_presets,
     list_run_recommendations,
     list_runs,
-    run_workbench,
 )
 
 JsonDict = dict[str, Any]
@@ -189,30 +181,6 @@ def _with_db(handler: Callable[[Session, argparse.Namespace], Any], args: argpar
         db.close()
 
 
-def _list_presets(db: Session, args: argparse.Namespace) -> JsonDict:
-    presets = list_presets(db)
-    if args.active_only:
-        presets = [p for p in presets if p.get("status") == "active"]
-    return {"presets": presets, "count": len(presets)}
-
-
-def _registry_diagnostics(db: Session, args: argparse.Namespace) -> JsonDict:
-    from app.engine.skill_loader import load_skills
-    from app.services.registry.data_source import DEFAULT_PRESETS
-    from app.services.registry.diagnostics import build_registry_diagnostics
-    from app.core.config import get_settings
-
-    skills = load_skills(get_settings().skills_dir)
-    report = build_registry_diagnostics(
-        skills,
-        list_presets(db),
-        canonical_presets=DEFAULT_PRESETS,
-    )
-    if args.preset_id:
-        report.require_executable(args.preset_id)
-    return report.to_dict()
-
-
 def _list_runs(db: Session, args: argparse.Namespace) -> JsonDict:
     runs = list_runs(db, run_mode=args.run_mode, limit=args.limit)
     payload = [_compact_run(run) for run in runs] if args.compact else runs
@@ -242,32 +210,6 @@ def _run_funnel(db: Session, args: argparse.Namespace) -> JsonDict:
         rows = audit.get("rows") or []
         audit["rows"] = [row for row in rows if str(row.get("code")) == args.code]
     return audit
-
-
-def _execute_preset(db: Session, args: argparse.Namespace) -> JsonDict:
-    payload: JsonDict = {
-        "preset_id": args.preset_id,
-        "wait_for_completion": bool(args.wait),
-        "async": not bool(args.wait),
-    }
-    for key in ("run_name", "data_source", "trade_date"):
-        value = getattr(args, key)
-        if value:
-            payload[key] = value
-    if args.output_count is not None:
-        payload["output_count"] = args.output_count
-    if args.score_line is not None:
-        payload["score_line"] = args.score_line
-    if args.skip_aux_refresh:
-        payload["skip_aux_refresh"] = True
-    result = asyncio.run(run_workbench(db, payload)) if args.wait else None
-    if not args.wait:
-        from app.services.workbench_service import enqueue_workbench_run
-
-        result = enqueue_workbench_run(db, payload)
-    if result is None:
-        raise RuntimeError("run execution returned no result")
-    return result
 
 
 def _wait_run(db: Session, args: argparse.Namespace) -> JsonDict:
@@ -392,264 +334,13 @@ def _readiness(db: Session, args: argparse.Namespace) -> JsonDict:
     return readiness_check(db)
 
 
-def _matrix_payload_from_args(args: argparse.Namespace) -> JsonDict:
-    payload: JsonDict = {
-        "matrix_batch_name": args.matrix_batch_name,
-        "run_name_prefix": args.run_name_prefix or args.matrix_batch_name,
-        "data_source": args.data_source,
-        "stop_on_error": args.stop_on_error,
-    }
-    for key in ("output_count", "score_line", "agent_review_limit", "agent_review_concurrency"):
-        value = getattr(args, key, None)
-        if value is not None:
-            payload[key] = value
-    if args.skip_aux_refresh:
-        payload["skip_aux_refresh"] = True
-    if args.disable_agent_review:
-        payload["disable_agent_review"] = True
-    return payload
-
-
-def _run_matrix(db: Session, args: argparse.Namespace) -> JsonDict:
-    if getattr(args, "async_job", False):
-        return _start_matrix_job(args)
-    payload = _matrix_payload_from_args(args)
-    if not payload.get("matrix_batch_name"):
-        stamp = datetime.now(timezone.utc).replace(tzinfo=None).strftime("%Y%m%d_%H%M%S")
-        payload["matrix_batch_name"] = f"CLI预设矩阵 {stamp}"
-        payload["run_name_prefix"] = payload["run_name_prefix"] or payload["matrix_batch_name"]
-    result = asyncio.run(_run_preset_matrix(db, payload))
-    if args.table:
-        result["markdown_table"] = _matrix_markdown_table(db, str(result.get("matrix_batch_id") or ""), top=args.top)
-    return result
-
-
-def _latest_matrix_batch_id(db: Session) -> str | None:
-    rows = db.scalars(
-        select(RecommendationRun)
-        .where(RecommendationRun.result_summary_json.contains("matrix_batch_id"))
-        .order_by(RecommendationRun.finished_at.desc(), RecommendationRun.started_at.desc())
-        .limit(100)
-    ).all()
-    best: tuple[str, datetime] | None = None
-    for run in rows:
-        summary = _loads(run.result_summary_json, {})
-        batch_id = str(summary.get("matrix_batch_id") or "").strip()
-        if not batch_id:
-            continue
-        ts = run.finished_at or run.started_at or datetime.min
-        if best is None or ts > best[1]:
-            best = (batch_id, ts)
-    return best[0] if best else None
-
-
-def _matrix_rows(db: Session, batch_id: str, *, top: int = 5) -> list[JsonDict]:
-    presets = {p.preset_id: p for p in db.scalars(select(Preset)).all()}
-    runs = db.scalars(
-        select(RecommendationRun)
-        .where(RecommendationRun.result_summary_json.contains(batch_id))
-        .order_by(RecommendationRun.started_at.asc())
-    ).all()
-    rows: list[JsonDict] = []
-    for run in runs:
-        summary = _loads(run.result_summary_json, {})
-        if str(summary.get("matrix_batch_id") or "") != batch_id:
-            continue
-        preset = presets.get(run.preset_id or "")
-        recs = db.scalars(
-            select(Recommendation).where(Recommendation.run_id == run.run_id).order_by(Recommendation.final_score.desc())
-        ).all()
-        pipeline = summary.get("pipeline") if isinstance(summary, dict) else {}
-        if not isinstance(pipeline, dict):
-            pipeline = {}
-        top_recs = [
-            {
-                "recommendation_id": rec.recommendation_id,
-                "code": rec.code,
-                "name": rec.name,
-                "final_score": rec.final_score,
-                "setup_type": rec.setup_type,
-            }
-            for rec in recs[:top]
-        ]
-        rows.append(
-            {
-                "preset_id": run.preset_id,
-                "preset_name": preset.name if preset else run.preset_id,
-                "run_id": run.run_id,
-                "trade_date": run.trade_date,
-                "status": run.status,
-                "scan_count": _number(pipeline.get("actual_scan_count"), run.universe_count or 0),
-                "rule_count": _number(pipeline.get("skill_rule_candidate_count")),
-                "gate_count": _number(pipeline.get("skill_gate_candidate_count")),
-                "recommended_count": len(recs) if recs else run.recommended_count,
-                "average_score": round(sum(float(rec.final_score or 0) for rec in recs) / len(recs), 2) if recs else None,
-                "top_recommendations": top_recs,
-                "error_message": run.error_message,
-                "started_at": run.started_at.isoformat() if run.started_at else None,
-                "finished_at": run.finished_at.isoformat() if run.finished_at else None,
-            }
-        )
-    return rows
-
-
-def _matrix_overlap(rows: list[JsonDict]) -> list[JsonDict]:
-    by_code: dict[str, JsonDict] = {}
-    for row in rows:
-        for rec in row.get("top_recommendations") or []:
-            code = str(rec.get("code") or "")
-            if not code:
-                continue
-            current = by_code.setdefault(
-                code,
-                {"code": code, "name": rec.get("name"), "count": 0, "presets": [], "max_score": 0.0},
-            )
-            current["count"] += 1
-            current["max_score"] = max(float(current.get("max_score") or 0), float(rec.get("final_score") or 0))
-            preset_name = row.get("preset_name")
-            if preset_name and preset_name not in current["presets"]:
-                current["presets"].append(preset_name)
-    return sorted(
-        [item for item in by_code.values() if int(item.get("count") or 0) > 1],
-        key=lambda item: (-int(item.get("count") or 0), -float(item.get("max_score") or 0), str(item.get("code") or "")),
-    )
-
-
-def _matrix_markdown_table(db: Session, batch_id: str, *, top: int = 5) -> str:
-    rows = _matrix_rows(db, batch_id, top=top)
-    lines = [
-        "| 预设 | 状态 | 扫描 | 规则门 | 推荐数 | 均分 | Top推荐 | run_id |",
-        "|---|---:|---:|---:|---:|---:|---|---|",
-    ]
-    for row in rows:
-        top_text = "；".join(
-            f"{rec['code']} {rec['name']} {float(rec.get('final_score') or 0):.1f}"
-            for rec in row.get("top_recommendations") or []
-        ) or "-"
-        lines.append(
-            "| "
-            + " | ".join(
-                [
-                    _escape_md(row.get("preset_name")),
-                    _escape_md(row.get("status")),
-                    str(row.get("scan_count") or 0),
-                    f"{row.get('rule_count') or 0}/{row.get('gate_count') or 0}",
-                    str(row.get("recommended_count") or 0),
-                    _escape_md(row.get("average_score")),
-                    _escape_md(top_text),
-                    _escape_md(row.get("run_id")),
-                ]
-            )
-            + " |"
-        )
-    return "\n".join(lines)
-
-
-def _matrix_result(db: Session, args: argparse.Namespace) -> JsonDict:
-    batch_id = args.batch_id or _latest_matrix_batch_id(db)
-    if not batch_id:
-        raise ValueError("matrix batch not found")
-    rows = _matrix_rows(db, batch_id, top=args.top)
-    overlap = _matrix_overlap(rows)
-    result: JsonDict = {
-        "matrix_batch_id": batch_id,
-        "run_count": len(rows),
-        "completed_count": sum(1 for row in rows if row.get("status") == "completed"),
-        "failed_count": sum(1 for row in rows if row.get("status") == "failed"),
-        "recommended_count": sum(_number(row.get("recommended_count")) for row in rows),
-        "overlap": overlap,
-        "rows": rows,
-    }
-    if args.table:
-        result["markdown_table"] = _matrix_markdown_table(db, batch_id, top=args.top)
-    return result
-
-
-def _start_matrix_job(args: argparse.Namespace) -> JsonDict:
-    job_id = f"matrix_{datetime.now(timezone.utc).replace(tzinfo=None).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    paths = _job_paths(job_id)
-    cmd = [
-        sys.executable,
-        str(Path(__file__).resolve()),
-        "matrix-run",
-        "--pretty",
-        "--matrix-batch-name",
-        args.matrix_batch_name,
-        "--data-source",
-        args.data_source,
-        "--top",
-        str(args.top),
-    ]
-    if args.run_name_prefix:
-        cmd.extend(["--run-name-prefix", args.run_name_prefix])
-    for flag, value in (
-        ("--output-count", args.output_count),
-        ("--score-line", args.score_line),
-        ("--agent-review-limit", args.agent_review_limit),
-        ("--agent-review-concurrency", args.agent_review_concurrency),
-    ):
-        if value is not None:
-            cmd.extend([flag, str(value)])
-    for flag, enabled in (
-        ("--skip-aux-refresh", args.skip_aux_refresh),
-        ("--disable-agent-review", args.disable_agent_review),
-        ("--stop-on-error", args.stop_on_error),
-        ("--table", args.table),
-    ):
-        if enabled:
-            cmd.append(flag)
-    shell = f"{shlex.join(cmd)} > {shlex.quote(str(paths['stdout']))} 2> {shlex.quote(str(paths['stderr']))}; echo $? > {shlex.quote(str(paths['rc']))}"
-    proc = subprocess.Popen(["/bin/bash", "-lc", shell], cwd=str(HERE))
-    meta = {
-        "job_id": job_id,
-        "kind": "matrix-run",
-        "pid": proc.pid,
-        "status": "running",
-        "started_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
-        "command": " ".join(shlex.quote(part) for part in cmd),
-        "stdout_path": str(paths["stdout"]),
-        "stderr_path": str(paths["stderr"]),
-    }
-    paths["meta"].write_text(json.dumps(meta, ensure_ascii=False, indent=2))
-    return meta
-
-
-def _matrix_job_status(db: Session, args: argparse.Namespace) -> JsonDict:
-    job = _load_job(args.job_id)
-    result = job.get("result")
-    if isinstance(result, dict) and result.get("matrix_batch_id"):
-        job["matrix_batch_id"] = result.get("matrix_batch_id")
-        if args.table and not result.get("markdown_table"):
-            result["markdown_table"] = _matrix_markdown_table(db, str(result.get("matrix_batch_id")), top=args.top)
-    return job
-
-
-def _wait_matrix_job(db: Session, args: argparse.Namespace) -> JsonDict:
-    deadline = time.monotonic() + args.timeout
-    last: JsonDict | None = None
-    while time.monotonic() <= deadline:
-        last = _matrix_job_status(db, args)
-        if not last.get("running"):
-            return last
-        time.sleep(args.interval)
-    return {"timeout": True, "job": last}
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="ashare-cli",
-        description="A股短线系统 CLI：供 Hermes/自动化调用预设、运行、推荐和解释能力。",
+        description="A股短线系统 CLI：供 Hermes/自动化调用运行、推荐和解释能力。",
     )
     parser.add_argument("--pretty", action="store_true", help="格式化 JSON 输出")
     sub = parser.add_subparsers(dest="command", required=True)
-
-    p = sub.add_parser("presets", help="列出预设")
-    p.add_argument("--active-only", action="store_true")
-    p.set_defaults(func=_list_presets)
-
-    p = sub.add_parser("registry-diagnostics", help="诊断已加载策略与预设注册（只读）")
-    p.add_argument("--preset-id", help="仅校验指定 preset 的 executable closure")
-    p.set_defaults(func=_registry_diagnostics)
 
     p = sub.add_parser("runs", help="列出运行")
     p.add_argument("--run-mode", choices=["formal", "experiment"])
@@ -661,17 +352,6 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("run_id")
     p.add_argument("--compact", action="store_true", default=False)
     p.set_defaults(func=_show_run)
-
-    p = sub.add_parser("execute-preset", help="执行预设")
-    p.add_argument("preset_id")
-    p.add_argument("--wait", action="store_true", help="同步等待完成；默认入队异步执行")
-    p.add_argument("--run-name")
-    p.add_argument("--data-source", choices=["local_pool", "local_pool_realtime", "local_pool_preferred", "realtime"])
-    p.add_argument("--trade-date")
-    p.add_argument("--output-count", type=int)
-    p.add_argument("--score-line", type=float)
-    p.add_argument("--skip-aux-refresh", action="store_true")
-    p.set_defaults(func=_execute_preset)
 
     p = sub.add_parser("wait-run", help="等待运行进入终态")
     p.add_argument("run_id")
@@ -750,42 +430,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("readiness", help="查看系统就绪检查")
     p.set_defaults(func=_readiness)
-
-    p = sub.add_parser("matrix-run", help="一次执行全部启用预设，生成推荐矩阵批次")
-    p.add_argument("--async-job", action="store_true", help="后台启动长任务，立即返回 job_id")
-    p.add_argument("--matrix-batch-name", default="CLI预设矩阵")
-    p.add_argument("--run-name-prefix")
-    p.add_argument("--data-source", default="local_pool_realtime", choices=["local_pool", "local_pool_realtime", "local_pool_preferred", "realtime"])
-    p.add_argument("--output-count", type=int)
-    p.add_argument("--score-line", type=float)
-    p.add_argument("--skip-aux-refresh", action="store_true")
-    p.add_argument("--disable-agent-review", action="store_true")
-    p.add_argument("--agent-review-limit", type=int)
-    p.add_argument("--agent-review-concurrency", type=int)
-    p.add_argument("--stop-on-error", action="store_true")
-    p.add_argument("--table", action="store_true", help="同时返回 Markdown 表格")
-    p.add_argument("--top", type=int, default=5, help="每个预设展示 Top N 推荐")
-    p.set_defaults(func=_run_matrix)
-
-    p = sub.add_parser("matrix-result", help="查看最近或指定批次的推荐矩阵")
-    p.add_argument("--batch-id")
-    p.add_argument("--table", action="store_true", help="返回 Markdown 表格")
-    p.add_argument("--top", type=int, default=5, help="每个预设展示 Top N 推荐")
-    p.set_defaults(func=_matrix_result)
-
-    p = sub.add_parser("matrix-status", help="查看异步矩阵任务状态")
-    p.add_argument("job_id")
-    p.add_argument("--table", action="store_true", help="完成后补充 Markdown 表格")
-    p.add_argument("--top", type=int, default=5, help="每个预设展示 Top N 推荐")
-    p.set_defaults(func=_matrix_job_status)
-
-    p = sub.add_parser("matrix-wait", help="等待异步矩阵任务完成")
-    p.add_argument("job_id")
-    p.add_argument("--timeout", type=int, default=1800)
-    p.add_argument("--interval", type=float, default=10.0)
-    p.add_argument("--table", action="store_true", help="完成后补充 Markdown 表格")
-    p.add_argument("--top", type=int, default=5, help="每个预设展示 Top N 推荐")
-    p.set_defaults(func=_wait_matrix_job)
 
     return parser
 

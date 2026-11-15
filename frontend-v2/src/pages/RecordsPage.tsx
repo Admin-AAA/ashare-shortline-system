@@ -9,7 +9,6 @@ import {
 } from "lucide-react";
 import { api } from "../api/client";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
-import { usePresetsQuery } from "../api/queries/useRunQueries";
 import { ResumeRunButton } from "../ui/ResumeRunButton";
 import type {
   MatrixRecordsResponse,
@@ -222,7 +221,6 @@ function RunRecordsList() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("__all__");
-  const [presetFilter, setPresetFilter] = useState<string>("__all__");
   const [modeFilter, setModeFilter] = useState<string>("__all__");
   const [page, setPage] = useState(1);
   const pageSize = 20;
@@ -249,14 +247,12 @@ function RunRecordsList() {
     return { from: fmt(from), to: fmt(today) };
   }, [datePreset, dateFrom, dateTo]);
 
-  const presetsQ = usePresetsQuery();
   const filters = {
     page,
     page_size: pageSize,
     fields: "slim" as const,
     run_mode: modeFilter === "__all__" ? undefined : modeFilter,
     status: statusFilter === "__all__" ? undefined : statusFilter,
-    preset_id: presetFilter === "__all__" ? undefined : presetFilter,
     trade_date_from: effectiveDateRange.from || undefined,
     trade_date_to: effectiveDateRange.to || undefined,
   };
@@ -286,7 +282,7 @@ function RunRecordsList() {
 
   const resetFilters = () => {
     setDatePreset("all"); setDateFrom(""); setDateTo("");
-    setStatusFilter("__all__"); setPresetFilter("__all__"); setModeFilter("__all__");
+    setStatusFilter("__all__"); setModeFilter("__all__");
     setMinPicks(""); setSortKey("started_at"); setSortDir("desc");
     resetPage();
   };
@@ -296,7 +292,7 @@ function RunRecordsList() {
   const data = q.data!;
   const total = data.total;
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
-  const filtered = [statusFilter, presetFilter, modeFilter].some((v) => v !== "__all__") || datePreset !== "all" || (extra.min_picks !== undefined && !data.degraded);
+  const filtered = [statusFilter, modeFilter].some((v) => v !== "__all__") || datePreset !== "all" || (extra.min_picks !== undefined && !data.degraded);
   const SortTh = ({ col, align = "left", children }: { col: RunPageSort; align?: "left" | "right"; children: React.ReactNode }) => {
     const active = !data.degraded && sortKey === col;
     return (
@@ -348,13 +344,6 @@ function RunRecordsList() {
             <option value="completed">completed</option>
             <option value="failed">failed</option>
             <option value="interrupted">interrupted</option>
-          </select>
-        </div>
-        <div className="records-filterbar__group">
-          <label className="records-filterbar__label">预设</label>
-          <select className="cfg-input records-filterbar__select" value={presetFilter} onChange={(e) => { setPresetFilter(e.target.value); resetPage(); }}>
-            <option value="__all__">全部</option>
-            {(presetsQ.data ?? []).map((p) => <option key={p.preset_id} value={p.preset_id}>{p.name}</option>)}
           </select>
         </div>
         <div className="records-filterbar__group">

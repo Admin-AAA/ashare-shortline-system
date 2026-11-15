@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.engine.trading_calendar import normalize_trade_date, latest_allowed_bar_date
-from app.models.tables import Preset, RecommendationRun, Stock
+from app.models.tables import RecommendationRun, Stock
 from app.services.registry.default_strategy import DEFAULT_SINGLE_STRATEGY_ID
 from app.services.evidence.validation import (
     canonical_historical_reconstruction_run_ids,
@@ -97,7 +97,6 @@ def analyze_stock(
     trade_date: str | None = None,
     include_llm: bool = False,
     skill_id: str = DEFAULT_SINGLE_STRATEGY_ID,
-    preset_id: str | None = None,
 ) -> dict[str, Any]:
     """以单只股票为输入，原样执行正式推荐管线的评分阶段。"""
     t0 = time.perf_counter()
@@ -107,12 +106,11 @@ def analyze_stock(
     stock = db.scalar(select(Stock).where(Stock.code == code))
     if not stock:
         return {"status": "error", "message": f"股票 {code} 不存在"}
-    request, preset = _single_stock_run_request(
+    request = _single_stock_run_request(
         db,
         trade_date=trade_date,
         include_llm=include_llm,
         skill_id=skill_id,
-        preset_id=preset_id,
     )
     run_id = f"single-stock-{code}-{uuid.uuid4().hex[:10]}"
     universe = _SingleStockMarketUniverse(db, code)
@@ -182,8 +180,8 @@ def analyze_stock(
         "pipeline": {
             "decision": pipeline_decision,
             "recommended": recommended_card is not None,
-            "preset_id": request.preset_id,
-            "preset_name": preset.name if preset else None,
+            "preset_id": None,
+            "preset_name": None,
             "score_line": request.score_line,
             "selected_skill_count": len(data.selected_skills),
             "skill_gate_passed": bool(data.skill_candidates),
@@ -197,7 +195,6 @@ def analyze_stock(
             skill_reviews=skill_reviews,
             normalized_reviews=normalized_reviews,
             scored_card=scored_card,
-            preset=preset,
             request=request,
             api_costs=list(data.api_costs),
             decision=pipeline_decision,
@@ -350,16 +347,12 @@ def _single_stock_run_request(
     trade_date: str,
     include_llm: bool,
     skill_id: str,
-    preset_id: str | None,
-) -> tuple[Any, Preset | None]:
+) -> Any:
     from app.services.runs.contracts import parse_run_request
     from app.services.workbench_service import _merge_run_params
 
-    preset = db.get(Preset, preset_id) if preset_id else None
-    if preset_id and preset is None:
-        raise ValueError(f"预设 {preset_id} 不存在")
     payload: dict[str, Any] = {
-        "preset_id": preset_id,
+        "single_skill_id": skill_id,
         "trade_date_override": trade_date,
         "disable_agent_review": not include_llm,
         # 单股分析是"这只票现在按管线算多少分"，不是出票：关闭跨 run/跨日重复推荐过滤，
@@ -367,13 +360,11 @@ def _single_stock_run_request(
         # 是否已被正式推荐改由结果里的 prior_formal_recommendations 标注。仅影响单股请求。
         "hide_recent_repeats": False,
         "dedup_same_day": False,
-        "run_name": f"单股推荐 · {skill_id if not preset else preset.name}",
+        "run_name": f"单股推荐 · {skill_id}",
     }
-    if preset is None:
-        payload["single_skill_id"] = skill_id
-    params = _merge_run_params(db, preset, payload)
+    params = _merge_run_params(payload)
     params["run_mode"] = "formal"
-    return parse_run_request(params), preset
+    return parse_run_request(params)
 
 
 async def _execute_single_stock_scoring_pipeline(
@@ -449,7 +440,6 @@ def _single_stock_llm_analysis(
     skill_reviews: list[dict[str, Any]],
     normalized_reviews: list[dict[str, Any]],
     scored_card: dict[str, Any] | None,
-    preset: Preset | None,
     request: Any,
     api_costs: list[dict[str, Any]],
     decision: str,
@@ -464,8 +454,8 @@ def _single_stock_llm_analysis(
     return {
         "status": "ok" if valid else "skipped",
         "summary": None if valid else f"正式推荐管线未触发 LLM 深审：{decision}",
-        "preset_id": request.preset_id,
-        "preset_name": preset.name if preset else None,
+        "preset_id": None,
+        "preset_name": None,
         "risk_template": request.risk_template,
         "final_score": scored_card.get("final_score") if scored_card else None,
         "component_scores": scored_card.get("component_scores", {}) if scored_card else {},
@@ -489,7 +479,7 @@ def _persist_single_stock_history(db: Session, code: str, trade_date: str, resul
 
         final_score = _resolve_single_stock_final_score(result)
 
-        # skill_count：preset 模式取有效 skill 数，单 skill 模式=1
+        # skill_count：单 skill 模式=1；有 LLM 深审时按有效 review 数计
         llm = result.get("llm_analysis")
         skill_count = 1
         if llm and isinstance(llm.get("skill_reviews"), list):
@@ -514,7 +504,7 @@ def _persist_single_stock_history(db: Session, code: str, trade_date: str, resul
 def _resolve_single_stock_final_score(result: dict[str, Any]) -> float | None:
     """返回单股记录唯一总分，口径与页面实际评分一致且限定为 0–100。
 
-    preset 模式优先使用推荐管线聚合分；否则使用已经归一化的
+    优先使用推荐管线聚合分；否则使用已经归一化的
     ``dsa_signal_score``。后者本身就是六个技术子分的总分，不能再次求和。
     """
     if "final_score" in result and result["final_score"] is None:

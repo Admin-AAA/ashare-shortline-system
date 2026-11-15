@@ -3,7 +3,7 @@
 任务 7.4（需求 6.1）落地：把 `workbench_service.py` 里散落的 `_bootstrap_cache` /
 `_initial_state_cache` 两组缓存字典 + 锁 + `invalidate_bootstrap_cache` 收口到本
 模块，作为纯缓存原语（无业务域依赖），供 `workbench_service.bootstrap_workbench_state`
-/ `get_initial_workbench_state`（编排）与 `registry/*`（skill/preset CRUD，写操作后
+/ `get_initial_workbench_state`（编排）与 `registry/*`（skill 注册表写操作后
 需要失效缓存）共用，避免 workbench_service <-> registry 之间因 `invalidate_bootstrap_cache`
 产生循环 import。
 """

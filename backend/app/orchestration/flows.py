@@ -119,15 +119,6 @@ def recommendation_flow(
     execute_recommendation_run(run_id, correlation_id)
 
 
-@flow(name="manual-preset-matrix", timeout_seconds=10800)
-def manual_preset_matrix_flow(task_run_id: str, payload: dict) -> None:
-    _ensure_app_logging()
-    assert_no_brokerage_access(payload, context="flow:manual-preset-matrix")  # Scope_Guard 0.10
-    from app.services.scheduler_service import _execute_manual_preset_matrix
-
-    _execute_manual_preset_matrix(task_run_id, payload)
-
-
 @flow(name="manual-data-health-remediation", timeout_seconds=7200)
 def manual_data_health_remediation_flow(task_run_id: str, payload: dict) -> None:
     _ensure_app_logging()

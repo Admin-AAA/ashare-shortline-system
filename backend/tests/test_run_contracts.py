@@ -137,7 +137,6 @@ def test_v0_upgrader_maps_legacy_run_fields_without_dropping_identity():
         {
             "mode": "experiment",
             "name": "旧调度任务",
-            "preset": {"preset_id": "preset-old", "name": "仅展示字段"},
             "risk": "aggressive",
             "review": True,
             "refresh": False,
@@ -148,7 +147,6 @@ def test_v0_upgrader_maps_legacy_run_fields_without_dropping_identity():
 
     assert request.schema_version == RUN_REQUEST_SCHEMA_VERSION
     assert request.run_mode is RunMode.EXPERIMENT
-    assert request.preset_id == "preset-old"
     assert request.risk_template == "aggressive"
     assert request.disable_agent_review is False
     assert request.skip_aux_refresh is True

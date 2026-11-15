@@ -6,29 +6,6 @@ export type ScheduledTaskType =
   | "data_backfill"
   | "formal_safety_net";
 
-export type PresetSkill = {
-  skill_id: string;
-  name: string;
-  weight: number;
-  sort_order: number;
-};
-
-export type Preset = {
-  preset_id: string;
-  name: string;
-  description?: string | null;
-  skip_aux_refresh: boolean;
-  market_scope: string;
-  market_scope_value?: string | null;
-  risk_template: string;
-  score_line: number;
-  output_count: number;
-  data_source: string;
-  hide_recent_repeats: boolean;
-  status: string;
-  skills: PresetSkill[];
-};
-
 export type ScheduledTask = {
   task_id: string;
   name: string;
@@ -77,6 +54,8 @@ export type RunSummary = {
   run_name: string;
   preset_id?: string | null;
   preset_name: string;
+  /** 单策略 run 的唯一策略 id；历史组合 run 为 null */
+  skill_id?: string | null;
   trade_date: string;
   run_mode?: string;
   /** 评估范围：live_forward=正式推荐（实盘），historical_replay=历史回放/补跑 */
@@ -929,7 +908,6 @@ export type LocalPoolGapSyncResult = {
 };
 
 export type HomeBootstrap = {
-  presets: Preset[];
   recent_runs: {
     latest: RunSummary | null;
   };
@@ -2482,12 +2460,6 @@ export type PresetDraft = {
   score_line: number;
   data_source: string;
   hide_recent_repeats: boolean;
-};
-
-export type PresetSkillDraft = {
-  skill_id: string;
-  weight: number;
-  sort_order: number;
 };
 
 export type PresetStatsRow = {

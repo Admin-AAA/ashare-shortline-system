@@ -15,10 +15,10 @@ def test_main_accepts_pretty_after_subcommand(monkeypatch):
 
     monkeypatch.setattr(ashare_cli, "_with_db", fake_with_db)
 
-    exit_code = ashare_cli.main(["presets", "--active-only", "--pretty"])
+    exit_code = ashare_cli.main(["runs", "--pretty"])
 
     assert exit_code == 0
-    assert calls == {"command": "presets", "pretty": True}
+    assert calls == {"command": "runs", "pretty": True}
 
 
 def test_emit_outputs_valid_json(capsys):
@@ -63,44 +63,10 @@ def test_new_data_sync_and_integrity_commands_exist():
         ["data-health"],
         ["alerts"],
         ["readiness"],
-        ["matrix-run"],
-        ["matrix-result"],
-        ["matrix-status", "matrix_1"],
-        ["matrix-wait", "matrix_1"],
     ]
     for argv in cases:
         ns = parser.parse_args(argv)
         assert ns.command == argv[0]
-
-
-def test_matrix_overlap_counts_cross_preset_recommendations():
-    rows = [
-        {
-            "preset_name": "陈小群",
-            "top_recommendations": [
-                {"code": "000001", "name": "平安银行", "final_score": 80},
-                {"code": "600519", "name": "贵州茅台", "final_score": 75},
-            ],
-        },
-        {
-            "preset_name": "炒股养家",
-            "top_recommendations": [
-                {"code": "000001", "name": "平安银行", "final_score": 82},
-            ],
-        },
-    ]
-
-    overlap = ashare_cli._matrix_overlap(rows)
-
-    assert overlap == [
-        {
-            "code": "000001",
-            "name": "平安银行",
-            "count": 2,
-            "presets": ["陈小群", "炒股养家"],
-            "max_score": 82.0,
-        }
-    ]
 
 
 def test_escape_md_keeps_table_cells_valid():

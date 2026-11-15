@@ -1,12 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, History, Loader2, PlayCircle, RotateCw, Search, Sparkles } from "lucide-react";
 import { api } from "../api/client";
-import type { Preset, RunDetail, SingleStockAnalysis, SingleStockSkillReview, ReplayAnalysisResult, StockMatrixHistoryItem } from "../types";
+import type { RunDetail, SingleStockAnalysis, SingleStockSkillReview, ReplayAnalysisResult, StockMatrixHistoryItem, StrategyListItem } from "../types";
 import { ErrorPage } from "../components/StateViews";
 import { Panel } from "../components/Panel";
 import { useUrlRoute } from "../app/useUrlRoute";
 import { queryParam } from "../app/nav";
-import { useCreateRunMutation, usePresetsQuery, useRunQuery } from "../api/queries/useRunQueries";
+import { useCreateRunMutation, useStrategiesQuery, useRunQuery } from "../api/queries/useRunQueries";
 import { isActiveRunStatus } from "../utils/display";
 import { formatBj } from "../utils/time";
 
@@ -17,14 +17,14 @@ import { formatBj } from "../utils/time";
 export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
   const { navigate, navigateSection } = useUrlRoute();
   const runId = queryParam("run_id");
-  const presetId = queryParam("preset_id");
+  const skillIdParam = queryParam("skill_id");
 
-  const [selectedPreset, setSelectedPreset] = useState<string>("");
+  const [selectedStrategy, setSelectedStrategy] = useState<string>("");
   const [message, setMessage] = useState("");
-  const presetsQuery = usePresetsQuery();
+  const strategiesQuery = useStrategiesQuery();
   const runQuery = useRunQuery(runId, refreshSignal);
   const createRunMutation = useCreateRunMutation();
-  const presets = presetsQuery.data ?? [];
+  const strategies = strategiesQuery.data ?? [];
   const detail = runQuery.data ?? null;
   const error = runQuery.error?.message ?? "";
   const running = createRunMutation.isPending;
@@ -40,20 +40,20 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
         : "立即运行";
 
   useEffect(() => {
-    if (!presets.length) return;
-    setSelectedPreset((current) => {
+    if (!strategies.length) return;
+    setSelectedStrategy((current) => {
       if (current) return current;
-      if (presetId && presets.some((item) => item.preset_id === presetId)) return presetId;
-      return presets[0]?.preset_id || "";
+      if (skillIdParam && strategies.some((item) => item.skill_id === skillIdParam)) return skillIdParam;
+      return strategies[0]?.skill_id || "";
     });
-  }, [presetId, presets]);
+  }, [skillIdParam, strategies]);
 
   async function startRun() {
-    if (!selectedPreset) return;
+    if (!selectedStrategy) return;
     setMessage("正在触发推荐运行…");
     try {
       const result = await createRunMutation.mutateAsync({
-        preset_id: selectedPreset,
+        single_skill_id: selectedStrategy,
         run_name: `驾驶舱 · 手动推荐`,
       });
       setMessage(`推荐已触发：${result.run.run_id}`);
@@ -93,10 +93,10 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
           bodyStyle={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}
         >
           <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "center" }}>
-            <label className="text-muted" style={{ fontSize: "var(--text-sm)" }}>运行预设</label>
+            <label className="text-muted" style={{ fontSize: "var(--text-sm)" }}>运行策略</label>
             <select
-              value={selectedPreset}
-              onChange={(e) => setSelectedPreset(e.target.value)}
+              value={selectedStrategy}
+              onChange={(e) => setSelectedStrategy(e.target.value)}
               style={{
                 background: "var(--surface-soft)",
                 border: "1px solid var(--line-strong)",
@@ -106,9 +106,9 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
                 fontFamily: "inherit",
               }}
             >
-              {presets.map((p) => (
-                <option key={p.preset_id} value={p.preset_id}>
-                  {p.name}
+              {strategies.map((s) => (
+                <option key={s.skill_id} value={s.skill_id}>
+                  {s.name}
                 </option>
               ))}
             </select>
@@ -117,7 +117,7 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
           <button
             className="btn btn--primary"
             onClick={startRun}
-            disabled={runActionBusy || !selectedPreset}
+            disabled={runActionBusy || !selectedStrategy}
             style={{ padding: "var(--space-3) var(--space-5)" }}
           >
             {runActionBusy ? <Loader2 size={16} className="spin" /> : <PlayCircle size={16} />}
@@ -131,7 +131,7 @@ export function RunDetailPage({ refreshSignal }: { refreshSignal: number }) {
           )}
         </Panel>
 
-        <SingleStockScorePanel key={queryParam("score_code") || "manual"} presets={presets} initialCode={queryParam("score_code") || ""} />
+        <SingleStockScorePanel key={queryParam("score_code") || "manual"} strategies={strategies} initialCode={queryParam("score_code") || ""} />
       </div>
 
       {error && <ErrorPage title="运行详情加载失败" message={error} onRetry={() => window.location.reload()} />}
@@ -274,10 +274,10 @@ function ReplayStatusTag({ label, tone }: { label: string; tone: "up" | "down" |
 // 单股票评分面板
 // ============================================================
 
-function SingleStockScorePanel({ presets, initialCode = "" }: { presets: Preset[]; initialCode?: string }) {
+function SingleStockScorePanel({ strategies, initialCode = "" }: { strategies: StrategyListItem[]; initialCode?: string }) {
   const [code, setCode] = useState(initialCode);
   const autoScored = useRef(false);
-  const [selectedPreset, setSelectedPreset] = useState<string>("");
+  const [selectedSkill, setSelectedSkill] = useState<string>("");
   const [includeLlm, setIncludeLlm] = useState(true);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<SingleStockAnalysis | null>(null);
@@ -289,10 +289,6 @@ function SingleStockScorePanel({ presets, initialCode = "" }: { presets: Preset[
   const [historyCode, setHistoryCode] = useState("");
   // 回放某条历史：加载其完整 result_json 后渲染
   const [replayId, setReplayId] = useState<number | null>(null);
-
-  useEffect(() => {
-    setSelectedPreset((current) => current || presets[0]?.preset_id || "");
-  }, [presets]);
 
   async function loadHistory(codeToFetch: string) {
     const trimmed = codeToFetch.trim();
@@ -320,13 +316,13 @@ function SingleStockScorePanel({ presets, initialCode = "" }: { presets: Preset[
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 来自 ⌘K「立即评分」：/run?score_code=xxxxxx —— 预设就绪后自动评分一次
+  // 来自 ⌘K「立即评分」：/run?score_code=xxxxxx —— 进入后自动评分一次（默认策略）
   useEffect(() => {
-    if (autoScored.current || !/^\d{6}$/.test(initialCode) || !selectedPreset) return;
+    if (autoScored.current || !/^\d{6}$/.test(initialCode)) return;
     autoScored.current = true;
     void runScore();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialCode, selectedPreset]);
+  }, [initialCode]);
 
   async function runScore() {
     const trimmed = code.trim();
@@ -342,7 +338,7 @@ function SingleStockScorePanel({ presets, initialCode = "" }: { presets: Preset[
       const res = await api.analyzeStock({
         code: trimmed,
         include_llm: includeLlm,
-        preset_id: selectedPreset || undefined,
+        skill_id: selectedSkill || undefined,
       });
       if (res.status === "error") {
         setError(res.message || "分析失败");
@@ -412,8 +408,8 @@ function SingleStockScorePanel({ presets, initialCode = "" }: { presets: Preset[
           }}
         />
         <select
-          value={selectedPreset}
-          onChange={(e) => setSelectedPreset(e.target.value)}
+          value={selectedSkill}
+          onChange={(e) => setSelectedSkill(e.target.value)}
           style={{
             background: "var(--surface-soft)",
             border: "1px solid var(--line-strong)",
@@ -423,9 +419,9 @@ function SingleStockScorePanel({ presets, initialCode = "" }: { presets: Preset[
             fontFamily: "inherit",
           }}
         >
-          <option value="">不选预设（单 skill）</option>
-          {presets.map((p) => (
-            <option key={p.preset_id} value={p.preset_id}>{p.name}</option>
+          <option value="">默认策略</option>
+          {strategies.map((s) => (
+            <option key={s.skill_id} value={s.skill_id}>{s.name}</option>
           ))}
         </select>
         <label style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-sm)", color: "var(--ink-secondary)", cursor: "pointer" }}>

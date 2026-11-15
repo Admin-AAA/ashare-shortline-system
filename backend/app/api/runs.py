@@ -29,8 +29,8 @@ router = APIRouter(prefix="/api/runs", tags=["runs"])
 @router.post("")
 async def create_run(payload: dict, db: Session = Depends(get_db)):
     try:
-        if not payload.get("preset_id") and not payload.get("single_skill_id"):
-            raise ValueError("preset_id or single_skill_id is required")
+        if not payload.get("single_skill_id"):
+            raise ValueError("single_skill_id is required")
         if not payload.get("wait_for_completion") and payload.get("async", True) is not False:
             # 同步 DB 写入放到线程池，避免阻塞事件循环（期间所有请求含 /api/auth/status 都会卡住）。
             from starlette.concurrency import run_in_threadpool
@@ -43,26 +43,6 @@ async def create_run(payload: dict, db: Session = Depends(get_db)):
     except Exception as exc:
         logger.exception("create_run unexpected error")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@router.post("/matrix")
-def create_matrix_run(payload: dict | None = None):
-    try:
-        from app.services.scheduler_service import start_preset_matrix_now
-
-        return start_preset_matrix_now(payload or {})
-    except RuntimeError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("create matrix run failed")
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
-@router.get("/matrix/status")
-def matrix_run_status():
-    from app.services.scheduler_service import get_latest_preset_matrix_task_run
-
-    return {"task_run": get_latest_preset_matrix_task_run()}
 
 
 @router.post("/backtest/comparison")
@@ -124,12 +104,11 @@ def analyze_single_stock(payload: dict, db: Session = Depends(get_db)):
     trade_date = str(payload.get("trade_date") or "").strip() or None
     include_llm = bool(payload.get("include_llm", False))
     skill_id = str(payload.get("skill_id") or DEFAULT_SINGLE_STRATEGY_ID).strip()
-    preset_id = str(payload.get("preset_id") or "").strip() or None
 
     try:
         return analyze_stock(
             db, code, trade_date=trade_date, include_llm=include_llm,
-            skill_id=skill_id, preset_id=preset_id,
+            skill_id=skill_id,
         )
     except Exception as exc:
         logger.exception("single stock analysis failed for %s", code)

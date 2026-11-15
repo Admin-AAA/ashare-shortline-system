@@ -13,7 +13,6 @@ from app.orchestration.flows import (
     execution_confirmation_poll_flow,
     intraday_lock_poll_flow,
     manual_data_health_remediation_flow,
-    manual_preset_matrix_flow,
     recommendation_flow,
     scheduled_task_flow,
     stale_run_recovery_flow,
@@ -23,7 +22,6 @@ from app.orchestration.flows import (
 SCHEDULED_DEPLOYMENT_PREFIX = "scheduled-task"
 WORK_POOL_NAME = "ashare-local"
 RECOMMENDATION_DEPLOYMENT_NAME = "recommendation-run/default"
-MANUAL_MATRIX_DEPLOYMENT_NAME = "manual-preset-matrix/default"
 MANUAL_REMEDIATION_DEPLOYMENT_NAME = "manual-data-health-remediation/default"
 # 子 flow（推荐 run）走独立队列：父 scheduled-task flow 在等待子 run 时仍占 default
 # 队列槽位（limit 2），两个父 flow 同时运行会把子 run 饿死成 Late（2026-10-15 实测死锁）。
@@ -59,7 +57,6 @@ def schedule_all_enabled_tasks() -> DeploymentSyncResult:
         deployment.apply()
         names.append(name)
     recommendation_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, work_queue_name=RECOMMENDATION_WORK_QUEUE, tags=["ashare", "recommendation"], job_variables=_JOB_VARIABLES).apply()
-    manual_preset_matrix_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, tags=["ashare", "matrix"], job_variables=_JOB_VARIABLES).apply()
     manual_data_health_remediation_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, tags=["ashare", "remediation"], job_variables=_JOB_VARIABLES).apply()
     # Periodic housekeeping (no DB ScheduledTask rows — these are infrastructure flows)
     intraday_lock_poll_flow.to_deployment(

@@ -31,7 +31,8 @@ def test_every_operation_has_unique_id_and_typed_success_response() -> None:
     # 端点数会随功能增长：硬编码精确值每新增一个路由就假失败一次
     # （2026-11-14 实测 146 个 operationId 全部唯一，却被 `== 145` 判失败）。
     # 真正的不变量是「operationId 唯一」+「2xx 有类型化 schema」；数量只守下限防误删路由。
-    assert len(operation_ids) >= 145
+    # 2026-11-15 预设层退役：有意删除预设 CRUD 与预设矩阵端点，基线降至 142。
+    assert len(operation_ids) >= 142
     duplicates = [oid for oid, n in Counter(operation_ids).items() if n > 1]
     assert not duplicates, f"重复 operationId: {duplicates}"
     assert missing == []

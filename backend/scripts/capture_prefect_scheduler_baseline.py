@@ -115,11 +115,6 @@ _SCHEDULER_IDENTITY_CONTRACTS: dict[str, dict[str, str]] = {
         "scope": "evaluation scope + horizon/label policy",
         "cardinality": "a settlement batch may label multiple recommendation dates",
     },
-    "preset_matrix_run": {
-        "business_date": "trade_date of the RecommendationRuns emitted by the matrix batch",
-        "scope": "matrix batch identity + run_mode + frozen active preset set",
-        "cardinality": "one manual batch may emit multiple preset/date identities",
-    },
 }
 
 _PREFECT_FLOW_IDENTITY_CONTRACTS: tuple[dict[str, str], ...] = (
@@ -136,13 +131,6 @@ _PREFECT_FLOW_IDENTITY_CONTRACTS: tuple[dict[str, str], ...] = (
         "scope": "RecommendationRun.run_mode + evaluation_scope + preset identity",
         "durable_identity": "run_id",
         "scheduled_for": "dispatch/expected start time",
-    },
-    {
-        "flow_name": "manual-preset-matrix",
-        "business_date": "matrix output RecommendationRun.trade_date",
-        "scope": "matrix batch + run_mode + preset set",
-        "durable_identity": "ScheduledTaskRun.task_run_id",
-        "scheduled_for": "manual dispatch time",
     },
     {
         "flow_name": "manual-data-health-remediation",
@@ -1011,7 +999,6 @@ def collect_scheduler_inventory(
         for row in run_rows
     ]
     task_types = {str(row.task_type) for row in task_rows}
-    task_types.add("preset_matrix_run")
     return {
         "tasks": tasks,
         "task_count": len(tasks),
