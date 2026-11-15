@@ -697,8 +697,8 @@ def check_xiaoshi_min1(open_days: list[str], expected: str, root: Path | None = 
               "替代数据源 data/xiaoshi_min_all（全市场分钟线归档）")
     return _item("file:xiaoshi_min1", "小石1分钟旧缓存 data/xiaoshi_min1（230只，已退役）", "文件数据集", GREEN, kind="file",
                  latest=mx, expected=expected, lag=lag, detail=detail, retired=True,
-                 impact="已退役：研究脚本请改读 xiaoshi_min_all（sync_xiaoshi_min_all.load_minutes）；"
-                        "bar.minute 网关里的 xiaoshi_min1 提供方对新交易日返回空，依赖兜底源，线上分钟线实际来自 minute_kbars")
+                 impact="已退役：研究脚本请改读数据库 minute_kbars（覆盖目标池 300 只）；"
+                        "data/xiaoshi_min_all 同样随整源退役冻结，不要再作为增量来源")
 
 
 def check_xiaoshi_min_all(open_days: list[str], expected: str, now: datetime | None = None,
