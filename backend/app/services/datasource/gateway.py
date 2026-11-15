@@ -577,6 +577,7 @@ ALWAYS_GATEWAY: frozenset[str] = frozenset({
     "ann.search.cninfo", "bar.minute", "quote.snapshot", "quote.daily", "bar.daily",
     "aux.limit_up", "aux.concept_sector", "aux.capital_flow", "aux.dragon_tiger", "aux.news",
     "ann.list", "xiaoshi.alt", "fina_indicator", "margin.detail", "float.unlock",
+    "market.qvix",
 })
 
 

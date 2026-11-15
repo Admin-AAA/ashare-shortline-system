@@ -32,6 +32,9 @@ PROVIDERS: dict[str, ProviderSpec] = {
     "cninfo": ProviderSpec((("cninfo", "news"),), 60),
     # 巨潮全文检索（ann.search.cninfo）：独立低速桶，礼貌访问；HTTP 403/429/5xx 触发熔断计数
     "cninfo_search": ProviderSpec((("cninfo", "news"),), 20, ("CninfoBlockedError",)),
+    # QVIX 期权隐含波动率（market.qvix）：akshare 无 token，低频日更，共用 akshare 源总开关；
+    # 上游是 options.qvix 主机（非 push2his 东财），实测稳定。见 app/services/datasource/qvix.py。
+    "akshare_qvix": ProviderSpec((("akshare", "tushare_provider"),), 20),
     # xiaoshi_quote / xiaoshi_kline / xiaoshi_alt 于 2026-11-15 随数据源退役移除
     # （app/services/datasource/retired.py）；恢复订阅后把三行加回并删掉 retired 里的条目。
     "tushare_quote": ProviderSpec((("tushare", "quote"),), 0),

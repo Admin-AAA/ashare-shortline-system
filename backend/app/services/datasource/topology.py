@@ -23,6 +23,7 @@ LABELS: dict[str, str] = {
     "baostock": "Baostock", "tushare_stk_mins": "Tushare stk_mins",
     "sina_kline": "新浪分钟", "tencent_mkline": "腾讯分钟", "akshare": "AKShare",
     "eastmoney": "东方财富", "cninfo": "巨潮", "cninfo_search": "巨潮全文检索",
+    "akshare_qvix": "QVIX波动率",
     "promax": "Promax", "quantdata": "QuantData", "teajoin": "Teajoin",
 }
 # Tushare 路由下游的接口：这些 provider 还受 tushare:<pro>:<api> 路由熔断约束。
@@ -64,9 +65,12 @@ def _wrap_datasets(reg: dict[str, list[str]]) -> list[dict[str, Any]]:
         {"key": "aux.capital_flow", "label": "资金流", "providers": names("capital_flow", "{}_capital_flow")},
         {"key": "aux.dragon_tiger", "label": "龙虎榜", "providers": names("dragon_tiger", "{}_dragon_tiger")},
         {"key": "aux.news", "label": "新闻公告", "providers": names("news", "{}_news")},
+        {"key": "margin.detail", "label": "融资融券明细", "providers": ["eastmoney"]},
+        {"key": "float.unlock", "label": "限售解禁", "providers": ["eastmoney"]},
         {"key": "ann.list", "label": "公告补数", "providers": ["eastmoney", "cninfo"]},
         {"key": "ann.search.cninfo", "label": "公告全文检索", "providers": ["cninfo_search"]},
         {"key": "fina_indicator", "label": "财务指标补数", "providers": ["promax"]},
+        {"key": "market.qvix", "label": "波动率QVIX", "providers": ["akshare_qvix"]},
     ]
 
 
