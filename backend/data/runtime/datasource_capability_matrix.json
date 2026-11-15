@@ -1,15 +1,15 @@
 {
- "probed_at": "2026-10-31T10:05:30+0800",
- "last_trade_date": "20261030",
+ "probed_at": "2026-11-14T11:51:21+0800",
+ "last_trade_date": "20261113",
  "rows": [
   {
    "provider": "promax",
    "api": "daily",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 1248,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 1004,
    "field_completeness": 1.0
   },
   {
@@ -17,9 +17,9 @@
    "api": "daily",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 2230,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 1117,
    "field_completeness": 1.0
   },
   {
@@ -27,9 +27,9 @@
    "api": "daily",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 2919,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 282,
    "field_completeness": 1.0
   },
   {
@@ -37,9 +37,9 @@
    "api": "adj_factor",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 596,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 382,
    "field_completeness": 1.0
   },
   {
@@ -47,9 +47,9 @@
    "api": "adj_factor",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 412,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 297,
    "field_completeness": 1.0
   },
   {
@@ -57,9 +57,9 @@
    "api": "adj_factor",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 2992,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 241,
    "field_completeness": 1.0
   },
   {
@@ -67,9 +67,9 @@
    "api": "daily_basic",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 175,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 738,
    "field_completeness": 1.0
   },
   {
@@ -77,9 +77,9 @@
    "api": "daily_basic",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 377,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 340,
    "field_completeness": 1.0
   },
   {
@@ -87,9 +87,9 @@
    "api": "daily_basic",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 3772,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 320,
    "field_completeness": 1.0
   },
   {
@@ -97,9 +97,9 @@
    "api": "stk_limit",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 1139,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 555,
    "field_completeness": 1.0
   },
   {
@@ -107,9 +107,9 @@
    "api": "stk_limit",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 398,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 449,
    "field_completeness": 1.0
   },
   {
@@ -117,9 +117,9 @@
    "api": "stk_limit",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 9631,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 287,
    "field_completeness": 1.0
   },
   {
@@ -128,8 +128,8 @@
    "rate_limit_per_minute": 180,
    "status": "ok",
    "rows": 30,
-   "latest": "20261030",
-   "latency_ms": 664,
+   "latest": "20261113",
+   "latency_ms": 992,
    "field_completeness": 1.0
   },
   {
@@ -138,8 +138,8 @@
    "rate_limit_per_minute": 120,
    "status": "ok",
    "rows": 22,
-   "latest": "20261030",
-   "latency_ms": 229,
+   "latest": "20261113",
+   "latency_ms": 166,
    "field_completeness": 1.0
   },
   {
@@ -148,8 +148,8 @@
    "rate_limit_per_minute": 420,
    "status": "ok",
    "rows": 30,
-   "latest": "20261030",
-   "latency_ms": 4994,
+   "latest": "20261113",
+   "latency_ms": 386,
    "field_completeness": 1.0
   },
   {
@@ -159,7 +159,7 @@
    "status": "ok",
    "rows": 1,
    "latest": null,
-   "latency_ms": 613,
+   "latency_ms": 574,
    "field_completeness": 1.0
   },
   {
@@ -169,7 +169,7 @@
    "status": "ok",
    "rows": 1,
    "latest": null,
-   "latency_ms": 370,
+   "latency_ms": 269,
    "field_completeness": 0.667
   },
   {
@@ -179,7 +179,7 @@
    "status": "ok",
    "rows": 1,
    "latest": null,
-   "latency_ms": 340,
+   "latency_ms": 266,
    "field_completeness": 0.667
   },
   {
@@ -189,7 +189,7 @@
    "status": "ok",
    "rows": 4,
    "latest": "20120120",
-   "latency_ms": 116,
+   "latency_ms": 38,
    "field_completeness": 1.0
   },
   {
@@ -199,7 +199,7 @@
    "status": "ok",
    "rows": 4,
    "latest": "20120120",
-   "latency_ms": 350,
+   "latency_ms": 325,
    "field_completeness": 1.0
   },
   {
@@ -209,7 +209,7 @@
    "status": "ok",
    "rows": 4,
    "latest": "20120802",
-   "latency_ms": 925,
+   "latency_ms": 743,
    "field_completeness": 1.0
   },
   {
@@ -217,9 +217,9 @@
    "api": "suspend_d",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 60,
-   "latest": "20261030",
-   "latency_ms": 43,
+   "rows": 58,
+   "latest": "20261113",
+   "latency_ms": 645,
    "field_completeness": 1.0
   },
   {
@@ -227,9 +227,9 @@
    "api": "suspend_d",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 60,
-   "latest": "20261030",
-   "latency_ms": 400,
+   "rows": 58,
+   "latest": "20261113",
+   "latency_ms": 289,
    "field_completeness": 1.0
   },
   {
@@ -237,9 +237,9 @@
    "api": "suspend_d",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 60,
-   "latest": "20261030",
-   "latency_ms": 3532,
+   "rows": 58,
+   "latest": "20261113",
+   "latency_ms": 237,
    "field_completeness": 1.0
   },
   {
@@ -247,9 +247,9 @@
    "api": "moneyflow",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 835,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 637,
    "field_completeness": 1.0
   },
   {
@@ -257,9 +257,9 @@
    "api": "moneyflow",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 404,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 340,
    "field_completeness": 1.0
   },
   {
@@ -267,9 +267,9 @@
    "api": "moneyflow",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 2876,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 356,
    "field_completeness": 1.0
   },
   {
@@ -277,9 +277,9 @@
    "api": "moneyflow_hsgt",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 16,
-   "latest": "20261030",
-   "latency_ms": 168,
+   "rows": 21,
+   "latest": "20261113",
+   "latency_ms": 1711,
    "field_completeness": 1.0
   },
   {
@@ -287,9 +287,9 @@
    "api": "moneyflow_hsgt",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 16,
-   "latest": "20261030",
-   "latency_ms": 2100,
+   "rows": 21,
+   "latest": "20261113",
+   "latency_ms": 278,
    "field_completeness": 1.0
   },
   {
@@ -297,9 +297,9 @@
    "api": "moneyflow_hsgt",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 15,
-   "latest": "20261029",
-   "latency_ms": 1636,
+   "rows": 21,
+   "latest": "20261113",
+   "latency_ms": 262,
    "field_completeness": 1.0
   },
   {
@@ -308,8 +308,8 @@
    "rate_limit_per_minute": 180,
    "status": "ok",
    "rows": 80,
-   "latest": "20261030",
-   "latency_ms": 482,
+   "latest": "20261113",
+   "latency_ms": 368,
    "field_completeness": 1.0
   },
   {
@@ -318,8 +318,8 @@
    "rate_limit_per_minute": 120,
    "status": "ok",
    "rows": 80,
-   "latest": "20261030",
-   "latency_ms": 365,
+   "latest": "20261113",
+   "latency_ms": 346,
    "field_completeness": 1.0
   },
   {
@@ -331,7 +331,7 @@
    "message": "teajoin hsgt_top10 failed (invalid_request, upstream=-1: bad request: 以下参数至少传一个: ts_code, trade_date)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 1629,
+   "latency_ms": 215,
    "field_completeness": 0.0
   },
   {
@@ -341,7 +341,7 @@
    "status": "empty",
    "rows": 0,
    "latest": null,
-   "latency_ms": 118,
+   "latency_ms": 839,
    "field_completeness": 1.0
   },
   {
@@ -351,7 +351,7 @@
    "status": "empty",
    "rows": 0,
    "latest": null,
-   "latency_ms": 644,
+   "latency_ms": 320,
    "field_completeness": 1.0
   },
   {
@@ -361,7 +361,7 @@
    "status": "empty",
    "rows": 0,
    "latest": null,
-   "latency_ms": 2084,
+   "latency_ms": 361,
    "field_completeness": 1.0
   },
   {
@@ -369,9 +369,9 @@
    "api": "top_list",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 96,
-   "latest": "20261030",
-   "latency_ms": 573,
+   "rows": 69,
+   "latest": "20261113",
+   "latency_ms": 801,
    "field_completeness": 1.0
   },
   {
@@ -379,69 +379,69 @@
    "api": "top_list",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 96,
-   "latest": "20261030",
+   "rows": 69,
+   "latest": "20261113",
+   "latency_ms": 379,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "teajoin",
+   "api": "top_list",
+   "rate_limit_per_minute": 420,
+   "status": "ok",
+   "rows": 69,
+   "latest": "20261113",
+   "latency_ms": 417,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "top_inst",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 690,
+   "latest": "20261113",
+   "latency_ms": 3312,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "top_inst",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 690,
+   "latest": "20261113",
+   "latency_ms": 199,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "teajoin",
+   "api": "top_inst",
+   "rate_limit_per_minute": 420,
+   "status": "ok",
+   "rows": 690,
+   "latest": "20261113",
+   "latency_ms": 733,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "limit_list_d",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 91,
+   "latest": "20261113",
+   "latency_ms": 133,
+   "field_completeness": 0.947
+  },
+  {
+   "provider": "quantdata",
+   "api": "limit_list_d",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 91,
+   "latest": "20261113",
    "latency_ms": 629,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "teajoin",
-   "api": "top_list",
-   "rate_limit_per_minute": 420,
-   "status": "ok",
-   "rows": 96,
-   "latest": "20261030",
-   "latency_ms": 5052,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "promax",
-   "api": "top_inst",
-   "rate_limit_per_minute": 180,
-   "status": "ok",
-   "rows": 960,
-   "latest": "20261030",
-   "latency_ms": 2215,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "quantdata",
-   "api": "top_inst",
-   "rate_limit_per_minute": 120,
-   "status": "ok",
-   "rows": 960,
-   "latest": "20261030",
-   "latency_ms": 265,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "teajoin",
-   "api": "top_inst",
-   "rate_limit_per_minute": 420,
-   "status": "ok",
-   "rows": 960,
-   "latest": "20261030",
-   "latency_ms": 7028,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "promax",
-   "api": "limit_list_d",
-   "rate_limit_per_minute": 180,
-   "status": "ok",
-   "rows": 160,
-   "latest": "20261030",
-   "latency_ms": 872,
-   "field_completeness": 0.947
-  },
-  {
-   "provider": "quantdata",
-   "api": "limit_list_d",
-   "rate_limit_per_minute": 120,
-   "status": "ok",
-   "rows": 160,
-   "latest": "20261030",
-   "latency_ms": 196,
    "field_completeness": 0.947
   },
   {
@@ -449,9 +449,9 @@
    "api": "limit_list_d",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 160,
-   "latest": "20261030",
-   "latency_ms": 7228,
+   "rows": 91,
+   "latest": "20261113",
+   "latency_ms": 264,
    "field_completeness": 1.0
   },
   {
@@ -459,9 +459,9 @@
    "api": "block_trade",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 650,
-   "latest": "20261030",
-   "latency_ms": 813,
+   "rows": 710,
+   "latest": "20261113",
+   "latency_ms": 1644,
    "field_completeness": 1.0
   },
   {
@@ -469,9 +469,9 @@
    "api": "block_trade",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 718,
-   "latest": "20261030",
-   "latency_ms": 400,
+   "rows": 730,
+   "latest": "20261113",
+   "latency_ms": 442,
    "field_completeness": 1.0
   },
   {
@@ -479,9 +479,9 @@
    "api": "block_trade",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 718,
-   "latest": "20261030",
-   "latency_ms": 11376,
+   "rows": 730,
+   "latest": "20261113",
+   "latency_ms": 727,
    "field_completeness": 1.0
   },
   {
@@ -493,7 +493,7 @@
    "message": "promax margin failed (http_client, upstream=invalid_params)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 86,
+   "latency_ms": 90,
    "field_completeness": 0.0
   },
   {
@@ -502,8 +502,8 @@
    "rate_limit_per_minute": 120,
    "status": "ok",
    "rows": 22,
-   "latest": "20261030",
-   "latency_ms": 423,
+   "latest": "20261113",
+   "latency_ms": 312,
    "field_completeness": 1.0
   },
   {
@@ -511,9 +511,9 @@
    "api": "margin",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 21,
-   "latest": "20261029",
-   "latency_ms": 9429,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 240,
    "field_completeness": 1.0
   },
   {
@@ -521,9 +521,9 @@
    "api": "margin_detail",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 16,
-   "latest": "20261029",
-   "latency_ms": 89,
+   "rows": 21,
+   "latest": "20261112",
+   "latency_ms": 1092,
    "field_completeness": 0.909
   },
   {
@@ -531,9 +531,9 @@
    "api": "margin_detail",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 16,
-   "latest": "20261029",
-   "latency_ms": 747,
+   "rows": 21,
+   "latest": "20261112",
+   "latency_ms": 359,
    "field_completeness": 0.909
   },
   {
@@ -541,9 +541,9 @@
    "api": "margin_detail",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 16,
-   "latest": "20261029",
-   "latency_ms": 3436,
+   "rows": 21,
+   "latest": "20261112",
+   "latency_ms": 312,
    "field_completeness": 1.0
   },
   {
@@ -555,7 +555,7 @@
    "message": "promax ths_index failed (http_client, upstream=invalid_params)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 25,
+   "latency_ms": 255,
    "field_completeness": 0.0
   },
   {
@@ -565,7 +565,7 @@
    "status": "ok",
    "rows": 395,
    "latest": null,
-   "latency_ms": 176,
+   "latency_ms": 671,
    "field_completeness": 1.0
   },
   {
@@ -575,7 +575,7 @@
    "status": "ok",
    "rows": 412,
    "latest": null,
-   "latency_ms": 1503,
+   "latency_ms": 409,
    "field_completeness": 1.0
   },
   {
@@ -583,9 +583,9 @@
    "api": "ths_member",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 281,
+   "rows": 282,
    "latest": null,
-   "latency_ms": 361,
+   "latency_ms": 511,
    "field_completeness": 1.0
   },
   {
@@ -593,9 +593,9 @@
    "api": "ths_member",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 281,
+   "rows": 282,
    "latest": null,
-   "latency_ms": 440,
+   "latency_ms": 503,
    "field_completeness": 1.0
   },
   {
@@ -603,9 +603,9 @@
    "api": "ths_member",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 280,
+   "rows": 281,
    "latest": null,
-   "latency_ms": 10318,
+   "latency_ms": 315,
    "field_completeness": 1.0
   },
   {
@@ -615,7 +615,7 @@
    "status": "ok",
    "rows": 13,
    "latest": null,
-   "latency_ms": 315,
+   "latency_ms": 333,
    "field_completeness": 1.0
   },
   {
@@ -627,7 +627,7 @@
    "message": "quantdata stk_mins failed (provider_error, upstream=2003: api not purchased)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 154,
+   "latency_ms": 98,
    "field_completeness": 0.0
   },
   {
@@ -639,7 +639,7 @@
    "message": "teajoin stk_mins failed (provider_error, upstream=-1: start_date/end_date 格式错误，请使用 YYYY-MM-DD HH:MM:SS，且起始时间不能晚于结束时间)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 4341,
+   "latency_ms": 225,
    "field_completeness": 0.0
   },
   {
@@ -649,7 +649,7 @@
    "status": "ok",
    "rows": 1,
    "latest": null,
-   "latency_ms": 52,
+   "latency_ms": 104,
    "field_completeness": 1.0
   },
   {
@@ -661,7 +661,7 @@
    "message": "quantdata rt_k failed (provider_error, upstream=2003: api not purchased)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 172,
+   "latency_ms": 102,
    "field_completeness": 0.0
   },
   {
@@ -670,10 +670,10 @@
    "rate_limit_per_minute": 420,
    "status": "error",
    "error": "provider_error",
-   "message": "teajoin rt_k failed (provider_error, upstream=-1: 不支持的接口: rt_k（未收录，可在 /debug 页查看已支持的接口目录）)",
+   "message": "teajoin rt_k failed (provider_error, upstream=-1: 不支持的接口: rt_k（未收录）)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 3243,
+   "latency_ms": 248,
    "field_completeness": 0.0
   },
   {
@@ -683,7 +683,7 @@
    "status": "ok",
    "rows": 1,
    "latest": null,
-   "latency_ms": 469,
+   "latency_ms": 509,
    "field_completeness": 1.0
   },
   {
@@ -693,7 +693,7 @@
    "status": "ok",
    "rows": 1,
    "latest": null,
-   "latency_ms": 598,
+   "latency_ms": 445,
    "field_completeness": 0.889
   },
   {
@@ -702,21 +702,23 @@
    "rate_limit_per_minute": 420,
    "status": "error",
    "error": "provider_error",
-   "message": "teajoin rt_min failed (provider_error, upstream=-1: 不支持的接口: rt_min（未收录，可在 /debug 页查看已支持的接口目录）)",
+   "message": "teajoin rt_min failed (provider_error, upstream=-1: 不支持的接口: rt_min（未收录）)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 4529,
+   "latency_ms": 215,
    "field_completeness": 0.0
   },
   {
    "provider": "promax",
    "api": "stk_auction",
    "rate_limit_per_minute": 180,
-   "status": "ok",
-   "rows": 8,
-   "latest": "20261030",
-   "latency_ms": 978,
-   "field_completeness": 1.0
+   "status": "error",
+   "error": "http_rate_limit",
+   "message": "promax stk_auction failed (http_rate_limit, upstream=upstream_pool_exhausted)",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 1276,
+   "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
@@ -724,8 +726,8 @@
    "rate_limit_per_minute": 120,
    "status": "ok",
    "rows": 8,
-   "latest": "20261030",
-   "latency_ms": 471,
+   "latest": "20261113",
+   "latency_ms": 245,
    "field_completeness": 1.0
   },
   {
@@ -734,128 +736,130 @@
    "rate_limit_per_minute": 420,
    "status": "ok",
    "rows": 8,
-   "latest": "20261030",
-   "latency_ms": 6226,
+   "latest": "20261113",
+   "latency_ms": 250,
    "field_completeness": 1.0
   },
   {
    "provider": "promax",
    "api": "stk_factor",
    "rate_limit_per_minute": 180,
-   "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 891,
-   "field_completeness": 1.0
+   "status": "no_permission",
+   "error": "permission",
+   "message": "promax stk_factor failed (permission, upstream=40203: 抱歉，您没有接口(stk_factor)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。；您的key还有10天到期客服微信:tlongzx 电话：",
+   "rows": 0,
+   "latest": null,
+   "latency_ms": 908,
+   "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "stk_factor",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 1425,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "teajoin",
-   "api": "stk_factor",
-   "rate_limit_per_minute": 420,
-   "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 1896,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "promax",
-   "api": "stk_factor_pro",
-   "rate_limit_per_minute": 180,
-   "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 711,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "quantdata",
-   "api": "stk_factor_pro",
-   "rate_limit_per_minute": 120,
-   "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 457,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "teajoin",
-   "api": "stk_factor_pro",
-   "rate_limit_per_minute": 420,
-   "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 4735,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "promax",
-   "api": "cyq_perf",
-   "rate_limit_per_minute": 180,
-   "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 500,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "quantdata",
-   "api": "cyq_perf",
-   "rate_limit_per_minute": 120,
-   "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 451,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "teajoin",
-   "api": "cyq_perf",
-   "rate_limit_per_minute": 420,
-   "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 2937,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "promax",
-   "api": "index_daily",
-   "rate_limit_per_minute": 180,
-   "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 3601,
-   "field_completeness": 1.0
-  },
-  {
-   "provider": "quantdata",
-   "api": "index_daily",
-   "rate_limit_per_minute": 120,
-   "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
+   "rows": 22,
+   "latest": "20261113",
    "latency_ms": 338,
    "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
+   "api": "stk_factor",
+   "rate_limit_per_minute": 420,
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 365,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "stk_factor_pro",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 129861,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "stk_factor_pro",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 30095,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "teajoin",
+   "api": "stk_factor_pro",
+   "rate_limit_per_minute": 420,
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 59209,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "cyq_perf",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 117,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "cyq_perf",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 814,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "teajoin",
+   "api": "cyq_perf",
+   "rate_limit_per_minute": 420,
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 446,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "promax",
+   "api": "index_daily",
+   "rate_limit_per_minute": 180,
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 950,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "quantdata",
+   "api": "index_daily",
+   "rate_limit_per_minute": 120,
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 331,
+   "field_completeness": 1.0
+  },
+  {
+   "provider": "teajoin",
    "api": "index_daily",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 17,
-   "latest": "20261030",
-   "latency_ms": 17180,
+   "rows": 22,
+   "latest": "20261113",
+   "latency_ms": 270,
    "field_completeness": 1.0
   },
   {
@@ -865,7 +869,7 @@
    "status": "ok",
    "rows": 158,
    "latest": "20261024",
-   "latency_ms": 3529,
+   "latency_ms": 5953,
    "field_completeness": 1.0
   },
   {
@@ -875,7 +879,7 @@
    "status": "ok",
    "rows": 100,
    "latest": "20261024",
-   "latency_ms": 890,
+   "latency_ms": 353,
    "field_completeness": 1.0
   },
   {
@@ -885,7 +889,7 @@
    "status": "ok",
    "rows": 236,
    "latest": "20261024",
-   "latency_ms": 17859,
+   "latency_ms": 2810,
    "field_completeness": 1.0
   },
   {
@@ -897,7 +901,7 @@
    "message": "promax fina_indicator_vip failed (http_client, upstream=unknown_api)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 31,
+   "latency_ms": 43,
    "field_completeness": 0.0
   },
   {
@@ -905,9 +909,9 @@
    "api": "fina_indicator_vip",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 8118,
-   "latest": "20261030",
-   "latency_ms": 9653,
+   "rows": 8120,
+   "latest": "20261031",
+   "latency_ms": 9096,
    "field_completeness": 1.0
   },
   {
@@ -917,7 +921,7 @@
    "status": "ok",
    "rows": 8047,
    "latest": "20260325",
-   "latency_ms": 33310,
+   "latency_ms": 3444,
    "field_completeness": 0.991
   },
   {
@@ -929,7 +933,7 @@
    "message": "promax broker_recommend failed (http_client, upstream=invalid_params)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 20,
+   "latency_ms": 30,
    "field_completeness": 0.0
   },
   {
@@ -937,9 +941,9 @@
    "api": "broker_recommend",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 237,
-   "latest": "202610",
-   "latency_ms": 874,
+   "rows": 265,
+   "latest": "202611",
+   "latency_ms": 369,
    "field_completeness": 1.0
   },
   {
@@ -947,9 +951,9 @@
    "api": "broker_recommend",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 237,
-   "latest": "202610",
-   "latency_ms": 7268,
+   "rows": 265,
+   "latest": "202611",
+   "latency_ms": 246,
    "field_completeness": 1.0
   },
   {
@@ -961,7 +965,7 @@
    "message": "promax anns_d failed (http_client, upstream=invalid_params)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 253,
+   "latency_ms": 21,
    "field_completeness": 0.0
   },
   {
@@ -973,7 +977,7 @@
    "message": "quantdata anns_d failed (provider_error, upstream=2003: api not purchased)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 157,
+   "latency_ms": 120,
    "field_completeness": 0.0
   },
   {
@@ -982,10 +986,10 @@
    "rate_limit_per_minute": 420,
    "status": "error",
    "error": "provider_error",
-   "message": "teajoin anns_d failed (provider_error, upstream=-1: 不支持的接口: anns_d（未收录，可在 /debug 页查看已支持的接口目录）)",
+   "message": "teajoin anns_d failed (provider_error, upstream=-1: 不支持的接口: anns_d（未收录）)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 4327,
+   "latency_ms": 211,
    "field_completeness": 0.0
   },
   {
@@ -995,7 +999,7 @@
    "status": "ok",
    "rows": 106,
    "latest": "20150520",
-   "latency_ms": 606,
+   "latency_ms": 65,
    "field_completeness": 1.0
   },
   {
@@ -1005,7 +1009,7 @@
    "status": "ok",
    "rows": 106,
    "latest": "20150520",
-   "latency_ms": 409,
+   "latency_ms": 330,
    "field_completeness": 1.0
   },
   {
@@ -1015,20 +1019,18 @@
    "status": "ok",
    "rows": 109,
    "latest": "20150520",
-   "latency_ms": 3675,
+   "latency_ms": 709,
    "field_completeness": 1.0
   },
   {
    "provider": "promax",
    "api": "stk_holdernumber",
    "rate_limit_per_minute": 180,
-   "status": "error",
-   "error": "business_rate_limit",
-   "message": "promax stk_holdernumber failed (business_rate_limit, upstream=40203: 抱歉，您访问接口(stk_holdernumber)频率超限(1次/小时)，具体频次详情：https://tushare.pro/document/1?doc_id=108。)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 112,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 150,
+   "latest": "20261024",
+   "latency_ms": 23,
+   "field_completeness": 1.0
   },
   {
    "provider": "quantdata",
@@ -1037,7 +1039,7 @@
    "status": "ok",
    "rows": 150,
    "latest": "20261024",
-   "latency_ms": 326,
+   "latency_ms": 304,
    "field_completeness": 1.0
   },
   {
@@ -1047,7 +1049,7 @@
    "status": "ok",
    "rows": 156,
    "latest": "20260815",
-   "latency_ms": 5286,
+   "latency_ms": 1217,
    "field_completeness": 1.0
   },
   {
@@ -1055,9 +1057,9 @@
    "api": "stk_holdertrade",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 1669,
-   "latest": "20261030",
-   "latency_ms": 6473,
+   "rows": 1710,
+   "latest": "20261113",
+   "latency_ms": 2682,
    "field_completeness": 1.0
   },
   {
@@ -1065,9 +1067,9 @@
    "api": "stk_holdertrade",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 1726,
-   "latest": "20261030",
-   "latency_ms": 556,
+   "rows": 1769,
+   "latest": "20261113",
+   "latency_ms": 455,
    "field_completeness": 1.0
   },
   {
@@ -1075,9 +1077,9 @@
    "api": "stk_holdertrade",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 1971,
-   "latest": "20261030",
-   "latency_ms": 2856,
+   "rows": 1814,
+   "latest": "20261113",
+   "latency_ms": 821,
    "field_completeness": 1.0
   },
   {
@@ -1085,9 +1087,9 @@
    "api": "pledge_stat",
    "rate_limit_per_minute": 180,
    "status": "ok",
-   "rows": 650,
-   "latest": "20261023",
-   "latency_ms": 62,
+   "rows": 652,
+   "latest": "20261106",
+   "latency_ms": 49,
    "field_completeness": 1.0
   },
   {
@@ -1095,9 +1097,9 @@
    "api": "pledge_stat",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 650,
-   "latest": "20261023",
-   "latency_ms": 431,
+   "rows": 652,
+   "latest": "20261106",
+   "latency_ms": 336,
    "field_completeness": 1.0
   },
   {
@@ -1105,31 +1107,29 @@
    "api": "pledge_stat",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 649,
-   "latest": "20261016",
-   "latency_ms": 19227,
+   "rows": 652,
+   "latest": "20261106",
+   "latency_ms": 908,
    "field_completeness": 1.0
   },
   {
    "provider": "promax",
    "api": "repurchase",
    "rate_limit_per_minute": 180,
-   "status": "no_permission",
-   "error": "permission",
-   "message": "promax repurchase failed (permission, upstream=40203: 抱歉，您没有接口(repurchase)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 1704,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 1050,
+   "latest": "20261113",
+   "latency_ms": 1827,
+   "field_completeness": 1.0
   },
   {
    "provider": "quantdata",
    "api": "repurchase",
    "rate_limit_per_minute": 120,
    "status": "ok",
-   "rows": 755,
-   "latest": "20261030",
-   "latency_ms": 703,
+   "rows": 1051,
+   "latest": "20261113",
+   "latency_ms": 1154,
    "field_completeness": 1.0
   },
   {
@@ -1137,9 +1137,9 @@
    "api": "repurchase",
    "rate_limit_per_minute": 420,
    "status": "ok",
-   "rows": 625,
-   "latest": "20261030",
-   "latency_ms": 5983,
+   "rows": 917,
+   "latest": "20261113",
+   "latency_ms": 1103,
    "field_completeness": 1.0
   },
   {
@@ -1149,7 +1149,7 @@
    "status": "ok",
    "rows": 400,
    "latest": null,
-   "latency_ms": 1072,
+   "latency_ms": 1601,
    "field_completeness": 0.9
   },
   {
@@ -1159,7 +1159,7 @@
    "status": "ok",
    "rows": 400,
    "latest": null,
-   "latency_ms": 365,
+   "latency_ms": 568,
    "field_completeness": 0.9
   },
   {
@@ -1169,7 +1169,7 @@
    "status": "ok",
    "rows": 10000,
    "latest": null,
-   "latency_ms": 20007,
+   "latency_ms": 19592,
    "field_completeness": 1.0
   }
  ]
