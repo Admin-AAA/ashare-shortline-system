@@ -2041,3 +2041,22 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 证据：§1013–§1017（2026-11-07，预注册 2026-11-06 23:58，规则未改）测试等权全市场 RSI(2/6/14) × 宽基/超跌/强势共 5 版。RSI6<20、RSI14<30 深超卖后等权指数 H5 平均 +1.79%~+2.58%（R12/N3）、胜率 60%~70%，W0/W00/W1 也同向为正；但 `amt20` 前 10 的可交易篮子 R12 每笔 −1.37%/−2.40%、N3 +0.87%/+1.44%，且 N3 跑输「每天买同样篮子」对照，5 版全部不过 §282。最好的是 RSI2<10 买近 20 日跌幅最大的 5 只：R12 +0.79%/笔 PF1.45，但 N3 −0.09%/笔 PF0.97、W1 −2.09%/笔、4 窗口仅 1 段为正、前 10 笔占 R12 利润 161.5%，彩票型。
 - 永久规则：**不要把「指数 RSI 超卖」直接当成短线选股信号**。等权指数反弹主要是小盘/低流动性宽度效应，流动性前 10 的票在恐慌日反而继续被卖；T+1 开盘和 0.3% 成本会再吃掉一层。若还要做，只能新预注册「等权/小盘篮子」并单独解决小票冲击成本、2024-01 微盘踩踏、与现役小市值中线重复三个问题（§307 已证明小盘 5 日超跌反转本身为负，先验不强）。不得用「指数层面好看」放宽个股门槛，也不得把 RSI2 超跌股近 12 个月的正收益当成稳定 alpha。
 - 复现：`backend/scripts/shortline_research/mrsi_s1013.py`、`run_s1013.sh`，结果 `backend/output/research/s1013/`；研究记录 `docs/strategy-research.md` §1013–§1017。
+
+## L-200 配置为启用的「死源」不会自己消失：它会空耗在链首，并把并发补数拖成 120s deadline 成批放弃 → 数据腰斩；完整性判定必须看覆盖实体数而非「有没有行」
+
+- 状态：active
+- 适用：任何「provider 链 + 按日/按标的批量补数」的数据集（分钟线、两融、竞价、资金流、概念成分等）；以及数据健康/自愈的缺口判定逻辑。
+- 证据：
+  - 小石（`api.shizixi.com`）解析到 `28.0.0.137` 不可达，`/api/v3/manifest`、`/api/v3/history/catalog` 全部失败；本地 `data/xiaoshi_min1` 缓存最后写入 2026-09-18，`data/xiaoshi_min_all/sync.log` 每日 `fatal`。而 `xiaoshi_min1` 仍是 `bar.minute` 链首 provider（`data_source_config` 里 `xiaoshi/kline` 为 enabled=1）。
+  - 实测关闭前单只 1min 取数 **10~16s**（链首 6s 失败 + 重试），8 线程并发补数时网关日志成批 `gateway call abandoned after 120.00s`；关闭后 **单只 0.9s、8 并发 0.9s**。
+  - 结果面：2026-09~10 有 11 个交易日分钟线覆盖只有 3~201 只（目标池 300），而 `data_health_service._recent_trade_day_coverage` 对 `minute_kbar` 只做「该日有没有行」（`daily_kbar`/`capital_flow` 才有不完整判定），自愈因此永不重补。补数脚本 `sync_minute_kbars_latest.py` 同样只判「整天缺失」。
+  - 修复与验证：`complete_rows` 接入两融补数（半量当换源信号）；`_incomplete_minute_kbar_dates`（<240 只即不完整）接入自愈计划；关闭 `xiaoshi/kline` 开关；`scripts/repair_thin_minute_days.py` 补齐 11 天共 795,079 行（仅 2026-09-23 缺 1 只），2026-09-01 起每个交易日覆盖 ≥240 只。见 `docs/reviews/datacenter-bypass-and-r12-incentive-verify-2026-11-15.md`。
+  - 同批查出的兄弟缺陷：`margin_detail_fill` 曾硬编码只调东财、绕开 `data_source_config`/`routing_table`/熔断；两融退避纯读 provenance，上游补发也要白等 12h。
+- 永久规则：
+  - **(a) 数据完整性判定一律用「当日覆盖实体数（distinct code/股票数）与近期中位数的比」，禁止用「该日是否存在行」；新增任何数据集进自愈时，必须同时定义最小覆盖门槛（默认目标池 80%），否则该数据集等于不受保护。**
+  - **(b) provider 的「已启用」不等于「可用」：批量补数前先看上游最近成功时间与本次调用延迟；链首源单次耗时超过其余源一个量级时，先关它的开关再谈容量，不要用加大并发/放宽 deadline 去「绕过」空耗。**
+  - **(c) 补数脚本不得自带 provider 优先级，必须走数据中心的链序与启停；「只回了半个市场/半个池」要当换源信号，不能当成功。**
+  - **(d) 退避类保护必须带一次「上游是否已恢复」的轻量探测，否则保护会变成掩盖；退避状态只认持久化的运行记录，不依赖可能被清掉的待补清单文件。**
+- 自动护栏：`tests/test_datacenter_complete_rows.py`（链序/换源/半量合并/退避探测）、`tests/test_data_health_service.py::test_incomplete_minute_kbar_dates_*`、`tests/test_data_gap_remediation_service.py::test_minute_kbar_plan_includes_incomplete_days_not_just_missing_dates`、`tests/test_margin_detail_fill.py`；巡检项 `db:*` 的行数 cliff 判定。
+- 吸收位置：`app/services/datasource/complete_rows.py`、`app/services/margin_detail_fill.py`、`app/services/data_health_service.py::_incomplete_minute_kbar_dates`、`app/services/data_gap_remediation_service.py::_build_remediation_plan`、`backend/scripts/repair_thin_minute_days.py`。
+- 相关：L-096（canonical 证据口径）、L-166（capital_flow 只补前 N 只同类缺陷）、`docs/reviews/datasource-availability-map-2026-09-14.md`（xiaoshi 在 09-14 仍可用，说明这是后续失效）。
