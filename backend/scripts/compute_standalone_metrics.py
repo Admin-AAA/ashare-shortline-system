@@ -116,10 +116,16 @@ def main():
                 rows, _nb = _cooldown_rows(_db, sid, rows, p)
             cooldown = {"rule": COOLDOWN_RULES[sid], "blocked_signal_days": _nb}
         def m(lo, hi):
-            r = _metrics([x for x in rows if lo <= x["dt"] < hi], [x for x in days if lo <= x < hi])
+            sel = [x for x in rows if lo <= x["dt"] < hi]
+            r = _metrics(sel, [x for x in days if lo <= x < hi])
             if r is None: return {"n": 0}
-            return {"n": int(r["n"]), "win_rate": round(r["wr"] * 100, 1), "avg_return_pct": round(r["avg"], 2),
-                    "pf": round(r["pf"], 2) if r["pf"] is not None else None, "max_drawdown_pct": round(r["mdd"], 1)}
+            out = {"n": int(r["n"]), "win_rate": round(r["wr"] * 100, 1), "avg_return_pct": round(r["avg"], 2),
+                   "pf": round(r["pf"], 2) if r["pf"] is not None else None, "max_drawdown_pct": round(r["mdd"], 1)}
+            # 收益质量 + 组合口径（只增字段）：识别「去掉极端笔后不赚钱」与「每笔行但组合回撤深」。
+            from app.services.return_quality import portfolio_metrics, quality_metrics
+            out.update(quality_metrics([x["net"] for x in sel]))
+            out.update(portfolio_metrics(sel, holding_days=5))
+            return out
         w12, wr = m("0", "9"), m(a.split, "9")
         status = "positive" if (w12.get("avg_return_pct") or 0) > 0 and (wr.get("avg_return_pct") or 0) > 0 else "watch"
         if sid in WATCH_STRATEGY_IDS: status = "watch"

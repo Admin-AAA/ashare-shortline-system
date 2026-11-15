@@ -15,6 +15,7 @@ from statistics import median
 from typing import Any, Iterable
 
 from app.services import midterm_service as ms
+from app.services.return_quality import portfolio_metrics, quality_metrics
 
 _PICK_FIELDS = (
     "code", "name", "status", "entry_date", "entry_price", "exit_date", "exit_price", "mark_date", "mark_price",
@@ -86,7 +87,7 @@ def stats(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     avg_win = sum(wins) / len(wins) if wins else None
     avg_loss = sum(losses) / len(losses) if losses else None
     days = [r["days"] for r in closed if r.get("days") is not None]
-    return {
+    out = {
         "n": n,
         "win_rate": _r(len(wins) / n * 100, 1) if n else None,
         "avg_ret": _r(sum(rets) / n) if n else None,
@@ -104,6 +105,13 @@ def stats(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "skipped": sum(1 for r in rows if r.get("status") == "skipped"),
         "total_picks": len(rows),
     }
+    # 收益质量与组合口径（只增字段，不改上面任何既有字段）。
+    # 收益质量用于识别「去掉极端笔后不赚钱」的策略；组合口径（槽位滚动）用于识别
+    # 「每笔看着行、组合风险却集中」的策略。口径说明见 app/services/return_quality.py。
+    # 注：quality_metrics 也返回 median_ret，与本函数上面的定义同源同值，覆盖无副作用。
+    out.update(quality_metrics(rets))
+    out.update(portfolio_metrics(closed))
+    return out
 
 
 def portrait_realized_12m(rows: Iterable[dict[str, Any]], horizon: str, *, today: _dt.date) -> dict[str, Any]:
