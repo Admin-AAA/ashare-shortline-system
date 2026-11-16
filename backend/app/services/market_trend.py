@@ -16,13 +16,14 @@ from typing import Any, Iterable, Mapping
 
 from sqlalchemy import func, select
 
-from app.models.market import DailyKbar
+from app.models.market import DailyKbar, IndexDaily
 
 logger = logging.getLogger(__name__)
 
-FIELDS = ("mkt_eqw_ma20_ratio", "mkt_eqw_ma60_ratio", "mkt_rsi6")
+FIELDS = ("mkt_eqw_ma20_ratio", "mkt_eqw_ma60_ratio", "mkt_rsi6", "mkt_qvix50_chg5")
 _MIN_SAMPLE = 1000
 _LOOKBACK_CAL_DAYS = 130
+_QVIX_TS_CODE = "QVIX50.SH"
 
 
 def _clip(v: float) -> float:
@@ -90,6 +91,36 @@ def _query_mean_returns(session: Any, start: str, end: str) -> dict[str, float]:
     return {str(d): float(r) for d, r, n in rows if r is not None and int(n or 0) >= _MIN_SAMPLE}
 
 
+def qvix_chg5_by_dates(session: Any, start: str, end: str) -> dict[str, float]:
+    """QVIX50 相对 5 个交易日前的涨幅（T 收盘可得，因果）。
+
+    数据：index_daily QVIX50.SH（期权隐含波动率，2015+）。上游脏数据口径：
+    close<=0 丢弃；同日重复行按日期去重留最后有效行。前 5 个交易日不足或
+    当日缺失的日期不返回（调用方按 0 处理 → 不触发 QVIX 尖峰，安全降级为价格恐慌门）。
+    """
+    q_start = (date.fromisoformat(start) - timedelta(days=15)).isoformat()
+    rows = session.execute(
+        select(IndexDaily.trade_date, IndexDaily.close)
+        .where(
+            IndexDaily.ts_code == _QVIX_TS_CODE,
+            IndexDaily.trade_date >= q_start,
+            IndexDaily.trade_date <= end,
+            IndexDaily.close > 0,
+        )
+        .order_by(IndexDaily.trade_date)
+    ).all()
+    by_date: dict[str, float] = {}
+    for d, cl in rows:
+        if cl is not None and float(cl) > 0:
+            by_date[str(d)] = float(cl)  # 同日重复留最后
+    ds = sorted(by_date)
+    out: dict[str, float] = {}
+    for i, d in enumerate(ds):
+        if i >= 5 and start <= d <= end and by_date[ds[i - 5]] > 0:
+            out[d] = round(by_date[d] / by_date[ds[i - 5]] - 1.0, 6)
+    return out
+
+
 def ratios_from_returns(returns: Mapping[str, float]) -> dict[str, dict[str, float]]:
     out: dict[str, dict[str, float]] = {}
     level = 1.0
@@ -112,7 +143,11 @@ def trend_by_dates(session: Any, dates: Iterable[str]) -> dict[str, dict[str, fl
         return {}
     start = (date.fromisoformat(ds[0]) - timedelta(days=_LOOKBACK_CAL_DAYS)).isoformat()
     try:
-        return ratios_from_returns(daily_mean_returns(session, start, ds[-1]))
+        out = ratios_from_returns(daily_mean_returns(session, start, ds[-1]))
+        qv = qvix_chg5_by_dates(session, start, ds[-1])
+        for d in ds:
+            out.setdefault(d, {})["mkt_qvix50_chg5"] = qv.get(d, 0.0)
+        return out
     except Exception:  # noqa: BLE001 - 闸门字段缺失时退化为 0（不拦），不阻断出票
         logger.warning("market_trend.trend_by_dates failed: 趋势闸门字段按缺失处理（退化为不拦）", exc_info=True)
         return {}
@@ -127,14 +162,18 @@ def trend_for_live(session: Any, trade_date: str, stocks: Iterable[Mapping[str, 
     try:
         start = (date.fromisoformat(td) - timedelta(days=_LOOKBACK_CAL_DAYS)).isoformat()
         rets = daily_mean_returns(session, start, td)
-        if td in rets:
-            return ratios_from_returns(rets).get(td, zero)
         if td not in rets:
             pcts = [_clip(s.get("pct") or 0) for s in stocks if float(s.get("amount") or 1) > 0]
             if len(pcts) < _MIN_SAMPLE:
                 return zero
-            rets[str(trade_date)[:10]] = sum(pcts) / len(pcts)
-        return ratios_from_returns(rets).get(str(trade_date)[:10], zero)
+            rets[td] = sum(pcts) / len(pcts)
+        res = dict(ratios_from_returns(rets).get(td, zero))
+        try:
+            qv = qvix_chg5_by_dates(session, (date.fromisoformat(td) - timedelta(days=15)).isoformat(), td)
+            res["mkt_qvix50_chg5"] = qv.get(td, 0.0)
+        except Exception:  # noqa: BLE001 - QVIX 缺失降级为 0（不触发尖峰），不阻断价格恐慌门
+            res["mkt_qvix50_chg5"] = 0.0
+        return res
     except Exception:  # noqa: BLE001
         logger.warning("market_trend.trend_for_live failed trade_date=%s: 趋势闸门退化为 0（不拦）", trade_date, exc_info=True)
         return zero

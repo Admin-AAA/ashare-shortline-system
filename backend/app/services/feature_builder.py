@@ -50,7 +50,7 @@ def build_features(
         from app.services.market_trend import trend_for_live
         mkt_trend = trend_for_live(db, str(snapshot.get("trade_date") or ""), stocks)
     else:
-        mkt_trend = {"mkt_eqw_ma20_ratio": 0.0, "mkt_eqw_ma60_ratio": 0.0, "mkt_rsi6": 0.0}
+        mkt_trend = {"mkt_eqw_ma20_ratio": 0.0, "mkt_eqw_ma60_ratio": 0.0, "mkt_rsi6": 0.0, "mkt_qvix50_chg5": 0.0}
     for stock in stocks:
         item = dict(stock)
         item["is_main_theme"] = item.get("industry") in main_industries and item.get("industry") != "未分类"

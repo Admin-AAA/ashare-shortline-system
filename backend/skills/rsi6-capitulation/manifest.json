@@ -1,14 +1,14 @@
 {
   "id": "rsi6-capitulation",
-  "name": "RSI6恐慌出清",
-  "version": "0.1.0",
+  "name": "恐慌出清(RSI6+QVIX)",
+  "version": "0.2.0",
   "mode": "imperative",
   "status": "active",
   "requirements": ["stock_feature_context"],
   "capabilities": ["signal_evaluation"],
   "enabled": true,
   "source_type": "local",
-  "description": "等权全市场 RSI6<20 且跌停家数明显多于涨停家数（lu_ld<=0.34）时，买入当日成交额前 10，+5% 止盈、-4.5% 止损、持 5 日；观察身份，低频。",
+  "description": "价格恐慌（等权 RSI6<20 且 lu_ld<=0.34）或 QVIX50 期权波动率五日飙升>25% 时，买入当日成交额前 10，+5% 止盈、-4.5% 止损、持 5 日；观察身份，低频。§1058 OR 扩展。",
   "impl_class": "app.skills_impl.rsi6_capitulation:Rsi6Capitulation",
   "signal_metadata": {
     "weight": 1.0,
