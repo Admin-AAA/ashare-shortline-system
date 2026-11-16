@@ -13094,5 +13094,5 @@ N3 回测里被≥2 个成员同时买入的 (票,入场日) 占比 7%。
   - **2026-03-24**（QVIX-only，rsi6≈33、lu_ld≈39.5、qvix5≈0.61）：新分支正确触发，setup「QVIX50五日飙升>25%」；feature_snapshot 的 mkt_qvix50_chg5=0.614653 **与研究面板逐位一致**（同构确认）。但出票仅 **2**。
 - **关键差异（待用户决策，未擅自改风控）**：03-24 是涨停潮日（lu_ld=39.5），生产 `strong_climax_top_n` 闸门（L-070「高潮只在强牛市可交易」）在 score_line 阶段把 30 只砍到 2 只（reason_counts: strong_climax_top_n=28）。价格恐慌日 lu_ld≤0.34 非高潮，不触发此闸（03-23 出 10）；**QVIX-only 日多为涨停潮日，会被此闸衰减**。回测 simulate 不含生产推荐管线风控（score_line/climax/portfolio 限额），故回测的 QVIX-only 增量（N3 196 笔）在实盘会被 climax 闸显著衰减——「总利润 2.2×」是回测口径，实盘增量小于此。
   - 本轮**不关闭 strong_climax_top_n**（L-070 是验证过的永久风控；关掉它让回测/实盘对齐属风险决策，须用户批准）。与 §1051 rsi6 接入时「gate/成交额口径仍有差异，先观察」一致，观察身份正是为量化此差异。
-  - 待决策：是否在 rsi6 的 STRATEGY_POLICY_OVERRIDES 豁免 strong_climax_top_n（充分实现回测增量，但承担涨停潮见顶风险），或保留闸门（保守，增量衰减）。live_forward 观察期按实际出票/结算评估。
+  - **已决策（用户 2026-11-16）：保留 strong_climax_top_n（保守）**，不在 STRATEGY_POLICY_OVERRIDES 豁免。QVIX-only 涨停潮日出票按闸门衰减（如 03-24 出 2），实盘增量以衰减后口径为准，不承担涨停潮见顶风险。live_forward 观察期按实际出票/结算评估衰减后的真实收益。
 - 观察期：只跑 live_forward，不混 replay；下一信号日记录实际出票、gate/filter audit、成交额排序；持有期结算后与研究逐笔对比。转正条件：≥3 独立信号日（含 ≥1 QVIX-only 日）、出票/结算口径一致或差异可解释、用户确认。

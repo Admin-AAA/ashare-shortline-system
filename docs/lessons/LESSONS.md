@@ -2148,6 +2148,6 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(b) 独立 QVIX 策略在现行 §282（W00 n=0→−99）下结构性不可采纳；若要让「慢熊空仓的正期望信号」可上线，须先由用户批准修订 §282 的 n=0 口径（如视为该窗无损失），不得擅自放宽。**
   - **(c) OR 扩展提高总利润（2.2×）但稀释每笔（1.79→1.54）：采纳口径以每笔（§282）还是总利润为准是治理决策，须用户明确；本轮以每笔为准判不采纳。**
   - **(d) QVIX 实盘接入前必须对账发布时延（17:35 推荐运行时当日 QVIX50 是否已入库）；研究假设 T 收盘可得。**
-  - **(e) 已部署（2026-11-16，用户批准总收益优先）：rsi6-capitulation 触发器扩展为 PRICE_CAP OR QV_SPIKE（观察身份，commit fe65bc99）。replay 确认字段逐位同构、QVIX-only 分支生效；但生产 strong_climax_top_n 闸门（L-070）在涨停潮日（QVIX-only 日多属此类，lu_ld 高）把出票从 10 衰减到 2——回测 simulate 不含推荐管线风控，「总利润 2.2×」是回测口径，实盘增量被 climax 闸打折。豁免 strong_climax_top_n 以充分实现增量属风险决策（承担涨停潮见顶风险），须用户批准，不擅自关。**
+  - **(e) 已部署（2026-11-16，用户批准总收益优先）：rsi6-capitulation 触发器扩展为 PRICE_CAP OR QV_SPIKE（观察身份，commit fe65bc99）。replay 确认字段逐位同构、QVIX-only 分支生效；但生产 strong_climax_top_n 闸门（L-070）在涨停潮日（QVIX-only 日多属此类，lu_ld 高）把出票从 10 衰减到 2——回测 simulate 不含推荐管线风控，「总利润 2.2×」是回测口径，实盘增量被 climax 闸打折。豁免 strong_climax_top_n 以充分实现增量属风险决策（承担涨停潮见顶风险），须用户批准，不擅自关。**用户 2026-11-16 决定保留闸门（保守），不豁免；实盘增量以衰减后口径观察。**
 - 吸收位置：docs/strategy-research.md §1058 预注册+结果+生产接入；backend/scripts/shortline_research/{qvix_audit_s1058,qvix_strats_s1058,qvix_eval_s1058}.py；backend/output/research/s1058/；生产 app/services/market_trend.py（mkt_qvix50_chg5）、app/skills_impl/rsi6_capitulation.py（OR 触发器）。
 - 相关：L-065（新数据维度）、L-058/L-080（regime 翻号）、L-201（右尾路径）、L-204（抓涨停关闭）、§1051–1054（rsi6-capitulation）。
