@@ -69,6 +69,37 @@ def test_trigger_only_on_rsi6_oversold_and_limit_down_dominance():
         assert miss["phase"] == "市场未触发"
 
 
+def test_qvix_or_trigger_extends_price_capitulation_gate():
+    """§1058：QVIX 五日尖峰 >25% 作为价格恐慌门的 OR 补充触发。"""
+    skill = load_skill(get_settings().skills_dir / _SKILL_ID)
+    strategy = instantiate_strategy(skill)
+    ctx = StrategyContext()
+
+    # QVIX-only：价格门不满足（RSI6 未超卖、lu_ld 不占优），但 QVIX 飙升 → 触发
+    qv_only = strategy.evaluate(
+        _stock(mkt_rsi6=30.0, mkt_lu_ld=0.5, mkt_qvix50_chg5=0.30), ctx)
+    assert qv_only["score"] >= 80.0
+    assert qv_only["phase"] == "QVIX恐慌尖峰"
+    assert qv_only["setup_match"] == "QVIX50五日飙升>25%"
+    assert qv_only["entry_mode"] == ENTRY_MODE_NEXT_OPEN
+
+    # 双触发：价格门 + QVIX 同时满足
+    both = strategy.evaluate(_stock(mkt_qvix50_chg5=0.30), ctx)
+    assert both["score"] >= 80.0
+    assert both["phase"] == "恐慌出清(价格+QVIX)"
+
+    # QVIX 低于阈值且价格门不满足 → 不触发
+    miss = strategy.evaluate(
+        _stock(mkt_rsi6=30.0, mkt_lu_ld=0.5, mkt_qvix50_chg5=0.20), ctx)
+    assert miss["score"] == 0.0
+    assert miss["phase"] == "市场未触发"
+
+    # QVIX 字段缺失（0）→ 降级为仅价格门：价格门满足仍触发
+    degrade = strategy.evaluate(_stock(), ctx)
+    assert degrade["score"] >= 80.0
+    assert degrade["phase"] == "RSI6恐慌出清"
+
+
 def test_strategy_exit_override_aligns_tp5_stop45_and_disables_trailing():
     p = execution_policy_for_next_open_entry()
     p2 = apply_exit_overrides(p, _SKILL_ID)

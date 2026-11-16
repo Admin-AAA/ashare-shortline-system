@@ -1,8 +1,9 @@
-# RSI6 恐慌出清（命令式策略）
-# 研究：docs/research/rsi_exit_s1051_capitulation_filter.md
-# 回测：§1053/§1054 R12 +1.77%/笔 PF1.90、N3 +1.21%/笔 PF1.55；4 窗口 4/4、8 段 6/8。
+# 恐慌出清（命令式策略，观察身份）
+# 研究：§1051–§1054（价格门）+ §1058（QVIX OR 扩展，用户 2026-11-16 批准总收益优先部署）
+# 触发：PRICE_CAP=(RSI6<20 & lu_ld<=0.34) OR QV_SPIKE=(QVIX50 五日涨幅>25%)
+# 回测：OR 过 §282（8/8 段正、4/4 窗正），N3 322 笔 +1.54%/笔 PF1.61 MDD−8.8，总利润≈2.2×价格门。
 id: rsi6-capitulation
-name: RSI6恐慌出清
+name: 恐慌出清(RSI6+QVIX)
 enabled: true
 default_entry_mode: next_open
 contract:

@@ -13078,3 +13078,21 @@ N3 回测里被≥2 个成员同时买入的 (票,入场日) 占比 7%。
   2. **每笔 vs 总利润**：QVC_OR 每笔被稀释（1.79→1.54）但 N3 名义总利润 ≈496%（322×1.54）vs REF ≈225%（126×1.79），**总利润 2.2 倍**，MDD 仍浅（−8.8%）。若目标是总收益而非每笔，OR 更优；本轮预注册以每笔为准（§282 口径），故不采纳。用户可决定是否另立「总利润目标」的采纳口径再评。
   3. **QVIX 数据已验证可用**：发布时延、实盘 17:35 当日 QVIX 入库对账尚未做（接入前必做）。
 - 结论：抓涨停方向已关闭（L-204）；QVIX 是本轮唯一验证出的新正期望信号，但按现行 §282 与预注册采纳规则均不部署。写入 L-205。下一步建议见最终汇报。
+
+### §1058 生产接入（观察身份，2026-11-16 08:54 CST；用户批准「总收益优先」部署 QVC_OR）
+
+- 决策：用户 2026-11-16 批准以总收益优先覆盖预注册采纳规则②（每笔），部署 QVC_OR。**部署方式＝替换 rsi6-capitulation 触发器**（非新增重复技能，避免同日同票双出票抢名额）；skill_id 不变、观察身份不变、live_forward 重新计时。
+- 代码（commit fe65bc99，feature/qvix-or-trigger）：
+  - `app/services/market_trend.py`：FIELDS 增 `mkt_qvix50_chg5`；新增 `qvix_chg5_by_dates`（index_daily QVIX50.SH，close>0、按日去重留最后、5 交易日涨幅，缺失降级 0）；`trend_by_dates`（回测）与 `trend_for_live`（实盘）同构注入。
+  - `app/skills_impl/rsi6_capitulation.py`：触发器改 `(0<RSI6<20 & lu_ld<=0.34) OR (mkt_qvix50_chg5>0.25)`；phase/setup 区分价格/QVIX/双触发；股池/排序/出场不变。
+  - `feature_builder.py` 兜底字典、`evaluator.py` 白名单、`research_runner.py` 字段面（RESEARCH_INPUT_SCHEMA_VERSION 9→10，旧快照不复用）。
+  - `skills/rsi6-capitulation/{manifest.json,strategy.yaml}`：name「恐慌出清(RSI6+QVIX)」、version 0.2.0、描述更新；exit_overrides TP5/SL4.5/activation99 不变。
+  - 测试：`test_rsi6_capitulation.py` 增 OR 触发回归（QVIX-only/双触发/低于阈值/缺失降级）；`test_market_trend.py` 增 qvix_chg5 纯单测（预热/计算/清洗）。
+- 验证：定向 pytest 140 passed（market_trend/rsi6/feature_builder/standalone/imperative/outcome_simulation/data_readiness）+ 契约 5 passed（evaluator 白名单/OpenAPI 基线 142 不变/研究归因）+ compileall + import app.main OK。
+- Replay（开盘前 08:49 重启 backend+worker，code_revision=fe65bc99 匹配，attempt-tag onboard-qvix-or-1，rule_only）：
+  - **2026-03-23**（价格门+QVIX 双触发，rsi6≈13、lu_ld≈0.26、qvix5≈1.39）：出票 **10**，setup 全「RSI6超卖+跌停占优+QVIX尖峰」，top 亿纬锂能/宁德时代/锦浪科技（成交额序）。
+  - **2026-03-24**（QVIX-only，rsi6≈33、lu_ld≈39.5、qvix5≈0.61）：新分支正确触发，setup「QVIX50五日飙升>25%」；feature_snapshot 的 mkt_qvix50_chg5=0.614653 **与研究面板逐位一致**（同构确认）。但出票仅 **2**。
+- **关键差异（待用户决策，未擅自改风控）**：03-24 是涨停潮日（lu_ld=39.5），生产 `strong_climax_top_n` 闸门（L-070「高潮只在强牛市可交易」）在 score_line 阶段把 30 只砍到 2 只（reason_counts: strong_climax_top_n=28）。价格恐慌日 lu_ld≤0.34 非高潮，不触发此闸（03-23 出 10）；**QVIX-only 日多为涨停潮日，会被此闸衰减**。回测 simulate 不含生产推荐管线风控（score_line/climax/portfolio 限额），故回测的 QVIX-only 增量（N3 196 笔）在实盘会被 climax 闸显著衰减——「总利润 2.2×」是回测口径，实盘增量小于此。
+  - 本轮**不关闭 strong_climax_top_n**（L-070 是验证过的永久风控；关掉它让回测/实盘对齐属风险决策，须用户批准）。与 §1051 rsi6 接入时「gate/成交额口径仍有差异，先观察」一致，观察身份正是为量化此差异。
+  - 待决策：是否在 rsi6 的 STRATEGY_POLICY_OVERRIDES 豁免 strong_climax_top_n（充分实现回测增量，但承担涨停潮见顶风险），或保留闸门（保守，增量衰减）。live_forward 观察期按实际出票/结算评估。
+- 观察期：只跑 live_forward，不混 replay；下一信号日记录实际出票、gate/filter audit、成交额排序；持有期结算后与研究逐笔对比。转正条件：≥3 独立信号日（含 ≥1 QVIX-only 日）、出票/结算口径一致或差异可解释、用户确认。

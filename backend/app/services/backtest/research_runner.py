@@ -139,7 +139,7 @@ MIN_LOOKBACK_CALENDAR_DAYS = 120
 # 注入逻辑发生向后不兼容变化时递增；strategy_profile._compatible_snapshot_id
 # 用同一常量校验候选快照是否由当前契约生成，避免复用旧字段面快照导致策略
 # prefilter 拿到缺失字段（0 信号）。
-RESEARCH_INPUT_SCHEMA_VERSION = 9  # v9 (2026-10-18): mkt_eqw_ma20/60_ratio 等权指数趋势字段
+RESEARCH_INPUT_SCHEMA_VERSION = 10  # v10 (2026-11-16): mkt_qvix50_chg5 QVIX 五日涨幅（§1058 QVIX OR 恐慌触发）
 RESEARCH_SOURCE_VERSION = f"local-daily-kbars/v{RESEARCH_INPUT_SCHEMA_VERSION}"
 RESEARCH_STOCK_METADATA_TEMPORALITY = CURRENT_STATIC
 
@@ -1961,6 +1961,7 @@ def _stock_as_of(
         "mkt_eqw_ma60_ratio": float((market_context or {}).get("mkt_eqw_ma60_ratio") or 0.0),
         "mkt_rsi6": float((market_context or {}).get("mkt_rsi6") or 0.0),
         "mkt_lu_ld": float((market_context or {}).get("limit_up_count") or 0) / max(1, int((market_context or {}).get("limit_down_count") or 0)),
+        "mkt_qvix50_chg5": float((market_context or {}).get("mkt_qvix50_chg5") or 0.0),
         "data_completeness_score": 100.0,
         "evidence_quality_score": 100.0,
         # 供因子管线复刻生产聚合（_apply_relative_features / build_features）
