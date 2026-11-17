@@ -159,6 +159,57 @@ def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
     )
 
 
+def test_business_tasks_are_isolated_from_high_frequency_polls(monkeypatch) -> None:
+    """2026-11-17 回归：业务日更不能和每 5 分钟轮询共用 default 队列。
+
+    当时 default 队列（limit=2）被盘中轮询的长耗时 run 占满，17:35 盘后全量同步
+    被 123 条迟到 run 挤在队尾、整天没启动，当天所有库表停在上一交易日，
+    数据健康页 blocked、推荐闸门关闭。
+    """
+    from app.orchestration.deployments import RECOMMENDATION_WORK_QUEUE
+
+    queues: list[tuple[str, object]] = []
+
+    class _FakeFlow:
+        def __init__(self, flow_name: str) -> None:
+            self._flow_name = flow_name
+
+        def to_deployment(self, *, name, work_pool_name=None, work_queue_name=None, schedules=None, parameters=None, tags=None, job_variables=None):
+            queues.append((self._flow_name, work_queue_name))
+
+            class _Deployment:
+                def apply(self):
+                    return self
+
+            return _Deployment()
+
+    task = SimpleNamespace(
+        task_id="post_sync_formal_recommendation",
+        cron_expression="35 17 * * mon-fri",
+        task_type="formal_recommendation",
+    )
+    for flow_name in (
+        "scheduled_task_flow",
+        "recommendation_flow",
+        "manual_data_health_remediation_flow",
+        "intraday_lock_poll_flow",
+        "stale_run_recovery_flow",
+        "execution_confirmation_poll_flow",
+    ):
+        monkeypatch.setattr(f"app.orchestration.deployments.{flow_name}", _FakeFlow(flow_name))
+    monkeypatch.setattr("app.orchestration.deployments.SessionLocal", lambda: SimpleNamespace(
+        query=lambda *a, **k: SimpleNamespace(filter=lambda *a, **k: SimpleNamespace(all=lambda: [task])),
+        close=lambda: None,
+    ))
+
+    schedule_all_enabled_tasks()
+
+    business = [q for f, q in queues if f in ("scheduled_task_flow", "manual_data_health_remediation_flow")]
+    periodic = [q for f, q in queues if f.endswith("_poll_flow") or f == "stale_run_recovery_flow"]
+    assert business and all(q == RECOMMENDATION_WORK_QUEUE for q in business)
+    assert periodic and all(q is None for q in periodic)  # 故意留在 default 队列
+
+
 def test_execution_confirmation_poll_confirms_all_unsettled_in_batches(monkeypatch) -> None:
     """盘中买入确认必须由服务端轮询，而不是只靠前端按钮（10-14 批次无人点击全判 missed）。"""
     from app.orchestration.flows import poll_execution_confirmation

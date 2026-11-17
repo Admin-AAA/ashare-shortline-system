@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import json
 import sys
 import urllib.request
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
@@ -23,6 +25,13 @@ from app.core.logger import setup_logging
 TASK_ID = "post_sync_formal_recommendation"
 CST = ZoneInfo("Asia/Shanghai")
 PREFECT_HEALTH_URL = "http://127.0.0.1:4200/api/health"
+BACKEND_BASE_URL = "http://127.0.0.1:8765"
+# 2026-11-17：watchdog 此前只告警不修复，17:35 漏跑后当天数据一整天不入库，
+# 数据健康页直接 blocked。改为自动补跑一次，用日期 marker 做幂等，避免同一天
+# 重复触发（launchd 每天 18:30 只跑一次，但手动重跑/补跑也要安全）。
+AUTORETRY_STATE_PATH = (
+    Path(__file__).resolve().parents[1] / "data" / "runtime" / "daily_run_watchdog_autoretry.json"
+)
 
 
 def _prefect_up(url: str = PREFECT_HEALTH_URL) -> bool:
@@ -64,6 +73,47 @@ def status_counts_today(db, now_cst: dt.datetime) -> dict[str, int]:
     return {str(r[0]): int(r[1]) for r in rows}
 
 
+def _already_retried(day: str) -> bool:
+    """同一交易日最多自动补跑一次，避免重复触发全量同步。"""
+    try:
+        state = json.loads(AUTORETRY_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    return isinstance(state, dict) and state.get("date") == day
+
+
+def _remember_retry(day: str, run_id: str) -> None:
+    AUTORETRY_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    AUTORETRY_STATE_PATH.write_text(
+        json.dumps(
+            {"date": day, "run_id": run_id, "at": dt.datetime.now(CST).isoformat()},
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def trigger_catch_up(task_id: str = TASK_ID, timeout: float = 15.0) -> tuple[bool, str]:
+    """经后端 API 补跑一次盘后流水线。
+
+    不直接调 Prefect：watchdog 由独立 launchd agent 启动，plist 里没有
+    PREFECT_API_URL，直接 run_deployment 会拉起临时 server 抢同一个 SQLite
+    （见 scripts/launchd/README.md）。后端进程已固定连常驻 server，由它触发最稳。
+    补跑本身按交易日/策略幂等，不会重复出票。
+    """
+    req = urllib.request.Request(
+        f"{BACKEND_BASE_URL}/api/admin/tasks/{task_id}/run", data=b"", method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            payload = json.load(resp)
+    except Exception as exc:  # noqa: BLE001 - 补跑失败不能压掉原告警
+        return False, f"{type(exc).__name__}: {exc}"
+    if not payload.get("ok"):
+        return False, str(payload)[:200]
+    return True, str(payload.get("orchestration_run_id") or "")
+
+
 def evaluate(
     now_cst: dt.datetime,
     run_count: int,
@@ -91,7 +141,8 @@ def evaluate(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true", help="print only, do not log alerts")
+    parser.add_argument("--dry-run", action="store_true", help="print only, do not log alerts or trigger catch-up")
+    parser.add_argument("--no-auto-retry", action="store_true", help="只告警，不自动补跑（诊断用）")
     args = parser.parse_args(argv)
     setup_logging()
     from app.db.session import SessionLocal
@@ -105,11 +156,34 @@ def main(argv: list[str] | None = None) -> int:
         db.close()
     up = _prefect_up()
     alerts = evaluate(now_cst, count, up, statuses)
-    print(f"watchdog {now_cst:%Y-%m-%d %H:%M} CST runs_today={count} statuses={statuses} prefect_up={up} alerts={len(alerts)}")
+    day = now_cst.date().isoformat()
+
+    # 漏跑不能只告警：当天库表会一直停在上一交易日，数据健康页 blocked、
+    # 推荐闸门关闭，直到有人手工补。补跑一次并留告警；同日 marker 保证不重复。
+    auto_retry = "n/a"
+    needs_retry = any(k in ("DAILY_RUN_MISSING", "DAILY_RUN_FAILED") for k, _ in alerts)
+    if needs_retry and up and not args.no_auto_retry:
+        if _already_retried(day):
+            auto_retry = "skipped: 今日已自动补跑过"
+        elif args.dry_run:
+            auto_retry = "would trigger (dry-run)"
+        else:
+            ok, detail = trigger_catch_up()
+            auto_retry = f"triggered run={detail}" if ok else f"failed: {detail}"
+            if ok:
+                _remember_retry(day, detail)
+                emit_alert(
+                    "DAILY_RUN_AUTORETRY", day,
+                    f"{TASK_ID} 漏跑，watchdog 已自动补跑一次（run={detail}）；"
+                    "请核对当日盘后数据与健康分是否恢复",
+                )
+
+    print(f"watchdog {now_cst:%Y-%m-%d %H:%M} CST runs_today={count} statuses={statuses} "
+          f"prefect_up={up} alerts={len(alerts)} auto_retry={auto_retry}")
     for kind, msg in alerts:
         print(f"[ALERT:{kind}] {msg}")
         if not args.dry_run:
-            emit_alert(kind, now_cst.date().isoformat(), msg)
+            emit_alert(kind, day, msg)
     return 2 if alerts else 0
 
 
