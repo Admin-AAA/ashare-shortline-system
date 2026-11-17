@@ -2151,3 +2151,21 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(e) 已部署（2026-11-16，用户批准总收益优先）：rsi6-capitulation 触发器扩展为 PRICE_CAP OR QV_SPIKE（观察身份，commit fe65bc99）。replay 确认字段逐位同构、QVIX-only 分支生效；但生产 strong_climax_top_n 闸门（L-070）在涨停潮日（QVIX-only 日多属此类，lu_ld 高）把出票从 10 衰减到 2——回测 simulate 不含推荐管线风控，「总利润 2.2×」是回测口径，实盘增量被 climax 闸打折。豁免 strong_climax_top_n 以充分实现增量属风险决策（承担涨停潮见顶风险），须用户批准，不擅自关。**用户 2026-11-16 决定保留闸门（保守），不豁免；实盘增量以衰减后口径观察。**
 - 吸收位置：docs/strategy-research.md §1058 预注册+结果+生产接入；backend/scripts/shortline_research/{qvix_audit_s1058,qvix_strats_s1058,qvix_eval_s1058}.py；backend/output/research/s1058/；生产 app/services/market_trend.py（mkt_qvix50_chg5）、app/skills_impl/rsi6_capitulation.py（OR 触发器）。
 - 相关：L-065（新数据维度）、L-058/L-080（regime 翻号）、L-201（右尾路径）、L-204（抓涨停关闭）、§1051–1054（rsi6-capitulation）。
+
+## L-206 Prefect 高频轮询与业务日更共用 default 队列会饿死盘后同步：数据健康「天天挂」的真因是队列堵塞，不是上游挂了
+
+- 状态：active（永久架构约束 + 已落地修复）。
+- 适用：`app/orchestration/deployments.py` 注册的所有 deployment；任何「每 5 分钟 periodic flow」与「每日/盘后关键任务」共池的调度；数据健康 blocked / 推荐闸门异常时的排查顺序。
+- 证据（2026-11-16、11-17 连续两日）：
+  - 11-17 22:27 用户报「数据健康又挂了」：`/api/admin/data-health` 返回 200 但 `score=62`、`recommendation_readiness.status=blocked`、`can_run_local_recommendation=false`，11 张表 `max_date` 全部停在 11-16，5 条 medium issue 都是「缺 2026-11-17」。后端进程、Prefect server（4200 health=200）、work pool、deployment（未暂停、cron 正确）全都正常。
+  - Prefect API 实证：17:35 的 flow run `expected_start_time=2026-11-17T09:35:00Z` 仍是 **SCHEDULED / start=null**；同池 **9 个业务日更 run 全部 SCHEDULED**（17:35 同步、18:40 健康快照、21:00 补数…），前面堵着 **66～123 条**每 5 分钟盘中轮询的迟到 run。default work queue `concurrency_limit=2`，而 `batch_execution_confirmation` 类 flow 单次 `elapsed=3647s / 5355s`（thsdk 游客账户重连 5 次），两槽被长期占满 → 高频 run 无限积压 → 按 expected_start_time 排队的关键任务永远轮不到。
+  - 11-16 同一原因但程度较轻：`scheduled_task_runs` 显示 17:35 同步直到 CST 22:35（迟到 5h）、18:40 快照 22:39（迟到 4h）、21:00 补数 23:07（迟到 2h）才跑；11-13 甚至迟到 18h 后 FAILED。11-16 22:34 日志 `self_heal ... 仍有 1 个交易日库表缺口`。
+  - `daily_run_watchdog.py` 18:30 已正确发出 `[ALERT:DAILY_RUN_MISSING] ... 调度可能静默中断`（11-17 19:11），但**只告警不修复**，当天数据一整天不入库直到人工介入。
+  - 修复后实证：15 个业务 deployment 改挂 `recommendation` 队列（priority=2、无队列级限额）→ 手动触发的补跑 run 立即 `RUNNING / queue=recommendation`；主要库表补齐到 11-17，`status` 从 `blocked` 变 `degraded`、`can_run=true`、`blockers=[]`。
+- 永久规则：
+  - **(a) 每 5 分钟的 periodic flow（intraday_lock_poll / stale_run_recovery / execution_confirmation_poll）必须留在 default 低优先队列；所有业务 ScheduledTask 与手动补数必须走独立 priority 队列。不得为了「统一」把它们合回一个队列。** 池上限 6 仍生效；父/子推荐 flow 同队列且无队列限额，避免 2026-10-15 的「父等子、子被饿死」死锁。
+  - **(b) 排查「数据健康挂 / 当天数据没入库」时先看 Prefect flow run 状态与 work queue 积压，不要先怀疑上游或后端进程**：接口 200、server health 200、deployment 未暂停、cron 正确，都可能在 SCHEDULED 排队。关键证据是 `expected_start_time` 已过但仍 `SCHEDULED` 的 run 数量与 queue 的 `concurrency_limit`。
+  - **(c) 漏跑告警必须配自动补跑，不能只 emit_alert**：watchdog 过宽限期且当日无 completed/running 时，经后端 API 触发一次盘后流水线（补跑按交易日/策略幂等），并用 `data/runtime/daily_run_watchdog_autoretry.json` 日期 marker 保证同日最多一次。
+  - **(d) 队列隔离后，已创建的旧 SCHEDULED run 不会自动迁移队列**（`work_queue_name` 在 run 创建时固化）；修完部署注册后必须取消积压的迟到 run 并重新触发，否则修复当天仍不生效。取消 RUNNING 的重复 run 要同步清理 `scheduled_task_runs` 里的僵尸 `running` 记录。
+- 吸收位置：`backend/app/orchestration/deployments.py`（`schedule_all_enabled_tasks` 业务任务 `work_queue_name=RECOMMENDATION_WORK_QUEUE` + 根因注释）、`backend/scripts/daily_run_watchdog.py`（自动补跑 + 幂等 marker）、`backend/tests/test_prefect_orchestration.py::test_business_tasks_are_isolated_from_high_frequency_polls`、`backend/tests/test_daily_run_watchdog.py`；背景见 `scripts/launchd/README.md`。
+- 相关：2026-10-15 父子 flow 死锁（deployments.py 注释）、`docs/reviews/datacenter-bypass-and-r12-incentive-verify-2026-11-15.md`（数据中心绕过/半量当成功，同类「症状在别处」误判）。

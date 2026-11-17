@@ -27,6 +27,20 @@ MANUAL_REMEDIATION_DEPLOYMENT_NAME = "manual-data-health-remediation/default"
 # 队列槽位（limit 2），两个父 flow 同时运行会把子 run 饿死成 Late（2026-10-15 实测死锁）。
 # 独立队列不受 default 限额约束，只受 pool 上限约束。
 RECOMMENDATION_WORK_QUEUE = "recommendation"
+# 2026-11-16/17 数据健康连续两天挂掉的根因修复：高频轮询与业务日更必须分队列。
+#
+# default 队列并发上限只有 2，而 intraday_lock_poll / stale_run_recovery /
+# execution_confirmation_poll 每 5 分钟各产生一条 run。这些 flow 单次可能跑
+# 60~90 分钟（thsdk 游客账户重连超时），两个槽被占满后，每 5 分钟新增的 run
+# 全部积压成 SCHEDULED；11-17 实测积压 123 条，17:35 盘后全量同步被挤在队尾
+# 整天没启动 → 当天所有库表停在上一交易日 → 数据健康 blocked、推荐闸门关闭。
+# 11-16 则是同一原因导致 17:35 / 18:40 / 21:00 连环迟到 2~5 小时。
+#
+# 因此：所有业务 ScheduledTask 与手动补数都走 recommendation 队列
+# （priority=2、无队列级并发上限），只受 work pool 上限 6 约束；
+# 只有下面 3 个高频 periodic flows 留在 default 队列，它们迟到即跳过、
+# 堵死也不影响日更。推荐子 flow 本来就在 recommendation 队列，父子同队列
+# 且无队列限额，不会出现 2026-10-15 那种「父等子、子被队列饿死」的死锁。
 WORK_POOL_CONCURRENCY_LIMIT = 6
 
 # Process worker spawns each flow run in its own subprocess. Without an
@@ -49,6 +63,7 @@ def schedule_all_enabled_tasks() -> DeploymentSyncResult:
         deployment = scheduled_task_flow.to_deployment(
             name=item.task_id,
             work_pool_name=WORK_POOL_NAME,
+            work_queue_name=RECOMMENDATION_WORK_QUEUE,
             schedules=[Cron(item.cron_expression, timezone="Asia/Shanghai")],
             parameters={"task_id": item.task_id, "trigger_source": "schedule"},
             tags=["ashare", "scheduled-task", item.task_type],
@@ -57,8 +72,10 @@ def schedule_all_enabled_tasks() -> DeploymentSyncResult:
         deployment.apply()
         names.append(name)
     recommendation_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, work_queue_name=RECOMMENDATION_WORK_QUEUE, tags=["ashare", "recommendation"], job_variables=_JOB_VARIABLES).apply()
-    manual_data_health_remediation_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, tags=["ashare", "remediation"], job_variables=_JOB_VARIABLES).apply()
-    # Periodic housekeeping (no DB ScheduledTask rows — these are infrastructure flows)
+    manual_data_health_remediation_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, work_queue_name=RECOMMENDATION_WORK_QUEUE, tags=["ashare", "remediation"], job_variables=_JOB_VARIABLES).apply()
+    # 下面 3 个高频 periodic infrastructure flows 故意留在 default 队列（limit=2）：
+    # 它们迟到后 flow 内部会自行跳过，积压也不会再阻塞业务日更任务。
+    # 不要给它们加 work_queue_name=RECOMMENDATION_WORK_QUEUE，否则又会把高优先队列占满。
     intraday_lock_poll_flow.to_deployment(
         name="default",
         work_pool_name=WORK_POOL_NAME,
