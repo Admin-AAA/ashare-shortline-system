@@ -610,3 +610,39 @@ def test_holder_trade_contract_accepts_observed_11_field_schema_and_news_backup_
         api_name="anns_d", requested_fields="", envelope={"data": {"fields": fields8, "items": [r[:-1] for r in rows]}},
     )
     assert not news.completeness_for(env).limit.truncation_ruled_out  # Tushare 本体仍受 2000 上限
+
+
+def test_share_float_window_looks_back_and_market_wide_view_is_not_empty(monkeypatch) -> None:
+    """解禁快照必须回看已发布公告；空 instruments 表示「全市场」而不是「一只都不要」。
+
+    2026-11-18 线上两处叠加导致静默空转：①分区用「未来 30 天」，而上游只返回已发布公告
+    （end_date 被忽略），于是每天 successful_empty（0 行）；②即便有行，视图按空
+    requested_codes 过滤也恒为空。两处都修掉，并用本用例锁住。
+    """
+    from datetime import datetime, timezone
+
+    from app.services.auxiliary import composition as comp
+    from app.services.auxiliary.contracts import AuxiliaryDatasetRequest
+
+    req = AuxiliaryDatasetRequest(
+        dataset_key="share_float",
+        instruments=(),
+        trade_date=date(2026, 11, 17),
+        refresh_enabled=True,
+        requested_at=datetime(2026, 11, 17, 1, 0, tzinfo=timezone.utc),
+    )
+    params = [dict(p.parameters) for p in comp._share_float_market_partition(req)]
+    assert len(params) == 31                                  # 未来 30 天逐日
+    assert params[0]["float_date"] == "20261117"
+    assert params[-1]["float_date"] == "20261217"
+    assert all("start_date" not in p and "end_date" not in p for p in params)  # 不再用上游会忽略的区间参数
+
+    row = {"ts_code": "000001.SZ", "ann_date": "20261110", "float_date": "20261120",
+           "float_share": 1000, "float_ratio": 1.5, "holder_name": "h", "share_type": "定增股份"}
+    monkeypatch.setattr(comp, "_rows", lambda _snapshots: (row,))
+    view = comp._share_float_view((), req)
+    assert view["000001"] and view["000001"][0]["float_date"] == "2026-11-20"
+
+    # 显式传了代码列表时仍按列表过滤（不改变既有语义）
+    filtered = comp._share_float_view((), replace(req, instruments=(AuxiliaryInstrument(code="600000"),)))
+    assert filtered == {}

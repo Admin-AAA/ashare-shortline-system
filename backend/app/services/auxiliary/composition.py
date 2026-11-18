@@ -187,14 +187,20 @@ def _news_date_partitions(request: AuxiliaryDatasetRequest) -> tuple[EventSnapsh
 
 
 def _share_float_market_partition(request: AuxiliaryDatasetRequest) -> tuple[EventSnapshotRequest, ...]:
-    """一次拉全市场未来 30 天解禁，避免按 5000 只股票逐股请求。"""
-    return (
-        EventSnapshotRequest.from_mapping(
-            {
-                "start_date": _compact_day(request.trade_date),
-                "end_date": _compact_day(request.trade_date + timedelta(days=30)),
-            }
-        ),
+    """按**解禁日**逐日分区，拉未来 30 天全市场解禁明细（一日一请求）。
+
+    为什么既不用「一次拉未来 30 天」也不用「按公告日回看」：
+    * 一次拉窗口：2026-11-18 实测 start=今日/end=今日+30 时上游返回 0 行（end_date 被忽略，
+      只按 start_date 起点返回已发布公告）→ 每天 successful_empty，解禁视图空转 8 天；
+      而回看 30 天会一次返回 61789 行（7 页），超过该接口 6000 行的可发布上限证据，
+      require_publishable 判「无法排除截断」，指针不发布，视图仍为空。
+    * 按公告日回看：单日公告量实测 49~9563 行，大公告日（9563）同样超上限被卡。
+    * 按解禁日：实测每日 0~126 行（11-18 为 126），天然小于上限、逐日可发布，
+      而且正是视图要的口径（float_date ∈ [T, T+30]），不需要再靠 ann_date 倒推。
+    """
+    return tuple(
+        EventSnapshotRequest.from_mapping({"float_date": _compact_day(request.trade_date + timedelta(days=offset))})
+        for offset in range(31)
     )
 
 
@@ -241,11 +247,15 @@ def _share_float_view(
     request: AuxiliaryDatasetRequest,
 ) -> dict[str, list[dict[str, Any]]]:
     cutoff = request.trade_date + timedelta(days=30)
+    # 空 instruments（夜间全域补数就是这种调用）表示「全市场」，不能当成「一只都不要」：
+    # 2026-11-18 实测 nightly 走 instruments=()，若按空集过滤，写库的 share_floats 从 11-09
+    # 起再没更新过（快照有行、视图为空），属于静默空转。显式传了代码列表时才按它过滤。
+    wanted = set(request.requested_codes)
     result: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in _rows(snapshots):
         code = _code(row.get("ts_code"))
         float_date = _iso_day(row.get("float_date"))
-        if code not in request.requested_codes or not float_date:
+        if (wanted and code not in wanted) or not float_date:
             continue
         try:
             parsed = date.fromisoformat(float_date)

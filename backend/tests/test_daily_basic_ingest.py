@@ -111,6 +111,39 @@ def test_freshness_check_flags_lag_and_dead_columns(db):
     assert any("关键列全 0/NULL: total_mv" in i for i in r["issues"])
 
 
+def test_freshness_ignores_non_trade_day_rows(db):
+    """非交易日的脏行不得被当成「行数断崖」，也不得掩盖真实滞后。
+
+    真实案例（2026-11-18）：QVIX 上游把周日 2026-11-01 写进 index_daily（2 行），
+    按「表里出现的全部日期」统计行数时被判成 2 vs 中位 8 的断崖，告警从 11-16 起每晚重发。
+    """
+    from app.services import data_freshness as df_mod
+
+    trade_days = ["2098-03-02", "2098-03-03", "2098-03-04"]
+    dirty_day = "2098-03-05"          # 在 reference 窗口之外，属于非交易日脏行
+    codes = ["999971", "999972", "999973"]
+    try:
+        for d in trade_days:
+            for c in codes:
+                db.execute(text("INSERT INTO daily_basic (code, trade_date, turnover_rate, pe_ttm, total_mv, circ_mv) "
+                                "VALUES (:c, :d, 1, 1, 1, 1)"), {"c": c, "d": d})
+        # 非交易日只有 1 行：修复前会被判成「断崖（中位 3）」
+        db.execute(text("INSERT INTO daily_basic (code, trade_date, turnover_rate, pe_ttm, total_mv, circ_mv) "
+                        "VALUES (:c, :d, 1, 1, 1, 1)"), {"c": codes[0], "d": dirty_day})
+        db.commit()
+
+        r = df_mod.check_daily_table(db, "daily_basic", "trade_date", 0, (), True, dates=trade_days)
+        assert r["ignored_non_trade_dates"] == [dirty_day]
+        assert r["latest"] == trade_days[-1]           # 脏日期不得成为「最新日期」
+        assert r["lag_trade_days"] == 0
+        assert not any("断崖" in i for i in r["issues"])
+    finally:
+        db.rollback()
+        db.execute(text("DELETE FROM daily_basic WHERE trade_date IN ('2098-03-02', '2098-03-03', '2098-03-04', "
+                        "'2098-03-05')"))
+        db.commit()
+
+
 def test_freshness_task_registered_and_dispatched():
     from app.services import scheduler_pure, scheduler_service
 
