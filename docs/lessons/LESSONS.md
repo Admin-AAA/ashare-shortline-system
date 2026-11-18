@@ -2169,3 +2169,24 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(d) 队列隔离后，已创建的旧 SCHEDULED run 不会自动迁移队列**（`work_queue_name` 在 run 创建时固化）；修完部署注册后必须取消积压的迟到 run 并重新触发，否则修复当天仍不生效。取消 RUNNING 的重复 run 要同步清理 `scheduled_task_runs` 里的僵尸 `running` 记录。
 - 吸收位置：`backend/app/orchestration/deployments.py`（`schedule_all_enabled_tasks` 业务任务 `work_queue_name=RECOMMENDATION_WORK_QUEUE` + 根因注释）、`backend/scripts/daily_run_watchdog.py`（自动补跑 + 幂等 marker）、`backend/tests/test_prefect_orchestration.py::test_business_tasks_are_isolated_from_high_frequency_polls`、`backend/tests/test_daily_run_watchdog.py`；背景见 `scripts/launchd/README.md`。
 - 相关：2026-10-15 父子 flow 死锁（deployments.py 注释）、`docs/reviews/datacenter-bypass-and-r12-incentive-verify-2026-11-15.md`（数据中心绕过/半量当成功，同类「症状在别处」误判）。
+
+## L-207 监控项的「口径错误」会自我固化：非交易日脏行、季频数据套日频阈值、上游成功 0 行记成失败，都会让同一黄项永久挂着
+
+- 状态：active（永久口径约束 + 已落地修复）。
+- 适用：`app/services/data_freshness.py`、`app/services/data_quality_monitor.py` 的全部按日/按事件/按快照检查项；`app/services/auxiliary/composition.py` 的事件快照分区；任何「黄项连续多天不消」的排查。
+- 证据（2026-11-18 逐个打穿）：
+  - **非交易日脏行**：`index_daily` 在周日 `2026-11-01` 有 2 行（QVIX50/QVIX300，上游写错日期；该日 `trade_calendar.is_open=0`）。新鲜度按「表里出现的全部日期」统计行数，2 vs 中位 8 判成「断崖」，告警从 11-16 起每晚重发、永不收敛。修复后 11-18 10:36 巡检自动打出 `[ALERT_RESOLVED:data_freshness] index_daily 已恢复`。
+  - **季频数据套日频阈值**：`hk_holdings` 只有季末（3-31/6-30/9-30/12-31）四种日期（2025 年以来实测），而巡检阈值是「黄 >45 天」。`2026-09-30` 到 11-18 是 48 天，于是每个季度中段必然报黄——文件本身 11-18 09:35 刚重导过，数据没问题，是阈值错。
+  - **上游成功但 0 行被记成失败**：`share_float` 从 11-10 起连续 8 次 `successful_empty`（0 行），但 `check_snapshot_datasets` 把 `status<>'complete'` 一律算失败、`failure_code` 又是不限时间的 `MAX`，于是告警写成「近 3 天失败 5 次，失败码 event_provider_request_failed」——把「上游还没发布」误报成「接口报错」，误导排查方向。
+  - **事件快照请求口径与接口能力不匹配**：`_share_float_market_partition` 原来发 `start_date=今日, end_date=今日+30`。实测 teajoin 只按 `start_date` 起点返回**已发布**公告、`end_date` 被忽略 → 未来窗口恒 0 行；改成回看 30 天又因一次返回 61789 行（7 页）超过该接口 6000 行可发布上限，`require_publishable` 判「无法排除截断」，快照落库但**指针不发布**，视图静默为空（`record_count=0 / pointer_not_published`）。最终按「解禁日逐日」分区（每日实测 0~126 行）才既发布又有数据：31 个分区全部 published、`record_count=130`、`errors=()`。
+  - 顺带发现：夜间全域补数用 `instruments=()` 调 `run_auxiliary_application`，而 `_share_float_view` 用 `code not in request.requested_codes` 过滤 → 空集把全市场行全丢掉，`share_floats` 从 11-09 起没再写过。
+  - 早间巡检实测 92 分钟（09:00:33→10:32:52），单跑只要 60 秒：09:00 机器唤醒后 5 个重任务同时抢库。无分项计时时只能看到「整块慢」。
+- 永久规则：
+  - **(a) 按日行数/断崖/整列判定只能统计「参考交易日集合」**（交易日历或 `daily_kbars` 的 `DISTINCT trade_date`），非交易日行既不进中位数也不判级；滞后判定的 `MAX(日期)` 必须 cap 在参考交易日，否则一个未来脏日期会把真实滞后掩盖成 `lag=0`。
+  - **(b) 阈值必须匹配数据发布频率**：季频（hk_holdings、pledge_stats 等）不得用 45 天这种日频口径；改了阈值必须在注释里写出「数据实际只有哪几种日期」的实测证据，不能只写「调宽阈值」。
+  - **(c) 事件快照巡检必须区分 `failure` 与 `successful_empty`，失败码必须带时间窗**（如近 3 天），否则文案会把几天前另一次故障的码当成今天的根因。
+  - **(d) 上游「成功但 0 行」先查请求参数是否被上游支持、再查数据是否真没有**：分区要选「一天一请求」这种天然小于接口单次上限的口径；一次窗口超过可发布上限会导致快照落库但指针不发布，视图静默为空，比报错更难发现。
+  - **(e) 空 `instruments` 语义必须是「全市场」而不是「一只都不要」**：市场级视图过滤前先判断 `wanted` 是否为空。
+  - **(f) 巡检必须有自己的分项计时**：单项 ≥5s 记 warning，结束时打印最慢 5 项；否则「巡检跑了 90 分钟」无法定位是被数据库争用还是某一项卡住。
+- 吸收位置：`backend/app/services/data_freshness.py`（`check_daily_table` 非交易日过滤 + `MAX` cap、`check_snapshot_datasets` 分开统计与时间窗失败码、`hk_holdings` 135 天）、`backend/app/services/data_quality_monitor.py`（`hk_holdings` 事件阈值 135/165、`_safe` 分项计时 + `run_checks` 汇总）、`backend/app/services/auxiliary/composition.py`（`_share_float_market_partition` 按 `float_date` 逐日、`_share_float_view` 空 codes 视为全市场）、`backend/tests/test_daily_basic_ingest.py::test_freshness_ignores_non_trade_day_rows`、`backend/tests/test_event_snapshot_composition.py::test_share_float_window_looks_back_and_market_wide_view_is_not_empty`。
+- 相关：L-206（同一天的另一层根因：队列堵塞）、L-096（evidence_class 口径混用同属「统计口径错导致结论错」）。

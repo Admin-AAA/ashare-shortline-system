@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import statistics
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -138,13 +139,25 @@ def cliff_severity(latest: float, prev: float | None, baseline: list[float]) -> 
     return GREEN, ""
 
 
+SLOW_CHECK_SECONDS = 5.0
+_CHECK_TIMINGS: list[tuple[str, float]] = []
+
+
 def _safe(label: str, key: str, category: str, kind: str, fn: Callable[[], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    started = time.monotonic()
     try:
-        return fn()
+        items = fn()
     except Exception as exc:  # noqa: BLE001 - 一项检查失败不得影响其它检查，更不能阻塞主流程
         logger.warning("data_quality check %s failed: %r", key, exc)
-        return [_item(key, label, category, YELLOW, kind=kind, detail=f"检查本身失败 {type(exc).__name__}: {str(exc)[:160]}",
-                      impact="该项无法判断，需人工排查监控代码")]
+        items = [_item(key, label, category, YELLOW, kind=kind, detail=f"检查本身失败 {type(exc).__name__}: {str(exc)[:160]}",
+                       impact="该项无法判断，需人工排查监控代码")]
+    elapsed = time.monotonic() - started
+    _CHECK_TIMINGS.append((key, elapsed))
+    if elapsed >= SLOW_CHECK_SECONDS:
+        # 2026-11-18：早间巡检实测跑了 92 分钟（单独跑只要 60 秒），原因是 09:00 机器唤醒后
+        # 五个重任务同时抢库。没有分项计时就只能看到「一整块慢」，无法判断被谁拖住。
+        logger.warning("data_quality check %s 耗时 %.1fs（慢检查：多为数据库/IO 争用）", key, elapsed)
+    return items
 
 
 # --------------------------------------------------------------------------- 数据库表
@@ -516,7 +529,11 @@ FILE_DATASETS: list[dict[str, Any]] = [
      "mode": "weekly", "glob": "midterm/basic_20[0-9][0-9].parquet", "cols": ("trade_date",), "weekly_lag": 5, "max": YELLOW,
      "impact": "线上 小盘高股息 / 小盘低市销率 / 红利低波：缺当周快照时线上代码改走数据网关现拉（不会静默用旧值），但多耗接口"},
     {"key": "file:midterm/hk_holdings.parquet", "label": "港股通持股 parquet", "mode": "event",
-     "glob": "midterm/hk_holdings.parquet", "cols": ("trade_date",), "event_days": (45, 130), "max": YELLOW,
+     # 这是季频数据，不是日频：hk_hold 上游只在季末（3-31/6-30/9-30/12-31）发布。2026-11-18 实测
+     # hk_holdings 表 2025 年以来的日期只有这四种，最新 2026-09-30。原阈值 (45,130) 会在每个季度
+     # 中段（季末 +45 天起、到下一季末数据到达前）必然报黄，属口径错误、不是数据故障。
+     # 改为：季末 +135 天仍未出现新季度 → 黄；+165 天 → 红（留出上游发布延迟）。
+     "glob": "midterm/hk_holdings.parquet", "cols": ("trade_date",), "event_days": (135, 165), "max": YELLOW,
      "impact": "研究用（季度快照）"},
     {"key": "file:research_cache/kpl_list", "label": "开盘啦涨停榜缓存(kpl)", "mode": "daily",
      "glob": "research_cache/kpl_list/kpl_20[0-9][0-9].parquet", "cols": ("trade_date",), "max": YELLOW,
@@ -1234,6 +1251,8 @@ def check_rolling_r12(db, open_days: list[str], now: datetime | None = None, pat
 
 def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -> dict[str, Any]:
     now = now or _now()
+    _CHECK_TIMINGS.clear()
+    started_at = time.monotonic()
     open_days = load_open_days(db)
     expected = expected_trade_date(open_days, now)
     items: list[dict[str, Any]] = []
@@ -1297,6 +1316,9 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     items += _safe("ds_all_failed", "alerts:datasource_all_failed", "静默失败", "log", lambda: [check_datasource_all_failed(now)])
     items.sort(key=lambda i: (-_RANK[i["severity"]], i["category"], i["key"]))
     counts = {s: sum(1 for i in items if i["severity"] == s) for s in (RED, YELLOW, GREEN)}
+    elapsed = time.monotonic() - started_at
+    slowest = ", ".join(f"{k}={v:.1f}s" for k, v in sorted(_CHECK_TIMINGS, key=lambda x: -x[1])[:5] if v >= 1.0)
+    logger.info("数据质量巡检完成: %.1fs，%d 项检查%s", elapsed, len(_CHECK_TIMINGS), f"，最慢 {slowest}" if slowest else "")
     return {"generated_at": now.strftime("%Y-%m-%d %H:%M:%S"), "expected_trade_date": expected,
             "overall": RED if counts[RED] else YELLOW if counts[YELLOW] else GREEN,
             "summary": {**counts, "total": len(items)}, "items": items}

@@ -53,7 +53,10 @@ EVENT_TABLES: list[tuple[str, str, int]] = [
     # 按季频给 130 天（与 holder_numbers / fina_indicator 同口径），Q4 数据在 130 天内到达。
     ("pledge_stats", "end_date", 130),
     ("margin_data", "trade_date", 5),
-    ("hk_holdings", "trade_date", 100),
+    # hk_holdings 是季频（hk_hold 上游只在季末 3-31/6-30/9-30/12-31 发布，2026-11-18 实测表内
+    # 2025 年以来仅这四种日期）。按 100 天判停更会在「季末 +100 天」就报警，早于下一季度数据
+    # 发布窗口；改为 135 天（与 data_quality_monitor 的 file:midterm/hk_holdings 口径一致）。
+    ("hk_holdings", "trade_date", 135),
 ]
 
 # 事件类数据的线上真源是 auxiliary_snapshot_batches（block_trades/holder_trades 旧表已不再写入，设计如此），
@@ -82,7 +85,10 @@ def recent_trade_dates(db, n: int = WINDOW) -> list[str]:
 def check_daily_table(db, table: str, col: str, allowed_lag: int, keys: tuple[str, ...], per_day: bool,
                       dates: list[str]) -> dict[str, Any]:
     latest = dates[-1]
-    mx = _norm(db.execute(text(f"SELECT MAX(`{col}`) FROM `{table}`")).scalar())
+    # 滞后判定同样限制在参考交易日之内：表里若存在非交易日/未来脏行（如 QVIX 上游写进 index_daily
+    # 的周日行），未加 cap 时 MAX(col) 会取到那个脏日期，把真实滞后掩盖成 "lag=0"。
+    mx = _norm(db.execute(text(f"SELECT MAX(`{col}`) FROM `{table}` WHERE `{col}` <= :cap"),
+                          {"cap": latest}).scalar())
     lag = sum(1 for d in dates if mx is None or d > mx)
     issues: list[str] = []
     if lag > allowed_lag:
@@ -93,6 +99,15 @@ def check_daily_table(db, table: str, col: str, allowed_lag: int, keys: tuple[st
         rows = db.execute(text(
             f"SELECT `{col}`, COUNT(*){', ' + sel if sel else ''} FROM `{table}` "
             f"WHERE `{col}` >= :s GROUP BY `{col}` ORDER BY `{col}`"), {"s": dates[0]}).all()
+        # 只统计「参考交易日」（dates 来自 daily_kbars 的交易日集合）。表里可能存在非交易日的脏行
+        # ——例如 QVIX 上游把周日 2026-11-01 写进 index_daily（2 行），会被 median(8) 判成「断崖」
+        # 并永久挂住告警（2026-11-18 实测：该告警从 11-16 起每晚重发）。非交易日没有「当日应有行数」
+        # 的语义，纳入断崖/整列判定只会产生误报，故过滤掉并留痕。见 L-207。
+        dates_set = set(dates)
+        ignored = sorted({str(r[0]) for r in rows if str(r[0]) not in dates_set})
+        rows = [r for r in rows if str(r[0]) in dates_set]
+        if ignored:
+            out["ignored_non_trade_dates"] = ignored
         counts = {str(r[0]): int(r[1]) for r in rows}
         out["counts"] = counts
         med = median(counts.values()) if counts else 0
@@ -117,25 +132,37 @@ def check_event_table(db, table: str, col: str, max_age_days: int) -> dict[str, 
 
 
 def check_snapshot_datasets(db) -> list[dict[str, Any]]:
+    # 2026-11-18：原来把 status<>'complete' 一律算失败，于是「上游成功但返回 0 行」
+    # (successful_empty) 被报成「近 3 天失败 5 次」；failure_code 又是不限时间的 MAX，
+    # 会引用几天前另一次故障的失败码，把「上游还没发布数据」误导成「接口报错」。
+    # 改为分开统计：真失败(failure) / 上游成功但 0 行(successful_empty)，失败码只取近 3 天。
     rows = db.execute(text(
         "SELECT dataset, MAX(CASE WHEN status='complete' THEN fetched_at END), "
-        "SUM(status<>'complete' AND fetched_at >= NOW() - INTERVAL 3 DAY), "
-        "MAX(CASE WHEN status<>'complete' THEN failure_code END), "
+        "SUM(status='failure' AND fetched_at >= UTC_TIMESTAMP() - INTERVAL 3 DAY), "
+        "SUM(status='successful_empty' AND fetched_at >= UTC_TIMESTAMP() - INTERVAL 3 DAY), "
+        "MAX(CASE WHEN status='failure' AND fetched_at >= UTC_TIMESTAMP() - INTERVAL 3 DAY "
+        "    THEN failure_code END), "
         "SUM(status<>'complete' AND fetched_at >= UTC_TIMESTAMP() - INTERVAL 1 DAY), "
         "SUM(status='complete' AND fetched_at >= UTC_TIMESTAMP() - INTERVAL 1 DAY) "
         "FROM auxiliary_snapshot_batches GROUP BY dataset")).all()
     out = []
     now = datetime.now()
-    for ds, last_ok, recent_fail, code, fail_1d, ok_1d in rows:
+    for ds, last_ok, fail_3d, empty_3d, code, fail_1d, ok_1d in rows:
         limit = SNAPSHOT_MAX_AGE_DAYS.get(str(ds), 4)
         age = (now - last_ok).days if last_ok else None
+        f3, e3 = int(fail_3d or 0), int(empty_3d or 0)
+        detail = f"近 3 天失败 {f3} 次"
+        if e3:
+            detail += f"、上游成功但 0 行 {e3} 次"
+        if code:
+            detail += f"，失败码 {code}"
         issues = []
         if age is None or age > limit:
-            issues.append(f"最近成功快照 {last_ok}（{age} 天前），近 3 天失败 {int(recent_fail or 0)} 次，失败码 {code}")
+            issues.append(f"最近成功快照 {last_ok}（{age} 天前），{detail}")
         elif int(fail_1d or 0) and not int(ok_1d or 0):
             # 2026-10-19：holder_trade 10-12 起每天 unknown_schema 0 行，但 10-09 的成功批次让年龄阈值晚几天才报；
-            # 近 24h 只有失败、没有任何成功批次即告警，不等年龄超阈值。
-            issues.append(f"近 24 小时快照全部失败 {int(fail_1d)} 次（0 次成功），失败码 {code}")
+            # 近 24h 只有失败/空返回、没有任何成功批次即告警，不等年龄超阈值。
+            issues.append(f"近 24 小时快照无成功批次（{detail}）")
         out.append({"table": f"snapshot:{ds}", "latest": str(last_ok)[:19] if last_ok else None,
                     "age_days": age, "issues": issues})
     return out
