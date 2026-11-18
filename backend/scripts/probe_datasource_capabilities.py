@@ -96,6 +96,12 @@ def probe(apis: list[str], providers_filter: set[str] | None) -> dict:
     for api in apis:
         params = {k: (ltd if v is None else v) for k, v in PROBES[api].items()}
         for p in providers:
+            included = p.config.included_apis
+            if included is not None and api not in included:
+                # 该源没有注册这个接口（运行时路由也不会尝试它，见 teajoin_capability.TEAJOIN_APIS）。
+                # 探测它只会稳定产出「不支持的接口（未收录）」，在矩阵里堆成永不消失的 unverified
+                # 条目（2026-11-18：teajoin 的 rt_k/rt_min/anns_d 三项），对能力结论没有任何信息量。
+                continue
             rec = {"provider": p.name, "api": api, "rate_limit_per_minute": p.config.rate_limit_per_minute}
             t0 = time.perf_counter()
             try:
