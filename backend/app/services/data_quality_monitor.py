@@ -50,6 +50,11 @@ DROP_RED = 0.5            # < 0.5 红
 SPIKE_RATIO = 3.0         # 最新一日 > 中位数 3 倍且 > 前一日 3 倍：口径突变，黄
 BASELINE_DAYS = 20
 EVENING_READY = (21, 30)  # 21:30 后认为当日晚间补数已完成，期望最新交易日 = 今天
+# 能力矩阵由 launchd 每周六 10:00 重测一次（deploy/launchd/com.wangao.ashare-datasource-probe.plist，
+# 刻意避开交易时段以免占配额）。阈值必须 ≥ 探测周期：原来写死 3 天，配上周频探测等于每周有 4 天
+# 必然显示「超期」，把一个周期正常的文件报成常态化黄项（2026-11-18 实测 age=4.0 天，见 L-207）。
+# 给 1 天宽限（7+1）：漏跑一次周六才报警。
+CAPABILITY_MATRIX_MAX_AGE_DAYS = 8
 
 
 def _now() -> datetime:
@@ -676,7 +681,8 @@ def check_age_file(spec: dict[str, Any], now: datetime | None = None, base: Path
                  detail=f"文件修改于 {age:.0f} 天前（黄>{spec['yellow_days']} 红>{spec['red_days']}）", impact=spec["impact"])
 
 
-def check_capability_matrix(now: datetime | None = None, path: Path | None = None) -> dict[str, Any]:
+def check_capability_matrix(now: datetime | None = None, path: Path | None = None,
+                            routing: dict | None = None) -> dict[str, Any]:
     p = path or (DATA_DIR / "runtime" / "datasource_capability_matrix.json")
     key, label = "file:runtime/datasource_capability_matrix.json", "数据源能力探测矩阵"
     impact = "只反映 Tushare 各接口(provider×api)是否可用，不覆盖 data/ 下的文件数据集——分钟K停更未被发现的原因之一"
@@ -685,13 +691,30 @@ def check_capability_matrix(now: datetime | None = None, path: Path | None = Non
     j = json.loads(p.read_text(encoding="utf-8"))
     probed = str(j.get("probed_at") or "")
     rows = j.get("rows") or []
-    # 异常只看「真的不能用了」：transient（限流/额度耗尽/超时/熔断）是上游当下的容量状态，
-    # 由 gateway:providers 单独反映；把它算成接口异常会让一个额度耗尽的 token 变成几十条「异常」
-    # （2026-11-06 实测 57 项里 38 项是同一个 quantdata 额度耗尽），把真正的故障埋掉。
-    from app.services.datasource.capability import classify
+    from app.services.datasource.capability import classify, load_routing_table
 
-    bad = [f"{r.get('provider')}/{r.get('api')}" for r in rows if classify(r) in ("unsupported", "unverified")]
-    skipped_transient = sum(1 for r in rows if classify(r) == "transient")
+    # 2026-11-18：原来把 unsupported / unverified 全部算成「异常」，于是矩阵这个黄项永远不收敛。
+    # 矩阵是 provider × api 的**全叉乘**，绝大多数组合本来就该是「这家不做这个接口」：
+    # quantdata 没买 stk_mins、promax 没买 stk_factor、teajoin 不提供实时行情——这些是稳定事实，
+    # 而且已经写进 routing_table 的 unsupported 列表，一致即正常。实测 114 项里 14 项「异常」
+    # 全部属于此类（5 项 unsupported 已在路由表声明、9 项 unverified 是探测参数不被上游接受），
+    # 真异常 0 项。见 L-207。
+    # 现在只报真漂移：路由表把某 provider 排进了 order（认为它能服务该接口），实测却是硬拒绝。
+    route = routing if routing is not None else load_routing_table()
+    bad: list[str] = []
+    transient = unverified = consistent = 0
+    for r in rows:
+        prov, api = str(r.get("provider") or ""), str(r.get("api") or "")
+        cls = classify(r)
+        if cls == "transient":
+            transient += 1
+        elif cls == "unverified":
+            unverified += 1
+        elif cls == "unsupported":
+            if prov in tuple((route.get(api) or {}).get("order") or ()):
+                bad.append(f"{prov}/{api}")
+            else:
+                consistent += 1
     age_days = None
     try:
         age_days = ((now or _now()) - datetime.strptime(probed, "%Y-%m-%dT%H:%M:%S%z")).total_seconds() / 86400
@@ -699,14 +722,19 @@ def check_capability_matrix(now: datetime | None = None, path: Path | None = Non
         pass
     sev = GREEN
     parts = [f"探测于 {probed}（{'%.1f 天前' % age_days if age_days is not None else '未知'}），{len(rows)} 项，异常 {len(bad)} 项"]
-    if skipped_transient:
-        parts.append(f"另 {skipped_transient} 项因上游限流/额度耗尽未取到能力结论（见 数据网关承载）")
-    if age_days is None or age_days > 3:
+    if consistent:
+        parts.append(f"{consistent} 项为已知不支持且与路由表一致")
+    if unverified:
+        # unverified 是「没取到结论」，不等于接口不可用（多为探测参数不被上游接受），只作计数。
+        parts.append(f"{unverified} 项未取到能力结论（不代表接口不可用）")
+    if transient:
+        parts.append(f"另 {transient} 项因上游限流/额度耗尽未取到能力结论（见 数据网关承载）")
+    if age_days is None or age_days > CAPABILITY_MATRIX_MAX_AGE_DAYS:
         sev = YELLOW
-        parts.append("探测已超过 3 天未更新")
+        parts.append(f"探测已超过 {CAPABILITY_MATRIX_MAX_AGE_DAYS} 天未更新")
     if bad:
         sev = _worse(sev, YELLOW)
-        parts.append("异常：" + "、".join(bad[:8]))
+        parts.append("路由表声明可用但实测不支持：" + "、".join(bad[:8]))
     return _item(key, label, "文件数据集", sev, kind="file", latest=probed[:10], detail="；".join(parts), impact=impact)
 
 

@@ -155,11 +155,34 @@ def test_dir_and_age_file_and_capability_matrix(tmp_path):
     assert dq.check_age_file({**aspec, "red_days": 40}, _t("2026-10-26 14:00"), tmp_path)["severity"] == dq.YELLOW  # 封顶
 
     m = tmp_path / "m.json"
-    m.write_text(json.dumps({"probed_at": "2026-10-24T11:32:40+0800", "rows": [{"provider": "p", "api": "a", "status": "error"}]}))
-    it = dq.check_capability_matrix(_t("2026-10-26 14:00"), m)
+    route = {"a": {"order": ("p",)}}
+
+    def _write(rows: list[dict], probed: str = "2026-10-24T11:32:40+0800") -> Path:
+        m.write_text(json.dumps({"probed_at": probed, "rows": rows}))
+        return m
+
+    # 探测周期是每周六一次：4 天前的矩阵是正常状态，不能因为「超过 3 天」就报黄
+    # （2026-11-18 实测：周频探测 + 3 天阈值 = 每周有 4 天必然挂着）。
+    _write([{"provider": "p", "api": "a", "status": "ok"}])
+    it = dq.check_capability_matrix(_t("2026-10-28 12:00"), m, route)
+    assert it["severity"] == dq.GREEN and "4.0 天前" in it["detail"]
+    # 漏跑一次周六（>8 天）才报超期
+    it = dq.check_capability_matrix(_t("2026-11-02 14:00"), m, route)
+    assert it["severity"] == dq.YELLOW and "探测已超过 8 天未更新" in it["detail"]
+
+    # 真漂移：路由表把 p 排进 a 的 order，实测却是硬拒绝 → 异常
+    _write([{"provider": "p", "api": "a", "status": "no_permission"}])
+    it = dq.check_capability_matrix(_t("2026-10-26 14:00"), m, route)
     assert it["severity"] == dq.YELLOW and "p/a" in it["detail"]
-    m.write_text(json.dumps({"probed_at": "2026-10-26T11:32:40+0800", "rows": [{"provider": "p", "api": "a", "status": "ok"}]}))
-    assert dq.check_capability_matrix(_t("2026-10-26 14:00"), m)["severity"] == dq.GREEN
+    # 已写进 unsupported（不在 order 里）的已知不支持只是矩阵的正常输出，不算异常
+    _write([{"provider": "q", "api": "b", "status": "no_permission"},
+            {"provider": "p", "api": "b", "status": "no_permission"}])
+    it = dq.check_capability_matrix(_t("2026-10-26 14:00"), m, route)
+    assert it["severity"] == dq.GREEN and "2 项为已知不支持" in it["detail"]
+    # 「没取到结论」不是「接口不可用」，只计数不判黄
+    _write([{"provider": "p", "api": "a", "status": "error"}])
+    it = dq.check_capability_matrix(_t("2026-10-26 14:00"), m, route)
+    assert it["severity"] == dq.GREEN and "1 项未取到能力结论" in it["detail"]
 
 
 # ---------------------------------------------------------------- 数据库（sqlite 内存库）
