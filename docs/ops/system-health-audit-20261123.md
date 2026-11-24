@@ -228,8 +228,14 @@ quotes(16.2s) → daily_kbar_batch(2.4s) → auxiliary(151.0s)
 
 | 项 | 状态 |
 |---|---|
-| QVIX 历史缺口 | 已加任务并手工回补；`backfill_qvix.py` 走 akshare 较慢，需确认补齐到 11-23 |
+| QVIX 历史缺口 | 已加每日任务（21:10）并手工回补，`backfill_qvix.py` 返回「写入 0 行，最新 11-18」→ **上游 akshare 本身只到 11-18**，缺 11-19/20/23。属数据源停更，不是同步问题；任务会每天重试，上游一恢复即自动补上。巡检保留 2 个红项（这是诚实的：策略的一半触发条件确实缺失）。 |
 | 连续 2 个交易日 0 票 | **未动**，属策略闸门（`strong_climax_top_n` 等）取舍，需要人判断行情无票 vs 阈值过紧 |
 | 出票时点 17:35 | **未改**。P0-1 修好后 21:00 晚补即可补出票，不再依赖 22:43 自愈；若仍要挪时点，需同步改 `live_forward` 的 `actual_generated_at` 口径 |
-| `formal:rolling_r12` | 未动（mid-incentive-option/-vol 各 271 天回放取数失败，属研究侧回放数据） |
-| `alerts:stale_active` | 旧 `task_status|data_quality_check_morning` 告警按 24h TTL 自然过期 |
+| `formal:rolling_r12` | 已改：结果里有整天取数失败（`incomplete_days`）且超过一周时，月度任务不再按「本月已算过」跳过，而是重放补齐（全量约 4 小时，故按周一次而非每天） |
+| `alerts:stale_active` | 已清理 3 条旧语义产生的 `task_status` 告警（巡检发现红黄 ≠ 任务失败）；剩 2 条真失败告警保留 |
+
+### 补充：改期宽限的实现
+
+`_converge_task_cron` 在写回 cron 时把变更时刻记进 `payload_json._cron_changed_at`；
+`check_scheduled_tasks` 判定「漏跑」时，早于该时刻的计划时点一律豁免。
+这样改期当天不会冒出 4 条「漏跑」误报（第一轮修复后实测确实冒了，红 4 黄 8，加这条后回到红 3 黄 5）。

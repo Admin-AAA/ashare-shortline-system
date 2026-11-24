@@ -333,10 +333,10 @@ def _utc(s: str) -> datetime:  # 库内为 UTC naive
 def test_scheduled_task_missed_run_failed_streak_and_new_task_grace():
     created = _utc("2026-10-01 00:00")
     db = _FakeDB(
-        tasks=[("post_sync_formal_recommendation", "盘后", "35 17 * * mon-fri", created),
-               ("postclose_late_data_repair", "晚间补数", "0 21 * * mon-fri", created),
-               ("brand_new", "新任务", "40 19 * * mon-fri", _utc("2026-10-25 10:00")),
-               ("ok_task", "ok", "10 8,17 * * mon-fri", created)],
+        tasks=[("post_sync_formal_recommendation", "盘后", "35 17 * * mon-fri", created, None),
+               ("postclose_late_data_repair", "晚间补数", "0 21 * * mon-fri", created, None),
+               ("brand_new", "新任务", "40 19 * * mon-fri", _utc("2026-10-25 10:00"), None),
+               ("ok_task", "ok", "10 8,17 * * mon-fri", created, None)],
         runs={"post_sync_formal_recommendation": [(_utc("2026-10-22 17:35"), "completed", "")],  # 10-23 的没跑
               "postclose_late_data_repair": [(_utc("2026-10-23 21:00"), "partial_failed", "失败数据集: fina_indicator）"),
                                              (_utc("2026-10-22 21:00"), "partial_failed", ""),

@@ -145,7 +145,7 @@ class _FakeDB:
 
     def execute(self, sql, params=None):
         if "FROM scheduled_tasks" in str(sql):
-            return _Rows([("data_quality_check_evening", "晚间巡检", "40 21 * * mon-fri", None)])
+            return _Rows([("data_quality_check_evening", "晚间巡检", "40 21 * * mon-fri", None, None)])
         return _Rows([(datetime(2026, 11, 14, 13, 40), "partial_failed", self.summary)])
 
 

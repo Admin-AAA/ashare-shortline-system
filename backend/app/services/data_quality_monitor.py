@@ -928,11 +928,23 @@ def is_result_derived_partial_failure(task_id: str, status: str, summary: str) -
             and _RESULT_SUMMARY_RE.search(summary or "") is not None)
 
 
+def _cron_changed_at(payload_raw: Any) -> datetime | None:
+    """从 scheduled_tasks.payload_json 读 cron 变更时刻（由 _converge_task_cron 写入，UTC ISO）。"""
+    try:
+        raw = (json.loads(payload_raw) or {}).get("_cron_changed_at")
+        if not raw:
+            return None
+        return datetime.fromisoformat(str(raw)).replace(tzinfo=timezone.utc).astimezone(_CST)
+    except (TypeError, ValueError):
+        return None
+
+
 def check_scheduled_tasks(db, open_days: list[str], now: datetime | None = None) -> list[dict[str, Any]]:
     now = now or _now()
     out: list[dict[str, Any]] = []
-    tasks = db.execute(text("SELECT task_id, name, cron_expression, created_at FROM scheduled_tasks WHERE enabled = 1")).all()
-    for task_id, name, cron, created_at in tasks:
+    tasks = db.execute(text("SELECT task_id, name, cron_expression, created_at, payload_json FROM scheduled_tasks "
+                            "WHERE enabled = 1")).all()
+    for task_id, name, cron, created_at, payload_raw in tasks:
         runs = db.execute(text(
             "SELECT started_at, status, summary FROM scheduled_task_runs WHERE task_id = :t ORDER BY started_at DESC LIMIT 8"),
             {"t": task_id}).all()
@@ -942,6 +954,12 @@ def check_scheduled_tasks(db, open_days: list[str], now: datetime | None = None)
         if exp and created_at is not None:  # 任务注册之前的计划时刻不算漏跑
             created = created_at.replace(tzinfo=timezone.utc).astimezone(_CST)
             if exp < created:
+                exp = None
+        # 改期宽限：cron 变更（_converge_task_cron 写入 _cron_changed_at）之前定义的计划时刻不算漏跑。
+        # 否则「改期当天旧时点已跑过、新时点还没到」会立刻报一批漏跑，把修复显示成新故障。
+        if exp and payload_raw:
+            cron_changed = _cron_changed_at(payload_raw)
+            if cron_changed is not None and exp < cron_changed:
                 exp = None
         if not runs:
             out.append(_item(key, f"调度任务 {task_id}", "调度任务", YELLOW if exp else GREEN, kind="job",

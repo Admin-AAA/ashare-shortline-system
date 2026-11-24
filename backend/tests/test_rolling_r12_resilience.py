@@ -149,3 +149,24 @@ def test_check_rolling_r12_reads_file_and_task_runs(tmp_path):
     open_days = ["2026-11-02", "2026-11-03", "2026-11-04"]
     it = dq.check_rolling_r12(_DB(), open_days, now, path=tmp_path / "missing.json")
     assert it["severity"] == dq.RED and "top_n" in it["detail"] and it["key"] == dq.ROLLING_R12_KEY
+
+
+# ---------------------------------------------------------------- 本月是否「已算完」
+def test_month_done_retries_when_replay_has_incomplete_days(tmp_path, monkeypatch):
+    """结果里仍有整天取数失败的策略时，本月不能算完成：否则月度任务一直 skip，
+    缺的日子永远补不上，formal:rolling_r12 黄项永久挂着（2026-11-23 体检）。"""
+    latest = tmp_path / "rolling_r12_latest.json"
+    monkeypatch.setattr(rr, "LATEST", latest)
+
+    latest.write_text(json.dumps({"month": "2026-11", "status": "completed",
+                                  "generated_at": "2026-11-06T00:02:25", "replay": {"incomplete_days": {}}}))
+    assert rr._month_done("2026-11") is True
+
+    latest.write_text(json.dumps({"month": "2026-11", "status": "completed",
+                                  "generated_at": "2026-11-06T00:02:25",
+                                  "replay": {"incomplete_days": {"mid-incentive-option": 271}}}))
+    monkeypatch.setattr(rr, "_now", lambda: dt.datetime(2026, 11, 20, 22, 30))
+    assert rr._month_done("2026-11") is False   # 超过一周 → 允许重试补齐
+
+    monkeypatch.setattr(rr, "_now", lambda: dt.datetime(2026, 11, 8, 22, 30))
+    assert rr._month_done("2026-11") is True    # 一周内 → 不重复跑（全量重放约 4 小时）
