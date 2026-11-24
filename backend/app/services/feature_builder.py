@@ -35,6 +35,28 @@ MACD_SCORE_MAP = {
 # 数据驱动（T3 第80轮反事实验证）：多头/下穿零轴被推荐后 WR 高，提分净 +30.60%（0 移除）
 
 
+def _sum_float_ratio(floats: list[dict[str, Any]]) -> float:
+    """窗口内解禁比例求和（占总股本 %）。
+
+    float_ratio 可能为 NULL（总股本解析不到时不写错值）。dict.get 的默认值只在键缺失时
+    生效，键存在而值为 None 时仍返回 None，直接 sum 会抛 TypeError。
+    """
+    return sum(float(f["float_ratio"]) for f in floats if f.get("float_ratio") is not None)
+
+
+def _margin_net_buy(md: dict[str, Any]) -> float | None:
+    """融资净买入（亿）= 买入 − 偿还。任一侧缺数返回 None，不按 0 计算。
+
+    2026-11-24 体检：margin_detail 有 11 个交易日的全部深市行（约 1860 只/日）rzche 为 NULL，
+    沪市完整。按 0 相减会把「买入额」整个当成净买入，凭空造出一倍的净流入，
+    而这些值会进研究面板被当成因子信号。缺数就是缺数。
+    """
+    buy, repay = md.get("rzmre"), md.get("rzche")
+    if buy is None or repay is None:
+        return None
+    return round(float(buy) - float(repay), 4)
+
+
 def build_features(
     stocks: list[dict[str, Any]],
     snapshot: dict[str, Any],
@@ -1062,9 +1084,7 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["upcoming_float_days"] = min(
                 (f.get("float_date") for f in floats), default=""
             )
-            stock["upcoming_float_ratio"] = sum(
-                f.get("float_ratio", 0) for f in floats
-            )
+            stock["upcoming_float_ratio"] = _sum_float_ratio(floats)
         else:
             stock["has_upcoming_float"] = False
             stock["upcoming_float_ratio"] = 0
@@ -1076,14 +1096,13 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["margin_rzmre"] = md.get("rzmre", 0)         # 融资买入额(亿)
             stock["margin_rzche"] = md.get("rzche", 0)         # 融资偿还额(亿)
             stock["margin_rzrqye"] = md.get("rzrqye", 0)       # 融资融券余额(亿)
-            # 融资净买入 = 买入 - 偿还
-            stock["margin_net_buy_yi"] = round((md.get("rzmre", 0) or 0) - (md.get("rzche", 0) or 0), 4)
+            stock["margin_net_buy_yi"] = _margin_net_buy(md)
         else:
             stock["margin_rzye"] = 0
             stock["margin_rzmre"] = 0
             stock["margin_rzche"] = 0
             stock["margin_rzrqye"] = 0
-            stock["margin_net_buy_yi"] = 0
+            stock["margin_net_buy_yi"] = None
 
         # ── 大宗交易特征（含折价率） ──
         bt_list = block_trade_map.get(code, [])

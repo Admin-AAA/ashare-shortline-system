@@ -32,7 +32,12 @@ def db(tmp_path, monkeypatch):
 
 
 def _seed(db, day: str, codes, rzye: float = 1.0):
-    db.bulk_insert_mappings(MarginDetail, [{"code": c, "trade_date": day, "rzye": rzye} for c in codes])
+    # 金额列全部给值：只留 rzye 会让 detect_column_gaps 判成列缺口，
+    # 行数口径的测试就分不清自己测的是行数还是列。
+    db.bulk_insert_mappings(MarginDetail, [
+        {"code": c, "trade_date": day, "rzye": rzye, "rqye": rzye, "rzmre": rzye,
+         "rzche": rzye, "rzrqye": rzye} for c in codes
+    ])
     db.commit()
 
 
@@ -89,7 +94,8 @@ def test_fills_only_missing_and_never_overwrites(db):
         calls.append(td)
         # 东财同时返回已有的沪市代码（值不同）和缺失的深市代码，外加一行别的日期和一行坏代码
         return ([{"code": c, "trade_date": "2026-10-16", "rzye": 99.0} for c in sh[:10]]
-                + [{"code": c, "trade_date": "2026-10-16", "rzye": 2.0, "rqyl": 5.0} for c in _codes(2450, 0)]
+                + [{"code": c, "trade_date": "2026-10-16", "rzye": 2.0, "rqye": 2.0, "rzmre": 2.0,
+                    "rzche": 2.0, "rzrqye": 2.0, "rqyl": 5.0} for c in _codes(2450, 0)]
                 + [{"code": "000001", "trade_date": "2026-10-15", "rzye": 3.0}, {"code": "12", "trade_date": "2026-10-16"}])
 
     r = mf.fill_margin_day(db, "20261016", fetch=fetch, now=AFTER_CLOSE)
@@ -120,6 +126,59 @@ def test_not_truncated_does_not_fetch(db):
     assert r["status"] == "not_truncated"
 
 
+# ── 行齐但列缺 ───────────────────────────────────────────────────────────
+def _seed_with_null_rzche(db, day: str, sh_codes, sz_codes):
+    db.bulk_insert_mappings(MarginDetail, [
+        {"code": c, "trade_date": day, "rzye": 1.0, "rqye": 1.0, "rzmre": 1.0, "rzche": 1.0, "rzrqye": 1.0}
+        for c in sh_codes
+    ] + [
+        {"code": c, "trade_date": day, "rzye": 1.0, "rqye": 1.0, "rzmre": 1.5, "rzche": None, "rzrqye": 1.0}
+        for c in sz_codes
+    ])
+    db.commit()
+
+
+def test_column_gap_detected_when_row_count_complete(db):
+    """2026-11-16 实测：4490 行齐全，全部深市行 rzche 为 NULL，行数口径看不到。"""
+    sh, sz = _codes(2001), _codes(2450, 0)
+    _seed_with_null_rzche(db, "2026-10-16", sh, sz)
+    gaps = mf.detect_column_gaps(db, "2026-10-16")
+    assert gaps == {"rzche": 2450}
+    assert mf.detect_truncation(4451, [4451] * 5)["truncated"] is False
+
+
+def test_column_gap_triggers_fetch_and_fills_only_null_cells(db):
+    _baseline(db)
+    sh, sz = _codes(2001), _codes(2450, 0)
+    _seed_with_null_rzche(db, "2026-10-16", sh, sz)
+
+    def fetch(td):
+        # 备份源同时给沪市（已有值，不得覆盖）与深市（补 NULL）
+        return [{"code": c, "trade_date": "2026-10-16", "rzye": 99.0, "rzche": 99.0} for c in sh] + [
+            {"code": c, "trade_date": "2026-10-16", "rzye": 88.0, "rzche": 1.25} for c in sz
+        ]
+
+    r = mf.fill_margin_day(db, "2026-10-16", fetch=fetch, now=AFTER_CLOSE)
+    assert r["reasons"] == ["column_gap"] and r["status"] == "filled"
+    assert r["eastmoney_inserted"] == 0 and r["null_fields_filled"] == 2450
+    assert r["column_gaps_left"] == {}
+    rows = {c: (rzye, rzche) for c, rzye, rzche in db.execute(
+        select(MarginDetail.code, MarginDetail.rzye, MarginDetail.rzche).where(MarginDetail.trade_date == "2026-10-16"))}
+    assert all(rows[c] == (1.0, 1.0) for c in sh)      # 非 NULL 一律不动
+    assert all(rows[c] == (1.0, 1.25) for c in sz)     # 只补 NULL 那一列
+
+
+def test_column_gap_left_keeps_day_pending(db):
+    """备份源也没给该列时不能标 filled，否则缺口从待补清单里被删掉后永久留着。"""
+    _baseline(db)
+    _seed_with_null_rzche(db, "2026-10-16", _codes(2001), _codes(2450, 0))
+    r = mf.fill_margin_day(db, "2026-10-16", now=AFTER_CLOSE,
+                           fetch=lambda td: [{"code": c, "trade_date": "2026-10-16", "rzye": 5.0} for c in _codes(2450, 0)])
+    assert r["status"] == "incomplete" and r["null_fields_filled"] == 0
+    assert r["column_gaps_left"] == {"rzche": 2450}
+    assert mf.load_pending() == ["2026-10-16"]
+
+
 def test_empty_primary_skipped_by_default(db):
     _baseline(db)
     r = mf.fill_margin_day(db, "2026-10-16", fetch=lambda td: pytest.fail("must not fetch"), now=AFTER_CLOSE)
@@ -136,7 +195,9 @@ def test_intraday_defers_and_after_close_picks_up_pending(db, tmp_path):
     # 盘后入口：即使 lookback 不含该日，也会处理待补清单
     _seed(db, "2026-10-19", _codes(2001) + _codes(2450, 0))
     out = mf.run_margin_detail_fill(db, "2026-10-19", lookback_days=1,
-                                    fetch=lambda td: [{"code": c, "trade_date": "2026-10-16", "rzye": 2.0} for c in _codes(2450, 0)],
+                                    fetch=lambda td: [{"code": c, "trade_date": "2026-10-16", "rzye": 2.0,
+                                                       "rqye": 2.0, "rzmre": 2.0, "rzche": 2.0, "rzrqye": 2.0}
+                                                      for c in _codes(2450, 0)],
                                     now=AFTER_CLOSE)
     by_day = {d["trade_date"]: d for d in out["days"]}
     assert by_day["2026-10-16"]["status"] == "filled" and by_day["2026-10-19"]["status"] == "not_truncated"

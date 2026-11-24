@@ -8,14 +8,15 @@ xiaoshi 两个数据集是「最新快照」，按日调用一次（分页），
 写库约定：
 - margin_detail：仅写 Tushare/promax 缺失的 (code, trade_date)，已有行不覆盖。
 - share_floats：holder_name 以 ``xiaoshi:`` 前缀标识来源，按 (code, float_date, holder_name) 去重；
-  float_ratio 统一成百分比口径（xiaoshi unlock_ratio 是小数）。
+  float_ratio 自行按「解禁股数 ÷ 总股本」算成占总股本 %（上游 unlock_ratio 的分母是流通股本，
+  直接用会写出 1546% 这种值，与表内 Tushare / 东财行的口径冲突）。
 """
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, Mapping
 
-from sqlalchemy import select, text
+from sqlalchemy import bindparam, select, text
 from sqlalchemy.orm import Session
 
 from app.models.tables import MarginDetail, ShareFloat
@@ -72,20 +73,50 @@ def margin_rows_from_xiaoshi(items: list[dict[str, Any]]) -> list[dict[str, Any]
     return out
 
 
-def float_rows_from_xiaoshi(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def total_shares_by_code(db: Session, codes: list[str]) -> dict[str, float]:
+    """总股本（股）：daily_basic.total_mv（万元）× 1e4 ÷ 当日收盘价。
+
+    库里没有单独的总股本列，total_mv 与收盘价是唯一的本地来源。取最新交易日快照。
+    """
+    if not codes:
+        return {}
+    rows = db.execute(
+        text(
+            "SELECT db.code, db.total_mv * 10000 / k.close AS total_shares "
+            "FROM daily_basic db JOIN daily_kbars k ON k.code = db.code AND k.trade_date = db.trade_date "
+            "WHERE db.trade_date = (SELECT MAX(trade_date) FROM daily_basic) "
+            "  AND k.close > 0 AND db.total_mv > 0 AND db.code IN :codes"
+        ).bindparams(bindparam("codes", expanding=True)),
+        {"codes": sorted(set(codes))},
+    ).all()
+    return {str(code): float(v) for code, v in rows if v}
+
+
+def float_rows_from_xiaoshi(items: list[dict[str, Any]], total_shares: Mapping[str, float]) -> list[dict[str, Any]]:
+    """float_ratio 一律自行按「解禁股数 ÷ 总股本」算，不采用上游 unlock_ratio。
+
+    上游 unlock_ratio 的分母是**流通股本**：实测 688781 反解分母 41,629,000 与流通股本
+    41,628,998 一致，而总股本是 1,000,000,000，于是写进表里的比例高达 1546.97%。
+    表内其余 312 万行（Tushare / 东财）都是占总股本口径，最大 91.28%。两种口径混在同一列，
+    经 feature_builder 汇总后会在推荐里输出「占总股本 524.2%」这种不可能的风险提示。
+
+    总股本解析不到时写 None，不写一个错的比例。
+    """
     out = []
     for it in items:
         code = str(it.get("code") or "")[:6]
         day = str(it.get("event_date") or "")[:10]
         if len(code) != 6 or not code.isdigit() or len(day) != 10:
             continue
-        ratio = _f(it.get("unlock_ratio"))
+        shares = _f(it.get("unlock_shares"))
+        total = _f(total_shares.get(code))
+        ratio = None if not shares or not total else round(shares / total * 100.0, 4)
         out.append({
             "code": code,
             "ann_date": None,
             "float_date": day.replace("-", ""),  # 与表内既有 YYYYMMDD 口径一致
-            "float_share": _f(it.get("unlock_shares")),
-            "float_ratio": None if ratio is None else round(ratio * 100.0, 4),
+            "float_share": shares,
+            "float_ratio": ratio,
             "holder_name": (XIAOSHI_FLOAT_PREFIX + str(it.get("unlock_type") or ""))[:120],
         })
     return out
@@ -129,7 +160,8 @@ def sync_xiaoshi_alt_data(db: Session, *, client: Any | None = None) -> dict[str
         result["errors"].append(f"margin: {str(exc)[:120]}")
 
     try:
-        floats = float_rows_from_xiaoshi(_paged(client, "restricted_unlock"))
+        items = _paged(client, "restricted_unlock")
+        floats = float_rows_from_xiaoshi(items, total_shares_by_code(db, [str(i.get("code") or "")[:6] for i in items]))
         existing_f = {
             (c, d, h) for c, d, h in db.execute(text(
                 "SELECT code, float_date, holder_name FROM share_floats WHERE holder_name LIKE :p"

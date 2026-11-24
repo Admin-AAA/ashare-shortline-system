@@ -501,6 +501,53 @@ def check_daily_kbar_values(db, open_days: list[str], expected: str) -> dict[str
                  anomalous_rows=len(rows), new_listing_exempted=len(exempted))
 
 
+def check_margin_columns(db, open_days: list[str], expected: str) -> dict[str, Any]:
+    """两融明细的金额列缺口：行数齐全也可能整批列为 NULL。
+
+    2026-11-24 体检：11 个交易日行数完整（4490 行）而全部深市行的 rzche 为 NULL，沪市完整。
+    行数口径的 db:margin_detail 全绿，缺口存在 6 周无人发现。rzche 缺失会让
+    「融资净买入 = 买入 − 偿还」把买入额整个当成净流入。
+    """
+    from app.services.margin_detail_fill import detect_column_gaps
+
+    key, label = "db:margin_detail:columns", "两融金额列完整性"
+    impact = "偿还额缺失会把融资买入额整个当成净买入，凭空造出一倍净流入"
+    start = _window_start(open_days, expected, 5)
+    days = [d for d in open_days if start <= d <= expected]  # open_days 含未来日期，必须同时卡上界
+    bad: list[str] = []
+    for d in days:
+        gaps = detect_column_gaps(db, d)
+        if gaps:
+            bad.append(f"{d}(" + "、".join(f"{f} 缺{n}行" for f, n in sorted(gaps.items())) + ")")
+    if not bad:
+        return _item(key, label, "数据质量", GREEN, kind="quality", latest=expected, expected=expected,
+                     detail=f"最近 {len(days)} 个交易日金额列无整批缺口", impact=impact)
+    return _item(key, label, "数据质量", RED, kind="quality", latest=expected, expected=expected,
+                 detail=f"{len(bad)} 个交易日金额列整批为 NULL：{'；'.join(bad[:4])}",
+                 impact=impact, anomalous_days=len(bad))
+
+
+def check_share_float_ratio(db) -> dict[str, Any]:
+    """解禁比例口径：share_floats.float_ratio 是占总股本 %，超过 100 即口径错误。
+
+    2026-11-24 体检：xiaoshi 回退源写入的 958 行里 160 行 >100%（最大 1546.97%），
+    因为上游 unlock_ratio 的分母是流通股本而非总股本。这些值经 feature_builder 汇总后
+    在推荐里输出「占总股本 524.2%」这种不可能的风险提示，且长期没有任何检查覆盖。
+    """
+    key, label = "db:share_floats:ratio", "解禁比例口径（占总股本%）"
+    impact = "比例超 100% 会让解禁风险提示输出不可能的数字，并抬高回避门槛"
+    rows = db.execute(text(
+        "SELECT code, float_date, float_ratio, holder_name FROM share_floats "
+        "WHERE float_ratio > 100 ORDER BY float_ratio DESC LIMIT 200"
+    )).all()
+    if not rows:
+        return _item(key, label, "数据质量", GREEN, kind="quality", detail="全部解禁比例在 0~100% 区间", impact=impact)
+    sample = "、".join(f"{r[0]}@{norm_date(r[1])}({float(r[2]):.1f}%)" for r in rows[:6])
+    return _item(key, label, "数据质量", RED, kind="quality",
+                 detail=f"{len(rows)} 行解禁比例 >100%（占总股本口径不可能）：{sample}",
+                 impact=impact, anomalous_rows=len(rows))
+
+
 CHIP_HOLE_WINDOW_DAYS = 30
 
 
@@ -1394,6 +1441,9 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     items += _safe("日K值域", "db:daily_kbars:values", "数据质量", "quality",
                    lambda: [check_daily_kbar_values(db, open_days, expected)])
     items += _safe("筹码空洞", "db:daily_kbars:chip_history", "数据质量", "quality", lambda: [check_chip_history(db)])
+    items += _safe("解禁比例口径", "db:share_floats:ratio", "数据质量", "quality", lambda: [check_share_float_ratio(db)])
+    items += _safe("两融金额列完整性", "db:margin_detail:columns", "数据质量", "quality",
+                   lambda: [check_margin_columns(db, open_days, expected)])
     items += _safe("概念板块完整性", "db:concept_sector:completeness", "数据质量", "quality",
                    lambda: [check_concept_completeness(db, open_days, expected)])
     _rollback(db)
