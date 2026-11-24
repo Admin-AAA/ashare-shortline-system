@@ -353,14 +353,11 @@ def is_open(key: str) -> bool:
 # should not trip on two transient timeouts, while promax (pool-exhaustion failures, 79.9% empty on
 # eastmoney) needs to open fast. ASHARE_BREAKER_THRESHOLD_OVERRIDES='{"promax":{"timeout":1}}'.
 def _provider_overrides() -> dict[str, dict[str, int]]:
-    try:
-        from app.core.config import get_settings
+    from app.core.config import get_settings
 
-        raw = getattr(get_settings(), "breaker_threshold_overrides", None) or {}
-        if isinstance(raw, dict):
-            return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
-    except Exception:  # noqa: BLE001
-        pass
+    raw = getattr(get_settings(), "breaker_threshold_overrides", None) or {}
+    if isinstance(raw, dict):
+        return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
     return {}
 
 
@@ -390,20 +387,14 @@ def kind_threshold(kind: str | None, key: str | None = None) -> int | None:
     if kind not in ("timeout", "bad_data", "rate_limit"):
         return None
     default = {"timeout": 2, "bad_data": 3, "rate_limit": 2}[kind]
-    try:
-        from app.core.config import get_settings
+    from app.core.config import get_settings
 
-        base = max(1, int(getattr(get_settings(), f"breaker_threshold_{kind}", default)))
-    except Exception:  # noqa: BLE001
-        base = default
-    try:
-        provider = _provider_of(key)
-        if provider:
-            spec = _provider_overrides().get(provider) or {}
-            if kind in spec:
-                return max(1, int(spec[kind]))
-    except Exception:  # noqa: BLE001
-        pass
+    base = max(1, int(getattr(get_settings(), f"breaker_threshold_{kind}", default)))
+    provider = _provider_of(key)
+    if provider:
+        spec = _provider_overrides().get(provider) or {}
+        if kind in spec:
+            return max(1, int(spec[kind]))
     return base
 
 

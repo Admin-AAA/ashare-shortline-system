@@ -795,10 +795,8 @@ def check_capability_matrix(now: datetime | None = None, path: Path | None = Non
             else:
                 consistent += 1
     age_days = None
-    try:
+    if probed:  # 缺 probed_at 记「未知」；有值但格式不对就地崩溃，不静默当成未知
         age_days = ((now or _now()) - datetime.strptime(probed, "%Y-%m-%dT%H:%M:%S%z")).total_seconds() / 86400
-    except Exception:  # noqa: BLE001
-        pass
     sev = GREEN
     parts = [f"探测于 {probed}（{'%.1f 天前' % age_days if age_days is not None else '未知'}），{len(rows)} 项，异常 {len(bad)} 项"]
     if consistent:
@@ -1296,10 +1294,14 @@ def check_confirmation_coverage(db, open_days: list[str], now: datetime | None =
 
 # --------------------------------------------------------------------------- 汇总
 def _rollback(db) -> None:
+    """逐项检查之间重置会话，让上一项的失败不污染后面所有项。
+
+    回滚本身失败只记日志：这里抛出会盖掉真正的原始错误，而调用方需要继续跑完剩余检查。
+    """
     try:
         db.rollback()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - 恢复动作，失败不能盖掉原始错误
+        logger.warning("数据质量巡检：会话回滚失败，后续检查可能读到失效事务", exc_info=True)
 
 
 ROLLING_R12_KEY = "formal:rolling_r12"
@@ -1512,32 +1514,26 @@ def check_provider_gateway(now: datetime | None = None, *, providers: tuple[str,
         keys = [str(b["key"]).replace("live:", "", 1) for b in open_live][:6]
         notes.append(f"实盘链路有 {len(open_live)} 个熔断打开：{'、'.join(keys)}")
     if "promax" in names:
-        try:
-            from app.core.config import get_settings as _gs
+        from app.core.config import get_settings as _gs
 
-            _st = _gs()
-            if bool(getattr(_st, "tushare_promax_rtk_reserved", True)):
-                notes.append("promax 额度专留实时行情 rt_k/rt_min（其余接口走 teajoin 等；补数进程"
-                             + ("不动用" if not bool(getattr(_st, "tushare_promax_research_enabled", False)) else "仍可动用") + " promax）")
-                if "promax" in exhausted:
-                    notes.append("⚠ promax 今日已耗尽：rt_k 现由 新浪→腾讯→AKShare 全市场快照→分钟→小石 依次兜底")
-        except Exception:  # noqa: BLE001
-            pass
+        _st = _gs()
+        if bool(getattr(_st, "tushare_promax_rtk_reserved", True)):
+            notes.append("promax 额度专留实时行情 rt_k/rt_min（其余接口走 teajoin 等；补数进程"
+                         + ("不动用" if not bool(getattr(_st, "tushare_promax_research_enabled", False)) else "仍可动用") + " promax）")
+            if "promax" in exhausted:
+                notes.append("⚠ promax 今日已耗尽：rt_k 现由 新浪→腾讯→AKShare 全市场快照→分钟→小石 依次兜底")
     if "teajoin" in names:
-        try:
-            from app.core.config import get_settings
-            from app.services.datasource import teajoin_capability as _tc
+        from app.core.config import get_settings
+        from app.services.datasource import teajoin_capability as _tc
 
-            if bool(getattr(get_settings(), "tushare_teajoin_lead", True)):
-                if bool(getattr(get_settings(), "tushare_teajoin_intraday_yield", False)):
-                    notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（盘中 {len(_tc.INTRADAY_SENSITIVE)} 个延迟敏感接口让原源先走，失败/超时自动降级）")
-                else:
-                    notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（含历史分钟 stk_mins；盘中不再让位，读超时收紧到 "
-                                 f"{get_settings().tushare_teajoin_intraday_read_timeout_seconds:g}s，超时/失败自动降级）")
+        if bool(getattr(get_settings(), "tushare_teajoin_lead", True)):
+            if bool(getattr(get_settings(), "tushare_teajoin_intraday_yield", False)):
+                notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（盘中 {len(_tc.INTRADAY_SENSITIVE)} 个延迟敏感接口让原源先走，失败/超时自动降级）")
             else:
-                notes.append("teajoin 主源开关已关闭（仅兜底）")
-        except Exception:  # noqa: BLE001
-            pass
+                notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（含历史分钟 stk_mins；盘中不再让位，读超时收紧到 "
+                             f"{get_settings().tushare_teajoin_intraday_read_timeout_seconds:g}s，超时/失败自动降级）")
+        else:
+            notes.append("teajoin 主源开关已关闭（仅兜底）")
     return _item("gateway:providers", "数据网关承载（各上游额度/熔断）", "数据网关", sev, kind="gateway",
                  detail="；".join(notes),
                  impact="实盘 rt_k/日K/分钟线的主备源切换；额度耗尽后补数任务会自动暂停，避免挤占实盘",
@@ -1573,13 +1569,11 @@ def quality_score_penalty(report: dict[str, Any] | None, now: datetime | None = 
     if research_bad:
         note += f"；另有 {research_bad} 项研究/回测产物滞后（只展示不扣分）"
     gen = report.get("generated_at")
-    try:
+    if gen:  # 缺 generated_at 不扣「巡检停了」的分；有值但格式不对就地崩溃
         age_h = ((now or _now()) - datetime.strptime(str(gen), "%Y-%m-%d %H:%M:%S").replace(tzinfo=_CST)).total_seconds() / 3600
         if age_h > REPORT_STALE_HOURS:
             pen += 5
             note += f"；巡检报告已 {age_h:.0f} 小时未更新（再扣 5）"
-    except Exception:  # noqa: BLE001
-        pass
     return {"penalty": int(pen), "red": red, "yellow": yellow, "rule": rule, "note": note, "generated_at": gen}
 
 

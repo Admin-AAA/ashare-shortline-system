@@ -602,8 +602,8 @@ def fail_orphaned_queued_run(db, repository, run_id: str, reason: str) -> bool:
         logger.warning("queued run %s 收尾失败: %r", run_id, exc)
         try:
             db.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 - 恢复动作，抛出会盖掉原始错误
+            logger.warning("queued run %s 收尾失败后回滚失败", run_id, exc_info=True)
         return False
 
 

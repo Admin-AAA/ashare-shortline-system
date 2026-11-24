@@ -1,12 +1,15 @@
 repos:
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
-    hooks:
-      - id: ruff
-        args: [--config, backend/ruff.toml]
-        files: ^backend/app/
   - repo: local
     hooks:
+      # 全部用项目虚拟环境 backend/.venv，且工作目录必须是 backend/：
+      # ruff.toml 的 per-file-ignores 写成 "app/main.py" 这种 backend 相对路径，
+      # 从仓库根传 backend/app/... 进去时一条都匹配不上，被豁免的文件会全部误报。
+      - id: ruff
+        name: ruff (swallowed-exception gate)
+        entry: bash -c 'cd backend && .venv/bin/ruff check --config ruff.toml app'
+        language: system
+        pass_filenames: false
+        files: ^backend/app/
       - id: layering-contract
         name: layering contract (api -> services -> engine)
         entry: bash -c 'cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_layering_contract.py'

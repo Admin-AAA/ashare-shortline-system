@@ -511,13 +511,9 @@ def research_intraday_throttled(now: datetime | None = None) -> bool:
 def _research_promax_limiter():
     with _RESEARCH_LIMITER_LOCK:
         if not _RESEARCH_LIMITER:
-            rpm = 30
-            try:
-                from app.core.config import get_settings
+            from app.core.config import get_settings
 
-                rpm = int(get_settings().tushare_promax_research_intraday_rpm)
-            except Exception:  # noqa: BLE001
-                pass
+            rpm = int(get_settings().tushare_promax_research_intraday_rpm)
             _RESEARCH_LIMITER.append(_make_limiter("promax:research_intraday", max(1, rpm)))
         return _RESEARCH_LIMITER[0]
 
@@ -532,13 +528,9 @@ def _research_provider_limiter(provider: str):
     rpm 来自 Settings.tushare_<provider>_research_intraday_rpm（teajoin 默认 30，quantdata 默认 0=不限）。"""
     with _RESEARCH_LIMITER_LOCK:
         if provider not in _RESEARCH_OTHER_LIMITERS:
-            rpm = 0
-            try:
-                from app.core.config import get_settings
+            from app.core.config import get_settings
 
-                rpm = int(getattr(get_settings(), f"tushare_{provider}_research_intraday_rpm", 0) or 0)
-            except Exception:  # noqa: BLE001
-                pass
+            rpm = int(getattr(get_settings(), f"tushare_{provider}_research_intraday_rpm", 0) or 0)
             _RESEARCH_OTHER_LIMITERS[provider] = _make_limiter(f"{provider}:research_intraday", rpm) if rpm > 0 else None
         return _RESEARCH_OTHER_LIMITERS[provider]
 

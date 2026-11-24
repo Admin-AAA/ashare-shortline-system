@@ -63,8 +63,8 @@ def _alert(key: str, message: str) -> None:
         from app.core.alerts import emit_alert
 
         emit_alert("trade_calendar", key, message)
-    except Exception:  # noqa: BLE001 - alerting must never break the reader
-        pass
+    except Exception:  # noqa: BLE001 - 告警通道故障不能中断日历读取
+        logger.warning("trade calendar 告警发送失败 key=%s", key, exc_info=True)
 
 
 def _compact(d: date) -> str:

@@ -171,8 +171,8 @@ def _run_block_trade_picks_hook(db, task_id: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - must not break the parent job
         try:
             db.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 - 恢复动作，抛出会盖掉原始错误
+            logger.warning("大宗交易备份出票失败后回滚失败 (%s)", task_id, exc_info=True)
         logger.warning("midterm block-trade picks failed (%s, T=%s): %s", task_id, trade_date, exc, exc_info=True)
         return {"trade_date": trade_date, "trigger": task_id, "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
 
@@ -287,8 +287,8 @@ async def _late_repair_repick(db, task_id: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - must not break the parent job
         try:
             db.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 - 恢复动作，抛出会盖掉原始错误
+            logger.warning("晚间补数后补跑失败后回滚失败 (%s)", task_id, exc_info=True)
         logger.warning("晚间补数后补跑失败（非阻塞）(%s): %s", task_id, exc, exc_info=True)
         out.update(status="failed", error=f"{type(exc).__name__}: {str(exc)[:200]}")
         try:
@@ -2724,8 +2724,8 @@ def _gate_standalone_payloads(db, payload: dict, items: list[dict[str, Any]],
         sdr.alert_gate_failure(f"short:{trade_date}", exc)
         try:
             db.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 - 恢复动作，抛出会盖掉原始错误
+            logger.warning("短线就绪闸门异常后回滚失败 (%s)", trade_date, exc_info=True)
         return items
     sdr.record(trade_date, gate.results)
     kept: list[dict[str, Any]] = []

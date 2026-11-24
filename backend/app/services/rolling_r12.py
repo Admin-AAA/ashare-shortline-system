@@ -53,16 +53,14 @@ def month_manifest(root: Path, month: str, cutoff_now: str) -> dict[str, str]:
     """本月第一次开跑时定下截止日和窗口，写进 manifest.json；之后续跑一律沿用，避免截止日漂移、重放前后不一致。"""
     f = month_dir(root, month) / "manifest.json"
     if f.exists():
-        try:
-            return json.loads(f.read_text())
-        except Exception:  # noqa: BLE001 - 坏文件就按本次重新定
-            pass
+        # 坏文件就地崩溃：静默按本次重新定会让截止日漂移，正是本函数要避免的前后不一致。
+        return json.loads(f.read_text(encoding="utf-8"))
     end = _dt.date.fromisoformat(cutoff_now)
     man = {"month": month, "cutoff": cutoff_now,
            "window_start": (end - _dt.timedelta(days=365)).isoformat(),
            "replay_start": (end - _dt.timedelta(days=365 + WARMUP_DAYS)).isoformat()}
     f.parent.mkdir(parents=True, exist_ok=True)
-    f.write_text(json.dumps(man, ensure_ascii=False, indent=1))
+    f.write_text(json.dumps(man, ensure_ascii=False, indent=1), encoding="utf-8")
     return man
 
 

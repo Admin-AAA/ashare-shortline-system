@@ -409,8 +409,8 @@ def fill_margin_day(
         except Exception as exc:  # noqa: BLE001 - 备份路径不阻断日跑
             try:
                 db.rollback()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception:  # noqa: BLE001 - 恢复动作，抛出会盖掉原始错误
+                logger.warning("margin_detail_fill 回滚失败 td=%s", iso_day, exc_info=True)
             out.update(status="error", error=str(exc)[:200])
             _save_pending(set(load_pending()) | {iso_day})
     # 无缺口 / 主源未给数据只是例行巡检：自愈每 2 小时扫 5 个交易日，全打 WARNING
