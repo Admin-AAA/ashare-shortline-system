@@ -2195,3 +2195,53 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(h) 多维探测矩阵的「异常」只能定义成真漂移**：`unsupported` 且已被路由表声明 = 已知事实（一致即正常），`unverified` = 没取到结论（不等于不可用），只有「路由表 `order` 里排了它、实测却硬拒绝」才是异常。同时探测本身不得覆盖 provider 注册名单之外的组合（`included_apis`）。
 - 吸收位置：`backend/app/services/data_freshness.py`（`check_daily_table` 非交易日过滤 + `MAX` cap、`check_snapshot_datasets` 分开统计与时间窗失败码、`hk_holdings` 135 天）、`backend/app/services/data_quality_monitor.py`（`hk_holdings` 事件阈值 135/165、`_safe` 分项计时 + `run_checks` 汇总、`CAPABILITY_MATRIX_MAX_AGE_DAYS=8`、`check_capability_matrix` 只报 order 内 unsupported 的真漂移 + `routing` 可注入）、`backend/app/services/auxiliary/composition.py`（`_share_float_market_partition` 按 `float_date` 逐日、`_share_float_view` 空 codes 视为全市场）、`backend/scripts/probe_datasource_capabilities.py`（按 `included_apis` 跳过未注册组合）、`backend/tests/test_daily_basic_ingest.py::test_freshness_ignores_non_trade_day_rows`、`backend/tests/test_event_snapshot_composition.py::test_share_float_window_looks_back_and_market_wide_view_is_not_empty`、`backend/tests/test_data_quality_monitor.py::test_dir_and_age_file_and_capability_matrix`（4 天绿 / 8 天黄 / 漂移黄 / 已知不支持绿 / unverified 绿）。
 - 相关：L-206（同一天的另一层根因：队列堵塞）、L-096（evidence_class 口径混用同属「统计口径错导致结论错」）。
+
+## L-208 调度时点必须晚于「上游数据到齐时刻」，巡检必须晚于「修复动作」：否则每天都报同一批红黄项，且都是误报
+
+- 状态：active（已落地修复 2026-11-24）。
+- 适用：`scheduler_pure.py` 里所有 cron 常量；任何「某个健康项连续多天在同一时点报同一原因」的排查。
+- 证据（2026-11-23 全系统体检，近 30 天 / 21 个交易日）：
+  - `formal:daily_output` **19/21 个交易日报红**（90%）。原因不是偶发：`index_daily` 实测每日 **21:02~22:48** 才入库、`limit_up_board` **18:24~次日 00:40**，而 `post_sync_formal_recommendation` 的 cron 是 17:35，其就绪闸门强制要求这两张表覆盖当日 → 17:35 时 100% 没有当天数据，必然 failed，19:08 有界重试耗尽后放弃。
+  - `data_freshness_check_daily` 18:00 跑，同样在数据到齐前 → 每天固定报「10 张表滞后 1 个交易日」，且把自身写成 `partial_failed` → 一条时序错误变成两条常态黄项（16 天 37 次）。
+  - `data_quality_check_evening` 21:40 跑在 22:43 自愈补跑**之前** → 每天如实记一次红项，次日早上看板挂着昨天的红。
+  - `data_health_snapshot_daily` 18:40 取样 → original 恒为失败项，只能靠次日 08:55 recheck 修正（与 2026-11-22 审计 P0② 同源）。
+  - 结果：每日黄项 26~93 条，`kpl` 单项 21 天报 54 次。**健康面板长期红，但日志层面当日真实 `[ERROR]` 只有 8 条**。
+- 永久规则：
+  - **(a) 任何「读某表当日数据」的任务，其 cron 必须晚于该表的实测入库时间**（看 `created_at` 分布，不看文档承诺的发布时间）。设计前先查 `SELECT trade_date, MAX(created_at) FROM <表> GROUP BY trade_date ORDER BY 1 DESC LIMIT 20`。
+  - **(b) 验收类巡检必须排在被验收的修复动作之后**：晚补 21:00 → 出票补跑 → 巡检 → 快照，顺序不能颠倒。把「检查」排在「修复」前面，等于每天记录一次假故障。
+  - **(c) 同一批检查项不要被多个作业各跑一遍**：`data_quality_check_morning` / `recheck` / `snapshot` / `evening` 跑同一份 report 时，只有最后一个时点应参与「当日结论」。
+- 吸收位置：`backend/app/services/scheduler_pure.py`（`POSTCLOSE_LATE_DATA_REPAIR_CRON` 保持 21:00；`DATA_FRESHNESS_CRON=30 21`、`DATA_QUALITY_CHECKS` 晚间 `50 22`、`DATA_HEALTH_SNAPSHOT_CRON=55 22`、`KPL_LIST_CRON=30 23`）。
+- 相关：L-206（队列堵塞是另一层「盘后同步跑不动」的根因）、L-207（口径错误让黄项永久挂着）、L-209（同一时序问题在事务层面的表现）。
+
+## L-209 同一任务内「刚补完数就要复查」必须换新连接：REPEATABLE-READ 的事务快照会读不到自己刚 commit 的行，force_refresh 跳不过它
+
+- 状态：active（已落地修复 2026-11-24）。
+- 适用：任何「先修数据、再立即判定能否继续」的流水线；`_diagnose_postclose_readiness`、`_wait_for_recommendation_run` 及同类的长事务内复查。
+- 证据（2026-11-23 实测，`postclose_late_data_repair` 单次任务内）：
+  - 步骤顺序 `quotes → daily_kbar → auxiliary(151s) → health_remediation(3.6s) → late_repick`。
+  - `health_remediation` 在 **21:02:54** 把 `index_daily` 11-23 写入并 commit；两分钟后（21:04）`late_repick` 调 `_diagnose_postclose_readiness(db, td)`（已带 `force_refresh=True`）仍报「指数日线未覆盖 11-23（最新 11-20）」→ `skipped / gate_blocked`。
+  - 原因：MySQL 默认 REPEATABLE-READ + `SessionLocal` 连接池复用，该会话的一致性快照钉在 21:00 任务开始时；`force_refresh` 只跳过进程内缓存，**跳不过事务快照**。
+  - 后果：晚补把数据补齐了却不出票，拖到 22:43 自愈 daemon（新进程新连接）才补跑，出票晚 5 小时；同时每天制造一条 `formal:daily_output` 红项。
+  - 同一个坑此前已在 `_wait_for_recommendation_run` 的注释里被记录并修过（改用 `engine.connect()`），但这条路径没跟着改。
+- 永久规则：
+  - **(a) 判断依据是「本任务自己刚写入的数据」时，必须 `db.commit()` 后在新物理连接上重读**，不能复用任务的长事务会话。
+  - **(b) `force_refresh=True` 只解决缓存，不解决隔离级别**；看到「刚写的数据读不到」先想一致性快照，不要加缓存绕过。
+  - **(c) 修一处的连接快照问题后，全仓 grep 同类调用点**（`diagnose_all(`、`SessionLocal` 复用、`_diagnose_*`），这次的漏网就是这么来的。
+- 吸收位置：`backend/app/services/scheduler_service.py::_diagnose_postclose_readiness`（新增 `fresh_session` 参数：`db.commit()` + `engine.connect()` + 独立 Session）、`_late_repair_repick` 改为传 `fresh_session=True`；契约测试 `backend/tests/test_late_repick_after_repair.py` 的 readiness 桩接受该关键字参数。
+- 相关：L-208（同一现象的时间轴版本）、L-206。
+
+## L-210 健康分只能计「实盘链路」；研究/回测产物没有日更调度，算进去等于给健康分设了一个永远够不到的上限
+
+- 状态：active（已落地修复 2026-11-24）。
+- 适用：`data_quality_monitor` 的计分口径、所有「黄项长期挂在同一批 file:* 上」的排查。
+- 证据（2026-11-23 体检）：
+  - 74 个检查项里 **19 项是 `data/midterm|cache|research_cache` 下的 parquet 中间产物**（`basic_<年>`、`daily_basic`、`stk_limits`、`index_daily.parquet`、`cache/daily_kbar`、`kpl_list`、`limit_list_d`、`xiaoshi_min_all`、`events/*`），由手动脚本或研究任务产出、**没有日更调度**，长期滞后是设计常态。
+  - 30 天里黄项一半以上来自它们（`kpl` 21 天 54 次、`limit_list_d` 17 天 45 次、`basic` 16 天 40 次…），健康分被结构性压掉 5~10 分，**没有真故障的日子也拿不到 90+**。
+  - 反向的例子：`file:runtime/pool_bar_source_stats.json` 是 `/api/data-sources/pool` 的**按需缓存**，只在有人打开该页面且 bar 日期变化时重算；用「5 天没更新就黄」检查它，等价于「没人访问该页面 = 数据故障」（9 天 22 次黄，无一对应真实问题）。
+- 永久规则：
+  - **(a) 健康分按 scope 分层**：`trading`（库表、实盘读取的 parquet、出票与调度）参与扣分；`research`（回测/研究中间产物）**仍然巡检、仍然展示，但不扣分**。
+  - **(b) 一个文件要不要算进健康分，取决于「有没有任务在日更它」，而不是「它重不重要」**：没有维护者却按日频判滞后，只会稳定产出噪音。
+  - **(c) 按需缓存（页面/接口被动生成的文件）不得当成日更数据集检查**，要么接主动刷新任务，要么从巡检里移除。
+  - **(d) 新增检查项时必须同时声明 scope 与「谁在什么周期生产它」**，否则下一个体检还会发现一堆「长期黄但没人管」的项。
+- 吸收位置：`backend/app/services/data_quality_monitor.py`（`RESEARCH_ONLY_FILE_KEYS` + `item_scope()` + `_item` 自动打 `scope`；`quality_score_penalty` 只统计 `scope="trading"` 并在 note 里单列「另有 N 项研究产物滞后（只展示不扣分）」；`AGE_FILES` 移除 `pool_bar_source_stats.json`）、`backend/tests/test_data_quality_monitor.py::test_freshness_task_quality_red_does_not_fail_the_job`（同时覆盖 P1-3：巡检发现红黄不再把作业标成 partial_failed）。
+- 相关：L-207（口径错误固化为黄项）、L-208（时序导致的误报）。

@@ -55,6 +55,12 @@ from app.services.scheduler_pure import (  # noqa: F401,E402  re-export (split)
     KPL_LIST_CRON,
     KPL_LIST_TASK_ID,
     TASK_TYPE_RESEARCH_CACHE_REFRESH,
+    TASK_TYPE_QVIX_REFRESH,
+    QVIX_CRON,
+    QVIX_TASK_ID,
+    TASK_TYPE_MIDTERM_BASIC_SNAPSHOT,
+    MIDTERM_BASIC_CRON,
+    MIDTERM_BASIC_TASK_ID,
     TASK_TYPE_DATA_FRESHNESS_CHECK,
     TASK_TYPE_STOCK_IDENTITY_REFRESH,
     BLOCK_TRADE_BACKUP_TASK_ID,
@@ -218,7 +224,7 @@ async def _late_repair_repick(db, task_id: str) -> dict[str, Any]:
         if inflight:
             out.update(status="skipped", reason="inflight", inflight=inflight)
             return out
-        readiness = _diagnose_postclose_readiness(db, trade_date)
+        readiness = _diagnose_postclose_readiness(db, trade_date, fresh_session=True)
         if not readiness.get("can_run_local_recommendation"):
             out.update(status="skipped", reason="gate_blocked", blockers=list(readiness.get("blockers") or [])[:10])
             logger.warning("晚间补数后补跑 %s 跳过：健康闸门仍未通过：%s", trade_date, out["blockers"])
@@ -372,10 +378,16 @@ def _refresh_kpl_list_cache(task_id: str) -> dict[str, Any]:
         out = {"status": "completed" if proc.returncode == 0 else "failed",
                "window": f"{start}~{end}", "seconds": round(time.monotonic() - t0, 1),
                "stdout_tail": (proc.stdout or "")[-800:], "stderr_tail": (proc.stderr or "")[-500:]}
+        # 上游当日榜单未发布时脚本返回 0 且只打印 "YYYYMMDD empty（尚未发布…）"。此前一律记 completed，
+        # 于是「任务成功但缓存仍停在昨天」的静默失败永远只在数据质量巡检里以黄项暴露（2026-11-23 体检：
+        # 11-19/11-20/11-23 连续三天都是 empty，任务状态一直是 completed）。这里显式区分，便于排查。
+        if out["status"] == "completed" and "empty（尚未发布" in out["stdout_tail"]:
+            out["status"] = "skipped_empty"
+            out["reason"] = "上游当日榜单尚未发布，已记 _empty_days.txt，由次日任务续补"
     except Exception as exc:  # noqa: BLE001 - 超时等也只告警
         out = {"status": "failed", "window": f"{start}~{end}", "seconds": round(time.monotonic() - t0, 1),
                "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
-    if out["status"] != "completed":
+    if out["status"] in ("failed",):
         logger.warning("kpl_list 日更失败 (%s): %s", task_id, out.get("error") or out.get("stderr_tail"))
         try:
             from app.core.alerts import emit_alert
@@ -384,6 +396,92 @@ def _refresh_kpl_list_cache(task_id: str) -> dict[str, Any]:
                        f"kpl_list 日更失败（{start}~{end}）：{str(out.get('error') or out.get('stderr_tail'))[:200]}")
         except Exception:  # noqa: BLE001
             logger.debug("kpl list alert failed", exc_info=True)
+    elif out["status"] == "skipped_empty":
+        logger.info("kpl_list 当日上游仍为空 (%s): %s", task_id, out.get("reason"))
+    return out
+
+
+QVIX_REFRESH_TIMEOUT_SECONDS = 300
+MIDTERM_BASIC_TIMEOUT_SECONDS = 1800
+
+
+def _refresh_midterm_basic(task_id: str) -> dict[str, Any]:
+    """独立子进程跑 backfill_longterm.py 的 basic_full 阶段（只补缺失日期）；非致命，失败只告警。"""
+    import os as _os
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    if _os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"status": "skipped", "reason": "pytest"}
+    backend = _Path(__file__).resolve().parents[2]
+    t0 = time.monotonic()
+    try:
+        env = {**_os.environ, "PYTHONPATH": _os.pathsep.join(
+            p for p in (str(backend), _os.environ.get("PYTHONPATH", "")) if p)}
+        proc = subprocess.run(
+            [_sys.executable, "scripts/midterm/backfill_longterm.py", "basic_full"],
+            cwd=str(backend), env=env, capture_output=True, text=True,
+            timeout=MIDTERM_BASIC_TIMEOUT_SECONDS, check=False,
+        )
+        out = {"status": "completed" if proc.returncode == 0 else "failed",
+               "seconds": round(time.monotonic() - t0, 1),
+               "stdout_tail": (proc.stdout or "")[-800:], "stderr_tail": (proc.stderr or "")[-500:]}
+    except Exception as exc:  # noqa: BLE001 - 超时等也只告警
+        out = {"status": "failed", "seconds": round(time.monotonic() - t0, 1),
+               "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    if out["status"] != "completed":
+        logger.warning("周度基本面快照补齐失败 (%s): %s", task_id, out.get("error") or out.get("stderr_tail"))
+        try:
+            from app.core.alerts import emit_alert
+
+            emit_alert("midterm_basic_snapshot_failed", datetime.now().strftime("%Y-%m-%d"),
+                       f"basic_<年>.parquet 周度补齐失败：{str(out.get('error') or out.get('stderr_tail'))[:200]}")
+        except Exception:  # noqa: BLE001
+            logger.debug("basic snapshot alert failed", exc_info=True)
+    return out
+
+
+def _refresh_qvix(task_id: str) -> dict[str, Any]:
+    """独立子进程增量补 QVIX（写 index_daily 的 QVIX* 行）；非致命，失败只告警。
+
+    为什么需要：rsi6-capitulation 的触发条件是「价格恐慌 OR QVIX 尖峰」，QVIX 缺数时 market_trend 按 0
+    处理（静默降级成仅价格门）。2026-11-23 体检发现它停在 11-13、缺 8 个交易日，而 backfill_qvix.py
+    从未挂过定时任务、巡检也不覆盖 QVIX——策略的一半触发条件实际上长期不存在。
+    """
+    import os as _os
+    import subprocess
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    if _os.environ.get("PYTEST_CURRENT_TEST"):
+        return {"status": "skipped", "reason": "pytest"}
+    backend = _Path(__file__).resolve().parents[2]
+    since = (datetime.now(timezone(timedelta(hours=8))) - timedelta(days=12)).strftime("%Y-%m-%d")
+    t0 = time.monotonic()
+    try:
+        env = {**_os.environ, "PYTHONPATH": _os.pathsep.join(
+            p for p in (str(backend), _os.environ.get("PYTHONPATH", "")) if p)}
+        proc = subprocess.run(
+            [_sys.executable, "scripts/backfill_qvix.py", "--since", since],
+            cwd=str(backend), env=env, capture_output=True, text=True,
+            timeout=QVIX_REFRESH_TIMEOUT_SECONDS, check=False,
+        )
+        out = {"status": "completed" if proc.returncode == 0 else "failed",
+               "since": since, "seconds": round(time.monotonic() - t0, 1),
+               "stdout_tail": (proc.stdout or "")[-800:], "stderr_tail": (proc.stderr or "")[-500:]}
+    except Exception as exc:  # noqa: BLE001 - 超时等也只告警
+        out = {"status": "failed", "since": since, "seconds": round(time.monotonic() - t0, 1),
+               "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
+    if out["status"] != "completed":
+        logger.warning("QVIX 日更失败 (%s): %s", task_id, out.get("error") or out.get("stderr_tail"))
+        try:
+            from app.core.alerts import emit_alert
+
+            emit_alert("qvix_refresh_failed", datetime.now().strftime("%Y-%m-%d"),
+                       f"QVIX 日更失败（since {since}）：{str(out.get('error') or out.get('stderr_tail'))[:200]}")
+        except Exception:  # noqa: BLE001
+            logger.debug("qvix alert failed", exc_info=True)
     return out
 
 
@@ -616,24 +714,44 @@ def _ensure_formal_safety_net_task() -> None:
         logger.exception("注册 formal 安全网任务失败")
 
 
+def _converge_task_cron(db, task: ScheduledTask, cron: str, name: str | None = None) -> None:
+    """cron/name 以代码定义为准做幂等收敛（不同才写，记一条 INFO）。
+
+    此前注册函数一律「已存在就不动」，于是改 ``scheduler_pure`` 里的 cron 常量对线上毫无作用：
+    2026-11-23 体检发现 data_freshness / 质量巡检 / 健康快照 / kpl 四个任务仍跑在旧时点，正是
+    「每天都报健康问题」的根因之一。调度时点是代码契约，不该在 DB 里静默漂移；需要临时改期请改代码。
+    """
+    changed = []
+    if task.cron_expression != cron:
+        changed.append(f"cron {task.cron_expression} → {cron}")
+        task.cron_expression = cron
+    if name and task.name != name:
+        changed.append(f"name {task.name!r} → {name!r}")
+        task.name = name
+    if changed:
+        logger.info("调度任务收敛 %s: %s", task.task_id, "；".join(changed))
+
+
 def _ensure_data_freshness_task() -> None:
-    """注册 18:00 每日数据新鲜度只读巡检（幂等，不覆盖手动调整）。"""
+    """注册 21:30 每日数据新鲜度只读巡检（幂等，cron 以代码为准收敛）。"""
     try:
         db = SessionLocal()
         try:
-            if db.get(ScheduledTask, DATA_FRESHNESS_TASK_ID) is None:
-                db.add(
-                    ScheduledTask(
-                        task_id=DATA_FRESHNESS_TASK_ID,
-                        name="每日数据新鲜度巡检（滞后/行数异常/关键列失效，只读）",
-                        task_type=TASK_TYPE_DATA_FRESHNESS_CHECK,
-                        cron_expression=DATA_FRESHNESS_CRON,
-                        payload_json=json.dumps({}),
-                        enabled=True,
-                    )
+            task = db.get(ScheduledTask, DATA_FRESHNESS_TASK_ID)
+            if task is None:
+                task = ScheduledTask(
+                    task_id=DATA_FRESHNESS_TASK_ID,
+                    name="每日数据新鲜度巡检（滞后/行数异常/关键列失效，只读）",
+                    task_type=TASK_TYPE_DATA_FRESHNESS_CHECK,
+                    cron_expression=DATA_FRESHNESS_CRON,
+                    payload_json=json.dumps({}),
+                    enabled=True,
                 )
-                db.commit()
+                db.add(task)
                 logger.info("已注册数据新鲜度巡检任务: %s (cron=%s)", DATA_FRESHNESS_TASK_ID, DATA_FRESHNESS_CRON)
+            else:
+                _converge_task_cron(db, task, DATA_FRESHNESS_CRON)
+            db.commit()
         finally:
             db.close()
     except Exception:
@@ -641,15 +759,18 @@ def _ensure_data_freshness_task() -> None:
 
 
 def _ensure_data_quality_tasks() -> None:
-    """注册盘前/晚间统一数据质量巡检（幂等，不覆盖手动调整；复用 data_freshness_check 任务类型，payload quality_only）。"""
+    """注册盘前 08:50 / 晚间 22:50 统一数据质量巡检（幂等，cron 以代码为准收敛；payload quality_only）。"""
     try:
         db = SessionLocal()
         try:
             for task_id, name, cron in DATA_QUALITY_CHECKS:
-                if db.get(ScheduledTask, task_id) is None:
+                task = db.get(ScheduledTask, task_id)
+                if task is None:
                     db.add(ScheduledTask(task_id=task_id, name=name, task_type=TASK_TYPE_DATA_FRESHNESS_CHECK,
                                          cron_expression=cron, payload_json=json.dumps({"quality_only": True}), enabled=True))
                     logger.info("已注册数据质量巡检任务: %s (cron=%s)", task_id, cron)
+                else:
+                    _converge_task_cron(db, task, cron, name)
             db.commit()
         finally:
             db.close()
@@ -658,15 +779,18 @@ def _ensure_data_quality_tasks() -> None:
 
 
 def _ensure_simple_task(task_id: str, name: str, task_type: str, cron: str, payload: dict | None = None) -> None:
-    """注册一个普通定时任务（幂等，已存在就不动，不覆盖手动调整）。"""
+    """注册一个普通定时任务（幂等；已存在时 cron/name 向代码收敛，payload 保持不动）。"""
     try:
         db = SessionLocal()
         try:
-            if db.get(ScheduledTask, task_id) is None:
+            task = db.get(ScheduledTask, task_id)
+            if task is None:
                 db.add(ScheduledTask(task_id=task_id, name=name, task_type=task_type, cron_expression=cron,
                                      payload_json=json.dumps(payload or {}), enabled=True))
-                db.commit()
                 logger.info("已注册调度任务: %s (cron=%s)", task_id, cron)
+            else:
+                _converge_task_cron(db, task, cron, name)
+            db.commit()
         finally:
             db.close()
     except Exception:
@@ -674,7 +798,7 @@ def _ensure_simple_task(task_id: str, name: str, task_type: str, cron: str, payl
 
 
 def _ensure_health_snapshot_task() -> None:
-    _ensure_simple_task(DATA_HEALTH_SNAPSHOT_TASK_ID, "数据健康分每日快照（18:40 原始记录：健康分、红黄项、盘后出票是否成功）",
+    _ensure_simple_task(DATA_HEALTH_SNAPSHOT_TASK_ID, "数据健康分每日快照（22:55 原始记录：健康分、红黄项、盘后出票是否成功）",
                         TASK_TYPE_DATA_HEALTH_SNAPSHOT, DATA_HEALTH_SNAPSHOT_CRON, {"mode": "original"})
     _ensure_simple_task(DATA_HEALTH_RECHECK_TASK_ID, "数据健康快照次日复核（08:55：只写复核字段，含大宗交易等晚发布数据）",
                         TASK_TYPE_DATA_HEALTH_SNAPSHOT, DATA_HEALTH_RECHECK_CRON, {"mode": "recheck"})
@@ -686,8 +810,18 @@ def _ensure_rolling_r12_task() -> None:
 
 
 def _ensure_research_cache_task() -> None:
-    _ensure_simple_task(KPL_LIST_TASK_ID, "研究缓存：开盘啦涨停榜 kpl_list 每交易日增量补齐（22:20，上游发布晚）",
+    _ensure_simple_task(KPL_LIST_TASK_ID, "研究缓存：开盘啦涨停榜 kpl_list 每交易日增量补齐（23:30，上游发布晚）",
                         TASK_TYPE_RESEARCH_CACHE_REFRESH, KPL_LIST_CRON)
+
+
+def _ensure_qvix_task() -> None:
+    _ensure_simple_task(QVIX_TASK_ID, "市场波动率 QVIX 每日增量（21:10，rsi6-capitulation 的 QVIX 尖峰门依赖）",
+                        TASK_TYPE_QVIX_REFRESH, QVIX_CRON)
+
+
+def _ensure_midterm_basic_task() -> None:
+    _ensure_simple_task(MIDTERM_BASIC_TASK_ID, "周度基本面快照 basic_<年>.parquet 增量补齐（周六 10:00）",
+                        TASK_TYPE_MIDTERM_BASIC_SNAPSHOT, MIDTERM_BASIC_CRON)
 
 
 def _run_data_health_snapshot(db, payload: dict | None = None) -> dict:
@@ -919,8 +1053,11 @@ def _run_data_freshness_check(db, payload: dict | None = None) -> dict:
     quality_only = bool((payload or {}).get("quality_only"))
     out: dict = {"problems": {}} if quality_only else run_freshness_check(db)
     problems = out.get("problems") or {}
+    # 巡检作业「跑成功」与「巡检结果有红黄」是两件事：红黄项已经在 db:*/file:*/formal:* 各自的检查项里
+    # 计过分，再把它写成任务 partial_failed 就多出一条 job:* 黄项（2026-11-23 体检：该项 16 天 37 次黄，
+    # 而同期真问题只有其中一小部分）。状态保持 completed，发现的问题照旧写进摘要并各自 emit_alert。
     if problems:
-        out["status"] = "partial_failed"  # 巡检发现问题即业务状态 partial_failed（同时每张问题表已 emit_alert）
+        out["freshness_issue_tables"] = len(problems)
     out["summary_text"] = (
         ("数据新鲜度正常" if not problems
          else f"数据新鲜度异常 {len(problems)} 张表: " + "；".join(f"{t}: {v[0]}" for t, v in list(problems.items())[:8]))
@@ -937,8 +1074,7 @@ def _run_data_freshness_check(db, payload: dict | None = None) -> dict:
                                "yellow": [i["key"] for i in dq.get("items", []) if i["severity"] == "yellow"]}
         out["summary_text"] = (out["summary_text"] + "；" if out["summary_text"] else "") + (
             f"数据质量巡检 红 {s.get('red', 0)} / 黄 {s.get('yellow', 0)} / 绿 {s.get('green', 0)}")
-        if s.get("red"):
-            out["status"] = "partial_failed"
+        # 同上：红项已经作为独立检查项计分 + 单独告警，不再把作业本身标成 partial_failed。
     except Exception:  # noqa: BLE001
         logger.warning("数据质量巡检异常（已忽略，不影响主流程）", exc_info=True)
     return out
@@ -964,6 +1100,8 @@ def ensure_scheduled_task_registrations() -> None:
     _ensure_health_snapshot_task()
     _ensure_rolling_r12_task()
     _ensure_research_cache_task()
+    _ensure_qvix_task()
+    _ensure_midterm_basic_task()
 
 
 def _current_code_revision() -> str:
@@ -1088,6 +1226,10 @@ def _execute_task(
                 result = _run_rolling_r12(db, payload)
             elif task_type == TASK_TYPE_RESEARCH_CACHE_REFRESH:
                 result = _refresh_kpl_list_cache(task_id)
+            elif task_type == TASK_TYPE_QVIX_REFRESH:
+                result = _refresh_qvix(task_id)
+            elif task_type == TASK_TYPE_MIDTERM_BASIC_SNAPSHOT:
+                result = _refresh_midterm_basic(task_id)
             elif task_type == TASK_TYPE_INTRADAY_LOCK_SHADOW:
                 result = _run_intraday_lock_shadow(db, payload)
             elif task_type in ("data_sync", "pool_refresh", "data_backfill"):
@@ -1938,13 +2080,37 @@ def _run_auxiliary_script(payload: dict) -> dict:
     }
 
 
-def _diagnose_postclose_readiness(db, trade_date: str) -> dict[str, Any]:
+def _diagnose_postclose_readiness(db, trade_date: str, *, fresh_session: bool = False) -> dict[str, Any]:
+    """盘后/补跑共用的数据就绪闸门。
+
+    ``fresh_session=True`` 用于「同一次任务内刚补完数就要复查」的场景（21:00 晚间补数 → 补跑出票）。
+    MySQL 默认 REPEATABLE-READ，连接池复用的长事务会把一致性快照钉在事务开始时刻；``force_refresh``
+    只跳过进程内缓存，跳不过事务快照，于是同任务 21:02:54 刚写入的 index_daily，21:04 复查时仍被读成
+    「最新 11-20」→ 补跑判 gate_blocked → 拖到 22:43 靠自愈 daemon 才出票（2026-11-23 实测）。
+    这里先结束当前事务再开独立物理连接重读，与 ``_wait_for_recommendation_run`` 同一个原因。
+    """
     from app.services.data_health_service import (
         diagnose_all,
         recommendation_readiness_from_diagnosis,
     )
 
-    diagnosis = diagnose_all(db, force_refresh=True)
+    if fresh_session:
+        from sqlalchemy.orm import Session as _Session
+
+        from app.db.session import engine as _engine
+
+        try:
+            db.commit()  # 让本任务已写入的补数结果对其他连接可见
+        except Exception:  # noqa: BLE001 - 提交失败不阻断，仍按新连接重读
+            db.rollback()
+        with _engine.connect() as conn:
+            fresh = _Session(bind=conn)
+            try:
+                diagnosis = diagnose_all(fresh, force_refresh=True)
+            finally:
+                fresh.close()
+    else:
+        diagnosis = diagnose_all(db, force_refresh=True)
     readiness = recommendation_readiness_from_diagnosis(
         diagnosis,
         expected_trade_date=trade_date,

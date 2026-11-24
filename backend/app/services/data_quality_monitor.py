@@ -70,7 +70,7 @@ def _item(key: str, label: str, category: str, severity: str, *, kind: str, late
           provisional: bool = False, **extra: Any) -> dict[str, Any]:
     out = {"key": key, "label": label, "category": category, "kind": kind, "severity": severity,
            "latest": latest, "expected": expected, "lag_trade_days": lag, "detail": detail, "impact": impact,
-           "provisional": provisional}
+           "provisional": provisional, "scope": item_scope(key)}
     out.update(extra)
     return out
 
@@ -198,7 +198,11 @@ DB_DATASETS: list[dict[str, Any]] = [
      "entity": "COUNT(DISTINCT code)", "lag": 0, "cliff": True,
      "impact": "盘中/分钟级研究与部分短线确认；此前只查最大日期，不查每日覆盖股票数"},
 ]
-INDEX_CODES = ("000300.SH", "000905.SH", "000852.SH", "000001.SH", "399001.SZ", "399006.SZ")
+INDEX_CODES = ("000300.SH", "000905.SH", "000852.SH", "000001.SH", "399001.SZ", "399006.SZ",
+               # QVIX 不是真实指数，但同样落在 index_daily。rsi6-capitulation 的 QVIX 尖峰分支就读它，
+               # 缺数时该策略静默降级为「仅价格门」（market_trend 缺失按 0 处理）。2026-11-23 体检发现
+               # 它已缺 8 个交易日而巡检完全看不见——纳入后缺一天就黄，与真实指数同口径。
+               "QVIX50.SH", "QVIX300.SH")
 
 
 def _window_start(open_days: list[str], expected: str, n: int) -> str:
@@ -382,9 +386,11 @@ def check_index_daily(db, open_days: list[str], expected: str) -> list[dict[str,
         lag = trade_lag(open_days, mx, expected)
         sev = lag_severity(lag, 0)
         detail = f"最新 {mx}，共 {n} 行" + ("" if sev == GREEN else f"，滞后 {lag} 个交易日")
+        impact = ("rsi6-capitulation 的 QVIX 尖峰门（缺数时 market_trend 按 0 处理，策略静默降级为仅价格门）"
+                  if code.startswith("QVIX") else
+                  "小盘指数20日线开关(000905)、沪深300超额对照、市场环境判断")
         out.append(_item(f"db:index_daily:{code}", f"指数日线 {code}", "数据库表", sev, kind="db", latest=mx,
-                         expected=expected, lag=lag, detail=detail,
-                         impact="小盘指数20日线开关(000905)、沪深300超额对照、市场环境判断"))
+                         expected=expected, lag=lag, detail=detail, impact=impact))
     out.extend(_check_qvix_freshness(seen, open_days, expected))
     dup = db.execute(text("SELECT COUNT(*) FROM (SELECT ts_code, trade_date FROM index_daily GROUP BY ts_code, trade_date "
                           "HAVING COUNT(*) > 1) x")).scalar()
@@ -495,18 +501,34 @@ def check_daily_kbar_values(db, open_days: list[str], expected: str) -> dict[str
                  anomalous_rows=len(rows), new_listing_exempted=len(exempted))
 
 
+CHIP_HOLE_WINDOW_DAYS = 30
+
+
 def check_chip_history(db) -> dict[str, Any]:
-    """筹码列整日为空/全零的历史交易日（近 120 个交易日内）。原 check_indicator_columns 只看最近一天。"""
+    """筹码列整日为空/全零的交易日（近 CHIP_HOLE_WINDOW_DAYS 个交易日）。
+
+    原版窗口 120 天、且用 `trade_date >= (SELECT MIN(d) FROM (... DISTINCT ... LIMIT 120))` 子查询，
+    在 600 万行 / 3GB 的 daily_kbars 上实测 106 秒（整轮巡检 2m33s 的主要来源，`refresh=true` 的 HTTP
+    请求会直接超时）。新空洞只可能出现在最近的交易日，历史空洞一旦存在也不会自愈，因此把窗口收到
+    30 个交易日、并先走 trade_date 索引取日期列表，扫描量降一个数量级。
+    """
+    days = [norm_date(r[0]) for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars ORDER BY trade_date DESC LIMIT :n"),
+        {"n": CHIP_HOLE_WINDOW_DAYS}).all()]
+    if not days:
+        return _item("db:daily_kbars:chip_history", "筹码列空洞（近30个交易日）", "数据质量", GREEN, kind="quality",
+                     detail="daily_kbars 无数据", impact="用筹码的短线策略在这些日子无信号/被误判")
     rows = db.execute(text(
-        "SELECT trade_date FROM daily_kbars WHERE trade_date >= (SELECT MIN(d) FROM (SELECT DISTINCT trade_date d FROM daily_kbars "
-        "ORDER BY d DESC LIMIT 120) t) GROUP BY trade_date "
+        "SELECT trade_date FROM daily_kbars WHERE trade_date >= :s GROUP BY trade_date "
         "HAVING SUM(CASE WHEN chip_cost_50 IS NOT NULL AND chip_cost_50 > 0 THEN 1 ELSE 0 END) < 0.05 * COUNT(*) "
-        "ORDER BY trade_date")).scalars().all()
-    days = [norm_date(r) for r in rows]
-    return _item("db:daily_kbars:chip_history", "筹码列历史空洞（近120个交易日）", "数据质量", YELLOW if days else GREEN,
+        "ORDER BY trade_date"), {"s": min(d for d in days if d)}).scalars().all()
+    holes = [norm_date(r) for r in rows]
+    return _item("db:daily_kbars:chip_history", "筹码列空洞（近30个交易日）", "数据质量", YELLOW if holes else GREEN,
                  kind="quality",
-                 detail=(f"{len(days)} 个交易日筹码列整日为空/0：{','.join(days[-8:])}" if days else "近 120 个交易日筹码列无整日空洞"),
-                 impact="用筹码的短线策略在这些日子无信号/被误判；回放与回测在这些日子失真", missing_days=days)
+                 detail=(f"{len(holes)} 个交易日筹码列整日为空/0：{','.join(holes[-8:])}" if holes
+                         else f"近 {len(days)} 个交易日筹码列无整日空洞"),
+                 impact="用筹码的短线策略在这些日子无信号/被误判；回放与回测在这些日子失真",
+                 missing_days=holes, window_days=len(days))
 
 
 def check_calendar_horizon(open_days: list[str], now: datetime) -> dict[str, Any]:
@@ -604,12 +626,43 @@ DIR_DATASETS: list[dict[str, Any]] = [
     {"key": "file:midterm/holdernum", "label": "逐股股东人数 parquet 目录", "dir": "midterm/holdernum", "yellow_days": 60,
      "red_days": 150, "min_files": 5000, "max": YELLOW, "impact": "股东人数类研究基线"},
 ]
+
+# ── 健康分分层：研究/回测产物不计入实盘健康分 ──────────────────────────────
+# 这些 parquet 是 data/midterm|cache|research_cache 下的中间产物，由手动脚本或研究任务产出，
+# **没有日更调度**，长期滞后是设计常态而不是故障。2026-11-23 体检：74 项里 19 项属此类，
+# 黄项里过半来自它们，导致健康分理论上限被压掉 5~10 分，「每天都有黄项」成为必然。
+# 处理方式：仍然巡检、仍然在面板展示（scope="research"），只是不参与扣分。
+# 明确不在本表里的（属实盘读取链路）：basic_<year>.parquet（线上高股息/低市销率）、
+# midterm/events/*_live（线上中线策略）、midterm/fina 目录（财报类长线基线）。
+RESEARCH_ONLY_FILE_KEYS = frozenset({
+    "file:midterm/daily_basic.parquet",
+    "file:midterm/stk_limits.parquet",
+    "file:midterm/index_daily.parquet",
+    "file:midterm/hk_holdings.parquet",
+    "file:cache/daily_kbar.parquet",
+    "file:research_cache/kpl_list",
+    "file:research_cache/limit_list_d",
+    "file:midterm/events/holdertrade_in",
+    "file:midterm/events/holdertrade_de",
+    "file:midterm/forecast",
+    "file:midterm/dividend",
+    "file:midterm/holdernum",
+})
+
+
+def item_scope(key: str) -> str:
+    """检查项的计分范围：research 只看不扣分，trading 参与健康分。"""
+    return "research" if key in RESEARCH_ONLY_FILE_KEYS else "trading"
+
+
 AGE_FILES: list[dict[str, Any]] = [
     {"key": "file:industry_cache.json", "label": "行业分类缓存 industry_cache.json", "path": "industry_cache.json",
      "yellow_days": 60, "red_days": 240, "max": YELLOW,
      "impact": "行业映射（板块相对强度、行业中性化）；新股/北交所行业会缺"},
-    {"key": "file:runtime/pool_bar_source_stats.json", "label": "行情池日K来源统计", "path": "runtime/pool_bar_source_stats.json",
-     "yellow_days": 5, "red_days": 15, "max": YELLOW, "impact": "行情池来源口径一致性核对"},
+    # 已移除 file:runtime/pool_bar_source_stats.json：它是 /api/data-sources/pool 的**按需缓存**
+    # （data_sources._raw_bar_source_rows 在有人打开该页面且 bar 日期变化时才重算落盘），
+    # 不是需要定期更新的数据集。文件 6 天没变只说明 6 天没人打开那个页面，不是数据故障；
+    # 用 5 天阈值持续报黄属口径错误（2026-11-23 体检：9 天 22 次黄，无一对应真实问题）。
 ]
 
 
@@ -1482,19 +1535,25 @@ REPORT_STALE_HOURS = 36    # 巡检报告超过 36 小时没更新，说明巡�
 
 
 def quality_score_penalty(report: dict[str, Any] | None, now: datetime | None = None) -> dict[str, Any]:
-    """把统一数据质量巡检的红/黄项折算成健康分扣分（已退役项 retired=True 不计）。
+    """把统一数据质量巡检的红/黄项折算成健康分扣分。
 
     规则：红项每个 −8（最多 −40）；黄项每个 −1（最多 −10）。巡检报告超过 36 小时未更新再 −5（巡检停了本身就是问题）。
+    只统计 scope="trading"（实盘链路）；研究/回测产物（scope="research"）仍展示但不扣分——它们没有日更调度，
+    长期滞后是设计常态，算进去会永久压住健康分上限（见 RESEARCH_ONLY_FILE_KEYS 注释）。已退役项不计。
     没有报告时不扣分但在 note 里说明。返回 {penalty, red, yellow, rule, note, generated_at}。"""
     rule = (f"红项每个扣 {PENALTY_PER_RED} 分（最多 {PENALTY_RED_CAP}）；黄项每个扣 {PENALTY_PER_YELLOW} 分（最多 {PENALTY_YELLOW_CAP}）；"
-            f"巡检报告超过 {REPORT_STALE_HOURS} 小时没更新另扣 5 分；已退役项不计")
+            f"仅计实盘链路项（研究/回测产物不扣分）；巡检报告超过 {REPORT_STALE_HOURS} 小时没更新另扣 5 分；已退役项不计")
     if not report or not report.get("items"):
         return {"penalty": 0, "red": 0, "yellow": 0, "rule": rule, "note": "尚无数据质量巡检报告，未扣分", "generated_at": None}
-    items = [i for i in report["items"] if not i.get("retired")]
+    items = [i for i in report["items"] if not i.get("retired") and i.get("scope", "trading") == "trading"]
     red = sum(1 for i in items if i.get("severity") == RED)
     yellow = sum(1 for i in items if i.get("severity") == YELLOW)
     pen = min(PENALTY_RED_CAP, red * PENALTY_PER_RED) + min(PENALTY_YELLOW_CAP, yellow * PENALTY_PER_YELLOW)
     note = f"红 {red} 项、黄 {yellow} 项"
+    research_bad = sum(1 for i in report["items"]
+                       if not i.get("retired") and i.get("scope") == "research" and i.get("severity") != GREEN)
+    if research_bad:
+        note += f"；另有 {research_bad} 项研究/回测产物滞后（只展示不扣分）"
     gen = report.get("generated_at")
     try:
         age_h = ((now or _now()) - datetime.strptime(str(gen), "%Y-%m-%d %H:%M:%S").replace(tzinfo=_CST)).total_seconds() / 3600
