@@ -1457,7 +1457,7 @@ def apply_pool_rules(
     _osc_regime = _ctx_base in _disabled_soft_regimes
     _soft_enabled = bool(getattr(selection_policy, "dynamic_soft_floor_enabled", True))
     _soft_floor_allowed = _soft_enabled and (not _disable_soft_floor) and (not _osc_regime)
-    if not result and ordered and top_final_score > 0 and _soft_floor_allowed:
+    if not result and deduped and top_final_score > 0 and _soft_floor_allowed:
         soft_floor = round(
             top_final_score - float(getattr(selection_policy, "dynamic_soft_floor_offset", 1.0)), 2
         )
@@ -1495,7 +1495,9 @@ def apply_pool_rules(
             score_line_context["dynamic_soft_floor"] = dynamic_line
             score_line_context["soft_floor_gap"] = round(gap, 2)
             score_line_context["soft_floor_reason"] = "per_card_penalty" if gap <= 0 else "near_market_line"
-            for card in ordered:
+            # 与否决链同一个池：ordered 是去重与横截面否决之前的池，遍历它会把已否决的卡
+            # 重新放行，也会把同一只票的重复卡出两次。软降线只降分数线，不撤销否决。
+            for card in deduped:
                 final_score = float(card.get("final_score") or 0)
                 if final_score <= 0:
                     continue
