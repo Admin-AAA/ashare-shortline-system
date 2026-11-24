@@ -409,14 +409,10 @@ def run_task_now(task_id: str, db: Session = Depends(get_db)):
 
 
 def _is_prefect_transport_error(exc: BaseException) -> bool:
-    """Prefect server 不可用类异常：httpx 传输/状态错误、部署不存在。"""
-    try:
-        import httpx
-    except Exception:  # noqa: BLE001 - httpx 缺失就按类名判断
-        httpx = None  # type: ignore[assignment]
-    if httpx is not None and isinstance(exc, httpx.HTTPError):
-        return True
-    return "Prefect" in type(exc).__name__ and "Error" in type(exc).__name__
+    """转发到 Prefect 客户端边界的判定，API 层不直接持有 HTTP 客户端类型。"""
+    from app.orchestration.api import is_prefect_transport_error
+
+    return is_prefect_transport_error(exc)
 
 
 @router.get("/orchestration/status")
@@ -492,9 +488,11 @@ def _validate_cron(cron_expression: str) -> None:
 
 
 def _reload_scheduler() -> int:
-    from app.orchestration import schedule_all_enabled_tasks
+    from app.orchestration import pause_disabled_task_deployments, schedule_all_enabled_tasks
 
-    return schedule_all_enabled_tasks().scheduled_task_count
+    count = schedule_all_enabled_tasks().scheduled_task_count
+    pause_disabled_task_deployments()
+    return count
 
 from app.services.cache_hooks import register as _register_cache_hook  # noqa: E402
 

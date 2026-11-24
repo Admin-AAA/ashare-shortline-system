@@ -4,8 +4,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from prefect.client.orchestration import get_client
+from prefect.client.schemas.actions import DeploymentUpdate
 from prefect.schedules import Cron
 
+from app.core.prefect_bootstrap import require_resident_prefect_client
 from app.db.session import SessionLocal
 from app.models.tables import ScheduledTask
 from app.orchestration.contracts import DeploymentSyncResult
@@ -52,6 +55,9 @@ _JOB_VARIABLES = {"working_dir": _BACKEND_DIR}
 
 
 def schedule_all_enabled_tasks() -> DeploymentSyncResult:
+    # 没有常驻 server 时 deployment.apply() 会写进一个用完即关的临时 server，
+    # 返回「同步成功」但常驻 server 上什么都没变。必须先过客户端闸门。
+    require_resident_prefect_client()
     db = SessionLocal()
     try:
         tasks = db.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()
@@ -103,3 +109,34 @@ def schedule_all_enabled_tasks() -> DeploymentSyncResult:
         job_variables=_JOB_VARIABLES,
     ).apply()
     return DeploymentSyncResult(len(tasks), tuple(sorted(names)))
+
+
+def pause_disabled_task_deployments() -> tuple[str, ...]:
+    """把 enabled=0 的任务留下的 deployment 暂停，返回本次新暂停的名字。
+
+    schedule_all_enabled_tasks 只同步 enabled 任务，退役任务的 deployment 会带着
+    active schedule 一直留在 server 上（实测 strategy_exposure_run 2026-10-19 退役后
+    仍每工作日 08:03 触发）。_execute_task 会因 enabled=0 跳过，业务不会错，但
+    ProcessWorker 每次都要为它拉起一个子进程（import 0.86s / RSS 114MB）后立刻退出。
+
+    暂停而非删除：任务重新启用时 schedule_all_enabled_tasks 的 apply() 会把 paused 改回 False。
+    """
+    require_resident_prefect_client()
+    db = SessionLocal()
+    try:
+        disabled = {
+            item.task_id
+            for item in db.query(ScheduledTask).filter(ScheduledTask.enabled.is_(False)).all()
+        }
+    finally:
+        db.close()
+    if not disabled:
+        return ()
+    paused: list[str] = []
+    with get_client(sync_client=True) as client:
+        for deployment in client.read_deployments():
+            if deployment.name not in disabled or deployment.paused:
+                continue
+            client.update_deployment(deployment.id, DeploymentUpdate(paused=True))
+            paused.append(deployment.name)
+    return tuple(sorted(paused))

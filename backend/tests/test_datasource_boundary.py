@@ -10,7 +10,10 @@ from pathlib import Path
 APP = Path(__file__).resolve().parents[1] / "app"
 BANNED = ("tushare", "baostock", "akshare", "httpx", "requests", "efinance", "mootdx", "pytdx")
 ALLOWED_DIRS = ("app/services/datasource/",)
-NON_MARKET = {"app/services/model_router_service.py"}  # LLM HTTP, not a market data provider
+NON_MARKET = {
+    "app/services/model_router_service.py",  # LLM HTTP, not a market data provider
+    "app/orchestration/api.py",  # Prefect 控制面 HTTP，唯一 Prefect 客户端边界，非行情源
+}
 LEGACY = {
     "app/services/cninfo_news.py",
     "app/services/eastmoney_news.py",

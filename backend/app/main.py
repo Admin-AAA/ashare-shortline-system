@@ -293,6 +293,10 @@ def on_startup() -> None:
     # 调度任务注册接线（2026-08-02 修复）：此前 4+1 个关键任务的注册函数零调用点，
     # 新部署依赖人工建行；此处统一幂等注册（盘后流水线/策略曝光/锁利/安全网）。
     ensure_scheduled_task_registrations()
+    # 注册只写 ScheduledTask 行；Prefect 侧的 deployment 由 worker 启动时同步。
+    # worker 长期不重启时新增任务拿不到 deployment（enabled=1 但 last_run 恒 NULL），
+    # 所以 API 启动也同步一次。
+    _sync_prefect_deployments()
     # 日志清理（2026-08-02 修复）：run_*.log 与脚本日志此前无轮转（数百个文件），
     # 启动时清理过期运行日志，避免磁盘无限增长。
     try:
@@ -434,6 +438,37 @@ def _warmup_pool_cache(delay_seconds: float = 0.0) -> None:
         finally:
             db.close()
     threading.Thread(target=_warm, daemon=True).start()
+
+
+def _sync_prefect_deployments() -> None:
+    """把 enabled=1 的 ScheduledTask 同步成 Prefect deployment。
+
+    此前只有 run_prefect_worker.py 启动时和 admin 手动端点会调用，worker 长期不重启时
+    新增任务（qvix_refresh / midterm_basic_snapshot）永远拿不到 deployment，enabled=1
+    但 last_run 恒为 NULL。API 启动是第二个可靠触发点。
+
+    必须在独立线程执行：RunnerDeployment.apply 带 @async_dispatch，在事件循环线程里
+    调用会返回未 await 的 coroutine，同步「成功」但实际什么都没写。
+    """
+    import threading
+
+    def _sync():
+        from app.orchestration import pause_disabled_task_deployments, schedule_all_enabled_tasks
+
+        started_at = perf_counter()
+        try:
+            result = schedule_all_enabled_tasks()
+            paused = pause_disabled_task_deployments()
+            logger.info(
+                "Prefect deployment 同步完成：%s 个调度任务，暂停退役 %s (%.0fms)",
+                result.scheduled_task_count,
+                list(paused),
+                (perf_counter() - started_at) * 1000,
+            )
+        except Exception:
+            logger.exception("Prefect deployment 同步失败，调度任务可能缺少 deployment")
+
+    threading.Thread(target=_sync, daemon=True).start()
 
 
 @app.get("/api/health", response_model=HealthResponse)

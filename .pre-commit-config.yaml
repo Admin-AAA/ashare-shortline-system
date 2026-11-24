@@ -22,3 +22,9 @@ repos:
         language: system
         pass_filenames: false
         files: ^backend/app/
+      - id: scheduler-wiring
+        name: scheduler wiring (registration / deployment sync call sites)
+        entry: bash -c 'cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_scheduler_wiring.py'
+        language: system
+        pass_filenames: false
+        files: ^backend/(app/(main|api/admin|orchestration)|scripts/run_prefect_worker)
