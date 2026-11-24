@@ -169,7 +169,9 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 股东 / 筹码
     {"key": "holder_number", "label": "股东人数(筹码集中度)", "category": "股东筹码", "table": HolderNumber, "date_col": "end_date", "critical": False, "fresh_days": 130},
     {"key": "holder_trade", "label": "股东增减持", "category": "股东筹码", "table": HolderTrade, "date_col": "ann_date", "critical": False, "fresh_days": None},
-    {"key": "pledge_stat", "label": "股权质押", "category": "股东筹码", "table": PledgeStat, "date_col": "end_date", "critical": False, "fresh_days": None},
+    # 质押每周五披露（实测 end_date=20261120/20261113/20261106 均有全市场行）。
+    # fresh_days=None 时完全不做新鲜度判定，曾让数据停在 2026-09-30 整 55 天无人发现。
+    {"key": "pledge_stat", "label": "股权质押", "category": "股东筹码", "table": PledgeStat, "date_col": "end_date", "critical": False, "fresh_days": 14},
     # 基本面
     {"key": "fina_indicator", "label": "财务指标", "category": "基本面", "table": FinaIndicator, "date_col": "end_date", "critical": False, "fresh_days": 130},
     {"key": "institutional_survey", "label": "机构调研", "category": "基本面", "table": InstitutionalSurvey, "date_col": "surv_date", "critical": False, "fresh_days": None},

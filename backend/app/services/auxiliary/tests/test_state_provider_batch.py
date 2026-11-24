@@ -45,14 +45,15 @@ def _request(codes: tuple[str, ...], trade_date: date) -> AuxiliaryDatasetReques
 
 def test_pledge_stat_single_batch_call_filters_to_requested_codes():
     frame = pd.DataFrame([
-        {"ts_code": "000001.SZ", "end_date": "20260630", "pledge_count": 2, "unrest_pledge": 0.1, "rest_pledge": 0.2, "pledge_ratio": 5},
-        {"ts_code": "600000.SH", "end_date": "20260630", "pledge_count": 1, "unrest_pledge": 0.3, "rest_pledge": 0.4, "pledge_ratio": 3},
-        {"ts_code": "300001.SZ", "end_date": "20260630", "pledge_count": 0, "unrest_pledge": 0.0, "rest_pledge": 0.0, "pledge_ratio": 0},
+        {"ts_code": "000001.SZ", "end_date": "20260710", "pledge_count": 2, "unrest_pledge": 0.1, "rest_pledge": 0.2, "pledge_ratio": 5},
+        {"ts_code": "600000.SH", "end_date": "20260710", "pledge_count": 1, "unrest_pledge": 0.3, "rest_pledge": 0.4, "pledge_ratio": 3},
+        {"ts_code": "300001.SZ", "end_date": "20260710", "pledge_count": 0, "unrest_pledge": 0.0, "rest_pledge": 0.0, "pledge_ratio": 0},
     ])
     client = _RecordingClient({"pledge_stat": frame})
     provider = TushareStateProvider(client, session=None)  # session unused by pledge_stat
     rows = provider.pledge_stat(_request(("000001", "600000"), date(2026, 7, 16)))
-    assert client.calls == [("pledge_stat", {"end_date": "20260630"})]
+    # 每周五披露：2026-07-16 是周四，最近披露日是 07-10。
+    assert client.calls == [("pledge_stat", {"end_date": "20260710"})]
     codes = {row["code"] for row in rows}
     assert codes == {"000001", "600000"}
 
@@ -193,12 +194,10 @@ def test_auction_unavailable_returns_empty_without_per_stock_loop():
     assert client.calls == 1  # single batch attempt, NOT 3 per-stock calls
 
 
-def test_pledge_stat_quarter_end_rollback_to_first_non_empty():
-    # pledge_stat 披露日不规则：2026-06-30/2026-03-31 无数据，回退到 2025-12-31。
-    # 空响应会继续向更早候选回退，直到拿到非空帧。
-    empty = pd.DataFrame()
+def test_pledge_stat_weekly_rollback_to_first_non_empty():
+    # 每周五披露，当周尚未披露时按候选日从近到远回退，拿到非空帧即停。
     non_empty = pd.DataFrame([{
-        "ts_code": "000001.SZ", "end_date": "20251231",
+        "ts_code": "000001.SZ", "end_date": "20260626",
         "pledge_count": 1, "unrest_pledge": 0.1, "rest_pledge": 0.2, "pledge_ratio": 3,
     }])
     client = _RecordingClient({
@@ -206,30 +205,30 @@ def test_pledge_stat_quarter_end_rollback_to_first_non_empty():
     })
     provider = TushareStateProvider(client, session=None)
     rows = provider.pledge_stat(_request(("000001",), date(2026, 7, 16)))
-    # 第一个候选是最近季末日 2026-06-30，非空即停
-    assert client.calls[0] == ("pledge_stat", {"end_date": "20260630"})
+    assert client.calls[0] == ("pledge_stat", {"end_date": "20260710"})
     assert len(client.calls) == 1
     assert {row["code"] for row in rows} == {"000001"}
 
-    # 真实回退场景：最近候选都空，直到 2025-12-31 才有数据
-    responses = {}
-    candidate_dates = ["20260630", "20260331", "20251231", "20250930", "20250630", "20250331"]
-    for d in candidate_dates:
-        responses[d] = non_empty if d == "20251231" else pd.DataFrame()
-
     class _ByEndDateClient:
-        def __init__(self):
+        def __init__(self, hit: str):
             self.calls = []
+            self._hit = hit
+
         def pledge_stat(self, end_date=None):
             self.calls.append(end_date)
-            return responses.get(end_date)
+            return non_empty if end_date == self._hit else pd.DataFrame()
 
-    client2 = _ByEndDateClient()
-    provider2 = TushareStateProvider(client2, session=None)
-    rows2 = provider2.pledge_stat(_request(("000001",), date(2026, 7, 16)))
-    # 回退链：20260630 → 20260331 → 20251231（命中）
-    assert client2.calls == ["20260630", "20260331", "20251231"]
+    client2 = _ByEndDateClient("20260626")
+    rows2 = TushareStateProvider(client2, session=None).pledge_stat(_request(("000001",), date(2026, 7, 16)))
+    assert client2.calls == ["20260710", "20260703", "20260626"]
     assert {row["code"] for row in rows2} == {"000001"}
+
+    # 周度候选全空时继续回退到季末候选，覆盖更早的历史。
+    client3 = _ByEndDateClient("20260630")
+    TushareStateProvider(client3, session=None).pledge_stat(_request(("000001",), date(2026, 7, 16)))
+    assert client3.calls[-1] == "20260630"
+    assert len(client3.calls) == 11
+    assert all(date(int(d[:4]), int(d[4:6]), int(d[6:])).weekday() == 4 for d in client3.calls[:10])
 
 
 def test_fina_indicator_batch_failure_does_not_fan_out_to_per_stock_calls():

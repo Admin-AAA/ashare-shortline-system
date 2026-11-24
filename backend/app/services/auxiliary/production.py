@@ -391,6 +391,10 @@ AUXILIARY_DATASET_INVENTORY: tuple[AuxiliaryDatasetInventoryEntry, ...] = (
         key="pledge_stat", category="pledge", view_key="market_pool.pledges", model=PledgeStat,
         natural_key=("code", "end_date"), freshness_field="end_date",
         update_policy=_atomic(("pledge_count", "unrest_pledge", "rest_pledge", "pledge_ratio")),
+        # 每周五披露，全市场约 2210~2270 行。行数下限取 1800（约八成）：
+        # 2026-05-22 只写进 116 行、2026-06-18 只有 268 行，上游这两天各有 2245/2235 行，
+        # 缺下限就会因为「那天有行」判新鲜，部分写入永远补不回来。
+        minimum_record_count=1800,
     ),
     AuxiliaryDatasetInventoryEntry(
         key="broker_recommend", category="broker_recs", view_key="market_pool.broker_recs", model=BrokerRecommend,
