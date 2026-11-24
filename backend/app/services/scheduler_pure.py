@@ -55,7 +55,12 @@ POSTCLOSE_LATE_DATA_REPAIR_TASK_ID = "postclose_late_data_repair"
 # 工作日使用 mon-fri，避免不同 cron 实现对数字星期的解释差异。
 # 与标准 crontab 的 0=Sunday 差一天，"1-5" 会被解析成「周二到周六」——周一永不触发、
 # 周六反而跑。名称形式在两种语义下都无歧义，是唯一安全写法。
-POSTCLOSE_PIPELINE_CRON = "35 17 * * mon-fri"
+# 21:30：必须晚于 21:00 晚间补数。就绪闸门要求 index_daily / limit_up_board 覆盖当日，
+# 而这两张表由 21:00 补数任务自己写入（实测 index_daily 入库 21:02~21:04，补数整体
+# 230~1012s 结束）。旧的 17:35 早于数据到齐两小时，有界重试 19:02 耗尽，近两周
+# 27 failed / 6 completed，每天的票实际由补数任务内的 late_repick 产出（L-208）。
+# 排在补数之后，主路径自己就能过闸门，late_repick 退回真正的兜底角色。
+POSTCLOSE_PIPELINE_CRON = "30 21 * * mon-fri"
 
 
 POSTCLOSE_LATE_DATA_REPAIR_CRON = "0 21 * * mon-fri"
@@ -106,7 +111,7 @@ STOCK_IDENTITY_CRON = "10 8,17 * * mon-fri"
 TASK_TYPE_STRATEGY_PROFILE_REFRESH = "strategy_profile_refresh"
 STRATEGY_PROFILE_TASK_ID = "strategy_profile_refresh_daily"
 STRATEGY_PROFILE_CRON = "40 19 * * mon-fri"
-DATA_FRESHNESS_CRON = "30 21 * * mon-fri"  # 周一到周五 21:30：必须晚于 21:00 晚间补数
+DATA_FRESHNESS_CRON = "50 21 * * mon-fri"  # 周一到周五 21:50：晚于 21:00 补数与 21:30 出票，避免同刻抢队列
 # 统一数据质量巡检（data_quality_monitor：数据库表 + data/ 文件数据集 + research 静态文件 + 调度/日志静默失败，只读）：
 # 盘前 08:50（隔夜失败/停更在开盘前暴露）、22:50（22:43 自愈补跑之后验收）。
 # 21:30 的 data_freshness 已经覆盖「晚间补数是否到齐」，质量巡检再早于自愈跑只会把已修好的项记成红

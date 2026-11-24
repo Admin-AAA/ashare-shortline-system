@@ -146,7 +146,18 @@ def test_freshness_ignores_non_trade_day_rows(db):
 
 def test_freshness_task_registered_and_dispatched():
     from app.services import scheduler_pure, scheduler_service
+    from app.services.data_quality_monitor import parse_simple_cron
 
-    assert scheduler_pure.DATA_FRESHNESS_CRON == "0 18 * * mon-fri"
+    def minutes_of(cron: str) -> int:
+        parsed = parse_simple_cron(cron)
+        assert parsed is not None, cron
+        minutes, hours, _ = parsed
+        return min(hours) * 60 + min(minutes)
+
+    # 断言时序不变量而非字面量：新鲜度巡检必须晚于晚间补数，出票也必须晚于晚间补数。
+    # 早于上游到齐的时点会让这些任务每天必然失败（L-208）。
+    repair = minutes_of(scheduler_pure.POSTCLOSE_LATE_DATA_REPAIR_CRON)
+    assert minutes_of(scheduler_pure.DATA_FRESHNESS_CRON) > repair
+    assert minutes_of(scheduler_pure.POSTCLOSE_PIPELINE_CRON) > repair
     assert hasattr(scheduler_service, "_ensure_data_freshness_task")
     assert hasattr(scheduler_service, "_run_data_freshness_check")

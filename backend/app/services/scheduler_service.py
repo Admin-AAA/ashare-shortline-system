@@ -1255,6 +1255,10 @@ def _execute_task(
                 result["midterm_block_trade"] = _run_block_trade_picks_hook(db, task_id)
             # 21:00 补数后：17:35 被闸门挡住的当天出票，闸门现已通过就补跑（幂等，不改补数任务自身状态）。
             if task_id in LATE_REPICK_HOOK_TASK_IDS and isinstance(result, dict):
+                # QVIX 增量必须排在出票之前：rsi6-capitulation 的「价格恐慌 OR QVIX 尖峰」
+                # 在 QVIX 缺数时静默降级成仅价格门。独立的 21:10 定时任务晚于这里的出票，
+                # 只靠它当日出票永远读不到当日 QVIX。非致命，失败只告警不改补数任务状态。
+                result["qvix_refresh"] = _refresh_qvix(task_id)
                 result["late_repick"] = asyncio.run(_late_repair_repick(db, task_id))
                 lr = result["late_repick"]
                 if lr.get("status") == "completed" and lr.get("recommendation"):
