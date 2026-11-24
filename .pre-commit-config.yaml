@@ -10,6 +10,12 @@ repos:
         language: system
         pass_filenames: false
         files: ^backend/app/
+      - id: credential-guard
+        name: credential guard
+        entry: backend/.venv/bin/python scripts/check_no_credentials.py
+        language: system
+        pass_filenames: false
+        always_run: true
       - id: layering-contract
         name: layering contract (api -> services -> engine)
         entry: bash -c 'cd backend && .venv/bin/python -m pytest -q -p no:cacheprovider tests/test_layering_contract.py'
