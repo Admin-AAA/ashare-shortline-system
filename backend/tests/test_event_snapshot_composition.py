@@ -237,6 +237,10 @@ def test_provider_failure_and_unknown_schema_become_nonpublishable_snapshot_fail
 
     assert failed.status is PartitionSnapshotStatus.FAILURE
     assert failed.failure is not None and failed.failure.code == "event_provider_request_failed"
+    # 失败原因必须带上游接口与原始异常：只报 code 时无法判断是哪个分区、为什么失败。
+    assert "stk_holdertrade" in failed.failure.message
+    assert "RuntimeError" in failed.failure.message
+    assert "fixture provider failure" in failed.failure.message
     assert unknown.status is PartitionSnapshotStatus.FAILURE
     assert unknown.failure is not None and unknown.failure.code == "event_provider_unknown_schema"
 

@@ -446,8 +446,10 @@ def inject_auxiliary_prefilter_flags(
             stock["is_limit_up"] = True
             stock["limit_up_consecutive_days"] = int(row.get("limit_times") or 1)
             stock["limit_up_open_times"] = int(row.get("open_times") or 0)
-            stock["limit_up_fd_amount_yi"] = float(row.get("fd_amount_yi") or 0.0)
-            stock["limit_up_limit_amount_yi"] = float(row.get("limit_amount_yi") or 0.0)
+            fd_amount = row.get("fd_amount_yi")
+            limit_amount = row.get("limit_amount_yi")
+            stock["limit_up_fd_amount_yi"] = float(fd_amount) if fd_amount is not None else None
+            stock["limit_up_limit_amount_yi"] = float(limit_amount) if limit_amount is not None else None
             stock["limit_up_turnover_ratio"] = float(row.get("turnover_ratio") or 0.0)
             stock.setdefault("limit_up_days20", 1)
         else:
@@ -472,10 +474,8 @@ def inject_auxiliary_prefilter_flags(
         if row := hsgt_top10.get(code):
             hsgt_hits += 1
             stock["hsgt_rank"] = int(row.get("rank") or 0)
-            stock["hsgt_net_buy"] = float(row.get("buy") or row.get("net_amount") or 0)
         else:
             stock.setdefault("hsgt_rank", 0)
-            stock.setdefault("hsgt_net_buy", 0)
         if row := capital_flows.get(code):
             if stock.get("main_net_inflow_yi") is None:
                 stock["main_net_inflow_yi"] = float(row.get("main_net_inflow_yi") or 0)

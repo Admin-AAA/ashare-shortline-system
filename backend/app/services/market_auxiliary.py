@@ -122,9 +122,9 @@ def _fetch_local_limit_up_board(trade_date: str | None = None) -> list[dict[str,
                     "last_time": row.last_time or "",
                     "open_times": int(row.open_times or 0),
                     "up_stat": row.up_stat or "",
-                    "limit_amount_yi": float(row.limit_amount_yi) if row.limit_amount_yi is not None else 0.0,
+                    "limit_amount_yi": float(row.limit_amount_yi) if row.limit_amount_yi is not None else None,
                     "turnover_ratio": float(row.turnover_ratio) if row.turnover_ratio is not None else 0.0,
-                    "fd_amount_yi": float(row.fd_amount_yi) if row.fd_amount_yi is not None else 0.0,
+                    "fd_amount_yi": float(row.fd_amount_yi) if row.fd_amount_yi is not None else None,
                     "industry": row.industry or "",
                 })
             return result

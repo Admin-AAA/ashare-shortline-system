@@ -1128,13 +1128,9 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             stock["block_trade_avg_discount_rate"] = 0.0
 
         # ── 北向持股特征 ──
+        # 只保留 rank：上游 2024-08-16 后不再披露个股买卖金额，buy/net_amount 恒为 0。
         hsgt = hsgt_top10_map.get(code)
-        if hsgt:
-            stock["hsgt_rank"] = hsgt.get("rank", 0)
-            stock["hsgt_net_buy"] = hsgt.get("buy", 0)        # 买入量(股)
-        else:
-            stock["hsgt_rank"] = 0
-            stock["hsgt_net_buy"] = 0
+        stock["hsgt_rank"] = hsgt.get("rank", 0) if hsgt else 0
 
         # ── 北向资金整体流向（市场级） ──
         if hsgt_flow_data:

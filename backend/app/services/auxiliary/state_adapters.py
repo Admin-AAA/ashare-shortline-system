@@ -449,9 +449,10 @@ class TushareStateProvider:
                     "last_time": str(item.get("last_time") or ""),
                     "open_times": int(_number(item.get("open_times"))),
                     "up_stat": str(item.get("up_stat") or ""),
-                    "limit_amount_yi": _number(item.get("limit_amount")) / 1e8,
+                    # U 只给 fd_amount（封单），D 只给 limit_amount，Z 两者皆无：缺失写 NULL。
+                    "limit_amount_yi": _optional_yi(item.get("limit_amount")),
                     "turnover_ratio": _number(item.get("turnover_ratio")),
-                    "fd_amount_yi": _number(item.get("fd_amount")) / 1e8,
+                    "fd_amount_yi": _optional_yi(item.get("fd_amount")),
                     "industry": str(item.get("industry") or ""),
                 })
         if failures and not rows:
