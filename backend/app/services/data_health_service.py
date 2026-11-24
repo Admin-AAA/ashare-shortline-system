@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -14,6 +15,7 @@ from typing import Any
 from sqlalchemy import distinct, func, select, text
 from sqlalchemy.orm import Session
 
+from app.db.session import SessionLocal
 from app.engine.trading_calendar import latest_allowed_bar_date as _latest_allowed_bar_date
 
 from app.models.tables import (
@@ -52,14 +54,16 @@ logger = logging.getLogger(__name__)
 # ── 注册需要监控的表 ─────────────────────────────────────────────────────
 
 _TABLE_DEFS: list[dict[str, Any]] = [
-    {"key": "daily_kbar",       "label": "日K线",       "table": DailyKbar,       "date_col": "trade_date", "critical": True,  "expect_recent_coverage": True},
-    {"key": "stock_quote",      "label": "实时快照",     "table": StockQuote,      "date_col": "trade_date", "critical": False, "expect_recent_coverage": False, "lag_alert_after_days": 1},
+    # 大表（百万行级）标 estimated_row_count：COUNT(*) 是 InnoDB 全索引扫描，
+    # 日K 600 万行单次 0.8s、资金流 550 万行 0.35s，健康页不需要精确到行的数字。
+    {"key": "daily_kbar",       "label": "日K线",       "table": DailyKbar,       "date_col": "trade_date", "critical": True,  "expect_recent_coverage": True, "estimated_row_count": True},
+    {"key": "stock_quote",      "label": "实时快照",     "table": StockQuote,      "date_col": "trade_date", "critical": False, "expect_recent_coverage": False, "lag_alert_after_days": 1, "estimated_row_count": True},
     {"key": "minute_kbar",      "label": "分钟K线",     "table": MinuteKbar,      "date_col": "trade_date", "critical": False, "expect_recent_coverage": True, "estimated_row_count": True, "fast_date_bounds": True},
     {"key": "index_daily",      "label": "指数日线",     "table": IndexDaily,      "date_col": "trade_date", "critical": True,  "expect_recent_coverage": True},
     {"key": "limit_up_board",   "label": "涨停板",       "table": LimitUpBoard,    "date_col": "trade_date", "critical": True,  "expect_recent_coverage": True},
     {"key": "dragon_tiger",     "label": "龙虎榜",       "table": DragonTiger,     "date_col": "trade_date", "critical": False, "expect_recent_coverage": False},
     {"key": "concept_sector",   "label": "概念板块",     "table": ConceptSector,   "date_col": "trade_date", "critical": False, "expect_recent_coverage": False, "lag_alert_after_days": 1},
-    {"key": "capital_flow",     "label": "资金流向",     "table": CapitalFlow,     "date_col": "trade_date", "critical": False, "expect_recent_coverage": True},
+    {"key": "capital_flow",     "label": "资金流向",     "table": CapitalFlow,     "date_col": "trade_date", "critical": False, "expect_recent_coverage": True, "estimated_row_count": True},
     {"key": "news",             "label": "新闻公告",     "table": NewsAnnouncement, "date_col": "announce_date", "critical": False, "expect_recent_coverage": False},
     {"key": "recommendation",   "label": "推荐记录",     "table": Recommendation,   "date_col": "trade_date", "critical": True,  "expect_recent_coverage": False},
     {"key": "outcome",          "label": "标注结果",     "table": RecommendationOutcome, "date_col": None, "critical": True, "expect_recent_coverage": False},
@@ -143,7 +147,7 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     {"key": "minute_kbar", "label": "分钟K线", "category": "行情K线", "table": MinuteKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     {"key": "index_daily", "label": "指数日线", "category": "行情K线", "table": IndexDaily, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     {"key": "stk_limit", "label": "涨跌停价格", "category": "行情K线", "table": StkLimit, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
-    {"key": "auction", "label": "集合竞价", "category": "行情K线", "table": AuctionData, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
+    {"key": "auction", "label": "集合竞价", "category": "行情K线", "table": AuctionData, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     # 实时盘口
     {"key": "realtime_quote", "label": "盘中实时快照", "category": "实时盘口", "table": StockQuote, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     # 情绪题材
@@ -153,7 +157,7 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     {"key": "dragon_tiger", "label": "龙虎榜", "category": "情绪题材", "table": DragonTiger, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     {"key": "broker_recommend", "label": "券商金股", "category": "情绪题材", "table": BrokerRecommend, "date_col": "month", "critical": False, "fresh_days": 45},
     # 资金流向
-    {"key": "capital_flow", "label": "资金流向", "category": "资金流向", "table": CapitalFlow, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS},
+    {"key": "capital_flow", "label": "资金流向", "category": "资金流向", "table": CapitalFlow, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     # 北向 / 港股通
     {"key": "hsgt_flow", "label": "沪深港通资金流", "category": "北向港股通", "table": HsgtFlow, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True},
     {"key": "hsgt_top10", "label": "北向持股TOP10", "category": "北向港股通", "table": HsgtTop10, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True},
@@ -161,7 +165,7 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 融资融券
     # margin_data 是旧版逐股投影，已无生产消费者；当前唯一执行数据源是 S4
     # margin_detail。继续把旧表计入健康分会在主数据正常时制造重复的假告警。
-    {"key": "margin_detail", "label": "融资融券明细", "category": "融资融券", "table": MarginDetail, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True},
+    {"key": "margin_detail", "label": "融资融券明细", "category": "融资融券", "table": MarginDetail, "date_col": "trade_date", "critical": False, "fresh_days": _MARGIN_LIKE_FRESH_DAYS, "source_lag_prone": True, "estimated_row_count": True},
     # 股东 / 筹码
     {"key": "holder_number", "label": "股东人数(筹码集中度)", "category": "股东筹码", "table": HolderNumber, "date_col": "end_date", "critical": False, "fresh_days": 130},
     {"key": "holder_trade", "label": "股东增减持", "category": "股东筹码", "table": HolderTrade, "date_col": "ann_date", "critical": False, "fresh_days": None},
@@ -172,7 +176,7 @@ _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 事件 / 公告
     {"key": "news", "label": "新闻公告", "category": "事件公告", "table": NewsAnnouncement, "date_col": "announce_date", "critical": False, "fresh_days": 14},
     {"key": "block_trade", "label": "大宗交易", "category": "事件公告", "table": BlockTrade, "date_col": "trade_date", "critical": False, "fresh_days": 7, "live_source": "block_trade"},
-    {"key": "share_float", "label": "限售解禁", "category": "事件公告", "table": ShareFloat, "date_col": "float_date", "critical": False, "fresh_days": None},
+    {"key": "share_float", "label": "限售解禁", "category": "事件公告", "table": ShareFloat, "date_col": "float_date", "critical": False, "fresh_days": None, "estimated_row_count": True},
     {"key": "repurchase", "label": "股票回购", "category": "事件公告", "table": Repurchase, "date_col": "ann_date", "critical": False, "fresh_days": 10, "live_source": "repurchase"},
     # 基础参照
     {"key": "stock_basic", "label": "股票基础信息", "category": "基础参照", "table": Stock, "date_col": "list_date", "critical": False, "fresh_days": None},
@@ -218,9 +222,10 @@ def _diagnosis_data_version(db: Session) -> str | None:
 
 
 def _get_cached_diagnosis(db: Session | None = None) -> dict[str, Any] | None:
-    """命中返回缓存结果，否则 None。
+    """命中「新鲜」缓存时返回结果，否则 None。
 
     失效条件：无缓存 / reference_trade_date 对不上 / 超过 TTL / 数据版本前进。
+    需要「宁可返回旧值也不等」的调用方走 diagnose_all(allow_stale=True)。
     """
     cached = _diagnosis_cache.get("result")
     if cached is None:
@@ -258,18 +263,81 @@ def clear_data_health_cache() -> None:
         _diagnosis_cache_generation += 1
 
 
-def diagnose_all(db: Session, *, force_refresh: bool = False) -> dict[str, Any]:
-    """全面数据质量诊断。
+def _start_background_refresh() -> None:
+    """缓存过期时起一个后台线程重算；已有一次在算（同步或后台）就不重复起。
 
-    默认命中进程内缓存；同步/修复写入会显式清空，force_refresh 会绕过已完成
-    的缓存。若已有一次诊断正在运行，所有调用者复用该次结果，避免重复全量查询。
+    用独立 Session：调用方的 db 在响应返回后就会关掉，不能挂到后台线程上。
     """
     global _diagnosis_in_progress
     with _diagnosis_cache_condition:
-        cached = _get_cached_diagnosis(db)
-        if cached is not None and not force_refresh:
-            logger.debug("data_health: cache hit (reference_date=%s)", cached.get("reference_trade_date"))
-            return cached
+        if _diagnosis_in_progress:
+            return
+        _diagnosis_in_progress = True
+        generation = _diagnosis_cache_generation
+    threading.Thread(
+        target=_background_refresh,
+        args=(generation,),
+        name="data-health-refresh",
+        daemon=True,
+    ).start()
+
+
+def _background_refresh(generation: int) -> None:
+    global _diagnosis_in_progress
+    session: Session | None = None
+    try:
+        session = SessionLocal()
+        result = _diagnose_all_uncached(session)
+        with _diagnosis_cache_condition:
+            # 后台算的这段期间缓存被显式清空过（修复任务完成）就不再写回：
+            # 那次清空代表「之前的结论作废」，旧 generation 的结果不该复活。
+            if generation == _diagnosis_cache_generation:
+                _set_cached_diagnosis(result, session)
+    except Exception:  # noqa: BLE001 - 后台失败只能沿用旧缓存，不能影响已返回的响应
+        logger.warning("data_health: 后台重算失败，继续沿用旧缓存", exc_info=True)
+    finally:
+        with _diagnosis_cache_condition:
+            _diagnosis_in_progress = False
+            _diagnosis_cache_condition.notify_all()
+        if session is not None:
+            session.close()
+
+
+def diagnose_all(db: Session, *, force_refresh: bool = False,
+                 allow_stale: bool = False) -> dict[str, Any]:
+    """全面数据质量诊断。
+
+    - 默认（allow_stale=False）：命中新鲜缓存直接返回；否则同步全量诊断。数据管道 /
+      出票闸门 / 修复任务用这个口径，拿到的必须是本次真实结论。
+    - ``allow_stale=True``：stale-while-revalidate。缓存只是过期（TTL 5 分钟或数据版本
+      前进）时**先返回上一次结果**，同时后台线程重算。HTTP 读接口用它——冷算本身
+      4~6s，日历/上游抖动时更长，不该让页面等。
+    - ``force_refresh=True``：绕过缓存同步重算（详情页「重新诊断」、每日快照）。
+    """
+    if not force_refresh:
+        cached = _diagnosis_cache.get("result")
+        if cached is not None:
+            if _get_cached_diagnosis(db) is not None:
+                logger.debug("data_health: cache hit (reference_date=%s)", cached.get("reference_trade_date"))
+                return cached
+            if allow_stale:
+                logger.debug("data_health: serving stale cache, background refresh scheduled")
+                _start_background_refresh()
+                return cached
+    return _diagnose_all_sync(db, force=force_refresh)
+
+
+def _diagnose_all_sync(db: Session, *, force: bool = False) -> dict[str, Any]:
+    """同步全量诊断：并发调用者复用同一次计算，避免重复全表扫描。
+
+    ``force=True``（force_refresh）跳过「命中新鲜缓存直接返回」，必须真的重算。
+    """
+    global _diagnosis_in_progress
+    with _diagnosis_cache_condition:
+        if not force:
+            cached = _get_cached_diagnosis(db)
+            if cached is not None:
+                return cached
 
         while _diagnosis_in_progress:
             logger.debug("data_health: waiting for in-flight diagnosis")
@@ -314,8 +382,12 @@ def diagnose_all(db: Session, *, force_refresh: bool = False) -> dict[str, Any]:
 def _diagnose_all_uncached(db: Session) -> dict[str, Any]:
     """全面数据质量诊断（无缓存，实际计算）。"""
 
+    # 行数统计在同一次诊断内共享：同一张表在 _TABLE_DEFS 与 _DATA_DOMAIN_DEFS 里
+    # 各出现一次，不共享就会把 capital_flow 这类 550 万行的表数两遍。
+    row_count_memo: dict[str, tuple[int, bool]] = {}
+
     # 1. 各表基础统计
-    table_stats = _table_stats(db)
+    table_stats = _table_stats(db, row_count_memo)
 
     # 2. 计算参考交易日（优先 Tushare，失败时回退本地）
     reference_info = _resolve_reference_trade_date(db)
@@ -338,7 +410,7 @@ def _diagnose_all_uncached(db: Session) -> dict[str, Any]:
     source_health = _data_source_health(db)
 
     # 4b. 数据域（指标级）覆盖：哪些数据域有接入策略且持续拉取
-    domain_summary = _data_domain_coverage(db, reference_trade_date)
+    domain_summary = _data_domain_coverage(db, reference_trade_date, row_count_memo)
 
     # 4c. 值分布哨兵：抓恒零/恒同值/整列 NULL——结构性检查看不见的失真（L-143）
     value_sentinel = _value_distribution_sentinel(db, reference_trade_date)
@@ -374,7 +446,7 @@ def _diagnose_all_uncached(db: Session) -> dict[str, Any]:
     return result
 
 
-def _table_stats(db: Session) -> dict[str, Any]:
+def _table_stats(db: Session, memo: dict[str, tuple[int, bool]] | None = None) -> dict[str, Any]:
     """各表行数 + 日期范围。"""
     result = {}
     for tdef in _TABLE_DEFS:
@@ -384,7 +456,9 @@ def _table_stats(db: Session) -> dict[str, Any]:
         label = tdef["label"]
 
         try:
-            total, total_estimated = _table_row_count(db, tbl, prefer_estimate=bool(tdef.get("estimated_row_count")))
+            total, total_estimated = _table_row_count(
+                db, tbl, prefer_estimate=bool(tdef.get("estimated_row_count")), memo=memo,
+            )
 
             min_date = None
             max_date = None
@@ -416,13 +490,19 @@ def _table_stats(db: Session) -> dict[str, Any]:
 
 
 def _get_tushare_recent_trade_dates() -> list[str]:
-    """Tushare 交易日历里最近的交易日（ISO 升序）；不可用时返回空列表。"""
+    """Tushare 交易日历里最近的交易日（ISO 升序）；不可用时返回空列表。
+
+    只读本地 trade_calendar 表（allow_network=False）。健康诊断跑在 HTTP 请求线程里，
+    这里若允许联网，日历过期 24h 时会同步拉一次上游 trade_cal——实测上游抖动时
+    10s 网络失败 + 重试共 14.5s，直接把 /api/admin/data-health 拖到 17s。
+    拿不到就返回空列表，由调用方回退到本地表推断参考交易日。
+    """
     try:
         from app.services.tushare_client import fetch_recent_trade_dates
 
         return [
             f"{compact[:4]}-{compact[4:6]}-{compact[6:]}"
-            for compact in fetch_recent_trade_dates()
+            for compact in fetch_recent_trade_dates(allow_network=False)
             if compact and len(compact) == 8
         ]
     except Exception:
@@ -801,7 +881,8 @@ def _data_source_health(db: Session) -> dict[str, Any]:
     }
 
 
-def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict[str, Any]:
+def _data_domain_coverage(db: Session, reference_trade_date: str | None,
+                          memo: dict[str, tuple[int, bool]] | None = None) -> dict[str, Any]:
     """数据域（指标级）覆盖：哪些市场数据域有接入策略且持续拉取。
 
     返回按类别分组的覆盖明细 + 汇总（覆盖率、评分扣减）。
@@ -850,6 +931,7 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None) -> dict
                     db,
                     tbl,
                     prefer_estimate=bool(ddef.get("estimated_row_count")),
+                    memo=memo,
                 )
 
             if hasattr(tbl, dc):
@@ -1267,12 +1349,38 @@ def _date_variants(value: Any) -> list[str]:
     return sorted({normalized, normalized.replace("-", "")})
 
 
-def _table_row_count(db: Session, tbl: Any, *, prefer_estimate: bool = False) -> tuple[int, bool]:
+def _table_row_count(db: Session, tbl: Any, *, prefer_estimate: bool = False,
+                     memo: dict[str, tuple[int, bool]] | None = None) -> tuple[int, bool]:
+    """返回 (行数, 是否为估算值)。同一次诊断内同一张表只算一次（memo）。
+
+    大表（日K 600 万行、资金流 550 万行）的 ``COUNT(*)`` 是 InnoDB 全索引扫描，单次
+    0.3~0.9s；这些表在 _TABLE_DEFS 与 _DATA_DOMAIN_DEFS 里各出现一次，重复计数会
+    直接翻倍。标了 ``estimated_row_count`` 的表改用 INFORMATION_SCHEMA 估算。
+    """
+    name = tbl.__tablename__
+    if memo is not None and name in memo:
+        return memo[name]
+    counted: tuple[int, bool] | None = None
     if prefer_estimate:
-        estimated = _estimated_table_rows(db, tbl.__tablename__)
-        if estimated is not None:
-            return estimated, True
-    return int(db.scalar(select(func.count()).select_from(tbl)) or 0), False
+        estimated = _estimated_table_rows(db, name)
+        # 估算为 0/None 不能当成「空表」：INFORMATION_SCHEMA 统计会滞后于真实写入，
+        # 空表判定（total_rows == 0 扣 20 分 + 高优先 issue）必须靠精确计数兜底。
+        # 真为空的表 COUNT(*) 是 O(1)，不会带来额外成本。
+        if estimated:
+            counted = (estimated, True)
+    if counted is None:
+        counted = (int(db.scalar(select(func.count()).select_from(tbl)) or 0), False)
+    if memo is not None:
+        memo[name] = counted
+    return counted
+
+
+# INFORMATION_SCHEMA.TABLES 的 TABLE_ROWS 一次取全库，进程内缓存 60s。
+# 逐表查询时单次约 190ms（MySQL 需要读存储引擎统计），而一张表只用一次估算——
+# 合并成一条查询后，把 7 张大表的估算成本从 ~1.3s 压到一次 ~200ms（且 60s 内复用）。
+_TABLE_ESTIMATE_TTL_SECONDS = 60.0
+_table_estimate_cache: dict[str, Any] = {"ts": 0.0, "rows": {}}
+_table_estimate_lock = threading.Lock()
 
 
 def _estimated_table_rows(db: Session, table_name: str) -> int | None:
@@ -1283,20 +1391,28 @@ def _estimated_table_rows(db: Session, table_name: str) -> int | None:
         dialect_name = ""
     if dialect_name not in {"mysql", "mariadb"}:
         return None
-    try:
-        row = db.execute(
-            text(
-                "SELECT TABLE_ROWS "
-                "FROM INFORMATION_SCHEMA.TABLES "
-                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = :table_name"
-            ),
-            {"table_name": table_name},
-        ).first()
-        if row and row[0] is not None:
-            return int(row[0])
-    except Exception:
-        _rollback_session_safely(db)
-    return None
+
+    age = time.monotonic() - float(_table_estimate_cache.get("ts") or 0.0)
+    rows: dict[str, int] = _table_estimate_cache.get("rows") or {}
+    if age <= _TABLE_ESTIMATE_TTL_SECONDS and table_name in rows:
+        return rows[table_name]
+
+    with _table_estimate_lock:
+        age = time.monotonic() - float(_table_estimate_cache.get("ts") or 0.0)
+        rows = _table_estimate_cache.get("rows") or {}
+        if age > _TABLE_ESTIMATE_TTL_SECONDS or table_name not in rows:
+            try:
+                fetched = db.execute(text(
+                    "SELECT TABLE_NAME, TABLE_ROWS FROM INFORMATION_SCHEMA.TABLES "
+                    "WHERE TABLE_SCHEMA = DATABASE()"
+                )).all()
+            except Exception:
+                _rollback_session_safely(db)
+                return rows.get(table_name)
+            rows = {str(name): int(count or 0) for name, count in fetched if name}
+            _table_estimate_cache["rows"] = rows
+            _table_estimate_cache["ts"] = time.monotonic()
+    return rows.get(table_name)
 
 
 def _date_bounds(db: Session, col: Any) -> tuple[str | None, str | None]:

@@ -1299,6 +1299,22 @@ class TushareHttpProvider:
         )
 
 
+# 只有在盘中才有意义的实时接口：收盘后 / 周末调用，上游本来就不供数，失败是预期行为。
+# 2026-11-22 体检：晚上打开持仓页（realtime-pnl）触发 rt_k 全上游失败，
+# datasource_all_failed 告警挂 24 小时，把 data-quality 的 alerts 项长期染黄。
+_REALTIME_ONLY_APIS = frozenset({"rt_k", "rt_min"})
+
+
+def _in_realtime_window() -> bool:
+    """当前是否处于可能有实时行情的时段（判断不了就当在时段内，宁可告警）。"""
+    try:
+        from app.services.trade_calendar import in_trading_session
+
+        return in_trading_session()
+    except Exception:  # noqa: BLE001 - 交易日历不可用时不做抑制
+        return True
+
+
 def _alert_all_providers_failed(api_name: str, failures: Sequence[Any]) -> None:
     from app.core.alerts import emit_alert
 
@@ -1307,6 +1323,10 @@ def _alert_all_providers_failed(api_name: str, failures: Sequence[Any]) -> None:
         f"{getattr(getattr(f, 'category', None), 'value', None) or (f.get('category') if isinstance(f, dict) else '?')}"
         for f in failures
     ) or "无可用 provider"
+    if api_name in _REALTIME_ONLY_APIS and not _in_realtime_window():
+        # 非交易时段的实时行情失败：只留日志，不要升级成告警
+        logger.info("非交易时段 %s 全部上游失败（预期内，不告警）: %s", api_name, detail)
+        return
     emit_alert("datasource_all_failed", api_name, f"Tushare 全部上游失败 api={api_name} [{detail}]")
 
 

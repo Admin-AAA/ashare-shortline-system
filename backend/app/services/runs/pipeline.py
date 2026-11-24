@@ -285,6 +285,7 @@ async def run_staged_pipeline(
     from app.agents.session_registry import AgentSessionRegistry
     from app.db.session import SessionLocal
     from app.services.registry.skills import sync_skills
+    from app.services.runs.filter_audit import compact_filter_audit_for_storage
 
     lifecycle_repository = SQLAlchemyRunRepository(db)
     now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -445,7 +446,9 @@ async def run_staged_pipeline(
             run.data_as_of = str(snapshot_dict.get("trade_date") or "") or None
             run.source_snapshot_id = str(snapshot_dict.get("snapshot_id") or "") or None
             run.market_snapshot_json = _dumps(_slim_market_snapshot(snapshot_dict))
-            run.filter_audit_json = _dumps(dict(data.filter_audit or {}))
+            run.filter_audit_json = _dumps(
+                compact_filter_audit_for_storage(dict(data.filter_audit or {}))
+            )
             summary = _build_run_summary(
                 list(data.scored_cards), list(data.saved_recommendations),
                 snapshot_dict, _strip_audit_rows(dict(data.pipeline_audit or {})),

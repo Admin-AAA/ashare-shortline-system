@@ -143,3 +143,27 @@ def test_runs(tmp_path, monkeypatch):
     assert items["mid-repurchase-plan-underreact"]["picks"] == 2 and items["mid-forecast-beat"]["detail"] == "slots_full"
     assert "long-dividend-lowvol" not in items
     assert [i["strategy_id"] for i in ha.runs("long")[0]["items"]] == ["long-dividend-lowvol"]
+
+
+def test_trades_result_is_cached_and_cache_can_be_cleared(tmp_path, monkeypatch):
+    """复盘页同时打 /trades 与 /metrics，后者内部又调一次 trades；1728 个 pick 文件
+    全量解析不该在一次页面加载里做两遍。"""
+    calls = {"n": 0}
+    original = ms._load_batches
+
+    def counting(db, files):
+        calls["n"] += 1
+        return original(db, files)
+
+    monkeypatch.setattr(ms, "_load_batches", counting)
+    ha.clear_trades_cache()
+    _setup(tmp_path, monkeypatch, REALIZED)
+
+    first = ha.trades(None, "mid")
+    second = ha.trades(None, "mid")
+    assert calls["n"] == 1          # 第二次走缓存
+    assert first == second
+
+    ha.clear_trades_cache()          # 新批次落盘 / 口径变更后必须能失效
+    ha.trades(None, "mid")
+    assert calls["n"] == 2

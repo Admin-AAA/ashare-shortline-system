@@ -407,3 +407,27 @@ def test_profile_refresh_uses_actionable_only_candidate_evidence(monkeypatch) ->
 
     assert captured["candidate_evidence_scope"] == "actionable"
     assert outcome["status"] == "completed"
+
+
+def test_rolled_profile_is_cached_per_target_and_invalidatable(monkeypatch) -> None:
+    """read_rolled 每个策略都要重建画像（拉 run、查快照、重算全部成交），
+    /api/strategies 每次请求都做一遍是 651ms 的来源；按 target fingerprint 缓存。"""
+    target = _target()
+    calls: list[str] = []
+
+    class _Profiles(StrategyBacktestProfiles):
+        def _read_rolled_uncached(self, t):  # noqa: ANN001
+            calls.append(t.strategy_id)
+            return {"backtest_id": "bt-1"}
+
+    profiles = _Profiles(db=None)  # type: ignore[arg-type]
+    StrategyBacktestProfiles.invalidate_profile_cache()
+
+    assert profiles.read_rolled(target) == {"backtest_id": "bt-1"}
+    assert profiles.read_rolled(target) == {"backtest_id": "bt-1"}
+    assert calls == ["current-strategy"]          # 第二次走缓存
+
+    StrategyBacktestProfiles.invalidate_profile_cache(target.fingerprint)
+    profiles.read_rolled(target)
+    assert calls == ["current-strategy", "current-strategy"]  # 失效后重算
+    StrategyBacktestProfiles.invalidate_profile_cache()

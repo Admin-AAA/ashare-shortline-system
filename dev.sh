@@ -55,15 +55,25 @@ kick() {  # 重启单个 launchd 服务
   fi
   info "重启 $name ($label) ..."
   launchctl kickstart -k "gui/$UID_NUM/$label"
-  sleep 3
-  local pid
+  # 旧进程退出 + 新进程 import 全部路由通常 15~30s（实测后端要 25s 才绑定端口），
+  # 固定 sleep 3 会把「还在启动」误报成失败；这里轮询到 90s，并确认 HTTP 真的响应。
+  local waited=0 timeout=90 pid
+  while [ "$waited" -lt "$timeout" ]; do
+    pid="$(port_pid "$port")"
+    if [ -n "$pid" ] && curl -sS -o /dev/null --max-time 3 "http://127.0.0.1:$port/" 2>/dev/null; then
+      log "$name 已就绪  http://127.0.0.1:${port}  (PID ${pid}, 等待 ${waited}s)"
+      return 0
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
   pid="$(port_pid "$port")"
   if [ -n "$pid" ]; then
-    log "$name 已就绪  http://127.0.0.1:$port  (PID $pid)"
+    err "$name 已监听 :${port} 但 ${timeout}s 内 HTTP 无响应 (PID ${pid})，看日志：tail -f $HOME/Library/Logs/ashare-${name}.err.log"
   else
-    err "$name 启动失败，看日志：tail -f $HOME/Library/Logs/ashare-${name}.err.log"
-    return 1
+    err "$name 启动失败（${timeout}s 内端口未监听），多半是 8765 被旧进程占用，看日志：tail -f $HOME/Library/Logs/ashare-${name}.err.log"
   fi
+  return 1
 }
 
 cmd_restart() {

@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -74,8 +76,30 @@ class StrategyBacktestProfileTarget:
 class StrategyBacktestProfiles:
     """Resolve, refresh and read exact current-version canonical profiles."""
 
+    # ── rolled 画像的进程内缓存 ───────────────────────────────────────────
+    # /api/strategies 每个策略都走 read_rolled：命中不了精确窗口时要拉全部 completed
+    # run、逐行查 snapshot manifest（N+1），再把该 run 的全部成交读出来重算指标。
+    # 实测 5 个策略 622ms / 27 条 SQL，占该接口 651ms 的绝大部分（2026-11-22 体检）。
+    # 画像只在回测完成后才变，按 target fingerprint 缓存即可；refresh() 会显式失效。
+    # 画像只在回测完成后才变，按 target fingerprint 缓存即可；refresh() 落库后会显式
+    # 失效，所以 TTL 只影响「别的进程直接写了 run、没走 refresh」这种边缘情况——
+    # 给 10 分钟，把冷读（0.5~1s，冷 buffer 时更久）从每 5 分钟一次降到每 10 分钟一次。
+    _CACHE_TTL_SECONDS = 600.0
+    _CACHE_MAX_ENTRIES = 512
+    _cache: dict[str, tuple[float, dict[str, Any] | None]] = {}
+    _cache_lock = threading.Lock()
+
     def __init__(self, db: Session) -> None:
         self._db = db
+
+    @classmethod
+    def invalidate_profile_cache(cls, fingerprint: str | None = None) -> None:
+        """清空（某个 target 的）rolled 画像缓存。回测落库后必须调用。"""
+        with cls._cache_lock:
+            if fingerprint is None:
+                cls._cache.clear()
+            else:
+                cls._cache.pop(fingerprint, None)
 
     def current_targets(
         self,
@@ -172,6 +196,8 @@ class StrategyBacktestProfiles:
         profile = self.read(target)
         if profile is None:
             raise RuntimeError("completed strategy profile backtest was not readable")
+        # 新画像刚落库：让 rolled 缓存立即失效，否则页面上仍是旧的 pending/旧窗口
+        self.invalidate_profile_cache(target.fingerprint)
         return {
             "status": "completed",
             "reused": bool(outcome.get("reused")),
@@ -217,7 +243,32 @@ class StrategyBacktestProfiles:
         回退到**同一 strategy_version** 下最新完成的画像——版本仍是硬约束，
         不跨版本混合，满足「不展示跨版本混合收益」。画像附 ``target_date_from/to``
         与 ``window_rolled``，供前端显式标注真实信号窗口。
+
+        结果按 target fingerprint 缓存 ``_CACHE_TTL_SECONDS``：画像只在回测完成后
+        才变，缓存把「每个策略重算一遍成交指标」从每次请求都做降到每 5 分钟一次。
         """
+        key = target.fingerprint
+        now = time.monotonic()
+        with self._cache_lock:
+            hit = self._cache.get(key)
+        if hit is not None and now - hit[0] <= self._CACHE_TTL_SECONDS:
+            return hit[1]
+
+        profile = self._read_rolled_uncached(target)
+        with self._cache_lock:
+            if len(self._cache) >= self._CACHE_MAX_ENTRIES:
+                # 先清过期条目；仍超限就整体清空（重建一次只有几十毫秒）
+                for stale_key, (ts, _) in list(self._cache.items()):
+                    if now - ts > self._CACHE_TTL_SECONDS:
+                        self._cache.pop(stale_key, None)
+                if len(self._cache) >= self._CACHE_MAX_ENTRIES:
+                    self._cache.clear()
+            self._cache[key] = (now, profile)
+        return profile
+
+    def _read_rolled_uncached(
+        self, target: StrategyBacktestProfileTarget
+    ) -> dict[str, Any] | None:
         exact = self.read(target)
         if exact is not None:
             return exact

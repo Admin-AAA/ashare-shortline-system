@@ -41,7 +41,8 @@ ENDPOINTS = [
     ("短线 复盘", "/api/recommendations/history?limit=200&offset=400"),
     ("短线 交易明细", "/api/recommendations/history?limit=50"),
     ("短线 运行记录", "/api/records/runs?page=1&page_size=20&fields=slim"),
-    ("短线 运行记录", "/api/presets"),
+    # /api/presets 已在 v4 重构中下线（路由与前端调用点都已移除），留着会让整个
+    # bench 在预热阶段 404 中断，等于性能基线再也没人跑得起来。
     ("短线 策略", "/api/strategies"),
     ("短线 策略", "/api/stats/by-preset"),
     ("短线 策略", "/api/strategies/standalone-metrics"),

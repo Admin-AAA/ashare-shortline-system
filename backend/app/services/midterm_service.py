@@ -2154,7 +2154,18 @@ def _save_picks(sid: str, as_of: str, picks: list[dict[str, Any]], apply_daily_c
     doc["picks"] = picks
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, ensure_ascii=False, indent=1))
+    _invalidate_flat_trades_cache()
     return len(picks)
+
+
+def _invalidate_flat_trades_cache() -> None:
+    """新批次落盘后清掉中长线平铺缓存，避免复盘页 30s 内看不到刚出的票。"""
+    try:
+        from app.services.horizon_analytics import clear_trades_cache
+
+        clear_trades_cache()
+    except Exception:  # noqa: BLE001 - 缓存清理失败不影响落盘
+        logger.debug("清空中长线平铺缓存失败", exc_info=True)
 
 
 @_formal_entry

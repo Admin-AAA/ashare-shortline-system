@@ -293,7 +293,11 @@ def model_completion_capability(
     if not configured:
         status, reason = "critical", "no_active_model_route"
     elif not live_attempts:
-        status, reason = "degraded", "no_recent_live_completion_evidence"
+        # 回看窗口内一次真实调用都没有：这是「没有证据」，不是「坏了」。
+        # 判 degraded 会让 /api/admin/readiness 永久 degraded（2026-11-22 体检：
+        # 成功 0/0 挂着 warning），用户对「系统就绪」徽章彻底脱敏。真正能证明
+        # 可用性的是调用，一旦有调用，下面的分支会给 ok/critical/degraded。
+        status, reason = "unknown", "no_recent_live_completion_evidence"
     elif not live_successes:
         status, reason = "critical", "recent_completions_all_failed"
     elif str(live_attempts[0].status or "") == "success":

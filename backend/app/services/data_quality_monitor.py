@@ -385,11 +385,37 @@ def check_index_daily(db, open_days: list[str], expected: str) -> list[dict[str,
         out.append(_item(f"db:index_daily:{code}", f"指数日线 {code}", "数据库表", sev, kind="db", latest=mx,
                          expected=expected, lag=lag, detail=detail,
                          impact="小盘指数20日线开关(000905)、沪深300超额对照、市场环境判断"))
+    out.extend(_check_qvix_freshness(seen, open_days, expected))
     dup = db.execute(text("SELECT COUNT(*) FROM (SELECT ts_code, trade_date FROM index_daily GROUP BY ts_code, trade_date "
                           "HAVING COUNT(*) > 1) x")).scalar()
     if dup:
         out.append(_item("db:index_daily:dup", "指数日线重复键", "数据库表", RED, kind="db",
                          detail=f"{dup} 组重复 (ts_code,trade_date)", impact="指数超额/20日线计算"))
+    return out
+
+
+# QVIX（期权隐含波动率）写 index_daily，但**没有常驻定时任务**（设计如此：
+# scripts/backfill_qvix.py 按需跑）。rsi6-capitulation 的 QVIX 尖峰分支在字段缺失时
+# 静默降级为「仅价格门」，所以它一旦停更没人会知道——2026-11-23 体检时已停更 8 个交易日
+# （QVIX50/QVIX300 最新 11-13，主指数已到 11-23）。上游本身有 2~3 个交易日发布延迟，
+# 因此按 5 个交易日容忍，超过才黄。
+_QVIX_CODES = ("QVIX50.SH", "QVIX300.SH")
+_QVIX_MAX_LAG_TRADE_DAYS = 5
+
+
+def _check_qvix_freshness(seen: dict[str, tuple[str | None, int]], open_days: list[str],
+                          expected: str) -> list[dict[str, Any]]:
+    out = []
+    for code in _QVIX_CODES:
+        mx, n = seen.get(code, (None, 0))
+        lag = trade_lag(open_days, mx, expected)
+        sev = YELLOW if (mx is None or lag > _QVIX_MAX_LAG_TRADE_DAYS) else GREEN
+        detail = f"最新 {mx}，共 {n} 行" + ("" if sev == GREEN else f"，滞后 {lag} 个交易日")
+        if sev != GREEN:
+            detail += "；rsi6-capitulation 的 QVIX 分支会静默降级为仅价格门，跑 scripts/backfill_qvix.py 补"
+        out.append(_item(f"db:index_daily:{code}", f"波动率指数 {code}", "数据库表", sev, kind="db", latest=mx,
+                         expected=expected, lag=lag, detail=detail,
+                         impact="rsi6-capitulation 恐慌出清策略的 QVIX 尖峰条件（缺失时静默降级）"))
     return out
 
 

@@ -90,8 +90,9 @@ def get_readiness(db: Session = Depends(get_db)):
 def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
     """数据质量诊断：各表覆盖情况、滞后天数、健康评分、问题列表。
 
-    结果按参考交易日缓存，默认命中缓存。force_refresh=true 跳过缓存（详情页
-    「重新诊断」按钮、修复任务完成后调用）。
+    结果按参考交易日缓存，默认命中缓存。缓存只是过期时先返回上一次结果、后台重算
+    （allow_stale=True），页面不用等 4~17s 的冷算；force_refresh=true 才同步重算
+    （详情页「重新诊断」按钮、修复任务完成后调用）。
     """
     # 健康评分原本只反映数据库表的结构性指标（95 分时 data/ 下分钟K缓存也可能已停更两个月）。
     # 2026-10-26 起：把统一数据质量巡检（data_quality_monitor）的红/黄项折算成扣分——
@@ -100,9 +101,9 @@ def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
     try:
         from app.services.data_health_snapshot import combined_health
 
-        return combined_health(db, force_refresh=bool(force_refresh))
+        return combined_health(db, force_refresh=bool(force_refresh), allow_stale=True)
     except Exception:  # noqa: BLE001 - 附加信息，失败不影响原健康接口
-        return diagnose_all(db, force_refresh=bool(force_refresh))
+        return diagnose_all(db, force_refresh=bool(force_refresh), allow_stale=True)
 
 
 @router.get("/data-health/snapshots")
@@ -394,7 +395,28 @@ def run_task_now(task_id: str, db: Session = Depends(get_db)):
             detail=f"Prefect 客户端未连到常驻 server，已拒绝触发：{exc}；"
                    f"请检查 /api/admin/orchestration/status 并重启后端",
         ) from exc
+    except Exception as exc:  # noqa: BLE001 - 只有 Prefect 侧故障才转 503，其余照常抛
+        # Prefect server 返回 5xx / 连接中断（实测 2026-11-20 18:56 有 502 Bad Gateway）
+        # 原本直接冒到全局处理器变成 500「未知错误」，前端看不出是调度服务的问题。
+        if _is_prefect_transport_error(exc):
+            raise HTTPException(
+                status_code=503,
+                detail=f"Prefect 触发失败（{type(exc).__name__}）：{str(exc)[:200]}；"
+                       f"请稍后重试，或检查 /api/admin/orchestration/status",
+            ) from exc
+        raise
     return {"ok": True, "orchestration_run_id": ref.run_id}
+
+
+def _is_prefect_transport_error(exc: BaseException) -> bool:
+    """Prefect server 不可用类异常：httpx 传输/状态错误、部署不存在。"""
+    try:
+        import httpx
+    except Exception:  # noqa: BLE001 - httpx 缺失就按类名判断
+        httpx = None  # type: ignore[assignment]
+    if httpx is not None and isinstance(exc, httpx.HTTPError):
+        return True
+    return "Prefect" in type(exc).__name__ and "Error" in type(exc).__name__
 
 
 @router.get("/orchestration/status")

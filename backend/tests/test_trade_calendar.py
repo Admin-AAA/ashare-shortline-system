@@ -149,6 +149,33 @@ def test_stale_refresh_failure_keeps_local(db, monkeypatch):
     assert tc.open_dates_between(date.today() - timedelta(days=7), date.today(), db=db, pro_factory=_pro(fail=True))
 
 
+def test_allow_network_false_never_reaches_upstream(db, monkeypatch):
+    """HTTP 读路径（allow_network=False）即使本地表已过期也不得联网。
+
+    复发场景：data-health 请求线程 → fetch_recent_trade_dates → _maybe_refresh，
+    日历 synced_at 超 24h 时同步拉 trade_cal，上游抖动 10s 失败 + 重试 → 接口 17s。
+    """
+    tc.sync_trade_calendar(db, pro_factory=_pro())
+    monkeypatch.setattr(tc, "REFRESH_AFTER_SECONDS", -1.0)  # 表已过期：默认路径会去刷上游
+    monkeypatch.setattr(tc, "_alert", lambda key, msg: None)
+
+    def boom():
+        raise AssertionError("allow_network=False 不得联网拉 trade_cal")
+
+    import app.services.tushare_client as tcl
+    monkeypatch.setattr(tcl, "get_pro", boom)
+
+    # ① 已覆盖区间：直接读本地表
+    assert tc.open_dates_between(date(2026, 10, 19), date(2026, 10, 21), db=db, allow_network=False) == [
+        "20261019", "20261020", "20261021"]
+    # ② 未覆盖区间：按工作日兜底 + 告警，同样不联网
+    far = date.today() + timedelta(days=400)
+    assert far.strftime("%Y%m%d") in tc.open_dates_between(far, far, db=db, allow_network=False)
+    # ③ strict 调用方拿异常，而不是等网络
+    with pytest.raises(tc.TradeCalendarUnavailable):
+        tc.open_dates_between(far, far, db=db, allow_network=False, strict=True)
+
+
 def test_trade_cal_route_includes_quantdata():
     from app.services.tushare_transport import TushareProviderRouter
     assert "quantdata" in TushareProviderRouter.DEFAULT_API_ROUTES["trade_cal"]

@@ -131,3 +131,30 @@ def test_recommendation_staleness_uses_reference_trade_date_on_weekend():
         latest_trade_date="2026-08-13",
         hours_since_run=12,
     )
+
+
+def test_model_completion_without_any_call_evidence_is_unknown_not_degraded(monkeypatch):
+    """窗口内 0 次真实调用 = 没有证据，不是「坏了」。
+
+    判 degraded 会让 /api/admin/readiness 永久 degraded（2026-11-22 体检：成功 0/0 常驻
+    warning），用户对「系统就绪」徽章直接脱敏。
+    """
+    monkeypatch.setattr("app.services.model_router_service.has_active_model_routes", lambda: True)
+    with _session() as db:
+        health = model_completion_capability(db, now=NOW)
+
+    assert health["status"] == "unknown"
+    assert health["reason"] == "no_recent_live_completion_evidence"
+
+    alert = _model_completion_alert(health)
+    assert alert is not None and alert["alert_level"] == "info"
+
+
+def test_unknown_model_completion_does_not_degrade_readiness():
+    from app.services.data_source_health import _readiness_outcome
+
+    overall, can_run = _readiness_outcome({
+        "daily_bar": {"status": "ok"},
+        "model_completion": {"status": "unknown"},
+    })
+    assert overall == "ready" and can_run is True

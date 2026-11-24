@@ -393,3 +393,21 @@ def test_rolling_trade_stats_and_blackout():
     assert trade_stats([-1.0] * 40)["verdict"] == "negative"
     assert in_blackout(dt.datetime(2026, 10, 27, 10, 0)) and in_blackout(dt.datetime(2026, 10, 27, 17, 0))
     assert not in_blackout(dt.datetime(2026, 10, 27, 22, 30))
+
+
+def test_snapshot_output_status_prefers_latest_recheck(monkeypatch, tmp_path):
+    """18:40 原始记录时当日还没出票（failed），次日复核 ok 才是当日结论。
+
+    此前成功率只看原始记录 → 恒 0、failure 日期天天全红（2026-11-22 体检发现）。
+    """
+    p = tmp_path / "snap.jsonl"
+    hs = _patch_snapshot(monkeypatch, [_sample(70, "failed"), _sample(80, "ok")])
+    hs.take_snapshot(None, mode="original", now=dt.datetime(2026, 10, 26, 18, 40, tzinfo=CN), path=p)
+    hs.take_snapshot(None, mode="recheck", now=dt.datetime(2026, 10, 27, 8, 55, tzinfo=CN), path=p)
+
+    s = hs.summarize(20, p)
+
+    assert s["output_success_rate"] == 1.0
+    assert s["output_failed_dates"] == []
+    # 取样时点的真实状态仍可查，便于排查「18:40 时还没出票」
+    assert s["output_failed_at_original_dates"] == ["2026-10-26"]

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import threading
+import time
 from statistics import median
 from typing import Any, Iterable
 
@@ -28,6 +30,12 @@ ORIGINS = ("live", "late", "replay", "legacy")
 # 与 rolling_r12.month_manifest 的 window_start = cutoff - 365 天同一长度，按信号日而不是平仓日。
 # 研究回测 quality.R12 是上线快照里的固定阶段，样本和名额不同，数字不必相等。
 PORTRAIT_CLOSED_WINDOW_DAYS = 365
+
+# 平铺结果缓存：见 trades() 的说明。30s 与复盘页 benchmark 的「空闲 31 秒让缓存过期」口径一致。
+_TRADES_CACHE_TTL_SECONDS = 30.0
+# key 里带 OUT_DIR：单测会把 ms.OUT_DIR 指到 tmp 目录，不同夹具之间不能互相复用缓存。
+_trades_cache: dict[tuple[str, str | None, str], tuple[float, list[dict[str, Any]]]] = {}
+_trades_cache_lock = threading.Lock()
 
 
 def _live_runs() -> set[tuple[str, str]]:
@@ -58,13 +66,39 @@ def origin_of(batch: dict[str, Any], live_runs: set[tuple[str, str]]) -> str:
 
 
 def trades(db, horizon: str, *, origin: str | None = None, strategy_id: str | None = None) -> list[dict[str, Any]]:
-    """所有批次的个股平铺成一行一笔，按信号日新→旧、批内排名升序。"""
+    """所有批次的个股平铺成一行一笔，按信号日新→旧、批内排名升序。
+
+    结果按 (horizon, strategy_id) 缓存 ``_TRADES_CACHE_TTL_SECONDS``：复盘页会同时打
+    /trades 和 /metrics，后者内部又调一次 trades；1728 个 pick 文件全量解析 + 结算
+    （实测 ~180ms）不该在一次页面加载里做两遍。结算依赖的日K每天只更新一次，
+    30s 的缓存不会让「持有中」的日期标签明显滞后（实时价另有 45s 缓存）。
+    """
+    key = (horizon, strategy_id, str(ms.OUT_DIR))
+    now = time.monotonic()
+    with _trades_cache_lock:
+        hit = _trades_cache.get(key)
+    if hit is None or now - hit[0] > _TRADES_CACHE_TTL_SECONDS:
+        rows = _trades_uncached(db, horizon, strategy_id)
+        with _trades_cache_lock:
+            _trades_cache[key] = (now, rows)
+        hit = (now, rows)
+    rows = hit[1]
+    if origin and origin != "all":
+        return [row for row in rows if row["origin"] == origin]
+    return rows
+
+
+def clear_trades_cache() -> None:
+    """清空中长线平铺缓存（新批次写入 / 结算口径变更后调用）。"""
+    with _trades_cache_lock:
+        _trades_cache.clear()
+
+
+def _trades_uncached(db, horizon: str, strategy_id: str | None) -> list[dict[str, Any]]:
     live_runs = _live_runs()
     rows: list[dict[str, Any]] = []
     for b in ms._load_batches(db, ms._pick_files(strategy_id, horizon)):
         o = origin_of(b, live_runs)
-        if origin and origin != "all" and o != origin:
-            continue
         for p in b["picks"]:
             row = {k: p.get(k) for k in _PICK_FIELDS}
             row.update(strategy_id=b["strategy_id"], strategy_name=b["strategy_name"], signal_date=b["signal_date"],

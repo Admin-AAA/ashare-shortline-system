@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from threading import Event, Lock, Thread
 from unittest.mock import MagicMock, patch
 
@@ -380,3 +381,110 @@ def test_incomplete_minute_kbar_dates_merges_date_format_variants():
     out = data_health_service._incomplete_minute_kbar_dates(db, ["2026-06-10"])
 
     assert out == []  # 两种日期格式合计 241 只，刚过 240 门槛，不能误报
+
+
+def _seed_stale_cache(monkeypatch, score: int = 90) -> None:
+    """放一份「已过期」的缓存：TTL 归零 + 数据版本探测固定为 None。"""
+    data_health_service.clear_data_health_cache()
+    data_health_service._set_cached_diagnosis(
+        {"reference_trade_date": "2026-05-27", "score": score}, None
+    )
+    data_health_service._diagnosis_cache["ts"] = 0.0
+    monkeypatch.setattr(data_health_service, "_diagnosis_data_version", lambda _db: None)
+
+
+def _wait_background_refresh(timeout: float = 3.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not data_health_service._diagnosis_in_progress:
+            return
+        time.sleep(0.01)
+    raise AssertionError("后台重算没有在超时内结束")
+
+
+def test_diagnose_all_allow_stale_returns_old_result_and_refreshes_in_background(monkeypatch):
+    """HTTP 读接口口径：缓存过期先返旧值，后台重算，页面不等 4~17s 的冷算。"""
+    _seed_stale_cache(monkeypatch, score=90)
+    computed = Event()
+
+    def fresh(_db):
+        computed.set()
+        return {"reference_trade_date": "2026-05-28", "score": 100}
+
+    monkeypatch.setattr(data_health_service, "_diagnose_all_uncached", fresh)
+    monkeypatch.setattr(data_health_service, "SessionLocal", lambda: MagicMock())
+
+    started = time.monotonic()
+    result = data_health_service.diagnose_all(MagicMock(), allow_stale=True)
+    elapsed = time.monotonic() - started
+
+    assert result["score"] == 90            # 立刻拿旧值
+    assert elapsed < 0.5                    # 不在请求线程里等冷算
+    assert computed.wait(timeout=2)         # 后台确实重算了一次
+    _wait_background_refresh()
+    assert data_health_service._diagnosis_cache["result"]["score"] == 100
+    data_health_service.clear_data_health_cache()
+
+
+def test_diagnose_all_default_still_recomputes_synchronously_when_expired(monkeypatch):
+    """数据管道 / 出票闸门口径不变：缓存过期就同步重算，绝不用旧结论。"""
+    _seed_stale_cache(monkeypatch, score=90)
+    calls: list[int] = []
+
+    def fresh(_db):
+        calls.append(1)
+        return {"reference_trade_date": "2026-05-28", "score": 77}
+
+    monkeypatch.setattr(data_health_service, "_diagnose_all_uncached", fresh)
+
+    result = data_health_service.diagnose_all(MagicMock())
+
+    assert result["score"] == 77
+    assert calls == [1]
+    assert not data_health_service._diagnosis_in_progress
+    data_health_service.clear_data_health_cache()
+
+
+def test_background_refresh_is_not_duplicated_by_concurrent_stale_readers(monkeypatch):
+    _seed_stale_cache(monkeypatch, score=90)
+    started, release = Event(), Event()
+    calls: list[int] = []
+    calls_lock = Lock()
+
+    def slow(_db):
+        with calls_lock:
+            calls.append(1)
+        started.set()
+        assert release.wait(timeout=2)
+        return {"reference_trade_date": "2026-05-28", "score": 100}
+
+    monkeypatch.setattr(data_health_service, "_diagnose_all_uncached", slow)
+    monkeypatch.setattr(data_health_service, "SessionLocal", lambda: MagicMock())
+    try:
+        data_health_service.diagnose_all(MagicMock(), allow_stale=True)
+        assert started.wait(timeout=2)
+        data_health_service.diagnose_all(MagicMock(), allow_stale=True)
+        assert calls == [1]
+    finally:
+        release.set()
+        _wait_background_refresh()
+        data_health_service.clear_data_health_cache()
+
+
+def test_diagnose_all_force_refresh_bypasses_fresh_cache(monkeypatch):
+    """「重新诊断」/每日快照口径：force_refresh 必须真的重算，不能被新鲜缓存短路。"""
+    data_health_service.clear_data_health_cache()
+    data_health_service._set_cached_diagnosis({"reference_trade_date": "2026-05-27", "score": 90}, None)
+    monkeypatch.setattr(data_health_service, "_diagnosis_data_version", lambda _db: None)
+    calls: list[int] = []
+
+    def fresh(_db):
+        calls.append(1)
+        return {"reference_trade_date": "2026-05-27", "score": 42}
+
+    monkeypatch.setattr(data_health_service, "_diagnose_all_uncached", fresh)
+
+    assert data_health_service.diagnose_all(MagicMock())["score"] == 90
+    assert data_health_service.diagnose_all(MagicMock(), force_refresh=True)["score"] == 42
+    assert calls == [1]
+    data_health_service.clear_data_health_cache()

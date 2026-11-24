@@ -449,3 +449,31 @@ def test_business_code_40203_rate_limit_text_is_not_permission() -> None:
     perm = _business_envelope_category("40203", "抱歉，您没有接口(hsgt_top10)访问权限，权限的具体详情访问：https://tushare.pro/document/1?doc_id=108。")
     assert rate is FailureCategory.BUSINESS_RATE_LIMIT
     assert perm is FailureCategory.PERMISSION
+
+
+def test_realtime_api_failure_outside_session_does_not_alert(monkeypatch):
+    """收盘后 rt_k 失败是预期行为：只留日志，不写 datasource_all_failed 告警。
+
+    2026-11-22 体检：晚上打开持仓页（realtime-pnl）触发 rt_k 全上游失败，
+    告警挂 24h，把 data-quality 的 alerts 项长期染黄。
+    """
+    import app.services.tushare_transport as tt
+
+    alerts: list[tuple] = []
+    monkeypatch.setattr("app.core.alerts.emit_alert",
+                        lambda kind, key, msg, **kw: alerts.append((kind, key, msg)))
+    monkeypatch.setattr(tt, "in_trading_session", lambda now=None: False, raising=False)
+    monkeypatch.setattr(tt, "_in_realtime_window", lambda: False)
+
+    tt._alert_all_providers_failed("rt_k", [{"provider": "promax", "category": "network"}])
+    assert alerts == []
+
+    # 盘中失败必须照常告警
+    monkeypatch.setattr(tt, "_in_realtime_window", lambda: True)
+    tt._alert_all_providers_failed("rt_k", [{"provider": "promax", "category": "network"}])
+    assert alerts and alerts[0][0] == "datasource_all_failed"
+
+    # 非实时接口（如日线）任何时段都要告警
+    monkeypatch.setattr(tt, "_in_realtime_window", lambda: False)
+    tt._alert_all_providers_failed("daily", [{"provider": "teajoin", "category": "network"}])
+    assert alerts[-1][1] == "daily"

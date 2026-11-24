@@ -147,6 +147,30 @@ def strip_audit_rows(value: Any) -> Any:
     return value
 
 
+# ── 落库裁剪 ────────────────────────────────────────────────────────────────
+# rows 里每只票都带 prefilter(≈0.4KB) 与 trace_summary：前端从来不读（读接口
+# workbench_pure._strip_funnel_row_dead_fields 已经把这两个字段剥掉），却占了
+# 单个 run 审计体积的 ~24%（5000 票时约 1.9MB）。写库前直接不存。
+# distributions 在裁剪之前就已算好并单独持久化，不受影响；trace 已经落在 rows 里，
+# upgrade_filter_audit 不会因为缺少 prefilter 而丢逐票路径（只在 trace 为空时才回退）。
+_FILTER_AUDIT_STORAGE_DROP_ROW_FIELDS = ("prefilter", "trace_summary")
+
+
+def compact_filter_audit_for_storage(audit: Any) -> Any:
+    """写库前裁掉前端从不消费的逐票字段；纯函数，不修改入参。"""
+    if not isinstance(audit, dict):
+        return audit
+    rows = audit.get("rows")
+    if not isinstance(rows, list):
+        return audit
+    compacted_rows = [
+        {key: value for key, value in row.items() if key not in _FILTER_AUDIT_STORAGE_DROP_ROW_FIELDS}
+        if isinstance(row, dict) else row
+        for row in rows
+    ]
+    return {**audit, "rows": compacted_rows}
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Skill Agent 深审失败归因
 # ═════════════════════════════════════════════════════════════════════════════

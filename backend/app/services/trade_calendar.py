@@ -9,6 +9,13 @@ readers must never block on the network), uncovered days are decided by the
 weekday rule and an ``[ALERT:trade_calendar]`` is emitted; ``strict=True`` callers get
 TradeCalendarUnavailable instead.  The table is refreshed once a day after the close
 by ``refresh_trade_calendar`` (postclose pipeline), never on the intraday read path.
+
+``allow_network=False``（HTTP 读接口一律用它）：本地表没覆盖也绝不联网，直接按
+「未覆盖」处理（工作日兜底 + 告警 / strict 抛错）。脱网之前 ``_maybe_refresh`` 会在
+「synced_at 超过 24h」时同步拉一次上游 trade_cal，而这条路径挂在 /api/admin/data-health
+的请求线程里：上游抖动时（实测 trade_cal 10s 网络失败 + 重试 = 14.5s）单个健康接口
+就能读到 17s。日历同步是盘后作业的职责（scheduler 的 refresh_trade_calendar），
+读路径只准读本地表。
 """
 from __future__ import annotations
 
@@ -103,14 +110,21 @@ def _covered(db: Session, day: date) -> bool:
     return db.get(TradeCalendar, (EXCHANGE, _compact(day))) is not None
 
 
-def _ensure(db: Session, day: date, pro_factory: Callable | None) -> None:
+def _ensure(db: Session, day: date, pro_factory: Callable | None,
+            *, allow_network: bool = True) -> None:
     """Make sure local calendar covers `day`; sync remotely (rate-limited) if not.
 
     Never goes to the network inside the trading session (unless a pro_factory is injected).
+    ``allow_network=False`` keeps even the 24h stale-refresh off the read path: an
+    uncovered day becomes TradeCalendarUnavailable instead of a blocking upstream call.
     """
     global _last_sync_attempt
     if _covered(db, day):
         return
+    if not allow_network:
+        raise TradeCalendarUnavailable(
+            f"本地交易日历未覆盖 {_compact(day)}，读路径不联网拉取 trade_cal"
+        )
     if pro_factory is None and in_trading_session():
         raise TradeCalendarUnavailable(f"本地交易日历未覆盖 {_compact(day)}，盘中不在线拉取 trade_cal")
     with _sync_lock:
@@ -143,15 +157,19 @@ def _with_db(fn, db: Session | None):
 REFRESH_AFTER_SECONDS = 86400.0
 
 
-def _maybe_refresh(db: Session, pro_factory: Callable | None) -> None:
+def _maybe_refresh(db: Session, pro_factory: Callable | None,
+                   *, allow_network: bool = True) -> None:
     """Stale-table safety net (holiday changes) -- outside the trading session only.
 
     The regular refresh is ``refresh_trade_calendar`` after the close; failure is
-    logged, local data stays authoritative.
+    logged, local data stays authoritative.  ``allow_network=False``（HTTP 读路径）
+    直接跳过这一步：24h 陈旧不构成在请求线程里等上游的理由。
     """
     global _last_sync_attempt
     from sqlalchemy import func
 
+    if not allow_network:
+        return
     if pro_factory is None and in_trading_session():
         return
     newest = db.execute(select(func.max(TradeCalendar.synced_at))).scalar()
@@ -199,13 +217,14 @@ def _weekday_dates(start: date, end: date) -> list[str]:
 
 
 def open_dates_between(start: date, end: date, *, db: Session | None = None,
-                       pro_factory: Callable | None = None, strict: bool = False) -> list[str]:
+                       pro_factory: Callable | None = None, strict: bool = False,
+                       allow_network: bool = True) -> list[str]:
     def run(s: Session) -> list[str]:
-        _maybe_refresh(s, pro_factory)
+        _maybe_refresh(s, pro_factory, allow_network=allow_network)
         missing: list[str] = []
         for d in (start, end):
             try:
-                _ensure(s, d, pro_factory)
+                _ensure(s, d, pro_factory, allow_network=allow_network)
             except TradeCalendarUnavailable as exc:
                 if strict:
                     raise
@@ -225,19 +244,22 @@ def open_dates_between(start: date, end: date, *, db: Session | None = None,
 
 
 def latest_trade_date(as_of: date | None = None, *, db: Session | None = None,
-                      pro_factory: Callable | None = None, strict: bool = False) -> str:
+                      pro_factory: Callable | None = None, strict: bool = False,
+                      allow_network: bool = True) -> str:
     as_of = as_of or date.today()
-    dates = open_dates_between(as_of - timedelta(days=14), as_of, db=db, pro_factory=pro_factory, strict=strict)
+    dates = open_dates_between(as_of - timedelta(days=14), as_of, db=db,
+                               pro_factory=pro_factory, strict=strict,
+                               allow_network=allow_network)
     if not dates:
         raise TradeCalendarUnavailable(f"{_compact(as_of)} 前 14 天无开市日")
     return dates[-1]
 
 
 def is_open(day: date, *, db: Session | None = None, pro_factory: Callable | None = None,
-            strict: bool = False) -> bool:
+            strict: bool = False, allow_network: bool = True) -> bool:
     def run(s: Session) -> bool:
         try:
-            _ensure(s, day, pro_factory)
+            _ensure(s, day, pro_factory, allow_network=allow_network)
         except TradeCalendarUnavailable as exc:
             if strict:
                 raise

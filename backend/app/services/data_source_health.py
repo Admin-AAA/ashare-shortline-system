@@ -300,6 +300,15 @@ def _model_completion_alert(health: dict[str, Any]) -> dict[str, Any] | None:
         return None
     attempts = int(health.get("live_attempt_count") or 0)
     successes = int(health.get("live_success_count") or 0)
+    if status == "unknown" and attempts == 0:
+        # 回看窗口内没有真实调用：只提示「无证据」，不算告警（否则常驻一条 warning）
+        return {
+            "source": "model_completion",
+            "source_type": "llm",
+            "status": "unknown",
+            "alert_level": "info",
+            "message": "模型真实 completion 暂无调用证据（窗口内 0 次真实请求），不下结论",
+        }
     counts = dict(health.get("status_counts") or {})
     reasons = ", ".join(
         f"{name}={count}"

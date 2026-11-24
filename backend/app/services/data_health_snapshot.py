@@ -35,13 +35,17 @@ MODE_RECHECK = "recheck"
 _LOCK = threading.Lock()  # 进程内互斥；跨进程（Prefect 每个任务一个子进程、API 进程）用文件锁
 
 
-def combined_health(db, *, force_refresh: bool = False, report: dict[str, Any] | None = None) -> dict[str, Any]:
-    """页面健康分的唯一公式：库表评分 score_db − 统一巡检扣分（红/黄项，见 quality_score_penalty）。"""
+def combined_health(db, *, force_refresh: bool = False, report: dict[str, Any] | None = None,
+                    allow_stale: bool = False) -> dict[str, Any]:
+    """页面健康分的唯一公式：库表评分 score_db − 统一巡检扣分（红/黄项，见 quality_score_penalty）。
+
+    ``allow_stale=True``（HTTP 读接口）：诊断缓存过期时先返旧值、后台重算，页面不等冷算。
+    """
     from app.services.data_health_service import diagnose_all
     from app.services.data_quality_monitor import load_report, quality_score_penalty
 
     try:
-        result = diagnose_all(db, force_refresh=force_refresh)
+        result = diagnose_all(db, force_refresh=force_refresh, allow_stale=allow_stale)
     except Exception as exc:  # noqa: BLE001 - 诊断崩了必须显式暴露，不能静默 500 / 沿用旧分
         err = f"{type(exc).__name__}: {str(exc)[:260]}"
         logger.exception("data_health: 诊断计算失败")
@@ -167,19 +171,31 @@ def summarize(days: int = 20, path: Path | None = None) -> dict[str, Any]:
     """近 N 个交易日（按有记录的交易日计）的原始记录：健康分均值、出票成功率、红项天数。
 
     - 均值只用巡检成功的原始记录；巡检失败的天数单独计数（quality_failed_days）。
-    - 出票成功率 = 原始记录里出票状态不是 failed 的占比（「待数据、未到点」不算失败）；
-      次日复核仍失败的日期单独列在 recheck_failed_dates。
-    - 没有原始记录（18:40 没跑上）的天数单独计数，不补。"""
+    - 出票成功率按**每个交易日的最终出票结论**算：有复核就用最后一次复核，没有复核才用
+      原始记录。18:40 取样时当日盘后出票还没跑（短线 formal 在 21:40 之后），原始记录的
+      ``failed`` 只代表「那一刻还没有」，不是当日结论——此前按原始记录算，导致成功率
+      恒为 0、failure 日期天天全红（2026-11-22 体检发现）。
+    - 没有原始记录（18:40 没跑上）的天数单独计数，不补。
+    - 原始记录时点的状态另存 ``output_failed_at_original_dates``，用于排查「18:40 时还没出票」。
+    """
     rows = sorted(load_snapshots(path), key=lambda r: str(r.get("trade_date")))[-days:]
     originals = [r for r in rows if r.get("original")]
     good = [r["original"] for r in originals if r["original"].get("quality_ok")
             and isinstance(r["original"].get("score"), (int, float))]
     scores = [float(o["score"]) for o in good]
-    out_ok = [r["original"].get("output_status") != "failed" for r in originals]
 
     def last_recheck(r: dict[str, Any]) -> dict[str, Any] | None:
         rc = r.get("rechecks") or []
         return rc[-1] if rc else None
+
+    def final_status(r: dict[str, Any]) -> str | None:
+        """当日最终出票结论：最新复核优先，没有复核才用原始记录。"""
+        record = last_recheck(r) or r.get("original") or {}
+        return record.get("output_status")
+
+    final_statuses = [final_status(r) for r in originals]
+    rated = [status for status in final_statuses if status is not None]
+    out_ok = [status != "failed" for status in rated]
 
     return {
         "days_requested": days,
@@ -192,8 +208,14 @@ def summarize(days: int = 20, path: Path | None = None) -> dict[str, Any]:
         "avg_score": round(mean(scores), 1) if scores else None,
         "min_score": min(scores) if scores else None,
         "output_success_rate": round(sum(out_ok) / len(out_ok), 3) if out_ok else None,
-        "output_failed_dates": [r["trade_date"] for r in originals if r["original"].get("output_status") == "failed"],
-        "output_pending_dates": [r["trade_date"] for r in originals if r["original"].get("output_status") == "pending"],
+        "output_success_rate_rule": "按每个交易日最新一条记录（复核优先，其次原始）判定；"
+                                    "18:40 原始记录时点尚未出票不计入失败",
+        "output_failed_dates": [r["trade_date"] for r, status in zip(originals, final_statuses)
+                                if status == "failed"],
+        "output_pending_dates": [r["trade_date"] for r, status in zip(originals, final_statuses)
+                                 if status == "pending"],
+        "output_failed_at_original_dates": [r["trade_date"] for r in originals
+                                            if r["original"].get("output_status") == "failed"],
         "recheck_failed_dates": [r["trade_date"] for r in rows
                                  if (last_recheck(r) or {}).get("output_status") == "failed"],
         "red_days": sum(1 for o in good if o.get("red")),

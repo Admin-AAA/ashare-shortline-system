@@ -53,3 +53,31 @@ def test_rows_missing_dead_fields_unchanged():
 def test_dead_fields_constant_covers_only_unused():
     # 防御：若将来前端开始消费这两个字段，常量必须同步更新，否则会误删。
     assert set(_FUNNEL_ROW_DEAD_FIELDS) == {"prefilter", "trace_summary"}
+
+
+def test_compact_filter_audit_for_storage_drops_dead_fields_only():
+    """写库前裁掉 prefilter / trace_summary（前端从不读），保留 UI 真正消费的字段。
+
+    2026-11-23：单 run 审计 7.8MB，其中这两项占 1.9MB；历史 1103 个 run 实测省 2.5GB。
+    """
+    from app.services.runs.filter_audit import compact_filter_audit_for_storage
+
+    audit = {
+        "stage_summary": {"total": 1},
+        "distributions": {"final_stage": {"recommended": 1}},
+        "reason_counts": {"recommended": {"出票": 1}},
+        "rows": [_row()],
+    }
+    compacted = compact_filter_audit_for_storage(audit)
+
+    row = compacted["rows"][0]
+    assert "prefilter" not in row and "trace_summary" not in row
+    assert row["rule_gate"] == audit["rows"][0]["rule_gate"]
+    assert row["score_line"] == audit["rows"][0]["score_line"]
+    assert row["trace"] == audit["rows"][0]["trace"]
+    # 顶层汇总一个都不能丢
+    assert compacted["stage_summary"] == audit["stage_summary"]
+    assert compacted["distributions"] == audit["distributions"]
+    assert compacted["reason_counts"] == audit["reason_counts"]
+    # 纯函数：入参不被修改
+    assert "prefilter" in audit["rows"][0]

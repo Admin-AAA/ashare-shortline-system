@@ -464,3 +464,21 @@ def test_provider_gateway_capacity_severity():
     assert br["severity"] == dq.YELLOW and br["open_breakers"] == 1
     research_open = [{"key": "research:tushare:promax:rt_k", "open_until": _t("2026-10-26 15:10").timestamp()}]
     assert dq.check_provider_gateway(usage_fn=lambda p: (1, False), **{**kw, "breakers_fn": lambda: research_open})["severity"] == dq.GREEN
+
+
+def test_qvix_freshness_flags_silent_strategy_degradation():
+    """QVIX 写 index_daily 但没有常驻任务：停更时 rsi6-capitulation 的 QVIX 分支会静默
+    降级为仅价格门（2026-11-23 体检：已停更 8 个交易日没人发现）。上游本身有 2~3 天
+    延迟，所以容忍 5 个交易日。"""
+    seen = {
+        "QVIX50.SH": ("2026-10-27", 100),
+        "QVIX300.SH": ("2026-10-15", 100),
+        "000300.SH": ("2026-10-27", 100),
+    }
+    items = {i["key"]: i for i in dq._check_qvix_freshness(seen, OPEN, "2026-10-27")}
+
+    assert items["db:index_daily:QVIX50.SH"]["severity"] == dq.GREEN
+    # 10-15 → 10-27 落后 6 个交易日 > 5，判黄并提示补数脚本
+    stale = items["db:index_daily:QVIX300.SH"]
+    assert stale["severity"] == dq.YELLOW
+    assert "backfill_qvix" in stale["detail"]

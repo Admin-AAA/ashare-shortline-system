@@ -1644,28 +1644,37 @@ def fetch_top_inst(trade_date: str | None = None) -> list[dict[str, Any]]:
     return result
 
 
-def fetch_latest_trade_date() -> str:
-    """获取最新交易日（本地交易日历；拿不到时抛 TradeCalendarUnavailable，绝不猜成今天）。"""
+def fetch_latest_trade_date(*, allow_network: bool = True) -> str:
+    """获取最新交易日（本地交易日历；拿不到时抛 TradeCalendarUnavailable，绝不猜成今天）。
+
+    ``allow_network=False``：本地表没覆盖也不联网（HTTP 读接口用）。
+    """
     from app.services.trade_calendar import latest_trade_date
 
-    return latest_trade_date()
+    return latest_trade_date(allow_network=allow_network)
 
 
-def fetch_recent_trade_dates(lookback_days: int = 30) -> list[str]:
+def fetch_recent_trade_dates(lookback_days: int = 30, *, allow_network: bool = True) -> list[str]:
     """最近 lookback_days 个自然日内的交易日列表（compact YYYYMMDD，升序）。
 
     只返回交易所日历里 is_open=1 的日期。调用方要判定「最新已收盘交易日」时必须用
     这份清单，而不能用工作日算术——休市的工作日（如 2026-09-25）会被算成交易日，
     使下游把所有表都判成缺那一天（L-147）。读本地交易日历；拿不到时抛
     TradeCalendarUnavailable，而不是返回空列表。
+
+    ``allow_network=False``：只读本地 trade_calendar 表。上游同步（含 24h 陈旧刷新）
+    会阻塞调用线程，实测上游抖动时 14.5s，绝不能挂在 HTTP 请求路径上。
     """
     from app.services.trade_calendar import open_dates_between
 
     today = date.today()
-    return open_dates_between(today - timedelta(days=max(1, int(lookback_days))), today)
+    return open_dates_between(
+        today - timedelta(days=max(1, int(lookback_days))), today,
+        allow_network=allow_network,
+    )
 
 
-def is_open_trade_date(day: date) -> bool:
+def is_open_trade_date(day: date, *, allow_network: bool = True) -> bool:
     """交易所日历判定 day 是否开市（SSE is_open=1）。
 
     定时作业的 cron 只能表达「周一到周五」，国庆、春节等工作日休市只能问交易所日历。
@@ -1675,7 +1684,7 @@ def is_open_trade_date(day: date) -> bool:
     from app.services.trade_calendar import TradeCalendarUnavailable, is_open
 
     try:
-        return is_open(day)
+        return is_open(day, allow_network=allow_network)
     except TradeCalendarUnavailable as exc:
         raise RuntimeError(f"Tushare 交易日历未返回 {day.strftime('%Y%m%d')}，无法判定是否交易日: {exc}") from exc
 
