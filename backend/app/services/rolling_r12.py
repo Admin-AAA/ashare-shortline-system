@@ -348,12 +348,28 @@ def short_segments(window_start: str, cutoff: str, boundary: str | None = None) 
     return {"replay": replay, "live": live}
 
 
+# 结果里有「整天取数失败」的策略时，本月不再算完成：否则月度任务按「本月已算过」一直 skip，
+# 缺的日子永远补不上，数据质量巡检的 formal:rolling_r12 黄项会永久挂着
+# （2026-11-23 体检：mid-incentive-option / mid-incentive-vol 各 271 天不完整，结果文件停在 11-02）。
+# 但全量重放一次约 4 小时，不能每天跑：按周重试一次，补齐后 incomplete_days 自然清空。
+_INCOMPLETE_RETRY_HOURS = 24 * 7
+
+
 def _month_done(month: str) -> bool:
     try:
         d = json.loads(LATEST.read_text())
     except Exception:  # noqa: BLE001
         return False
-    return d.get("month") == month and d.get("status") == "completed"
+    if not (d.get("month") == month and d.get("status") == "completed"):
+        return False
+    incomplete = (d.get("replay") or {}).get("incomplete_days") or {}
+    if not incomplete:
+        return True
+    try:
+        gen = _dt.datetime.fromisoformat(str(d.get("generated_at")))
+    except (TypeError, ValueError):
+        return True
+    return _now() - gen < _dt.timedelta(hours=_INCOMPLETE_RETRY_HOURS)
 
 
 def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,

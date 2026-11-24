@@ -720,6 +720,10 @@ def _converge_task_cron(db, task: ScheduledTask, cron: str, name: str | None = N
     此前注册函数一律「已存在就不动」，于是改 ``scheduler_pure`` 里的 cron 常量对线上毫无作用：
     2026-11-23 体检发现 data_freshness / 质量巡检 / 健康快照 / kpl 四个任务仍跑在旧时点，正是
     「每天都报健康问题」的根因之一。调度时点是代码契约，不该在 DB 里静默漂移；需要临时改期请改代码。
+
+    改期时在 payload 里记 ``_cron_changed_at``：质量巡检按新时点算「应运行时刻」时，晚于该时刻的计划
+    才需要判断是否漏跑。否则改期当天（旧时点已跑过、新时点还没到）会立刻报 4 条「漏跑」误报，
+    把一次正确的修复显示成新的故障。
     """
     changed = []
     if task.cron_expression != cron:
@@ -728,8 +732,16 @@ def _converge_task_cron(db, task: ScheduledTask, cron: str, name: str | None = N
     if name and task.name != name:
         changed.append(f"name {task.name!r} → {name!r}")
         task.name = name
+    try:
+        payload = json.loads(task.payload_json or "{}")
+    except (TypeError, ValueError):
+        payload = {}
+    if changed or "_cron_changed_at" not in payload:
+        # 首次接入或本次改期：记下时间基线，供巡检判定「漏跑」时豁免早于该时刻的计划时点。
+        payload["_cron_changed_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        task.payload_json = json.dumps(payload, ensure_ascii=False)
     if changed:
-        logger.info("调度任务收敛 %s: %s", task.task_id, "；".join(changed))
+        logger.info("调度任务收敛 %s: %s（改期宽限至次日）", task.task_id, "；".join(changed))
 
 
 def _ensure_data_freshness_task() -> None:
