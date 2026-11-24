@@ -106,18 +106,22 @@ STOCK_IDENTITY_CRON = "10 8,17 * * mon-fri"
 TASK_TYPE_STRATEGY_PROFILE_REFRESH = "strategy_profile_refresh"
 STRATEGY_PROFILE_TASK_ID = "strategy_profile_refresh_daily"
 STRATEGY_PROFILE_CRON = "40 19 * * mon-fri"
-DATA_FRESHNESS_CRON = "0 18 * * mon-fri"  # 周一到周五 18:00 只读巡检（允许在 16:35–18:35 日更窗口内跑）
+DATA_FRESHNESS_CRON = "30 21 * * mon-fri"  # 周一到周五 21:30：必须晚于 21:00 晚间补数
 # 统一数据质量巡检（data_quality_monitor：数据库表 + data/ 文件数据集 + research 静态文件 + 调度/日志静默失败，只读）：
-# 18:00 与 data_freshness 一起跑；另在盘前 08:50（隔夜失败/停更在开盘前暴露）和 21:40（21:00 晚间补数之后验收）各跑一次。
+# 盘前 08:50（隔夜失败/停更在开盘前暴露）、22:50（22:43 自愈补跑之后验收）。
+# 21:30 的 data_freshness 已经覆盖「晚间补数是否到齐」，质量巡检再早于自愈跑只会把已修好的项记成红
+# （2026-11-23 实测：21:40 记红，22:43 自愈补跑后转绿，看板挂着一整夜）。
 DATA_QUALITY_CHECKS = (
     ("data_quality_check_morning", "盘前数据质量巡检（只读：文件数据集/research 文件/调度/日志）", "50 8 * * mon-fri"),
-    ("data_quality_check_evening", "晚间补数后数据质量验收（只读）", "40 21 * * mon-fri"),
+    ("data_quality_check_evening", "晚间补数后数据质量验收（只读）", "50 22 * * mon-fri"),
 )
-# 数据健康分每日快照：18:40（17:35 日更、18:35 出票截止之后）重跑一次统一巡检，按页面同一公式算分，
+# 数据健康分每日快照：22:55（21:00 晚间补数 + 22:4x 自愈漏出票补跑之后）重跑一次统一巡检，按页面同一公式算分，
 # 连同红/黄项、当天盘后出票是否成功存一行，供近 20 个交易日均值 / 出票成功率（data_health_snapshot）。
+# 原 18:40 取样时当日指数日线/涨停板还没入库、出票也还没补跑，original 恒为失败项，快照只能靠次日
+# 08:55 的 recheck 修正（2026-11-22 审计 P0②；2026-11-23 体检确认数据入库在 21:02 之后）。
 TASK_TYPE_DATA_HEALTH_SNAPSHOT = "data_health_snapshot"
 DATA_HEALTH_SNAPSHOT_TASK_ID = "data_health_snapshot_daily"
-DATA_HEALTH_SNAPSHOT_CRON = "40 18 * * mon-fri"
+DATA_HEALTH_SNAPSHOT_CRON = "55 22 * * mon-fri"
 # 次日复核：只写复核字段（大宗交易约 21:00 才发布，08:03 盘前备份出票后再核对）。08:55 而不是 08:50，
 # 错开 08:50 的盘前数据质量巡检，避免两次巡检同时写报告。
 DATA_HEALTH_RECHECK_TASK_ID = "data_health_snapshot_recheck"
@@ -129,12 +133,30 @@ ROLLING_R12_TASK_ID = "rolling_r12_monthly"
 ROLLING_R12_CRON = "30 22 * * mon-fri"
 
 # 研究缓存日更（开盘啦涨停榜 kpl_list，data/research_cache/kpl_list/kpl_YYYY.parquet）。
-# 上游当日榜单发布时间不固定（实测 16:00 之后、有时 22:00 还没出），此前没有任何定时任务调用
-# fetch_kpl_list.py，只能靠手工补，缓存一度停在 10-21（滞后 15 个交易日），数据质量巡检长期挂黄。
-# 22:20 跑（在 21:00 晚间补数之后、rolling_r12 22:30 之前），脚本自带断点：已有日期跳过、空日记 _empty_days.txt。
+# 上游当日榜单发布时间不固定（实测 16:00 之后、常常 22:20 仍返回空、有时到 23:30 之后才出），此前没有任何
+# 定时任务调用 fetch_kpl_list.py，只能靠手工补，缓存一度停在 10-21（滞后 15 个交易日），巡检长期挂黄。
+# 23:30 跑（在 21:00 晚间补数、22:4x 出票补跑之后）。脚本自带断点：已有日期跳过、空日记 _empty_days.txt；
+# 任务层把「当日上游仍为空」记成 skipped_empty 而不是 completed，避免「成功但没数据」的静默失败。
 TASK_TYPE_RESEARCH_CACHE_REFRESH = "research_cache_refresh"
 KPL_LIST_TASK_ID = "research_kpl_list_daily"
-KPL_LIST_CRON = "20 22 * * mon-fri"
+KPL_LIST_CRON = "30 23 * * mon-fri"
+
+# 市场级波动率 QVIX（落在 index_daily 的 QVIX50.SH / QVIX300.SH / QVIX300IDX.SH 三行）。
+# rsi6-capitulation 的「价格恐慌 OR QVIX 尖峰」双门里，QVIX 一支长期失效：2026-11-23 体检发现数据停在
+# 11-13（缺 8 个交易日），backfill_qvix.py 自己的注释就是「默认不挂常驻定时任务」，巡检也不覆盖它
+# （data_quality_monitor.INDEX_CODES 只有 6 个真实指数）——于是策略静默降级成「仅价格门」而无人知道。
+# 上游 akshare 无 token、收盘后即可取；21:10 在 21:00 晚间补数之后、出票补跑之前增量同步最近 10 天。
+TASK_TYPE_QVIX_REFRESH = "qvix_refresh"
+QVIX_TASK_ID = "qvix_daily_refresh"
+QVIX_CRON = "10 21 * * mon-fri"
+
+# 周度基本面快照 data/midterm/basic_<年>.parquet（线上 小盘高股息 / 小盘低市销率 / 红利低波 会读它）。
+# 此前只由 scripts/midterm/backfill_longterm.py 手动跑：2026-11-23 体检发现停在 11-11（滞后 8 个交易日，
+# 巡检允许 5），而同一批「研究 parquet」里其余几张已由 21:00 晚补后的重导覆盖。该脚本的 basic_full 阶段
+# 带 STATE 断点、只补缺失日期（weekly=True），增量调用很轻；周六 10:00 跑一次，避开交易时段与上游配额高峰。
+TASK_TYPE_MIDTERM_BASIC_SNAPSHOT = "midterm_basic_snapshot"
+MIDTERM_BASIC_TASK_ID = "midterm_basic_snapshot_weekly"
+MIDTERM_BASIC_CRON = "0 10 * * sat"
 
 
 # ── 盘中锁利影子链路（只记录不交易，见 intraday_lock_service）────────────────

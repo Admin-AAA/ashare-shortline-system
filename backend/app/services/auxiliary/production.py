@@ -356,6 +356,11 @@ AUXILIARY_DATASET_INVENTORY: tuple[AuxiliaryDatasetInventoryEntry, ...] = (
         identity_semantics=AuxiliaryPersistenceIdentity.IMMUTABLE_PARTITION_SNAPSHOT,
         provider="tushare_pro", endpoint="anns_d", mysql_blockers=(),
         snapshot_blockers=tuple(SnapshotVerificationRequirement),
+        # 行数下限：tushare anns_d 频繁失败（`event_provider_request_failed`）时改走 akshare 兜底，
+        # 兜底只覆盖部分来源。2026-11-23 体检：当日主表只有 15 行，而 11-17 是 125 行、11-20 是 65 行，
+        # 却因为「当天有行」被判为成功——公告类策略与研究输入实质缺数而无告警。正常交易日 60~135 行，
+        # 取 40 作为下限（约三成），既能拦住明显截断，又不会在清淡日反复重取。
+        minimum_record_count=40,
     ),
     AuxiliaryDatasetInventoryEntry(
         key="margin_detail", category="margin", view_key="market_pool.margin_details", model=MarginDetail,

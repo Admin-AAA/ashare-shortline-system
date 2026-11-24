@@ -39,8 +39,11 @@ def env(monkeypatch):
     monkeypatch.setattr(ss, "_formal_inflight_count", lambda db, d: state["inflight"])
     monkeypatch.setattr(seal, "generated_before_entry_open", lambda d, now: state["before_open"])
 
-    def readiness(db, d):
+    def readiness(db, d, **kwargs):
+        # 晚补补跑用 fresh_session=True 在独立物理连接上重判（绕开 REPEATABLE-READ 事务快照），
+        # 桩要接受该关键字参数。
         calls["readiness"] += 1
+        calls["fresh_session"] = kwargs.get("fresh_session")
         assert d == TD
         return {"can_run_local_recommendation": state["gate"],
                 "blockers": [] if state["gate"] else ["日K线未覆盖 2026-11-04（最新 2026-11-03）"]}

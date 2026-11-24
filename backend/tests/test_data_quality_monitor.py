@@ -424,14 +424,18 @@ def test_freshness_task_survives_quality_monitor_failure(monkeypatch):
     assert "data_quality" not in out and out["problems"] == {}
 
 
-def test_freshness_task_quality_red_marks_partial_failed(monkeypatch):
+def test_freshness_task_quality_red_does_not_fail_the_job(monkeypatch):
+    """巡检作业「跑成功」≠「巡检结果全绿」：红项已在各自检查项计分并单独告警，
+    不再把作业本身标成 partial_failed，否则同一事实会多出一条 job:* 黄项并循环放大
+    （2026-11-23 体检：data_freshness_check_daily 16 天 37 次黄，大半是这种重复计分）。"""
     from app.services import scheduler_service
 
     monkeypatch.setattr(dq, "run_data_quality_check", lambda *a, **k: {
         "overall": "red", "summary": {"red": 1, "yellow": 2, "green": 3}, "expected_trade_date": "2026-10-23",
         "items": [{"key": "db:daily_kbars", "severity": "red"}]})
     out = scheduler_service._run_data_freshness_check(SimpleNamespace(), {"quality_only": True})
-    assert out["status"] == "partial_failed" and out["data_quality"]["red"] == ["db:daily_kbars"]
+    assert out.get("status") != "partial_failed"
+    assert out["data_quality"]["red"] == ["db:daily_kbars"]
     assert "数据质量巡检 红 1 / 黄 2 / 绿 3" in out["summary_text"]
 
 
