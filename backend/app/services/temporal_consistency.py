@@ -212,11 +212,10 @@ def _load_recommendations(
     recs = db.scalars(stmt).all()
 
     run_ids = list(set(str(r.run_id) for r in recs))
-    # defer 大字段：filter_audit_json 平均 5MB/行，这里只要 run 的标量列；不 defer 会把全部 run 的审计 JSON 读进内存
+    # defer 大字段：这里只要 run 的标量列；不 defer 会把每个 run 的几十~几百 KB JSON 读进内存
     run_rows = db.scalars(
         select(RecommendationRun)
         .options(
-            defer(RecommendationRun.filter_audit_json),
             defer(RecommendationRun.market_snapshot_json),
             defer(RecommendationRun.params_json),
             defer(RecommendationRun.request_json),

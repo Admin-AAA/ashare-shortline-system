@@ -443,7 +443,6 @@ def test_remediate_recommendation_run_auxiliary_data_updates_candidate_snapshot(
         params_json="{}",
         market_snapshot_json=json.dumps({"trade_date": "2026-05-27", "breadth": {"data_source": "local_pool"}}),
         result_summary_json="{}",
-        filter_audit_json="{}",
         status="completed",
     )
     feature_snapshot = {

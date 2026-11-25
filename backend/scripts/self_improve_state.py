@@ -1622,10 +1622,11 @@ def _load_policy_health_from_db() -> dict:
 
     with SessionLocal() as db:
         rows = db.execute(text("""
-            SELECT trade_date, recommended_count, filter_audit_json
-            FROM recommendation_runs
-            WHERE run_mode='formal' AND status='completed'
-            ORDER BY trade_date DESC, finished_at DESC
+            SELECT r.trade_date, r.recommended_count, a.payload_json
+            FROM recommendation_runs r
+            LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id
+            WHERE r.run_mode='formal' AND r.status='completed'
+            ORDER BY r.trade_date DESC, r.finished_at DESC
             LIMIT 200
         """)).fetchall()
     return summarize_policy_health(list(rows))

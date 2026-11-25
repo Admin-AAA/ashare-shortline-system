@@ -9,7 +9,7 @@ self_check 的「保护性 0 推荐」只是初步分类，**不能作为跳过 
   3. 全局门线/聚合器误拦   → 只有跨策略、跨≥3交易日且去污染的生产等价反事实表明误拦净正候选才可改
   4. 单策略 universe/评分失配 → 仅在该策略内最小改动，且须给 OOS 净胜率不降对照；证据不足保留为 experiment
 
-本工具把一次 completed=0 的 formal run 的 filter_audit_json 还原成可读漏斗，并自动分类根因：
+本工具把一次 completed=0 的 formal run 的过滤审计快照还原成可读漏斗，并自动分类根因：
   - 只要「最高候选最终分 < 名义地板 72.0」→ legitimate_empty（市场缺乏合格候选，主动空仓；
     即便把 regime 抬线撤到地板，最高候选仍不过线，故 regime 线是二层放大器而非主因）
   - 最高候选 ≥ 地板 但 < regime 有效线 → gate_misblock_suspect（regime 线拦下了本可过地板的候选，
@@ -221,7 +221,7 @@ def classify_zero_run(
         )
 
     if best_final_score is None:
-        return "unknown", "无可解析的 score_line 拦截信息，无法分类；人工核查 filter_audit_json。"
+        return "unknown", "无可解析的 score_line 拦截信息，无法分类；人工核查过滤审计快照。"
 
     if best_final_score < floor:
         return (
@@ -256,7 +256,7 @@ def parse_funnel(
     floor: float = NOMINAL_FLOOR,
     top_k: int = 3,
 ) -> RunFunnel:
-    """解析单 run 的 filter_audit_json → RunFunnel（含分类）。纯函数，不依赖 DB。"""
+    """解析单 run 的过滤审计快照 → RunFunnel（含分类）。纯函数，不依赖 DB。"""
     audit = audit_json if isinstance(audit_json, dict) else (json.loads(audit_json) if audit_json else {})
     stages = extract_stages(audit)
     best_fs, eff_line, gap = extract_effective_line(audit)
@@ -354,7 +354,7 @@ def compute_t1_counterfactual(db, run_funnels: list[RunFunnel]) -> list[T1Bucket
         # 直接从 filter_audit 重新提取全部被拦候选（near_misses 被 top_k 截断）
         # 这里 rf 已有 near_misses，但为拿全量重新查库一次
         row = db.execute(
-            text("SELECT filter_audit_json FROM recommendation_runs WHERE run_id=:rid"),
+            text("SELECT payload_json FROM recommendation_run_filter_audits WHERE run_id=:rid"),
             {"rid": rf.run_id},
         ).fetchone()
         if not row or not row[0]:
@@ -479,8 +479,11 @@ def audit_run(db, run_id: str, floor: float = NOMINAL_FLOOR, top_k: int = 3) -> 
 
     row = db.execute(
         text(
-            "SELECT run_id, trade_date, universe_count, recommended_count, filter_audit_json "
-            "FROM recommendation_runs WHERE run_id=:rid"
+            "SELECT r.run_id, r.trade_date, r.universe_count, r.recommended_count, "
+            "a.payload_json AS filter_audit_json "
+            "FROM recommendation_runs r "
+            "LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id "
+            "WHERE r.run_id=:rid"
         ),
         {"rid": run_id},
     ).fetchone()
@@ -494,11 +497,13 @@ def scan_recent_zero_runs(db, days: int = 10, floor: float = NOMINAL_FLOOR, top_
 
     rows = db.execute(
         text(
-            "SELECT run_id, trade_date, universe_count, recommended_count, filter_audit_json "
-            "FROM recommendation_runs "
-            "WHERE run_mode='formal' AND status='completed' AND recommended_count=0 "
-            "  AND trade_date >= DATE_SUB(CURDATE(), INTERVAL :d DAY) "
-            "ORDER BY trade_date DESC, run_id DESC"
+            "SELECT r.run_id, r.trade_date, r.universe_count, r.recommended_count, "
+            "a.payload_json AS filter_audit_json "
+            "FROM recommendation_runs r "
+            "LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id "
+            "WHERE r.run_mode='formal' AND r.status='completed' AND r.recommended_count=0 "
+            "  AND r.trade_date >= DATE_SUB(CURDATE(), INTERVAL :d DAY) "
+            "ORDER BY r.trade_date DESC, r.run_id DESC"
         ),
         {"d": days},
     ).fetchall()
@@ -530,9 +535,12 @@ def main() -> None:
 
             rows = db.execute(
                 text(
-                    "SELECT run_id, trade_date, universe_count, recommended_count, filter_audit_json "
-                    "FROM recommendation_runs WHERE run_mode='formal' AND status='completed' "
-                    "  AND recommended_count=0 AND trade_date=:td ORDER BY run_id DESC"
+                    "SELECT r.run_id, r.trade_date, r.universe_count, r.recommended_count, "
+                    "a.payload_json AS filter_audit_json "
+                    "FROM recommendation_runs r "
+                    "LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id "
+                    "WHERE r.run_mode='formal' AND r.status='completed' "
+                    "  AND r.recommended_count=0 AND r.trade_date=:td ORDER BY r.run_id DESC"
                 ),
                 {"td": args.trade_date},
             ).fetchall()

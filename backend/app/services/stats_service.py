@@ -445,8 +445,8 @@ def _runs_for_mode(
     extra_cols: list | None = None,
     run_mode: str = "formal",
 ) -> list[RecommendationRun]:
-    # 仅加载各 stats 函数实际使用的列，避免物化每条 run 的 4 个大型 JSON 列
-    # （market_snapshot_json / result_summary_json / filter_audit_json / selected_skills_json）。
+    # 仅加载各 stats 函数实际使用的列，避免物化每条 run 的 3 个大型 JSON 列
+    # （market_snapshot_json / result_summary_json / selected_skills_json）。
     # 全量加载 890 条 run 会产生 ~2.4GB 传输，冷调用 4.5s+；按列裁剪后 <0.05s（~200x）。
     # get_skill_stats 需要 regime（埋在 market_snapshot_json），须显式 opt-in；
     # get_overview_stats / get_preset_stats 不需要该巨型列，默认不加载。

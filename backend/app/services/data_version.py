@@ -8,7 +8,7 @@
   不再读大字段；迁移前没有这一列时自动退回下面的全列算法。
 - 小表（推荐、运行、结算、执行确认、重建批次、预设、关注）：COUNT(*) + 全部列拼接后 CRC32 的 BIT_XOR。
   任何一行任何一列的增删改都会改变指纹（CRC32 碰撞概率 ~2^-32，可忽略）。
-  recommendation_runs 跳过 4 个大字段（params/market_snapshot/filter_audit/request，平均 5MB/行，
+  recommendation_runs 跳过 3 个大字段（params/market_snapshot/request，几十~几百 KB/行，
   使用本模块的读接口都不读它们）。
 - 大表（daily_kbars / stk_limits，几百万行）：MAX(id) + MAX(trade_date)，走主键/索引，<1ms。
   能发现新增的日K和新交易日；**发现不了对旧日K的原地改写**（没有 updated_at 索引），
@@ -31,7 +31,7 @@ from sqlalchemy.sql.elements import TextClause
 _APPEND_ONLY_TABLES = {"daily_kbars", "stk_limits"}
 # 小表里不参与指纹的大字段（读接口不用）
 _SKIP_COLUMNS = {
-    "recommendation_runs": {"params_json", "market_snapshot_json", "filter_audit_json", "request_json"},
+    "recommendation_runs": {"params_json", "market_snapshot_json", "request_json"},
 }
 
 _columns_lock = threading.Lock()

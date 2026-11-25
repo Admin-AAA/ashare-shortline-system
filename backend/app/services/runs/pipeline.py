@@ -281,6 +281,7 @@ async def run_staged_pipeline(
         _slim_market_snapshot,
         _strip_audit_rows,
         invalidate_bootstrap_cache,
+        store_filter_audit,
     )
     from app.agents.session_registry import AgentSessionRegistry
     from app.db.session import SessionLocal
@@ -446,8 +447,8 @@ async def run_staged_pipeline(
             run.data_as_of = str(snapshot_dict.get("trade_date") or "") or None
             run.source_snapshot_id = str(snapshot_dict.get("snapshot_id") or "") or None
             run.market_snapshot_json = _dumps(_slim_market_snapshot(snapshot_dict))
-            run.filter_audit_json = _dumps(
-                compact_filter_audit_for_storage(dict(data.filter_audit or {}))
+            store_filter_audit(
+                db, run_id, compact_filter_audit_for_storage(dict(data.filter_audit or {}))
             )
             summary = _build_run_summary(
                 list(data.scored_cards), list(data.saved_recommendations),

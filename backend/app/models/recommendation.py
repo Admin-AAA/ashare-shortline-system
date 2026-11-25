@@ -129,7 +129,6 @@ class RecommendationRun(Base):
     params_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
     market_snapshot_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
     result_summary_json: Mapped[str] = mapped_column(MEDIUMTEXT().with_variant(Text(), "sqlite"), default="{}")
-    filter_audit_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"), default="{}")
     status: Mapped[str] = mapped_column(String(30), default="running")
     error_message: Mapped[str | None] = mapped_column(Text)
     heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
@@ -154,6 +153,25 @@ class RecommendationRun(Base):
     lease_acquired_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     stable_error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+
+class RecommendationRunFilterAudit(Base):
+    """推荐 run 的过滤审计快照，按 run_id 一行。
+
+    这份快照平均 3MB/行、最大 9MB（2026-11-25 实测 1164 行合计 3.5GB，占
+    recommendation_runs 数据量 99%）。留在主表会让任何整行读取都搬几 MB，
+    拆表后主表只剩标量列与百 KB 级字段，审计快照只在 /runs/{id}/funnel 按需读取。
+    """
+
+    __tablename__ = "recommendation_run_filter_audits"
+
+    run_id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    payload_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime().with_variant(DATETIME(fsp=6), "mysql"),
+        default=utcnow_naive,
+        onupdate=utcnow_naive,
+    )
 
 
 class RecommendationEvidenceClassificationAudit(Base):

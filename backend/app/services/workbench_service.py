@@ -45,6 +45,7 @@ from app.models.tables import (
     Recommendation,
     RecommendationOutcome,
     RecommendationRun,
+    RecommendationRunFilterAudit,
     ReviewNote,
     SkillRegistry,
     SkillVersion,
@@ -402,8 +403,8 @@ def _select_latest_bootstrap_run(db: Session) -> RecommendationRun | None:
             RecommendationRun.run_id.in_(historical_run_ids),
         ),
     )
-    # defer 大字段：filter_audit_json 平均 3MB/行，首页只要摘要列（与 list_runs 同口径）；
-    # 否则排序 + 取行会把大 JSON 一起拖进 filesort，首页 bootstrap 白白多 6~7 秒。
+    # defer 大字段：首页只要摘要列（与 list_runs 同口径）；params / market_snapshot / request
+    # 几十~几百 KB，不 defer 会把排序 + 取行拖成 filesort 大搬运。
     # result_summary_json 平均 31KB/行也要 defer：ORDER BY 用的是 CASE 表达式，无法走索引，
     # 1164 行全部进 filesort，实测冷查询 815ms vs 43ms。序列化时按主键补取这一行即可。
     return db.scalar(
@@ -411,7 +412,6 @@ def _select_latest_bootstrap_run(db: Session) -> RecommendationRun | None:
         .options(
             defer(RecommendationRun.params_json),
             defer(RecommendationRun.market_snapshot_json),
-            defer(RecommendationRun.filter_audit_json),
             defer(RecommendationRun.request_json),
             defer(RecommendationRun.result_summary_json),
         )
@@ -706,13 +706,12 @@ def dispatch_workbench_run(db: Session, run_id: str) -> None:
 
 def list_runs(db: Session, limit: int = 100, *, run_mode: str | None = None) -> list[dict[str, Any]]:
     # 列表序列化（serialize_run_summary）只用标量列 + result_summary_json + selected_skills_json，
-    # 不用 params_json/market_snapshot_json/filter_audit_json/request_json（每个几十~几百 KB）。
-    # defer 这4个大字段避免 500 run 传输几十 MB JSON + ORM 实例化（list_runs 1.26s 主因）。
+    # 不用 params_json/market_snapshot_json/request_json（每个几十~几百 KB）。
+    # defer 这3个大字段避免 500 run 传输几十 MB JSON + ORM 实例化（list_runs 1.26s 主因）。
     # 详情页 get_run_detail 单独加载完整实体。
     _LIST_DEFERRED = (
         RecommendationRun.params_json,
         RecommendationRun.market_snapshot_json,
-        RecommendationRun.filter_audit_json,
         RecommendationRun.request_json,
     )
     stmt = select(RecommendationRun).options(*[defer(c) for c in _LIST_DEFERRED])
@@ -1595,7 +1594,6 @@ def _persist_run_start(
     elif existing_execution_audit is not None:
         result_summary["execution"] = existing_execution_audit
     run.result_summary_json = _dumps(result_summary)
-    run.filter_audit_json = run.filter_audit_json or _dumps({})
     run.status = "running"
     run.error_message = None
     run.heartbeat_at = now
@@ -1678,6 +1676,16 @@ def get_recommendation_detail(db: Session, recommendation_id: str) -> dict[str, 
     return data
 
 
+def store_filter_audit(db: Session, run_id: str, audit: dict[str, Any]) -> None:
+    """写入过滤审计快照（独立表，每 run 一行，重复写入覆盖）。"""
+    payload = _dumps(audit)
+    row = db.get(RecommendationRunFilterAudit, run_id)
+    if row is None:
+        db.add(RecommendationRunFilterAudit(run_id=run_id, payload_json=payload))
+    else:
+        row.payload_json = payload
+
+
 def get_run_filter_audit(db: Session, run_id: str) -> dict[str, Any] | None:
     run = db.get(RecommendationRun, run_id)
     if run is None:
@@ -1689,7 +1697,8 @@ def get_run_filter_audit(db: Session, run_id: str) -> dict[str, Any] | None:
         or ((snapshot.get("breadth") or {}).get("recommendation_pipeline") if snapshot else {})
         or {}
     )
-    audit = _loads(getattr(run, "filter_audit_json", "") or "{}", {})
+    stored = db.get(RecommendationRunFilterAudit, run_id)
+    audit = _loads(stored.payload_json if stored is not None else "{}", {})
     if not audit:
         audit = pipeline.get("filter_audit") if isinstance(pipeline, dict) else None
     if not audit:
@@ -1950,7 +1959,6 @@ _history_population_cache = make_cache("history_population", maxsize=16, max_age
 _RUN_HEAVY_COLUMNS = (
     RecommendationRun.params_json,
     RecommendationRun.market_snapshot_json,
-    RecommendationRun.filter_audit_json,
     RecommendationRun.request_json,
 )
 
@@ -1970,8 +1978,8 @@ def _serialize_recommendations_batched(db: Session, recs: list[Recommendation], 
     preset_map: dict[str, str] = {}
     if run_ids:
         # 推荐序列化只用 run 的标量列 + selected_skills_json / result_summary_json；
-        # filter_audit_json 平均 5MB/行、params/market_snapshot/request 也是几十~几百 KB，
-        # 不 defer 时推荐历史 200 条要拉 ~100 个 run 整行（实测 740ms）。defer 后若有人访问仍会按需懒加载，结果不变。
+        # params/market_snapshot/request 几十~几百 KB，不 defer 时推荐历史 200 条要拉
+        # ~100 个 run 整行（实测 740ms）。defer 后若有人访问仍会按需懒加载，结果不变。
         runs = db.scalars(
             select(RecommendationRun)
             .options(*[defer(c) for c in _RUN_HEAVY_COLUMNS])

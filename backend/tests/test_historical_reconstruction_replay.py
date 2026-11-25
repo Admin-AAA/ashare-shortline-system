@@ -12,6 +12,7 @@ from app.models.tables import (
     Recommendation,
     RecommendationOutcome,
     RecommendationRun,
+    RecommendationRunFilterAudit,
     StockMetadataHistory,
 )
 from app.services.evidence import (
@@ -454,7 +455,6 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
         finished_at=actual_generated_at,
         data_as_of=trade_date,
         source_snapshot_id="snapshot_pool_2099-02-03_task_1_3",
-        filter_audit_json=json.dumps({"candidate_audit": {"retained": True}}),
         status="completed",
     )
     _seal_run_identity(run)
@@ -487,6 +487,10 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
         outcome_label="success",
     )
     db.add_all([run, recommendation, outcome, metadata])
+    db.add(RecommendationRunFilterAudit(
+        run_id=run_id,
+        payload_json=json.dumps({"candidate_audit": {"retained": True}}),
+    ))
     db.flush()
     finalize_reconstruction_run(db, run_id)
     publish_reconstruction_batch(db, identity.batch_id)
@@ -510,7 +514,9 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
         "canonical_history_live_and_reconstruction_v1"
     )
     assert "replay_setup_fixture" in result["facets"]["setup_types"]
-    assert json.loads(run.filter_audit_json)["candidate_audit"]["retained"] is True
+    stored_audit = db.get(RecommendationRunFilterAudit, run_id)
+    assert stored_audit is not None
+    assert json.loads(stored_audit.payload_json)["candidate_audit"]["retained"] is True
     assert run.evaluation_scope == "historical_replay"
 
     live_count = db.scalar(

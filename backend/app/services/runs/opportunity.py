@@ -1,10 +1,10 @@
 """Canonical opportunity semantics for persisted run audits.
 
 The production-policy replay evaluates opportunity from scored cards before the
-selection policy runs.  A persisted ``filter_audit_json`` is the read-only
-projection of those cards used by health diagnostics; its score-line stage's
-``input_count`` is only the number of scored cards and is not an opportunity
-count.
+selection policy runs.  The persisted filter-audit snapshot (table
+``recommendation_run_filter_audits``) is the read-only projection of those cards
+used by health diagnostics; its score-line stage's ``input_count`` is only the
+number of scored cards and is not an opportunity count.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ def audit_has_opportunity(audit: Mapping[str, Any] | None) -> bool:
     """Return whether a persisted audit contains a canonical opportunity card.
 
     This mirrors ``backtest.policy_experiment._is_opportunity_day`` using the
-    fields retained by ``filter_audit_json``.  Missing card-level evidence is
+    fields retained by the persisted audit snapshot.  Missing card-level evidence is
     conservatively treated as not an opportunity rather than inferred from the
     score-line stage count.
     """

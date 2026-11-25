@@ -88,6 +88,7 @@ from app.models.strategy import (  # noqa: F401,E402
 from app.models.recommendation import (  # noqa: F401,E402
     RecommendationReconstructionBatch,
     RecommendationRun,
+    RecommendationRunFilterAudit,
     RecommendationEvidenceClassificationAudit,
     RecommendationCollectionSeal,
     Recommendation,

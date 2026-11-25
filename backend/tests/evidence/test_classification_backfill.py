@@ -55,7 +55,6 @@ def _seed_legacy_run(
         params_json=json.dumps({"immutable": suffix}, sort_keys=True),
         market_snapshot_json=json.dumps({"snapshot": suffix}, sort_keys=True),
         result_summary_json=json.dumps({"result": suffix}, sort_keys=True),
-        filter_audit_json=json.dumps({"audit": suffix}, sort_keys=True),
         status="completed",
         **(provenance or {}),
     )
@@ -206,8 +205,8 @@ def test_rollback_transaction_write_path_changes_only_allowlist_and_is_second_ru
     original_run = db.execute(
         text(
             "SELECT run_mode, run_name, evaluation_scope, trade_date, started_at, "
-            "finished_at, params_json, market_snapshot_json, result_summary_json, "
-            "filter_audit_json FROM recommendation_runs WHERE run_id=:run_id"
+            "finished_at, params_json, market_snapshot_json, result_summary_json "
+            "FROM recommendation_runs WHERE run_id=:run_id"
         ),
         {"run_id": run.run_id},
     ).mappings().one()
@@ -252,8 +251,8 @@ def test_rollback_transaction_write_path_changes_only_allowlist_and_is_second_ru
     preserved_run = db.execute(
         text(
             "SELECT run_mode, run_name, evaluation_scope, trade_date, started_at, "
-            "finished_at, params_json, market_snapshot_json, result_summary_json, "
-            "filter_audit_json FROM recommendation_runs WHERE run_id=:run_id"
+            "finished_at, params_json, market_snapshot_json, result_summary_json "
+            "FROM recommendation_runs WHERE run_id=:run_id"
         ),
         {"run_id": run.run_id},
     ).mappings().one()

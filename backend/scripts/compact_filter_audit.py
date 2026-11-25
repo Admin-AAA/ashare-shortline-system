@@ -1,6 +1,6 @@
-"""Compact `recommendation_runs.filter_audit_json` (default dry-run).
+"""Compact `recommendation_run_filter_audits.payload_json` (default dry-run).
 
-一个 run 的审计 JSON 平均 4.5MB / 最大 8MB，全表 5GB+：99% 体积在 `rows`（全市场每只票
+一个 run 的审计 JSON 平均 4.5MB / 最大 8MB，全表 3.5GB：99% 体积在 `rows`（全市场每只票
 一份诊断对象），其中 `prefilter`（约 0.4KB/票）与 `trace_summary` 前端从不读取——
 读接口已经剥掉它们。本脚本做两级瘦身：
 
@@ -43,11 +43,12 @@ BATCH = 20  # 单行最大约 8MB，小批量提交，避免撑爆 lock buffer
 
 def _candidates(db, *, older_than_days: int, min_bytes: int, limit: int | None):
     sql = """
-        SELECT run_id, trade_date, CHAR_LENGTH(filter_audit_json) AS n
-        FROM recommendation_runs
-        WHERE filter_audit_json IS NOT NULL AND CHAR_LENGTH(filter_audit_json) > :min_bytes
-          AND trade_date <= DATE_SUB(CURDATE(), INTERVAL :days DAY)
-        ORDER BY trade_date ASC, run_id ASC
+        SELECT r.run_id, r.trade_date, CHAR_LENGTH(a.payload_json) AS n
+        FROM recommendation_runs r
+        JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id
+        WHERE CHAR_LENGTH(a.payload_json) > :min_bytes
+          AND r.trade_date <= DATE_SUB(CURDATE(), INTERVAL :days DAY)
+        ORDER BY r.trade_date ASC, r.run_id ASC
     """
     if limit:
         sql += f" LIMIT {int(limit)}"
@@ -55,7 +56,7 @@ def _candidates(db, *, older_than_days: int, min_bytes: int, limit: int | None):
 
 
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Compact recommendation_runs.filter_audit_json")
+    ap = argparse.ArgumentParser(description="Compact recommendation_run_filter_audits.payload_json")
     ap.add_argument("--days", type=int, default=7, help="只处理 trade_date 早于 N 天前的 run（默认 7）")
     ap.add_argument("--drop-rows-before-days", type=int, default=0,
                     help="早于 N 天的 run 直接丢 rows，只留汇总（0=不丢）")
@@ -79,7 +80,7 @@ def main() -> int:
         dropped_rows_runs = 0
         for i, row in enumerate(rows, 1):
             payload = db.scalar(
-                text("SELECT filter_audit_json FROM recommendation_runs WHERE run_id = :rid"),
+                text("SELECT payload_json FROM recommendation_run_filter_audits WHERE run_id = :rid"),
                 {"rid": row.run_id},
             )
             if not payload:
@@ -99,7 +100,7 @@ def main() -> int:
             saved += max(0, len(payload.encode()) - len(new_payload.encode()))
             if args.apply:
                 db.execute(
-                    text("UPDATE recommendation_runs SET filter_audit_json = :payload WHERE run_id = :rid"),
+                    text("UPDATE recommendation_run_filter_audits SET payload_json = :payload WHERE run_id = :rid"),
                     {"payload": new_payload, "rid": row.run_id},
                 )
                 if i % BATCH == 0:
@@ -113,8 +114,8 @@ def main() -> int:
               f"（{saved / max(1, total_before):.1%}），其中整块丢 rows 的 run {dropped_rows_runs} 个")
         print(f"字段裁剪：{', '.join(_FILTER_AUDIT_STORAGE_DROP_ROW_FIELDS)}")
         if args.apply and args.optimize:
-            print("OPTIMIZE TABLE recommendation_runs ...")
-            db.execute(text("OPTIMIZE TABLE recommendation_runs"))
+            print("OPTIMIZE TABLE recommendation_run_filter_audits ...")
+            db.execute(text("OPTIMIZE TABLE recommendation_run_filter_audits"))
             db.commit()
             print("完成（磁盘空间已回收）")
         elif not args.apply:

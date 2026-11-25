@@ -96,11 +96,12 @@ def main() -> None:
                     {"code": r.get("code"), "name": r.get("name"), "final_score": r.get("final_score")}
                     for r in recs
                 ]
-                from app.models.tables import RecommendationRun
+                from app.models.tables import RecommendationRun, RecommendationRunFilterAudit
 
                 rr = db.get(RecommendationRun, run.get("run_id"))
+                audit_row = db.get(RecommendationRunFilterAudit, run.get("run_id"))
                 summary = json.loads(rr.result_summary_json or "{}") if rr else {}
-                audit = json.loads(rr.filter_audit_json or "{}") if rr else {}
+                audit = json.loads(audit_row.payload_json or "{}") if audit_row else {}
                 row = {"skill_id": sid, "status": run.get("status"), "score_line": p["score_line"],
                        "output_count": p["output_count"], "n": len(picks), "picks": picks,
                        "universe": getattr(rr, "universe_count", None),

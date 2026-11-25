@@ -88,7 +88,6 @@ class SQLAlchemyRunRepository:
             params_json=request.to_canonical_json(),
             market_snapshot_json="{}",
             result_summary_json=json.dumps({"agent_runtime": "queued"}, ensure_ascii=False),
-            filter_audit_json="{}",
             status=RunStatus.QUEUED.value,
             heartbeat_at=command.created_at,
             progress_phase=RunStatus.QUEUED.value,

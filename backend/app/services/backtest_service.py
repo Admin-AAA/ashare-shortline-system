@@ -44,6 +44,7 @@ from app.models.tables import (
     Recommendation,
     RecommendationOutcome,
     RecommendationRun,
+    RecommendationRunFilterAudit,
     Stock,
     StockQuote,
 )
@@ -841,10 +842,13 @@ def _persist_backtest_run(
         execution_version=execution_version,
         market_snapshot_json="{}",
         result_summary_json=json.dumps({"backtest": True, "score_line": score_line}),
-        filter_audit_json=json.dumps(filter_audit, ensure_ascii=False),
     )
     assert_run_request_index_consistency(run, request)
     db.add(run)
+    db.add(RecommendationRunFilterAudit(
+        run_id=run_id,
+        payload_json=json.dumps(filter_audit, ensure_ascii=False),
+    ))
     db.commit()
     return run_id
 
