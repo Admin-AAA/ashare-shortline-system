@@ -17,6 +17,7 @@ import re
 
 import pytest
 
+from app.engine.canonical import canonical_json
 from app.services.llm.prompt_context import (
     DEFAULT_PROMPT_CONTEXT_POLICY,
     PROMPT_CONTEXT_POLICY_ID,
@@ -71,6 +72,8 @@ def test_projected_context_is_valid_json_and_sorted():
         # canonical JSON 必须可解析（不截断 token）
         parsed = json.loads(text)
         assert isinstance(parsed, dict)
+        # 键必须有序且无多余空白：与 canonical_json 的输出逐字一致
+        assert text == canonical_json(parsed)
 
 
 def test_whitelist_drops_unknown_fields():

@@ -14,9 +14,14 @@ def test_counters_and_timings():
     assert snap["timings"][0]["count"] == 1
 
 
-def test_metrics_never_raise():
-    metrics.inc("x", value="bad")  # type error swallowed
+def test_metrics_never_raise_and_ignore_bad_values():
+    metrics.reset()
+    metrics.inc("x", value="bad")
     metrics.observe("y", "bad")
+    snap = metrics.snapshot()
+    # 坏值既不抛出，也不能留下半条记录（observe 旧实现先加 count 再加 sum，会留 count=1/sum=0）
+    assert snap["counters"] == []
+    assert snap["timings"] == []
 
 
 def test_runtime_endpoint():

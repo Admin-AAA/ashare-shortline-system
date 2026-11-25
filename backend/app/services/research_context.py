@@ -168,12 +168,9 @@ def _resolve_stock_name_from_db(code: str) -> str | None:
     """
     if code in _stock_name_cache:
         return _stock_name_cache[code] if _stock_name_cache[code] else None
-    try:
-        from app.db.session import SessionLocal
-        from app.models.tables import Stock
-    except ImportError:
-        logger.debug("无法导入 DB 模块，跳过 stocks 表名称查询")
-        return None
+    from app.db.session import SessionLocal
+    from app.models.tables import Stock
+
     session = SessionLocal()
     try:
         stock_row = session.query(Stock).filter(Stock.code == code).first()

@@ -90,10 +90,11 @@ def inc(name: str, value: float = 1.0, **labels: Any) -> None:
     if not _publisher_started:
         start_publisher()
     try:
+        amount = float(value)  # 先校验再改状态：坏值不能留下半条计数
         k = _key(name, labels)
         with _lock:
-            _counters[k] = _counters.get(k, 0.0) + value
-            _rate_bump_locked(k, value)
+            _counters[k] = _counters.get(k, 0.0) + amount
+            _rate_bump_locked(k, amount)
     except Exception:  # noqa: BLE001 - metrics must never break callers
         return
 
@@ -102,12 +103,13 @@ def observe(name: str, seconds: float, **labels: Any) -> None:
     if not _publisher_started:
         start_publisher()
     try:
+        duration = float(seconds)  # 先校验再改状态：坏值不能留下半条计时（count 已加、sum 未加）
         k = _key(name, labels)
         with _lock:
             s = _timings.setdefault(k, [0.0, 0.0, 0.0])
             s[0] += 1
-            s[1] += seconds
-            s[2] = max(s[2], seconds)
+            s[1] += duration
+            s[2] = max(s[2], duration)
     except Exception:  # noqa: BLE001 - metrics must never break callers
         return
 

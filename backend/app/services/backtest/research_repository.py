@@ -99,10 +99,7 @@ class BacktestORMModels:
 
     @classmethod
     def from_tables(cls) -> "BacktestORMModels":
-        try:
-            from app.models import tables
-        except ImportError as exc:  # pragma: no cover - import environment issue
-            raise RepositoryConfigurationError("无法导入 app.models.tables。") from exc
+        from app.models import tables
 
         expected = {
             "data_snapshot": "BacktestDataSnapshot",

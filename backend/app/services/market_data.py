@@ -992,10 +992,8 @@ def fetch_tushare_industries(settings: Any) -> dict[str, str]:
     if cached:
         _TUSHARE_INDUSTRY_MAP = cached
         return cached
-    try:
-        from app.services.tushare_client import get_pro
-    except ImportError:
-        return {}
+    from app.services.tushare_client import get_pro
+
     _throttle_tushare(settings)
     pro = get_pro()
     df = pro.stock_basic(exchange="", list_status="L", fields="symbol,industry")
