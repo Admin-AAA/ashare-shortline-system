@@ -394,7 +394,6 @@ class MinuteKbar(Base):
             name="uq_minute_kbar_code_freq_time",
         ),
         Index("idx_mk_td_code", "trade_date", "code"),
-        Index("idx_mk_code_time", "code", "trade_time"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
