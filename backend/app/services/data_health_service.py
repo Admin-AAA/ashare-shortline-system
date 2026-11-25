@@ -143,7 +143,7 @@ _VOLUME_UNIT_MAX_SHARES_RATIO = 0.05
 _DATA_DOMAIN_DEFS: list[dict[str, Any]] = [
     # 行情 K 线
     {"key": "daily_kbar", "label": "日K线(含技术指标)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
-    {"key": "chip", "label": "筹码分布(筹码峰)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "column": "chip_cost_50", "positive_only": True},
+    {"key": "chip", "label": "筹码分布(筹码峰)", "category": "行情K线", "table": DailyKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "column": "chip_cost_50", "positive_only": True, "latest_window_days": 90},
     {"key": "minute_kbar", "label": "分钟K线", "category": "行情K线", "table": MinuteKbar, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
     {"key": "index_daily", "label": "指数日线", "category": "行情K线", "table": IndexDaily, "date_col": "trade_date", "critical": True, "fresh_days": _DAILY_DATA_FRESH_DAYS},
     {"key": "stk_limit", "label": "涨跌停价格", "category": "行情K线", "table": StkLimit, "date_col": "trade_date", "critical": False, "fresh_days": _DAILY_DATA_FRESH_DAYS, "estimated_row_count": True},
@@ -943,7 +943,17 @@ def _data_domain_coverage(db: Session, reference_trade_date: str | None,
                     latest_query = latest_query.where(value_col.is_not(None))
                     if positive_only:
                         latest_query = latest_query.where(value_col > 0)
-                max_date = db.scalar(latest_query.order_by(date_col.desc()).limit(1))
+                window_days = ddef.get("latest_window_days")
+                # 列型数据域取最新日期要走 (date_col, value_col) 联合索引；索引前导列是日期，
+                # 不带日期下界时优化器只能对整列做跳跃扫描再排序（daily_kbars 620 万行实测 1.3s）。
+                # 先按参考交易日限定窗口取；窗口内没有行才退回全表口径，保证陈旧数据仍报出真实最新日期。
+                if window_days and ref:
+                    max_date = db.scalar(
+                        latest_query.where(date_col >= _shift_days(ref, -int(window_days)))
+                        .order_by(date_col.desc()).limit(1)
+                    )
+                if max_date is None:
+                    max_date = db.scalar(latest_query.order_by(date_col.desc()).limit(1))
         except Exception as exc:
             _rollback_session_safely(db)
             logger.warning("数据域 %s 统计失败: %s", key, exc)
@@ -1342,6 +1352,14 @@ def _date_diff(d1: str, d2: str) -> int:
         return (a - b).days
     except Exception:
         return 999
+
+
+def _shift_days(iso_day: str, delta: int) -> str:
+    """ISO 日期平移若干天；解析失败时原样返回（调用方用它做索引区间下界）。"""
+    try:
+        return (date.fromisoformat(iso_day) + timedelta(days=delta)).isoformat()
+    except Exception:
+        return iso_day
 
 
 def _date_variants(value: Any) -> list[str]:

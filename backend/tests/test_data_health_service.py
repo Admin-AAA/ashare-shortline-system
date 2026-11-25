@@ -146,6 +146,31 @@ def test_column_data_domain_skips_expensive_exact_row_count():
         db.close()
 
 
+def test_column_data_domain_reports_true_max_date_when_older_than_window():
+    """窗口化取最新日期只用于走索引；窗口内无行时必须退回全表口径，陈旧数据仍要报出真实日期。
+
+    chip 域带 latest_window_days（daily_kbars 620 万行上不带日期下界取最新日期实测 1.3s），
+    若窗口内取不到就直接当成无数据，筹码停在很久以前会被误报成 empty 而不是 stale。
+    """
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[DailyKbar.__table__])
+    Session = sessionmaker(bind=engine)
+    db = Session()
+    try:
+        db.add(DailyKbar(code="000001", trade_date="2025-01-06", close=1, chip_cost_50=1.0))
+        db.commit()
+        chip_domain = next(item for item in data_health_service._DATA_DOMAIN_DEFS if item["key"] == "chip")
+
+        with patch.object(data_health_service, "_DATA_DOMAIN_DEFS", [chip_domain]):
+            result = data_health_service._data_domain_coverage(db, "2026-05-27")
+
+        domain = result["categories"][0]["domains"][0]
+        assert domain["status"] == "stale"
+        assert domain["max_date"] == "2025-01-06"
+    finally:
+        db.close()
+
+
 def test_indexed_date_queries_do_not_wrap_trade_date_column():
     db = MagicMock()
     db.execute.return_value.one.return_value = ("2026-05-26", "2026-05-27")

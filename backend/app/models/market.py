@@ -633,7 +633,7 @@ class ShareFloat(Base):
     ann_date: Mapped[str | None] = mapped_column(String(10))
     float_date: Mapped[str] = mapped_column(String(10), index=True)
     float_share: Mapped[float | None] = mapped_column(Float)
-    float_ratio: Mapped[float | None] = mapped_column(Float)
+    float_ratio: Mapped[float | None] = mapped_column(Float, index=True)
     holder_name: Mapped[str | None] = mapped_column(String(120))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 

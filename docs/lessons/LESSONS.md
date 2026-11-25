@@ -2300,3 +2300,35 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(c) 事后用 `pct_chg` 链或 adj 比值修正收益，只是复权因子不可用时的兜底，不能替代出场判定本身的复权。**
 - 吸收位置：`backend/app/services/outcome_simulation.py`（`_RebasedBar`、`_rebase_holding_bars`、`_simulate_outcome`）、`backend/tests/test_outcome_simulation.py::test_simulate_outcome_ex_right_day_in_window_is_not_a_stop_loss`、`test_simulate_outcome_window_metrics_adjusted_on_ex_right_day`。
 - 相关：L-207（口径错误固化为永久黄项）、L-211（同一批体检里的数据新鲜度口径问题）。
+
+## L-215 大 JSON 快照列必须拆到独立表：留在主表会把整行读取和缓冲池一起拖垮
+
+- 状态：encoded（2026-11-25 拆分完成）。
+- 适用：任何「按 run/任务一行、payload 是几 MB JSON、只在详情页读一次」的快照列。
+- 证据：
+  - `recommendation_runs.filter_audit_json` 平均 3MB/行、最大 9MB，1164 行合计 3.5GB，占主表数据量 99%，主表因此 3.5GB。
+  - 任何未显式 defer 的整行读取都要搬几 MB；`/api/runs` 列表与驾驶舱概览因此出现秒级响应，缓冲池被大 JSON 挤占后连小表查询也变慢。
+  - 拆表后主表 60.5MB（数据）+ 1.1MB（索引），最大单 run 的 `/funnel` 详情 0.276s 返回。
+- 永久规则：
+  - **(a) 大 payload 快照一律一 run 一行的独立表（主键 = 业务主键），主表只留摘要字段。**
+  - **(b) 迁移用 `INSERT ... SELECT` 在服务端复制，再 `ALTER TABLE ... DROP COLUMN, ALGORITHM=INPLACE, LOCK=NONE`；不要经过客户端。**
+  - **(c) 空快照（`''`/`'{}'`）不复制，读接口把「没有行」当作空审计，避免为占位符建行。**
+  - **(d) 所有读取方（脚本、诊断、自检）必须同步改成 `LEFT JOIN` 或按主键单查，不能留一个还读旧列的分支。**
+- 吸收位置：`backend/alembic/versions/0030_filter_audit_side_table.py`、`backend/app/models/recommendation.py`（`RecommendationRunFilterAudit`）、`backend/app/services/workbench_service.py`（`store_filter_audit`、`get_run_filter_audit`）、`backend/tests/test_run_filter_audit_storage.py`。
+- 相关：L-207（口径错误固化为永久黄项）、L-214。
+
+## L-216 数据健康巡检的每次全表扫描都会按日累积成「面板慢」：检查项查询必须能走索引
+
+- 状态：encoded（2026-11-25 修复）。
+- 适用：`data_quality_monitor.run_checks` 的每一项检查，以及被巡检按日调用的诊断函数。
+- 证据：
+  - `/api/admin/data-quality?refresh=true` 冷算实测 46.6s（最大 217.7s）；逐项计时显示 `quality:data_health_diagnosis` 3.9s、`db:share_floats:ratio` 0.6~2.3s、`db:minute_kbars` 1.2s。
+  - `share_floats` 312 万行上 `WHERE float_ratio > 100 ORDER BY float_ratio DESC LIMIT 200` 无索引，每次全表扫描；加索引后 0.0003s。
+  - `chip` 数据域取最新日期不带日期下界时，`(trade_date, chip_cost_50)` 联合索引的前导列失效，620 万行跳跃扫描 1.3s；按参考交易日限定 90 天窗口后 0.001s。
+  - 修完后同一端点冷算 1.8~2.6s、缓存读 0.003s。
+- 永久规则：
+  - **(a) 巡检里出现 `WHERE 某列 > 阈值` 的检查，该列必须有索引；没有就先加索引再谈优化查询。**
+  - **(b) 取「最新日期」这类查询必须带日期下界走索引，窗口内取不到再退回全表口径，不能因为窗口化就把陈旧数据报成无数据。**
+  - **(c) 巡检项耗时用 `_CHECK_TIMINGS` 逐项打点，改完用同一入口复测，不要只看总耗时。**
+- 吸收位置：`backend/alembic/versions/0031_share_float_ratio_index.py`、`backend/app/services/data_health_service.py`（`_data_domain_coverage` 的 `latest_window_days`、`_shift_days`）、`backend/tests/test_data_health_service.py::test_column_data_domain_reports_true_max_date_when_older_than_window`。
+- 相关：L-207、L-215。

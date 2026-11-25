@@ -6,7 +6,7 @@ import pytest
 from app.db.alembic_runtime import get_alembic_health, upgrade_database
 
 
-HEAD_REVISION = "0030_filter_audit_side_table"
+HEAD_REVISION = "0031_share_float_ratio_index"
 
 
 def test_upgrade_database_creates_schema_and_is_idempotent() -> None:
