@@ -1826,9 +1826,17 @@ def _backfill_missing_indicators(db: Session, lookback_days: int = 14) -> None:
         if not codes:
             continue
 
+        # 只需要最后 60 根日K（见下方 bars[-60:]），但指标计算依赖前序窗口，
+        # 留 120 个自然日余量（约 80 个交易日）。不设下界会把全市场 5573 只票
+        # 的全部历史（实测 613 万行、21.9 秒）一次读进内存，而实际只用 45 万行。
+        window_start = (date.fromisoformat(str(target_date)) - timedelta(days=120)).isoformat()
         all_rows = db.scalars(
             select(DailyKbar)
-            .where(DailyKbar.code.in_(codes), DailyKbar.trade_date <= target_date)
+            .where(
+                DailyKbar.code.in_(codes),
+                DailyKbar.trade_date <= target_date,
+                DailyKbar.trade_date >= window_start,
+            )
             .order_by(DailyKbar.code, DailyKbar.trade_date.asc())
         ).all()
 

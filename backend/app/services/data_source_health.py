@@ -174,8 +174,12 @@ def readiness_check(db: Session) -> dict[str, Any]:
         "min_required": 500,
     }
 
-    # K线数据
-    bar_count = db.scalar(select(func.count()).select_from(DailyKbar)) or 0
+    # K线数据。bar_count 只用来判断 >= 1000，用 INFORMATION_SCHEMA 估算即可：
+    # COUNT(*) 在 InnoDB 上是全索引扫描，daily_kbars 623 万行实测 14.7 秒，
+    # 而这个端点没有缓存、前端每次进页面都会打。估算值 11ms，空表时回退精确计数。
+    from app.services.data_health_service import _table_row_count
+
+    bar_count, _bar_count_estimated = _table_row_count(db, DailyKbar, prefer_estimate=True)
     today_bars = db.scalar(
         select(func.count()).select_from(DailyKbar).where(
             DailyKbar.trade_date == reference_trade_date

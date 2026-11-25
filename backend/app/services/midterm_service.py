@@ -1284,9 +1284,31 @@ def _smallcap_div_universe(db, as_of: str, limit: int, pool_n: int = 400, factor
              "amt20": float(r["amt20"]), factor: dv[r["code"]], "mv_rank": mv_rank[r["code"]], "dv_snap": snap} for r in cand]
 
 
+_SMALL_CAP_GUARD_TTL_SECONDS = 300.0
+_small_cap_guard_cache: dict[tuple[str, int], tuple[float, dict[str, Any]]] = {}
+_small_cap_guard_lock = threading.Lock()
+
+
 def small_cap_guard(db, as_of: str, window: int = 20) -> dict[str, Any]:
     """小盘趋势过滤：总市值最小400只（pe>0、非北交所）等权日收益累乘成指数，指数 > MA20 才开新仓。
-    成分按当日（或之前最近一日）daily_basic 排名，与 research7.py 口径一致。"""
+    成分按当日（或之前最近一日）daily_basic 排名，与 research7.py 口径一致。
+
+    单次约 1.5 秒（40 个交易日 × 2 条 SQL）。4 个 guard 策略在同一次出票里用同一个
+    as_of 各调一次，结果必然相同，所以按 (as_of, window) 缓存 5 分钟。
+    """
+    key = (str(as_of), int(window))
+    now = time.monotonic()
+    with _small_cap_guard_lock:
+        hit = _small_cap_guard_cache.get(key)
+    if hit is not None and now - hit[0] <= _SMALL_CAP_GUARD_TTL_SECONDS:
+        return hit[1]
+    result = _small_cap_guard_uncached(db, as_of, window)
+    with _small_cap_guard_lock:
+        _small_cap_guard_cache[key] = (now, result)
+    return result
+
+
+def _small_cap_guard_uncached(db, as_of: str, window: int) -> dict[str, Any]:
     dates = [r[0] for r in db.execute(text(
         "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
         "ORDER BY trade_date DESC LIMIT :n"), {"d": as_of, "n": window * 2})][::-1]

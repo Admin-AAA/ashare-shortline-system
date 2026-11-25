@@ -1731,8 +1731,10 @@ def _aux_snapshot_fallback_covered(db, dataset_key: str, errors, trade_date: str
     if len(day) != 8:
         return False
     iso = f"{day[:4]}-{day[4:6]}-{day[6:8]}"
+    # 不用 DATE(col)=:d 包裹：这些表的 freshness_field 都是 YYYY-MM-DD 字符串列，
+    # 函数包裹会让索引失效。实测 capital_flow（550 万行）从 6765ms 降到 2ms。
     count = db.execute(
-        text(f"SELECT COUNT(*) FROM {entry.model.__tablename__} WHERE DATE({entry.freshness_field}) = :d"),
+        text(f"SELECT COUNT(*) FROM {entry.model.__tablename__} WHERE {entry.freshness_field} = :d"),
         {"d": iso},
     ).scalar()
     return int(count or 0) >= entry.minimum_record_count
@@ -2031,19 +2033,25 @@ def _backfill_stk_limit_window(
 
 
 def _recent_trade_day_compacts(db, ref_compact: str, limit: int) -> list[str]:
-    """最近 limit 个交易日（含 ref_compact），紧凑 YYYYMMDD 格式，倒序。"""
-    from app.models.tables import DailyKbar
-    from sqlalchemy import func, select
+    """最近 limit 个交易日（含 ref_compact），紧凑 YYYYMMDD 格式，倒序。
 
-    normalized_col = func.replace(DailyKbar.trade_date, "-", "")
+    库里的 trade_date 已经是 YYYY-MM-DD 字符串，字典序与日期序一致。原先用
+    ``REPLACE(trade_date,'-','')`` 包住列再比较，WHERE/GROUP BY/ORDER BY 全是表达式，
+    ``(trade_date, ma5)`` 索引完全用不上——实测全表扫 613 万行 13.7 秒，改成直接
+    字符串区间比较后 268ms。
+    """
+    from app.models.tables import DailyKbar
+    from sqlalchemy import select
+
+    ref_dashed = f"{ref_compact[:4]}-{ref_compact[4:6]}-{ref_compact[6:8]}"
     rows = db.scalars(
-        select(normalized_col)
-        .where(DailyKbar.trade_date.is_not(None), normalized_col <= ref_compact)
-        .group_by(normalized_col)
-        .order_by(normalized_col.desc())
+        select(DailyKbar.trade_date)
+        .where(DailyKbar.trade_date.is_not(None), DailyKbar.trade_date <= ref_dashed)
+        .group_by(DailyKbar.trade_date)
+        .order_by(DailyKbar.trade_date.desc())
         .limit(max(1, limit))
     ).all()
-    return [str(r) for r in rows if r]
+    return [str(r).replace("-", "") for r in rows if r]
 
 
 def _run_backfill_script(payload: dict) -> dict:
