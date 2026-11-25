@@ -1008,6 +1008,20 @@ def _classify_coverage_blind(
     return {"silent_death": silent_death, "expected_sparse": expected_sparse}
 
 
+def _exposure_backfill_enabled(db) -> bool:
+    """曝光补跑任务（strategy_exposure_run）当前是否启用。
+
+    2026-10-19 退役（9feff7a1）：盘后流水线已为每个现役策略各出一个 formal run，正式
+    胜率只认 formal，同信号日重复跑会制造强相关重复样本。任务行保留 enabled=0。
+    退役后 E 项「补跑停滞 / 补跑未入队」全部是永久误报——没有补跑在跑是设计如此。
+    行不存在时按启用处理：未接线的新部署仍需这条诊断提醒。
+    """
+    row = db.execute(text(
+        "SELECT enabled FROM scheduled_tasks WHERE task_id = 'strategy_exposure_run'"
+    )).fetchone()
+    return row is None or bool(row[0])
+
+
 def _classify_zero_exposure(
     zero_exp: list[str],
     experiment_completed_sids: set[str],
@@ -1546,20 +1560,31 @@ def check_e_item(db, hit_skills: set) -> None:
                 if sid:
                     experiment_completed_sids.add(str(sid))
     zero_cls = _classify_zero_exposure(zero_exp, experiment_completed_sids)
+    exposure_enabled = _exposure_backfill_enabled(db)
     if zero_cls["covered_zero"]:
         print(
             f'  ℹ️ {len(zero_cls["covered_zero"])} 个 active 策略近 30 天 0 曝光但补跑已覆盖'
             f'（completed experiment 0 产出，当前 regime/universe 无票，非补跑故障——'
             f'勿为喂样本放宽门槛）: {zero_cls["covered_zero"]}'
         )
-    if zero_cls["uncovered"]:
+    if zero_cls["uncovered"] and not exposure_enabled:
+        print(
+            f'  ℹ️ {len(zero_cls["uncovered"])} 个 active 策略近 30 天 0 曝光（曝光补跑已退役，'
+            f'formal 独立出票是唯一来源；0 曝光即当前 regime/universe 无票）: {zero_cls["uncovered"]}'
+        )
+    elif zero_cls["uncovered"]:
         print(
             f'⚠️ {len(zero_cls["uncovered"])} 个 active 策略近 30 天 0 曝光且补跑未入队'
             f'（真覆盖缺口，查 strategy_exposure_run）: {zero_cls["uncovered"]}'
         )
     under_floor = sorted(s for s, n in exposure.items() if n < SAMPLE_FLOOR and s in active_set)
-    if under_floor:
+    if under_floor and exposure_enabled:
         print(f'⚠️ {len(under_floor)} 个 active 策略样本 <{SAMPLE_FLOOR}（胜率统计不可信，补跑应持续喂）: {under_floor}')
+    elif under_floor:
+        print(
+            f'  ℹ️ {len(under_floor)} 个 active 策略样本 <{SAMPLE_FLOOR}（曝光补跑已退役，样本只由 formal 累积，'
+            f'胜率统计暂不可信）: {under_floor}'
+        )
 
     # ── D 项陷阱护栏：曝光-胜率错配 ≠ 应调权重 ─────────────────────────────
     # 未来 D 攻击轮几乎必看到「高胜率策略低曝光 vs daily-stock 低胜率高曝光」，
@@ -1568,7 +1593,8 @@ def check_e_item(db, hit_skills: set) -> None:
     #      通用技术分析、候选池天然大，龙虎榜/板块龙头本就 niche——是选择效应非错配。
     #   ② 高胜率样本普遍 <50（sector-relative n=38/dragon-tiger n=44），按 E 项规则
     #      样本 <50 不该按胜率大调，随样本增加会回归均值。
-    #   ③ E 项补跑（experiment）已在喂低样本策略，再调权重会重复、且可能破 H_norm。
+    #   ③ 曝光补跑（experiment）2026-10-19 已退役，低样本策略只能靠 formal 慢慢累积，
+    #      调权重既不增加样本、又会把噪声当信号。
     # 按胜率强制重排曝光违背「策略优先架构」（各策略 universe 自主，不全局一刀切）。
     # 禁据下表直接调 aggregator 权重或曝光补跑阈值；要动 D 走前瞻验证，不刷历史曝光。
     wr_by_sid = {r[0]: round(r[2] * 100 / r[1], 1) for r in rows if r[1] >= SAMPLE_FLOOR}
@@ -1582,7 +1608,8 @@ def check_e_item(db, hit_skills: set) -> None:
     # T25：以「最新 completed experiment 的 recommended_count」为准——若最新补跑 0 产出，
     # 即使 7 天内更早有推荐，也标门线拦截（07-16 1 笔 + 07-21 三次 0 产出误标先例）。
     # gate_blocked 明细沿用 _fetch_gate_blocked_detail（有效线 vs 最高候选分）。
-    if under_floor:
+    # 补跑退役后本段整体跳过：没有 experiment run 是设计如此，逐策略报「停滞」是永久误报。
+    if under_floor and exposure_enabled:
         recent_rows = db.execute(text("""
             SELECT jt.strategy_id AS sid, MAX(u.started_at) AS latest, COUNT(*) AS n
             FROM recommendations rec
