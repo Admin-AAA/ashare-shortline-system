@@ -462,9 +462,10 @@ def check_a_item(db) -> None:
                 non_trade.append(td)
                 continue
             stage_rows = db.execute(text("""
-                SELECT filter_audit_json
-                FROM recommendation_runs
-                WHERE trade_date = :td AND run_mode='formal' AND status='completed'
+                SELECT a.payload_json
+                FROM recommendation_runs r
+                LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id
+                WHERE r.trade_date = :td AND r.run_mode='formal' AND r.status='completed'
             """).bindparams(td=td)).fetchall()
             filter_audits: list[dict] = []
             for sr in stage_rows:
@@ -1118,7 +1119,7 @@ def _format_e_forward_note(
 
 
 def _parse_score_line_gate_stats(fa_str: str | None) -> dict:
-    """从 filter_audit_json 解析 score_line 阶段被拦候选的最高最终分与最高有效线。
+    """从过滤审计 payload 解析 score_line 阶段被拦候选的最高最终分与最高有效线。
 
     实测格式（曝光补跑）：
       reason_counts.score_line = {
@@ -1263,14 +1264,17 @@ def _build_gate_detail(base_line, fa_raw, rs_raw, snap_raw, trade_date) -> dict 
 def fetch_gate_blocked_details(db, sids: list[str]) -> dict[str, dict | None]:
     """批量门线拦截明细（T4 性能优化，两步查询）。
 
-    **根因**：原 1 步查询拉 31 行 × 4 个大 JSON 列（filter_audit_json 138MB!），
+    **根因**：原 1 步查询拉 31 行 × 4 个大 JSON 列（过滤审计 138MB!），
     即使用 started_at 索引范围扫描，网络传输 + pymysql 解析 140MB JSON 仍需 0.63s。
 
     **修复**（两步查询）：
     1. 只拉 run_id + selected_skills_json（6KB），内存解析匹配 target sids
-    2. 对匹配到的 run_id（通常 ≤4 个），按主键拉 detail 列（score_line/filter_audit/
+    2. 对匹配到的 run_id（通常 ≤4 个），按主键拉 detail 列（score_line/过滤审计/
        result_summary/market_snapshot/trade_date）
     实测 0.63s → 0.03s（22x），输出与单条版本逐字段一致。
+
+    过滤审计自修订 0030 起存在 recommendation_run_filter_audits.payload_json，
+    按 run_id 左连接读取；无审计行的 run 仍返回 None。
     """
     if not sids:
         return {}
@@ -1315,9 +1319,11 @@ def fetch_gate_blocked_details(db, sids: list[str]) -> dict[str, dict | None]:
     for sid, run_id in sid_to_run.items():
         try:
             row = db.execute(text("""
-                SELECT r.score_line, r.filter_audit_json, r.result_summary_json,
+                SELECT r.score_line, a.payload_json, r.result_summary_json,
                        r.market_snapshot_json, r.trade_date
-                FROM recommendation_runs r WHERE r.run_id = :rid
+                FROM recommendation_runs r
+                LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id
+                WHERE r.run_id = :rid
             """), {"rid": run_id}).fetchone()
         except Exception:
             continue
@@ -1340,9 +1346,10 @@ def _fetch_gate_blocked_detail(db, sid: str) -> dict | None:
     try:
         params = {"pat": '%"' + sid + '"%'}
         row = db.execute(text("""
-            SELECT r.score_line, r.filter_audit_json, r.result_summary_json,
+            SELECT r.score_line, a.payload_json, r.result_summary_json,
                    r.market_snapshot_json, r.trade_date
             FROM recommendation_runs r
+            LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id
             WHERE r.run_mode = 'experiment' AND r.status = 'completed'
               AND r.selected_skills_json LIKE :pat
               AND r.started_at >= DATE_SUB(NOW(), INTERVAL 14 DAY)
