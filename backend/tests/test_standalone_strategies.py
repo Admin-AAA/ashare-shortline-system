@@ -24,7 +24,7 @@ def _skill(sid, enabled=True, executable=True, name=None):
 
 def test_strategy_ids_exclude_retired_disabled_and_warning():
     skills = [
-        _skill("chen-xiaoqun-skill"),  # restored 2026-10-18 (L-191), watch
+        _skill("chen-xiaoqun-skill"),  # 2026-11-25 全期净负 → 退役
         _skill("sector-relative-strength-leader"),
         _skill("oversold-capital-reversal"),
                 _skill("within-industry-reversal"),  # deleted 2026-10-14, stays excluded
@@ -36,7 +36,19 @@ def test_strategy_ids_exclude_retired_disabled_and_warning():
         _skill("low-max-steady-trend"),  # deleted 2026-10-15 (L-184), stays excluded
         _skill("no-contract", executable=False),
     ]
-    assert ss.standalone_strategy_ids(skills) == ["chen-xiaoqun-skill", "oversold-capital-reversal", "sector-relative-strength-leader"]
+    assert ss.standalone_strategy_ids(skills) == ["oversold-capital-reversal", "sector-relative-strength-leader"]
+
+
+def test_chen_xiaoqun_retired_after_negative_full_period():
+    """2026-11-25：陈小群全期 227 笔净均值 −0.09%、PF 0.95、14 个月里 9 个月为负 → 退役。
+
+    与 high-range-breakout-momentum 同样只停每日独立运行，skill 目录保留（历史 outcome 仍可复盘）。
+    """
+    assert "chen-xiaoqun-skill" in ss.RETIRED_STRATEGY_IDS
+    assert "chen-xiaoqun-skill" not in ss.WATCH_STRATEGY_IDS
+    assert not (ss.RETIRED_STRATEGY_IDS & ss.WATCH_STRATEGY_IDS)
+    skills = [_skill("chen-xiaoqun-skill"), _skill("chao-gu-yang-jia-skill")]
+    assert ss.standalone_strategy_ids(skills) == ["chao-gu-yang-jia-skill"]
 
 
 def test_high_range_breakout_retired_s107():

@@ -41,13 +41,18 @@ RETIRED_STRATEGY_IDS: frozenset[str] = frozenset(
         # 预注册 3 版修复（R1 强牛·高潮停出 / X1 MA10 破位离场 / RX 两者）全部不过采纳线（最好 R1：N3 +0.105 PF1.06 < 1.3）。
         # 只停每日独立运行、/strategies 隐藏；skill 目录与代码保留。
         "high-range-breakout-momentum",
+        # 2026-11-25 退役：唯一全期净负的短线策略。LIVE formal 已结算 227 笔（2025-10-20~2026-11-19，
+        # 14 个月），净均值 −0.09%/笔（扣 0.07% 往返税费）、PF 0.95、14 个月里只有 4 个月为正；
+        # 2026-06 起 92 笔超额 −0.71%、PF 0.69。其余 4 个短线策略同期净均值 +0.46%~+2.49%。
+        "chen-xiaoqun-skill",
     }
 )
 
 # 观察名单：照常每日独立运行，/strategies 标「运行中·观察」。删除只看绝对收益（近12月每笔均值/总收益/MDD），
-# 同池随机对照仅作诊断（2026-10-18 恢复，L-191）。陈小群 MDD -30.5% 偏大。
+# 同池随机对照仅作诊断（2026-10-18 恢复，L-191）。
 # （high-range-breakout-momentum 2026-10-19 §107 修复失败 → 移出观察、退役。）
-WATCH_STRATEGY_IDS: frozenset[str] = frozenset({"chen-xiaoqun-skill", "rsi6-capitulation"})
+# （chen-xiaoqun-skill 2026-11-25 全期净负 → 移出观察、退役。）
+WATCH_STRATEGY_IDS: frozenset[str] = frozenset({"rsi6-capitulation"})
 
 # 纯风险提示 / 非选股技能（没有可执行选股合约），不单独出票。
 NON_PICKING_SKILL_IDS: frozenset[str] = frozenset({"high-position-volume-stall-warning"})

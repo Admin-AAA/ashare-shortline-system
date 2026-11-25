@@ -52,10 +52,16 @@ def test_chen_xiaoqun_main_strength_expression_accepts_deep_pullback():
     assert evaluate(when, {**ok, "is_main_theme": False}) is False
 
 
-def test_chen_xiaoqun_skill_loads_and_enabled():
+def test_chen_xiaoqun_skill_is_retired_but_contract_intact():
+    """2026-11-25 退役：skill 目录与合约保留（历史 outcome 可复盘），但不再参与独立运行。
+
+    退役依据见 standalone_strategies.RETIRED_STRATEGY_IDS：全期 227 笔净均值 −0.09%/笔、PF 0.95。
+    """
     skills = {s.skill_id: s for s in load_skills(SKILLS_DIR)}
     assert SKILL_ID in skills
-    assert skills[SKILL_ID].enabled is True
+    assert skills[SKILL_ID].enabled is False
+    # 合约仍然完整，便于随时按新证据复活
+    assert (skills[SKILL_ID].contract or {}).get("phases")
 
 
 def test_chen_xiaoqun_bias_ma5_cap_and_field_is_top_level():

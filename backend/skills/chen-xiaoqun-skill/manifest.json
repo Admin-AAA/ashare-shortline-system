@@ -3,11 +3,12 @@
   "name": "陈小群龙头战法",
   "version": "0.1.0",
   "mode": "declarative",
-  "status": "active",
+  "status": "disabled",
   "requirements": ["stock_feature_context"],
   "capabilities": ["signal_evaluation"],
-  "enabled": true,
+  "enabled": false,
   "source_type": "local",
-  "description": "A股短线龙头、分歧转一致、加速阶段识别。"
+  "description": "A股短线龙头、分歧转一致、加速阶段识别。",
+  "deprecation_reason": "2026-11-25 退役：LIVE formal 已结算 227 笔净均值 -0.09%/笔、PF 0.95，14 个月里 9 个月为负；同期其余 4 个短线策略净均值 +0.46%~+2.49%"
 }
 
