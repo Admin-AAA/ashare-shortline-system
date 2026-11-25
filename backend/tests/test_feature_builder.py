@@ -792,3 +792,24 @@ def test_sum_float_ratio_skips_null_and_missing():
     assert _sum_float_ratio([{"float_ratio": 64.3975}, {"float_ratio": None}, {}]) == 64.3975
     assert _sum_float_ratio([{"float_ratio": None}]) == 0.0
     assert _sum_float_ratio([]) == 0.0
+
+
+def test_capital_resonance_source_is_usable_in_strategy_rules():
+    """capital_resonance_source 必须可被策略规则引用。
+
+    2026-11-25 修复：该字段由 feature_builder 写入、daily-stock-analysis-skill 的
+    phases/scoring/risk 多处引用（`capital_resonance_source == 'capital_flow'`），
+    但不在 evaluator.ALLOWED_NAMES 里。evaluate() 对未授权名字抛 UnsafeExpression，
+    被上层吞掉后条件恒 False —— 规则写了等于没写，且没有任何报错。
+    """
+    from app.engine.evaluator import ALLOWED_NAMES, evaluate
+
+    assert "capital_resonance_source" in ALLOWED_NAMES
+    assert evaluate(
+        "capital_resonance_source == 'capital_flow'",
+        {"capital_resonance_source": "capital_flow"},
+    ) is True
+    assert evaluate(
+        "capital_resonance_source == 'capital_flow'",
+        {"capital_resonance_source": "price_volume_fallback"},
+    ) is False

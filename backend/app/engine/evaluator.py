@@ -55,6 +55,7 @@ ALLOWED_NAMES = {
     "chip_health_score",
     "capital_resonance_score",
     "capital_resonance_signal",
+    "capital_resonance_source",
     "cost_ratio",
     "dragon_tiger_recent_count",
     "dragon_tiger_is_on_list",

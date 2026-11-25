@@ -1145,7 +1145,6 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
             profile["net_profit_yoy"] = fina.get("net_profit_yoy")
             profile["roe"] = fina.get("roe")
             profile["gross_margin"] = fina.get("gross_margin")
-            profile["pe_ttm"] = fina.get("pe_ttm")
             if fina.get("end_date"):
                 profile["earnings_outlook"] = f"财报期{fina['end_date']}"
                 profile["fina_end_date"] = fina["end_date"]
