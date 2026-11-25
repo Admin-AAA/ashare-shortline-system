@@ -100,7 +100,7 @@ def persist_execution_assessments(db: Session, assessments: list[dict[str, Any]]
         state.latest_checked_at = checked_at
         state.latest_quote_time = str(assessment.get("quote_time") or "") or None
         state.latest_data_as_of = str(assessment.get("data_as_of") or "") or None
-        state.latest_price = _optional_float(assessment.get("current_price"))
+        state.latest_price = _positive_float(assessment.get("current_price"))
         state.latest_strategy_id = str(assessment.get("strategy_id") or "") or None
         state.latest_setup_match = str(signal.get("setup_match") or "") or None
         state.latest_condition_json = json.dumps(
@@ -205,16 +205,16 @@ def serialize_execution_state(state: RecommendationExecutionState) -> dict[str, 
         "latest_checked_at": _isoformat(state.latest_checked_at),
         "latest_quote_time": state.latest_quote_time,
         "latest_data_as_of": state.latest_data_as_of,
-        "latest_price": state.latest_price,
+        "latest_price": _positive_float(state.latest_price),
         "latest_strategy_id": state.latest_strategy_id,
         "latest_setup_match": state.latest_setup_match,
         "condition_summary": condition,
         "ever_buy_confirmed": bool(state.ever_buy_confirmed),
         "first_buy_confirmed_at": _isoformat(state.first_buy_confirmed_at),
-        "first_buy_confirmed_price": state.first_buy_confirmed_price,
+        "first_buy_confirmed_price": _positive_float(state.first_buy_confirmed_price),
         "cancelled_before_entry": bool(state.cancelled_before_entry),
         "first_cancelled_at": _isoformat(first_cancelled_at),
-        "first_cancelled_price": first_cancelled_price,
+        "first_cancelled_price": _positive_float(first_cancelled_price),
         "first_cancel_reason": first_cancel_reason,
     }
 
@@ -237,6 +237,13 @@ def _optional_float(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _positive_float(value: Any) -> float | None:
+    """价格只接受正数：rt_k 缺价时 current_price 会给 0，落成 0 会被前端当成 -100% 浮亏。
+    写入与读取都过这一层，存量行里的 0 也按缺失返回。"""
+    parsed = _optional_float(value)
+    return parsed if parsed is not None and parsed > 0 else None
 
 
 def _isoformat(value: datetime | None) -> str | None:

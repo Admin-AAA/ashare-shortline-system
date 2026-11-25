@@ -245,3 +245,40 @@ def test_concurrent_insert_of_same_recommendation_is_upserted_not_a_batch_failur
         assert s1.latest_decision_code == "cancel" and s1.latest_price == 8.10          # 更新而不是抛错
         assert s1.ever_buy_confirmed is True and s1.first_buy_confirmed_price == 8.41  # 对方写入的首次 buy 事实保留
         assert s1.cancelled_before_entry is False
+
+
+def test_missing_price_is_not_persisted_as_zero():
+    """rt_k 缺价时 current_price 为 0：落成 0 会被前端当成 -100% 浮亏画进收益曲线。"""
+    engine = create_engine("sqlite:///:memory:")
+    RecommendationExecutionState.__table__.create(engine)
+
+    with Session(engine) as db:
+        persist_execution_assessments(db, [_assessment("buy", checked_at="2026-07-29T10:05:01", price=0)])
+        db.commit()
+        state = db.get(RecommendationExecutionState, "rec_state_1")
+
+    assert state is not None
+    assert state.ever_buy_confirmed is True
+    assert state.latest_price is None
+
+
+def test_projection_hides_legacy_zero_prices():
+    """存量行里已有 latest_price=0（旧写入未校验），投影必须按缺失返回。"""
+    engine = create_engine("sqlite:///:memory:")
+    RecommendationExecutionState.__table__.create(engine)
+
+    with Session(engine) as db:
+        db.add(RecommendationExecutionState(
+            recommendation_id="rec_state_zero",
+            latest_decision_code="expired",
+            latest_checked_at=datetime(2026, 7, 29, 10, 5, 0),
+            latest_data_as_of="2026-07-29",
+            latest_price=0.0,
+            ever_buy_confirmed=True,
+            first_buy_confirmed_price=0.0,
+        ))
+        db.commit()
+        projected = load_execution_state_map(db, ["rec_state_zero"])["rec_state_zero"]
+
+    assert projected["latest_price"] is None
+    assert projected["first_buy_confirmed_price"] is None
