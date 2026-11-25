@@ -1,52 +1,90 @@
 # 数据源能力矩阵
 
-实测时间：2026-11-14T11:51:21+0800，最近交易日 20261113。 由 `scripts/probe_datasource_capabilities.py` 生成（每 provider×api 1 次小调用），勿手改。
+实测时间：2026-11-25T12:25:38+0800，最近交易日 20261124。 由 `scripts/probe_datasource_capabilities.py` 生成（每 provider×api 1 次小调用），勿手改。
 
 图例：✅有数据 ⚪调用成功但空 ⛔无权限 ❌错误；格内为 行数/最新日期/字段完整度/延迟。
 
 | api | promax | quantdata | teajoin |
 |---|---|---|---|
-| adj_factor | ✅ 22/20261113/100%/382ms | ✅ 22/20261113/100%/297ms | ✅ 22/20261113/100%/241ms |
-| anns_d | ❌ unverified:http_client | ❌ unsupported:provider_error | ❌ unverified:provider_error |
-| block_trade | ✅ 710/20261113/100%/1644ms | ✅ 730/20261113/100%/442ms | ✅ 730/20261113/100%/727ms |
-| broker_recommend | ❌ unverified:http_client | ✅ 265/202611/100%/369ms | ✅ 265/202611/100%/246ms |
-| cyq_perf | ✅ 22/20261113/100%/117ms | ✅ 22/20261113/100%/814ms | ✅ 22/20261113/100%/446ms |
-| daily | ✅ 22/20261113/100%/1004ms | ✅ 22/20261113/100%/1117ms | ✅ 22/20261113/100%/282ms |
-| daily_basic | ✅ 22/20261113/100%/738ms | ✅ 22/20261113/100%/340ms | ✅ 22/20261113/100%/320ms |
-| fina_indicator | ✅ 158/20261024/100%/5953ms | ✅ 100/20261024/100%/353ms | ✅ 236/20261024/100%/2810ms |
-| fina_indicator_vip | ❌ unsupported:http_client | ✅ 8120/20261031/100%/9096ms | ✅ 8047/20260325/99%/3444ms |
-| hk_hold | ⚪ 0/-/100%/839ms | ⚪ 0/-/100%/320ms | ⚪ 0/-/100%/361ms |
-| hsgt_top10 | ✅ 80/20261113/100%/368ms | ✅ 80/20261113/100%/346ms | ❌ unverified:invalid_request |
-| index_daily | ✅ 22/20261113/100%/950ms | ✅ 22/20261113/100%/331ms | ✅ 22/20261113/100%/270ms |
-| limit_list_d | ✅ 91/20261113/95%/133ms | ✅ 91/20261113/95%/629ms | ✅ 91/20261113/100%/264ms |
-| margin | ❌ unverified:http_client | ✅ 22/20261113/100%/312ms | ✅ 22/20261113/100%/240ms |
-| margin_detail | ✅ 21/20261112/91%/1092ms | ✅ 21/20261112/91%/359ms | ✅ 21/20261112/100%/312ms |
-| moneyflow | ✅ 22/20261113/100%/637ms | ✅ 22/20261113/100%/340ms | ✅ 22/20261113/100%/356ms |
-| moneyflow_hsgt | ✅ 21/20261113/100%/1711ms | ✅ 21/20261113/100%/278ms | ✅ 21/20261113/100%/262ms |
-| namechange | ✅ 4/20120120/100%/38ms | ✅ 4/20120120/100%/325ms | ✅ 4/20120802/100%/743ms |
-| pledge_stat | ✅ 652/20261106/100%/49ms | ✅ 652/20261106/100%/336ms | ✅ 652/20261106/100%/908ms |
-| repurchase | ✅ 1050/20261113/100%/1827ms | ✅ 1051/20261113/100%/1154ms | ✅ 917/20261113/100%/1103ms |
-| rt_k | ✅ 1/-/100%/104ms | ❌ unsupported:provider_error | ❌ unverified:provider_error |
-| rt_min | ✅ 1/-/100%/509ms | ✅ 1/-/89%/445ms | ❌ unverified:provider_error |
-| share_float | ✅ 106/20150520/100%/65ms | ✅ 106/20150520/100%/330ms | ✅ 109/20150520/100%/709ms |
-| stk_auction | ❌ transient:http_rate_limit | ✅ 8/20261113/100%/245ms | ✅ 8/20261113/100%/250ms |
-| stk_factor | ⛔ unsupported:permission | ✅ 22/20261113/100%/338ms | ✅ 22/20261113/100%/365ms |
-| stk_factor_pro | ✅ 22/20261113/100%/129861ms | ✅ 22/20261113/100%/30095ms | ✅ 22/20261113/100%/59209ms |
-| stk_holdernumber | ✅ 150/20261024/100%/23ms | ✅ 150/20261024/100%/304ms | ✅ 156/20260815/100%/1217ms |
-| stk_holdertrade | ✅ 1710/20261113/100%/2682ms | ✅ 1769/20261113/100%/455ms | ✅ 1814/20261113/100%/821ms |
-| stk_limit | ✅ 22/20261113/100%/555ms | ✅ 22/20261113/100%/449ms | ✅ 22/20261113/100%/287ms |
-| stk_mins | ✅ 13/-/100%/333ms | ❌ unsupported:provider_error | ❌ unverified:provider_error |
-| stk_surv | ✅ 400/-/90%/1601ms | ✅ 400/-/90%/568ms | ✅ 10000/-/100%/19592ms |
-| stock_basic | ✅ 1/-/100%/574ms | ✅ 1/-/67%/269ms | ✅ 1/-/67%/266ms |
-| suspend_d | ✅ 58/20261113/100%/645ms | ✅ 58/20261113/100%/289ms | ✅ 58/20261113/100%/237ms |
-| ths_index | ❌ unverified:http_client | ✅ 395/-/100%/671ms | ✅ 412/-/100%/409ms |
-| ths_member | ✅ 282/-/100%/511ms | ✅ 282/-/100%/503ms | ✅ 281/-/100%/315ms |
-| top_inst | ✅ 690/20261113/100%/3312ms | ✅ 690/20261113/100%/199ms | ✅ 690/20261113/100%/733ms |
-| top_list | ✅ 69/20261113/100%/801ms | ✅ 69/20261113/100%/379ms | ✅ 69/20261113/100%/417ms |
-| trade_cal | ✅ 30/20261113/100%/992ms | ✅ 22/20261113/100%/166ms | ✅ 30/20261113/100%/386ms |
+| adj_factor | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/237ms |
+| anns_d | ❌ transient:network | ❌ transient:quota_exhausted |  |
+| block_trade | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 428/20261124/100%/289ms |
+| broker_recommend | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 265/202611/100%/251ms |
+| cyq_perf | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/243ms |
+| daily | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/623ms |
+| daily_basic | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/565ms |
+| fina_indicator | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 236/20261024/100%/1340ms |
+| fina_indicator_vip | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 8047/20260325/100%/8816ms |
+| hk_hold | ❌ transient:network | ❌ transient:quota_exhausted | ⚪ 0/-/100%/243ms |
+| hsgt_top10 | ❌ transient:network | ❌ transient:quota_exhausted | ❌ unverified:invalid_request |
+| index_daily | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/1476ms |
+| limit_list_d | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 125/20261124/100%/236ms |
+| margin | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 21/20261124/100%/229ms |
+| margin_detail | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/251ms |
+| moneyflow | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/306ms |
+| moneyflow_hsgt | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/240ms |
+| namechange | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 4/20120802/100%/230ms |
+| pledge_stat | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 652/20261106/100%/1075ms |
+| repurchase | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 1027/20261124/100%/504ms |
+| rt_k | ❌ transient:network | ❌ transient:quota_exhausted |  |
+| rt_min | ❌ transient:network | ❌ transient:quota_exhausted |  |
+| share_float | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 109/20150520/100%/375ms |
+| stk_auction | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 7/20261124/100%/249ms |
+| stk_factor | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/384ms |
+| stk_factor_pro | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/1502ms |
+| stk_holdernumber | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 156/20260815/100%/707ms |
+| stk_holdertrade | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 1180/20261124/100%/532ms |
+| stk_limit | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 22/20261124/100%/234ms |
+| stk_mins | ❌ transient:network | ❌ transient:quota_exhausted | ❌ unverified:provider_error |
+| stk_surv | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 10000/-/100%/7184ms |
+| stock_basic | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 1/-/100%/246ms |
+| suspend_d | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 63/20261124/100%/229ms |
+| ths_index | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 412/-/100%/416ms |
+| ths_member | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 282/-/100%/260ms |
+| top_inst | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 720/20261124/100%/405ms |
+| top_list | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 72/20261124/100%/247ms |
+| trade_cal | ❌ transient:network | ❌ transient:quota_exhausted | ✅ 30/20261124/100%/244ms |
 
 ## 限速（配置值，次/分钟）
 
 - promax: 180
-- quantdata: 120
-- teajoin: 420
+- quantdata: 90
+- teajoin: 480
+
+## 与上次实测相比的漂移
+
+- quantdata/adj_factor: ok -> error
+- quantdata/block_trade: ok -> error
+- quantdata/broker_recommend: ok -> error
+- quantdata/cyq_perf: ok -> error
+- quantdata/daily: ok -> error
+- quantdata/daily_basic: ok -> error
+- quantdata/fina_indicator: ok -> error
+- quantdata/fina_indicator_vip: ok -> error
+- quantdata/hk_hold: empty -> error
+- quantdata/hsgt_top10: ok -> error
+- quantdata/index_daily: ok -> error
+- quantdata/limit_list_d: ok -> error
+- quantdata/margin: ok -> error
+- quantdata/margin_detail: ok -> error
+- quantdata/moneyflow: ok -> error
+- quantdata/moneyflow_hsgt: ok -> error
+- quantdata/namechange: ok -> error
+- quantdata/pledge_stat: ok -> error
+- quantdata/repurchase: ok -> error
+- quantdata/rt_min: ok -> error
+- quantdata/share_float: ok -> error
+- quantdata/stk_auction: ok -> error
+- quantdata/stk_factor: ok -> error
+- quantdata/stk_factor_pro: ok -> error
+- quantdata/stk_holdernumber: ok -> error
+- quantdata/stk_holdertrade: ok -> error
+- quantdata/stk_limit: ok -> error
+- quantdata/stk_surv: ok -> error
+- quantdata/stock_basic: ok -> error
+- quantdata/suspend_d: ok -> error
+- quantdata/ths_index: ok -> error
+- quantdata/ths_member: ok -> error
+- quantdata/top_inst: ok -> error
+- quantdata/top_list: ok -> error
+- quantdata/trade_cal: ok -> error
