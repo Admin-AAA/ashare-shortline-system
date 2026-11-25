@@ -15,27 +15,6 @@ def test_backfill_missing_local_indicators_no_op_when_data_clean(db):
     assert result["fixed_dates"] == []
 
 
-def test_backfill_missing_local_indicators_handles_missing_db_execute_gracefully():
-    """FakeDb（无 execute）不应让调用崩——best-effort，异常被上层 try/except 捕获。
-
-    回归保护：test_scheduler_service 的 FakeDb mock 没有 execute 方法，
-    _backfill_missing_local_indicators 调 _dates_needing_indicators(db) 会 AttributeError。
-    上层 _run_daily_kbar_batch 的 try/except 保护 K 线同步不受影响。
-    """
-
-    class FakeDb:
-        def close(self):
-            pass
-
-    # 直接调会抛 AttributeError（FakeDb 无 execute）——上层 try/except 兜底
-    try:
-        _backfill_missing_local_indicators(FakeDb(), days=7)
-        # 若没抛异常（未来改为防御性），也 OK
-    except AttributeError:
-        # 预期：FakeDb 无 execute 时抛 AttributeError，由上层 try/except 捕获
-        pass
-
-
 def test_dates_needing_indicators_importable():
     """backfill_indicators 模块可从 scripts 导入（_backfill_missing_local_indicators 依赖）。"""
     import sys

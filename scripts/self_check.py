@@ -3170,9 +3170,9 @@ def _backtest_consistency_stats(trades: list) -> dict:
     return out
 
 
-def check_scheduler_health(db) -> None:
+def check_scheduler_health(db) -> list[str]:
     """盘后流水线调度健康（T12 可观测性）：报告 post_sync_formal_recommendation 的
-    last_run_at/last_status，让用户知道流水线是否正常执行。
+    last_run_at/last_status，让用户知道流水线是否正常执行。返回告警行，供测试断言。
 
     根因（2026-07-23 调研）：07-22 推荐未结算（outcome=None），因为盘后流水线
     post_sync_formal_recommendation last_status=failed（07-21 10:20），07-22 17:35
@@ -3185,24 +3185,27 @@ def check_scheduler_health(db) -> None:
         """)).fetchall()
     except Exception as exc:
         print(f'  ⚠️ 调度健康诊断查询失败: {exc}')
-        return
+        return []
     if not rows:
-        return
+        return []
     print('  调度健康（enabled tasks）:')
     from datetime import datetime
     now = datetime.now()
+    warnings: list[str] = []
     for r in rows:
         tid, ttype, cron, enabled, last_run, last_status, last_error = r
         # 盘后流水线 last_status=failed 或超过1交易日没跑 → 警告
         flag = ""
         if str(last_status) == "failed":
             flag = " ⚠️上次失败"
+            warnings.append(f'{tid}: 上次失败')
         if last_run:
             try:
                 last_dt = last_run if hasattr(last_run, 'date') else datetime.strptime(str(last_run), '%Y-%m-%d %H:%M:%S')
                 days_ago = (now - last_dt).days
                 if days_ago >= 2 and str(ttype) == "recommendation_run":
                     flag += f" ⚠️{days_ago}天未跑"
+                    warnings.append(f'{tid}: {days_ago}天未跑')
             except Exception:
                 pass
         err_str = f" err={str(last_error or '')[:60]}" if last_error else ""
@@ -3212,6 +3215,8 @@ def check_scheduler_health(db) -> None:
     if postclose and str(postclose[5]) == "failed":
         print('    ——盘后流水线上次失败：outcome 结算 + formal 推荐未执行，前瞻样本无法积累（D 项阻塞）。')
         print('      查 app.log 排查失败原因；手动触发 label_pending_outcomes 结算 pending 推荐。')
+        warnings.append('post_sync_formal_recommendation: 上次失败，outcome 结算 + formal 推荐未执行')
+    return warnings
 
 
 def check_registry_diagnostics(db) -> None:
