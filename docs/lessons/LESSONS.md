@@ -2245,3 +2245,58 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(d) 新增检查项时必须同时声明 scope 与「谁在什么周期生产它」**，否则下一个体检还会发现一堆「长期黄但没人管」的项。
 - 吸收位置：`backend/app/services/data_quality_monitor.py`（`RESEARCH_ONLY_FILE_KEYS` + `item_scope()` + `_item` 自动打 `scope`；`quality_score_penalty` 只统计 `scope="trading"` 并在 note 里单列「另有 N 项研究产物滞后（只展示不扣分）」；`AGE_FILES` 移除 `pool_bar_source_stats.json`）、`backend/tests/test_data_quality_monitor.py::test_freshness_task_quality_red_does_not_fail_the_job`（同时覆盖 P1-3：巡检发现红黄不再把作业标成 partial_failed）。
 - 相关：L-207（口径错误固化为黄项）、L-208（时序导致的误报）。
+
+## L-211 期末/公告日类数据集的 freshness 必须卡「请求日上界」，行数下限只能算最新分区：否则历史补数永远取不到数，部分写入永远补不回来
+
+- 状态：active（已落地修复 2026-11-25）。
+- 适用：`auxiliary/state_adapters.py::SQLAlchemyStateRepository.inspect`，以及所有 `freshness_field` 不是 `trade_date` 的数据集（`pledge_stat` 的 `end_date`、`holder_number` 的 `end_date`、`fina_indicator` 的 `ann_date`、`broker_recommend` 的 `month`）。
+- 证据（2026-11-24 全系统体检）：
+  - `pledge_stats` 的 freshness 列是 `end_date`。旧实现取整表 `MAX(end_date)` 判新鲜：库里已有 2026-11-20 时，请求 2026-10-30 也判「新鲜」，历史补数直接跳过、永远取不到数。
+  - 行数下限按整表累计行数算：`pledge_stats` 的 2026-05-22 只写进 116 行、2026-06-18 只有 268 行（上游这两天各 2245/2235 行）。累计行数永远超过任何下限 → 「那天有行」就判新鲜，残缺分区永远发现不了。修复后按最新分区统计，行数下限 1800（上游单期的八成），2026 年 41 个周五全部补齐（428 个分区最小 2208 行）。
+  - 存储格式不一致：`String(10)` 存 ISO 日、`String(8)` 存 `YYYYMMDD`、`String(6)` 存 `YYYYMM`。右值统一按 ISO 渲染时，紧凑日期列的字符串比较跨格式恒不成立。
+- 永久规则：
+  - **(a) 期末/公告日类 freshness 列必须写成 `column <= 请求日`，禁止用整表 `MAX(column)` 或等值匹配判新鲜。**
+  - **(b) 行数下限只统计最新分区（`freshness = observed`）；累计行数不能作为「这次写全了」的证据。**
+  - **(c) 行数下限按上游单期实际行数的八成设，不能只判「有行」。**
+  - **(d) freshness 的 SQL 右值必须按列的存储长度渲染（6/8/10），不能假定 ISO 格式。**
+- 吸收位置：`backend/app/services/auxiliary/state_adapters.py::_freshness_upper_bound`、`backend/app/services/auxiliary/production.py`（`pledge_stat` 的 `minimum_record_count=1800`）、`backend/tests/test_auxiliary_periodic_freshness.py`、`backend/scripts/repair_pledge_partition.py`。
+- 相关：L-207（口径错误固化为永久黄项）。
+
+## L-212 动态软降线只能遍历「去重 + 横截面否决之后」的池：兜底放行只降分数线，不撤销否决
+
+- 状态：active（已落地修复 2026-11-25）。
+- 适用：`engine/aggregator_pure.py` 里任何「零推荐兜底」「降低分数线补票」逻辑。
+- 证据：软降线遍历的是 `ordered`（去重与十余道横截面否决之前的池）。后果有两层：被 `high_turnover_veto` 等规则明确否决的卡被重新放行；同一只票的多张重复卡各自输出一次。修复为只遍历 `deduped`（去重 + 否决之后的池）。
+- 永久规则：
+  - **(a) 兜底放行只能降分数线，不能撤销任何否决。**
+  - **(b) 兜底遍历的池必须与被兜底的池同源（去重与否决之后），不能用上游宽池。**
+  - **(c) 新增兜底逻辑时必须验证「同一 code 不会输出两次」。**
+- 吸收位置：`backend/app/engine/aggregator_pure.py`、`backend/tests/test_soft_floor_respects_policy_vetoes.py`（用 v11 生产政策 + 弱势快照构造被否决卡）。
+
+## L-213 上游停披露或未披露的数值必须写 NULL 并从因子层移除：填 0 会把「没有数据」变成「数据是 0」
+
+- 状态：active（已落地修复 2026-11-25）。
+- 适用：`limit_list_d`（U/D/Z 三种类型各给不同字段）、`hsgt_top10`（2024-08-16 后个股买卖金额停止披露）、任何 `_optional_yi` 风格的映射。
+- 证据：
+  - `limit_up_board` 把缺失的 `limit_amount`/`fd_amount` 填 0，库里 66995 + 17398 行假 0（U 类型只有 `fd_amount`、D 类型只有 `limit_amount`、Z 类型两者皆无）。
+  - `hsgt_top10` 的 `net_amount`/`buy` 在 2025/2026 共 8860 行全为 0（上游 2024-08-16 起停披露），`hsgt_net_buy` 因子仍留在 `evaluator.py` 的 `ALLOWED_NAMES` 里，恒零因子参与评分。
+- 永久规则：
+  - **(a) 上游没给的数值写 NULL，禁止填 0：0 是有意义的取值（封单 0 与未披露是两件事）。**
+  - **(b) 恒零/恒缺字段不得进入因子层；删因子时 `ALLOWED_NAMES` 白名单条目必须一起删。**
+  - **(c) 同一接口按类型给不同字段时按类型分别映射，不要用一个字段兜全部类型。**
+- 吸收位置：`backend/app/services/auxiliary/application.py`、`backend/app/models/market.py`、`backend/app/engine/evaluator.py`、`backend/app/services/feature_builder.py`、`backend/scripts/repair_limit_amount_nulls.py`。
+
+## L-214 持仓窗口内的除权必须按复权口径判定出场：raw 空间的除权跳空会被记成跳空止损，还会让退出价落在 bar 区间之外
+
+- 状态：active（已落地修复 2026-11-25）。
+- 适用：`outcome_simulation._simulate_outcome` 及任何「以入场价为基准」的出场判定（止损线、止盈线、移动保护、入场日最低价、MA 破位）。
+- 证据：
+  - 300660 2026-05-26 送转 30.6%（adj_factor 比值 1.3062）：除权日 raw 开盘 -25%，真实涨跌幅只有 -2.5%，旧实现记为 `stop_loss_gap`。
+  - 跳空止损上限（-15%）在 raw 空间把退出价定在除权日 bar 区间之外，结算抛 `ExitPriceOutOfRangeError`（10 元入场、6.8 元开盘 → 退出价 8.5 元，当日区间 [6.6, 7.0]）。
+  - 619 条已结算推荐里 3 条窗口内含除权日（0.3%~0.7% 分红，未触发 >20% 检测），`max_return`/`min_return` 偏差 0.3~0.8pp。
+- 永久规则：
+  - **(a) 出场判定与窗口指标必须在同一复权口径（以入场日 `adj_factor` 为基准）里做；折算范围包含 `ma5/ma10/ma20/ma30/ma60` 与 MA 兜底现算用的入场前收盘。**
+  - **(b) 落库的 `exit_price` 必须是退出日真实成交价；收益用复权价计算，两者不可混用。**
+  - **(c) 事后用 `pct_chg` 链或 adj 比值修正收益，只是复权因子不可用时的兜底，不能替代出场判定本身的复权。**
+- 吸收位置：`backend/app/services/outcome_simulation.py`（`_RebasedBar`、`_rebase_holding_bars`、`_simulate_outcome`）、`backend/tests/test_outcome_simulation.py::test_simulate_outcome_ex_right_day_in_window_is_not_a_stop_loss`、`test_simulate_outcome_window_metrics_adjusted_on_ex_right_day`。
+- 相关：L-207（口径错误固化为永久黄项）、L-211（同一批体检里的数据新鲜度口径问题）。
