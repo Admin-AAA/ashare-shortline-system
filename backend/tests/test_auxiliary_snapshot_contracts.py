@@ -179,7 +179,7 @@ def test_failure_and_successful_empty_are_distinct_terminal_contracts() -> None:
         )
 
 
-def test_inventory_separates_exactly_thirteen_state_four_publishable_snapshots_and_one_audit_only_artifact() -> None:
+def test_inventory_separates_exactly_fourteen_state_four_publishable_snapshots_and_one_audit_only_artifact() -> None:
     state = {entry.key for entry in AUXILIARY_DATASET_INVENTORY if entry.is_state_dataset}
     snapshots = {entry.key for entry in AUXILIARY_DATASET_INVENTORY if entry.is_snapshot_dataset}
     audit_only = {entry.key for entry in AUXILIARY_AUDIT_ONLY_DATASET_INVENTORY}
@@ -188,9 +188,10 @@ def test_inventory_separates_exactly_thirteen_state_four_publishable_snapshots_a
     assert snapshots == IMMUTABLE_PARTITION_SNAPSHOT_DATASET_KEYS
     assert audit_only == AUDIT_ONLY_AUXILIARY_DATASET_KEYS
     assert audit_only == AUDIT_ONLY_IMMUTABLE_PARTITION_SNAPSHOT_DATASET_KEYS
-    assert len(state) == 13
+    # 2026-11-25：daily_basic 接入（PE/市值此前从未进入特征），state 13 → 14。
+    assert len(state) == 14
     assert len(snapshots) == 4
-    assert len(AUXILIARY_DATASET_INVENTORY) == 17
+    assert len(AUXILIARY_DATASET_INVENTORY) == 18
     assert state.isdisjoint(snapshots)
     assert snapshots.isdisjoint(audit_only)
     for entry in AUXILIARY_DATASET_INVENTORY:

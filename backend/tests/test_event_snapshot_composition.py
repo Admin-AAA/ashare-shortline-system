@@ -460,7 +460,7 @@ def test_injected_composition_freezes_full_inventory_and_routes_events_through_g
         event_keys = set(EVENT_SNAPSHOT_CONTRACTS)
         assert composition.registry.is_frozen is True
         assert set(by_dataset) == state_keys | event_keys
-        assert len(by_dataset) == 17
+        assert len(by_dataset) == 18
         assert readiness.checked == [entry.key for entry in AUXILIARY_DATASET_INVENTORY if entry.is_state_dataset]
         assert all(not by_dataset[key].errors for key in state_keys | event_keys)
         assert all(call[2] == "" for call in raw_provider.calls)

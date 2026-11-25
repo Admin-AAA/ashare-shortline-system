@@ -269,9 +269,9 @@ def test_application_routes_the_complete_frozen_inventory_without_event_table_fa
         assert tuple(item.dataset_key for item in result.orchestrated.results) == tuple(
             entry.key for entry in AUXILIARY_DATASET_INVENTORY
         )
-        assert len(result.orchestrated.results) == 17
+        assert len(result.orchestrated.results) == 18
         assert readiness.checked == [entry.key for entry in AUXILIARY_DATASET_INVENTORY if entry.is_state_dataset]
-        assert fetcher.calls == 13
+        assert fetcher.calls == 14
         assert set(raw.calls) == {contract.endpoint for contract in EVENT_SNAPSHOT_CONTRACTS.values()}
         assert "stk_surv" not in raw.calls
         assert "institutional_survey" not in result.orchestrated.by_dataset

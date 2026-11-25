@@ -29,6 +29,7 @@ from app.models.tables import (
     CapitalFlow,
     ConceptSector,
     ConceptSectorStock,
+    DailyBasic,
     DailyKbar,
     DragonTiger,
     FinaIndicator,
@@ -1118,6 +1119,20 @@ class _StateViews:
             for code, item in latest.items()
         }}
 
+    def daily_basic(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
+        """当日估值/规模快照。total_mv/circ_mv 单位万元（与 Tushare 一致）。
+
+        与 capital_flow 同样按当日取：这两个数据集都在盘前入库，17:35 正式推荐时
+        当日数据已就绪；取不到时下游按缺失处理，不会写成 0。
+        """
+        rows = self._session.scalars(
+            select(DailyBasic).where(
+                DailyBasic.code.in_(request.requested_codes),
+                DailyBasic.trade_date == self._target(request),
+            )
+        ).all()
+        return {"daily_basics": {item.code: _row(item) for item in rows}}
+
     def auction(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
         rows = self._session.scalars(select(AuctionData).where(AuctionData.code.in_(request.requested_codes), AuctionData.trade_date == self._target(request))).all()
         return {"auctions": {item.code: _row(item) for item in rows}}
@@ -1205,6 +1220,7 @@ def build_standard_state_adapters(
         ("pledge_stat", fetch("pledge_stat"), views.pledge_stat),
         ("broker_recommend", fetch("broker_recommend"), views.broker_recommend),
         ("fina_indicator", fetch("fina_indicator"), views.fina_indicator),
+        ("daily_basic", fetch("daily_basic"), views.daily_basic),
         ("auction", fetch("auction"), views.auction),
         ("holder_number", fetch("holder_number"), views.holder_number),
     )

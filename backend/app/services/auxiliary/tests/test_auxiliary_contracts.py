@@ -439,7 +439,7 @@ def test_inventory_is_frozen_auditable_and_marks_identity_specific_work_as_block
 
     validate_auxiliary_inventory()
     assert REQUIRED_AUXILIARY_CATEGORIES <= {entry.category for entry in AUXILIARY_DATASET_INVENTORY}
-    assert len(AUXILIARY_DATASET_INVENTORY) == 17
+    assert len(AUXILIARY_DATASET_INVENTORY) == 18
     assert {entry.key for entry in AUXILIARY_AUDIT_ONLY_DATASET_INVENTORY} == AUDIT_ONLY_AUXILIARY_DATASET_KEYS
     assert set(AUXILIARY_DATASET_BY_KEY) == {entry.key for entry in AUXILIARY_DATASET_INVENTORY}
     state_entries = tuple(entry for entry in AUXILIARY_DATASET_INVENTORY if entry.is_state_dataset)
@@ -691,7 +691,7 @@ def test_s4_inventory_declares_unique_plans_only_for_state_datasets_and_register
     assert set(AUXILIARY_UNIQUE_MIGRATION_PLANS) == STATE_ATOMIC_UPSERT_DATASET_KEYS
     assert not (set(AUXILIARY_UNIQUE_MIGRATION_PLANS) & IMMUTABLE_PARTITION_SNAPSHOT_DATASET_KEYS)
     assert set(AUXILIARY_DATASET_COMPLETION) == inventory_keys
-    assert len(unique_versions) == 13
+    assert len(unique_versions) == 14
 
     for dataset_key in STATE_ATOMIC_UPSERT_DATASET_KEYS:
         entry = next(item for item in AUXILIARY_DATASET_INVENTORY if item.key == dataset_key)

@@ -168,6 +168,7 @@ def _feature_views(result: AuxiliaryOrchestratorResult, *, as_of_trade_date: dat
         "pledges": {}, "broker_recs": {}, "share_floats_upcoming": {},
         "margin_details": {}, "block_trades": {}, "hsgt_top10": {},
         "hsgt_flow": None, "finas": {}, "holder_numbers": {},
+        "daily_basics": {},
         "holder_trades": {}, "coverage": {},
     }
     coverage: dict[str, Any] = {}

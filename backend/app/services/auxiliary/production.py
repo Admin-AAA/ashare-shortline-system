@@ -22,6 +22,7 @@ from app.models.tables import (
     CapitalFlow,
     ConceptSector,
     ConceptSectorStock,
+    DailyBasic,
     DragonTiger,
     FinaIndicator,
     HolderNumber,
@@ -414,6 +415,12 @@ AUXILIARY_DATASET_INVENTORY: tuple[AuxiliaryDatasetInventoryEntry, ...] = (
         update_policy=_atomic(("ann_date", "roe", "grossprofit_margin", "netprofit_margin", "netprofit_yoy", "or_yoy", "eps", "bps"), preserve_fields=("id", "updated_at")),
     ),
     AuxiliaryDatasetInventoryEntry(
+        key="daily_basic", category="daily_basic", view_key="market_pool.daily_basics", model=DailyBasic,
+        natural_key=("code", "trade_date"), freshness_field="trade_date",
+        # daily_basic 表没有 created_at 列（只有 id + 四个指标列），不能用默认 preserve。
+        update_policy=_atomic(("turnover_rate", "pe_ttm", "total_mv", "circ_mv"), preserve_fields=("id",)),
+    ),
+    AuxiliaryDatasetInventoryEntry(
         key="auction", category="auction", view_key="market_pool.auctions", model=AuctionData,
         natural_key=("code", "trade_date"), freshness_field="trade_date",
         update_policy=_atomic(("vol", "price", "amount", "pre_close", "turnover_rate", "volume_ratio", "float_share")),
@@ -475,6 +482,7 @@ STATE_ATOMIC_UPSERT_DATASET_KEYS = frozenset(
         "fina_indicator",
         "auction",
         "holder_number",
+        "daily_basic",
     }
 )
 IMMUTABLE_PARTITION_SNAPSHOT_DATASET_KEYS = frozenset(
@@ -620,6 +628,7 @@ _AUXILIARY_UNIQUE_MIGRATION_SPECS: tuple[tuple[str, str, str], ...] = (
     ("fina_indicator", "V019_auxiliary_fina_indicator_unique", "uq_fina_code_end_date"),
     ("auction", "V020_auxiliary_auction_unique", "uq_auction_data_code_date"),
     ("holder_number", "V021_auxiliary_holder_number_unique", "uq_holder_numbers_code_date"),
+    ("daily_basic", "V022_auxiliary_daily_basic_unique", "uq_daily_basic_code_date"),
 )
 
 

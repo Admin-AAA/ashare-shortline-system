@@ -865,6 +865,7 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
     hsgt_top10_map = aux.get("hsgt_top10", {})
     hsgt_flow_data = aux.get("hsgt_flow")
     fina_map = aux.get("finas", {})
+    daily_basic_map = aux.get("daily_basics", {})
     broken_limit_up_map = aux.get("broken_limit_up", {})
     holder_number_map = aux.get("holder_numbers", {})
     holder_trade_map = aux.get("holder_trades", {})
@@ -1163,6 +1164,24 @@ def _enrich_with_auxiliary_data(stocks: list[dict[str, Any]], db: Any, snapshot:
         else:
             stock["has_real_fundamental"] = False
             missing_fields.add("fundamental")
+
+        # ── 估值/规模（daily_basic） ──
+        # 2026-11-25 接入：此前 pe_ttm 从 fina_indicator 取，但该表没有这一列，
+        # 619 条实盘推荐里 pe_ttm 全部是 0.0，而 daily_basic 570 万行有完整 PE。
+        # total_mv/circ_mv 单位万元，转亿元后与行情池口径一致。
+        dbasic = daily_basic_map.get(code)
+        if dbasic:
+            pe_ttm = dbasic.get("pe_ttm")
+            if pe_ttm is not None:
+                profile["pe_ttm"] = float(pe_ttm)
+            total_mv = dbasic.get("total_mv")
+            if total_mv is not None:
+                stock["total_mv_yi"] = round(float(total_mv) / 1e4, 2)
+            circ_mv = dbasic.get("circ_mv")
+            if circ_mv is not None:
+                stock["free_mv_yi"] = round(float(circ_mv) / 1e4, 2)
+            missing_fields.discard("valuation")
+            data_quality["daily_basic_checked"] = True
 
         # ── 股东人数变化（筹码集中度代理） ──
         # 替换 SYNTHETIC 的 institution_holding_change：股东人数减少=机构建仓=看多
