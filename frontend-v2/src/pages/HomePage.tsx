@@ -15,7 +15,6 @@ import type {
   CockpitRecommendation,
   DashboardOverview,
   DataHealthDiagnostic,
-  HomeBootstrap,
   LlmReviewHealth,
   OutcomeSummary,
   RunProgress,
@@ -34,6 +33,7 @@ import { LlmStanceBadge } from "../components/LlmStanceBadge";
 import { MultiStrategyBadge } from "../components/MultiStrategyBadge";
 import { dashboardRunLabel } from "../utils/display";
 import { useUrlRoute } from "../app/useUrlRoute";
+import { useBootstrap } from "../ui/useMarketState";
 import { formatBj, parseUtc } from "../utils/time";
 import { isAiReviewDisabled } from "../types";
 
@@ -47,8 +47,9 @@ export function HomePage() {
   const loading = dashboardQuery.isLoading;
   const error = dashboardQuery.error?.message ?? "";
 
-  // 合并自着陆页的独有数据：最近 run + 策略开关状态 + 市场宽度
-  const [boot, setBoot] = useState<HomeBootstrap | null>(null);
+  // 合并自着陆页的独有数据：最近 run + 策略开关状态 + 市场宽度。
+  // 走 useBootstrap 的 react-query 缓存（含 localStorage 首屏），与其它页面共用同一次请求。
+  const boot = useBootstrap().data ?? null;
   // 数据健康度诊断（独立于 overview，调用 /api/admin/data-health）
   const [healthDiag, setHealthDiag] = useState<DataHealthDiagnostic | null>(null);
   const [healthLoading, setHealthLoading] = useState(false);
@@ -59,17 +60,6 @@ export function HomePage() {
   const [llmHealth, setLlmHealth] = useState<LlmReviewHealth | null>(null);
   // 候选股票历史已结算推荐胜率（北极星 B 项「历史同策略胜率」一屏可见）
   const [outcomeMap, setOutcomeMap] = useState<Record<string, OutcomeSummary>>({});
-
-  useEffect(() => {
-    const controller = new AbortController();
-    api
-      .bootstrap({ signal: controller.signal })
-      .then((d) => setBoot(d))
-      .catch(() => {
-        /* 着陆页数据非关键，失败则静默降级，不阻塞驾驶舱 */
-      });
-    return () => controller.abort();
-  }, []);
 
   useEffect(() => {
     const controller = new AbortController();

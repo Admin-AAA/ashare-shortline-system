@@ -483,8 +483,8 @@ export const api = {
     request<TextEventLabelResponse>(`/api/text-events/labels?code=${encodeURIComponent(code)}&limit=${limit}`),
   horizonRun: (horizon: "mid" | "long", payload: { as_of: string; strategy_ids?: string[]; force?: boolean }) =>
     requestWithTimeout<HorizonRunResponse>(`/api/horizons/${horizon}/run`, 900_000, json("POST", payload)),
-  horizonTrades: (horizon: "mid" | "long") =>
-    request<HorizonTradesResponse>(`/api/horizons/${horizon}/trades`),
+  horizonTrades: (horizon: "mid" | "long", strategyId?: string) =>
+    request<HorizonTradesResponse>(`/api/horizons/${horizon}/trades${strategyId ? `?strategy_id=${encodeURIComponent(strategyId)}` : ""}`),
   horizonMetrics: (horizon: "mid" | "long", origin: "all" | HorizonOrigin, windowDays?: number | null) =>
     request<HorizonMetricsResponse>(`/api/horizons/${horizon}/metrics?origin=${origin}${windowDays ? `&window_days=${windowDays}` : ""}`),
   horizonRuns: (horizon: "mid" | "long", limit = 60) =>

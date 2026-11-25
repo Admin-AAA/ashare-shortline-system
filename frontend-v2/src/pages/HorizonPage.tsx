@@ -1,7 +1,7 @@
 import { ReturnSourceBlock, HS300_HINT } from "../components/ReturnSourceBlock";
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, CalendarClock, Layers, Archive } from "lucide-react";
-import { api, type HorizonBatch, type HorizonMetrics, type HorizonPick, type HorizonStrategy, type HorizonStrategiesResponse, type HorizonPicksResponse, type HorizonMetricsResponse } from "../api/client";
+import { api, type HorizonBatch, type HorizonMetrics, type HorizonPick, type HorizonStrategy, type HorizonStrategiesResponse, type HorizonPicksResponse, type HorizonMetricsResponse, type HorizonTradesResponse } from "../api/client";
 import { EmptyState, ErrorPage, PageSkeleton } from "../components/StateViews";
 import { useApi } from "../app/useApi";
 import "../styles/horizon.css";
@@ -287,26 +287,13 @@ function ReviewView({ horizon, list, rz, onPick }: { horizon: H; list: HorizonSt
   const [st, setSt] = useState<string>("all");
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<"date" | "ret_desc" | "ret_asc">("date");
-  // 收益曲线要全量批次（列表是分页的）：按 200 一页拉全，只跟随策略筛选，不跟随状态/搜索（否则幸存者偏差）。
-  // 列表分页直接切这份全量数据（后端分页同样是按文件新→旧切片，结果一致），不再另发 page_size=20 的请求，翻页也不用等网络。
-  const allQ = useApi<{ batches: HorizonBatch[]; total: number; total_picks: number }>(async () => {
-    const sq = sid === "all" ? undefined : sid;
-    const first = await api.horizonPicksPage(horizon, 1, 200, sq);
-    const n = Math.ceil((first.total ?? 0) / 200);
-    const rest = await Promise.all(Array.from({ length: Math.max(0, n - 1) }, (_, i) => api.horizonPicksPage(horizon, i + 2, 200, sq)));
-    return { batches: [first, ...rest].flatMap((r) => r.batches), total: first.total ?? 0, total_picks: first.total_picks ?? 0 };
-  }, [horizon, sid]);
-  const all = { ...allQ, data: allQ.data?.batches };
-  const res = {
-    ...allQ,
-    data: allQ.data && {
-      batches: allQ.data.batches.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
-      total: allQ.data.total,
-      total_picks: allQ.data.total_picks,
-      has_more: page * PAGE_SIZE < allQ.data.total,
-    },
-  };
-  const curvePicks = useMemo(() => (allQ.data?.batches ?? []).flatMap((b) => b.picks), [allQ.data]);
+  // 列表走服务端分页（每页 20 批），首屏不用等全量结算；收益曲线要全部已结算笔，
+  // 改读 /trades（后端 30s 缓存，诊断页的 /metrics 也读它）。旧实现为曲线一次拉 9 页
+  // 200 批，9 个请求在后端批量结算锁上串行，p95 5.9s。
+  const sq = sid === "all" ? undefined : sid;
+  const res = useApi<HorizonPicksResponse>(() => api.horizonPicksPage(horizon, page, PAGE_SIZE, sq), [horizon, sid, page]);
+  const curveQ = useApi<HorizonTradesResponse>(() => api.horizonTrades(horizon, sq), [horizon, sid]);
+  const curvePicks = useMemo(() => curveQ.data?.trades ?? [], [curveQ.data]);
   const kw = q.trim();
   const batches = res.data?.batches ?? [];
   const shown = batches
@@ -354,7 +341,7 @@ function ReviewView({ horizon, list, rz, onPick }: { horizon: H; list: HorizonSt
           <Kpi label="开盘涨停取消买入" value={`${cancelled} 只`} tone={cancelled ? "amber" : undefined} />
         </div>
       </section>
-      {all.data && (
+      {curveQ.data && (
         <EquityCurve items={curvePicks} classify={classifyHorizon} />
       )}
       {res.loading ? <PageSkeleton title="加载批次" /> : res.error ? <ErrorPage title="批次加载失败" message={res.error} onRetry={res.refetch} /> : <>
@@ -383,7 +370,9 @@ function BatchCard({ b, defaultOpen, list, highlight, rz, onPick }: { b: Horizon
   // 盘中确认：入场日当天日K还没入库，后端用实时快照给出开盘价与浮盈，收益口径是「实时价」不是收盘价
   const intraday = b.picks.some((p) => p.intraday);
   const markDate = b.picks.find((p) => p.status === "holding" && p.mark_date)?.mark_date;
-  const retHead = b.status === "closed" ? "收益（含成本）" : hasHolding ? (intraday ? "浮动收益（盘中实时价，未扣 0.3% 成本）" : `浮动收益（按 ${markDate ?? "最新"} 收盘，未扣 0.3% 成本）`) : "收益";
+  // 表头只留短标签，口径说明放 title 悬浮提示，避免列头过长
+  const retHead = b.status === "closed" ? "收益（含成本）" : hasHolding ? "浮动收益" : "收益";
+  const retTitle = b.status === "closed" || !hasHolding ? undefined : intraday ? "盘中实时价，未扣 0.3% 成本" : `按 ${markDate ?? "最新"} 收盘，未扣 0.3% 成本`;
   // 同一批次只有一个策略，规则分单位一致；按批内排名排序，不跨策略比较
   const picks = [...b.picks].sort((x, y) => (x.selection_rank ?? 999) - (y.selection_rank ?? 999));
   return (
@@ -405,7 +394,7 @@ function BatchCard({ b, defaultOpen, list, highlight, rz, onPick }: { b: Horizon
         {rz && <div style={{ padding: "0 14px" }}><QualityStrip quality={list.find((x) => x.id === b.strategy_id)?.metrics.quality} realized={rz.of(b.strategy_id)} realizedKind={rz.kind} realizedWindow={rz.window} /></div>}
         <div className="hz-tablewrap">
           <table className="hz-table">
-            <thead><tr><th className="r">排名</th><th>代码</th><th>名称</th><th className="r" title={first?.rule_score_note || undefined}>{first ? <>{`${first.rule_score_label}（${better(first.rule_score_better)}）`}{first.rule_score_note ? <span className="hz-score-note">{first.rule_score_note}</span> : null}</> : "规则分"}</th><th>状态</th><th>买入</th><th>卖出 / 估值</th><th className="r">天数</th><th className="r">{retHead}</th><th>入选原因</th></tr></thead>
+            <thead><tr><th className="r">排名</th><th>代码</th><th>名称</th><th className="r" title={first?.rule_score_note || undefined}>{first ? <>{`${first.rule_score_label}（${better(first.rule_score_better)}）`}{first.rule_score_note ? <span className="hz-score-note">{first.rule_score_note}</span> : null}</> : "规则分"}</th><th>状态</th><th>买入</th><th>卖出 / 估值</th><th className="r">天数</th><th className="r" title={retTitle}>{retHead}</th><th>入选原因</th></tr></thead>
             <tbody>
               {picks.map((p) => (
                 <tr key={p.code} className={`hz-row${isCancelled(p) ? " hz-row--cancel" : ""}${highlight && (p.code.includes(highlight) || p.name.includes(highlight)) ? " hz-hl" : ""}`}
