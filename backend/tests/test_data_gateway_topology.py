@@ -69,7 +69,7 @@ def test_topology_reflects_switch_and_breakers(db_session, monkeypatch):
     assert by["tushare.*"]["quantdata"]["breaker"]["state"] == "half_open"
     assert by["tushare.*"]["promax"]["breaker"]["state"] == "open"
     # 2026-11-15 小石整源退役：拓扑里不能再出现任何 xiaoshi provider（否则管理页会显示一个死源）
-    assert not [p for provs in by.values() for name in provs if "xiaoshi" in name]
+    assert not [name for provs in by.values() for name in provs if "xiaoshi" in name]
     assert "xiaoshi.alt" not in by
     # 腾讯行情受 cutover flag 控制，默认不在链上
     assert by["quote.realtime"]["tencent_qt"]["active"] is False
