@@ -33,12 +33,14 @@ class RecommendationReconstructionBatch(Base):
             "status",
             "completed_at",
         ),
+        Index("ix_recommendation_reconstruction_batches_window_start", "window_start"),
+        Index("ix_recommendation_reconstruction_batches_window_end", "window_end"),
     )
 
     batch_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     schema_version: Mapped[int] = mapped_column(SmallInteger, default=1)
-    window_start: Mapped[str] = mapped_column(String(10), index=True)
-    window_end: Mapped[str] = mapped_column(String(10), index=True)
+    window_start: Mapped[str] = mapped_column(String(10))
+    window_end: Mapped[str] = mapped_column(String(10))
     expected_trade_dates_json: Mapped[str] = mapped_column(Text)
     expected_trade_date_count: Mapped[int] = mapped_column(Integer)
     completed_trade_date_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -73,8 +75,12 @@ class RecommendationRun(Base):
             "trade_date",
             "actual_generated_at",
         ),
-        Index("ix_rec_runs_reconstruction_batch", "reconstruction_batch_id"),
         Index("ix_rec_runs_evidence_identity_hash", "evidence_identity_hash"),
+        Index("idx_recommendation_runs_lease", "status", "lease_expires_at"),
+        Index("idx_recommendation_runs_lifecycle", "lifecycle_phase", "run_revision"),
+        Index("idx_runs_mode_trade_date", "run_mode", "trade_date"),
+        Index("idx_runs_status_started", "status", "started_at"),
+        Index("ix_recommendation_runs_data_as_of", "data_as_of"),
         Index(
             "uq_rec_runs_reconstruction_batch_date",
             "reconstruction_batch_id",
@@ -92,7 +98,7 @@ class RecommendationRun(Base):
         default="historical_replay",
         server_default="historical_replay",
     )
-    data_as_of: Mapped[str | None] = mapped_column(String(10), nullable=True, index=True)
+    data_as_of: Mapped[str | None] = mapped_column(String(10), nullable=True)
     source_snapshot_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     # Nullable during the compatibility phase. Task 1.3+ owns explicit writes and
@@ -256,12 +262,17 @@ class RecommendationCollectionSeal(Base):
 
 class Recommendation(Base):
     __tablename__ = "recommendations"
+    __table_args__ = (
+        Index("idx_recs_code_trade", "code", "trade_date"),
+        Index("idx_recs_run_score", "run_id", "final_score"),
+        Index("idx_recs_trade_score", "trade_date", "final_score"),
+    )
 
     recommendation_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    run_id: Mapped[str] = mapped_column(String(60), index=True)
-    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    run_id: Mapped[str] = mapped_column(String(60))
+    trade_date: Mapped[str] = mapped_column(String(10))
     recommended_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     name: Mapped[str] = mapped_column(String(80))
     industry: Mapped[str | None] = mapped_column(String(80))
     recommend_price: Mapped[float] = mapped_column(Float, default=0)
@@ -284,11 +295,17 @@ class Recommendation(Base):
 
 class RecommendationOutcome(Base):
     __tablename__ = "recommendation_outcomes"
+    __table_args__ = (
+        Index("idx_outcomes_entry_label", "entry_triggered", "outcome_label"),
+        Index("idx_outcomes_label", "outcome_label"),
+        Index("ix_outcomes_current_fingerprint", "current_calculation_fingerprint"),
+        Index("ix_recommendation_outcomes_calculation_version_id", "calculation_version_id"),
+    )
 
     recommendation_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    calculation_version_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    calculation_version_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
     current_calculation_fingerprint: Mapped[str | None] = mapped_column(
-        CHAR(64), nullable=True, index=True
+        CHAR(64), nullable=True
     )
     projection_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     projected_at: Mapped[datetime | None] = mapped_column(
@@ -337,18 +354,21 @@ class RecommendationOutcomeVersion(Base):
     """Append-only calculation evidence; RecommendationOutcome is only the current projection."""
 
     __tablename__ = "recommendation_outcome_versions"
+    __table_args__ = (
+        Index("ix_outcome_versions_rec_computed", "recommendation_id", "computed_at"),
+        Index("ix_recommendation_outcome_versions_computed_at", "computed_at"),
+        UniqueConstraint("calculation_fingerprint", name="uq_outcome_versions_calc_fingerprint"),
+    )
 
     version_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    recommendation_id: Mapped[str] = mapped_column(String(80), index=True)
+    recommendation_id: Mapped[str] = mapped_column(String(80))
     calculation_version: Mapped[str] = mapped_column(String(80))
     entry_policy_id: Mapped[str] = mapped_column(String(80))
     horizon_days: Mapped[int] = mapped_column(Integer)
     label_source: Mapped[str] = mapped_column(String(20))
     result_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"))
-    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive, index=True)
-    calculation_fingerprint: Mapped[str | None] = mapped_column(
-        CHAR(64), nullable=True, unique=True
-    )
+    computed_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
+    calculation_fingerprint: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
     result_hash: Mapped[str | None] = mapped_column(CHAR(64), nullable=True)
     recommendation_identity_hash: Mapped[str | None] = mapped_column(
         CHAR(64), nullable=True
@@ -405,7 +425,7 @@ class ReviewNote(Base):
     __table_args__ = (UniqueConstraint("recommendation_id", name="uq_review_note_recommendation"),)
 
     note_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    recommendation_id: Mapped[str] = mapped_column(String(80), index=True)
+    recommendation_id: Mapped[str] = mapped_column(String(80))
     user_label: Mapped[str | None] = mapped_column(String(80))
     failure_reason: Mapped[str | None] = mapped_column(String(120))
     review_text: Mapped[str | None] = mapped_column(Text)
@@ -420,7 +440,7 @@ class WatchItem(Base):
     watch_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     code: Mapped[str] = mapped_column(String(6), index=True)
     source_run_id: Mapped[str] = mapped_column(String(60), index=True)
-    source_recommendation_id: Mapped[str] = mapped_column(String(80), index=True)
+    source_recommendation_id: Mapped[str] = mapped_column(String(80))
     watch_status: Mapped[str] = mapped_column(String(20), default="watching")
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
@@ -442,16 +462,20 @@ class IntradayLockMonitor(Base):
     """盘中锁利影子监控任务(只记录不交易)。每个精选持仓一条监控任务。"""
 
     __tablename__ = "intraday_lock_monitors"
+    __table_args__ = (
+        Index("idx_ilm_recommendation", "recommendation_id"),
+        Index("idx_ilm_status_date", "status", "trade_date"),
+    )
 
     monitor_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    recommendation_id: Mapped[str] = mapped_column(String(80), index=True)
+    recommendation_id: Mapped[str] = mapped_column(String(80))
     code: Mapped[str] = mapped_column(String(6))
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     entry_date: Mapped[str] = mapped_column(String(10))
     entry_price: Mapped[float] = mapped_column(Float)
     target_pct: Mapped[float] = mapped_column(Float)
     lock_ratio: Mapped[float] = mapped_column(Float, default=0.5)
-    status: Mapped[str] = mapped_column(String(20), index=True, default="monitoring")
+    status: Mapped[str] = mapped_column(String(20), default="monitoring")
     triggered_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
@@ -461,11 +485,15 @@ class IntradayLockSignal(Base):
     """盘中锁利信号。触及锁利目标时记录,盘后回填走势并与实际出场对比。"""
 
     __tablename__ = "intraday_lock_signals"
+    __table_args__ = (
+        Index("idx_ils_date_status", "trade_date", "status"),
+        Index("idx_ils_monitor", "monitor_id"),
+    )
 
     signal_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    monitor_id: Mapped[str] = mapped_column(String(80), index=True)
+    monitor_id: Mapped[str] = mapped_column(String(80))
     code: Mapped[str] = mapped_column(String(6))
-    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10))
     target_pct: Mapped[float] = mapped_column(Float)
     lock_ratio: Mapped[float] = mapped_column(Float, default=0.5)
     trigger_time: Mapped[str] = mapped_column(String(40))

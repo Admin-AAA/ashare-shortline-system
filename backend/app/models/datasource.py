@@ -103,10 +103,18 @@ class DataSourceRequestTrace(Base):
     幂等键 (correlation_id, request_identity_hash) 唯一。
     """
     __tablename__ = "data_source_request_traces"
+    __table_args__ = (
+        UniqueConstraint(
+            "correlation_id",
+            "request_identity_hash",
+            name="uq_trace_idempotency",
+        ),
+        Index("ix_trace_operation_time", "operation_name", "started_at"),
+    )
 
     trace_id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    correlation_id: Mapped[str] = mapped_column(String(80), index=True)
-    operation_name: Mapped[str] = mapped_column(String(80), index=True)
+    correlation_id: Mapped[str] = mapped_column(String(80))
+    operation_name: Mapped[str] = mapped_column(String(80))
     request_identity_hash: Mapped[str] = mapped_column(CHAR(64))
     contract_id: Mapped[str] = mapped_column(String(80))
     contract_version: Mapped[int] = mapped_column(Integer)
@@ -131,12 +139,17 @@ class DataSourceAttempt(Base):
     contract_validation_json 为结构化校验摘要，不含敏感正文。
     """
     __tablename__ = "data_source_attempts"
+    __table_args__ = (
+        UniqueConstraint("trace_id", "ordinal", name="uq_attempt_trace_ordinal"),
+        Index("ix_attempt_provider_outcome", "provider", "outcome"),
+        Index("ix_data_source_attempts_outcome", "outcome"),
+    )
 
     attempt_id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    trace_id: Mapped[str] = mapped_column(String(80), index=True)
+    trace_id: Mapped[str] = mapped_column(String(80))
     ordinal: Mapped[int] = mapped_column(Integer)
-    provider: Mapped[str] = mapped_column(String(40), index=True)
-    outcome: Mapped[str] = mapped_column(String(20), index=True)
+    provider: Mapped[str] = mapped_column(String(40))
+    outcome: Mapped[str] = mapped_column(String(20))
     duration_ms: Mapped[int] = mapped_column(BigInteger, default=0)
     failure_category: Mapped[str | None] = mapped_column(String(40))
     retryable: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

@@ -395,7 +395,7 @@ def _completion_summary(db, freq: str, start_date: str, end_date: str):
         .order_by(DailyKbar.trade_date, DailyKbar.code)
         .with_hint(
             DailyKbar,
-            "FORCE INDEX (ix_daily_kbars_trade_date)",
+            "FORCE INDEX (idx_kbars_td_ma5)",
             dialect_name="mysql",
         )
     ).all()

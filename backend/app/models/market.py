@@ -57,7 +57,7 @@ class StockMetadataHistory(Base):
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引被 (code, effective_from, effective_to) 覆盖
     name: Mapped[str] = mapped_column(String(80))
     industry: Mapped[str | None] = mapped_column(String(80), nullable=True)
     market: Mapped[str | None] = mapped_column(String(16), nullable=True)
@@ -100,11 +100,15 @@ class DailyKbar(Base):
     自定义指标：本地计算（bias/vol_ratio/breakout/drawdown/holder_pct）
     """
     __tablename__ = "daily_kbars"
-    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_daily_kbar_code_date"),)
+    __table_args__ = (
+        UniqueConstraint("code", "trade_date", name="uq_daily_kbar_code_date"),
+        Index("idx_kbars_td_ma5", "trade_date", "ma5"),
+        Index("ix_kbars_td_chip50", "trade_date", "chip_cost_50"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
-    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10))
 
     # OHLCV
     open: Mapped[float] = mapped_column(Float, default=0)
@@ -218,7 +222,10 @@ class StockQuote(Base):
     每个 code 每天一条记录，最新数据覆盖旧数据。
     """
     __tablename__ = "stock_quotes"
-    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_stock_quote_code_date"),)
+    __table_args__ = (
+        UniqueConstraint("code", "trade_date", name="uq_stock_quote_code_date"),
+        Index("idx_quotes_status", "freshness_status", "snapped_at"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
@@ -253,11 +260,15 @@ class StockQuote(Base):
 class LimitUpBoard(Base):
     """涨停板榜单。数据来源：Tushare limit_list_d。"""
     __tablename__ = "limit_up_board"
-    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_limit_up_board_code_date"),)
+    __table_args__ = (
+        UniqueConstraint("code", "trade_date", name="uq_limit_up_board_code_date"),
+        Index("idx_lub_td_limit", "trade_date", "limit_type"),
+        Index("idx_lub_td_ltimes", "trade_date", "limit_times"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
-    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10))
     name: Mapped[str | None] = mapped_column(String(80))
     pct_chg: Mapped[float] = mapped_column(Float, default=0)
     limit_type: Mapped[str] = mapped_column(String(2), default="U")  # U=涨停 D=跌停
@@ -276,11 +287,14 @@ class LimitUpBoard(Base):
 class ConceptSector(Base):
     """概念板块列表。数据来源：Tushare ths_index。"""
     __tablename__ = "concept_sector"
-    __table_args__ = (UniqueConstraint("sector_code", "trade_date", name="uq_concept_sector_code_date"),)
+    __table_args__ = (
+        UniqueConstraint("sector_code", "trade_date", name="uq_concept_sector_code_date"),
+        Index("idx_cs_td", "trade_date"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    sector_code: Mapped[str] = mapped_column(String(20), index=True)
-    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    sector_code: Mapped[str] = mapped_column(String(20))
+    trade_date: Mapped[str] = mapped_column(String(10))
     sector_name: Mapped[str] = mapped_column(String(80))
     member_count: Mapped[int] = mapped_column(Integer, default=0)
     exchange: Mapped[str | None] = mapped_column(String(8))
@@ -293,11 +307,14 @@ class ConceptSector(Base):
 class ConceptSectorStock(Base):
     """概念板块成分股。数据来源：Tushare ths_member。"""
     __tablename__ = "concept_sector_stock"
-    __table_args__ = (UniqueConstraint("sector_code", "code", "trade_date", name="uq_concept_sector_stock_sc_c_d"),)
+    __table_args__ = (
+        UniqueConstraint("sector_code", "code", "trade_date", name="uq_concept_sector_stock_sc_c_d"),
+        Index("idx_css_code_sc", "code", "sector_code"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    sector_code: Mapped[str] = mapped_column(String(20), index=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    sector_code: Mapped[str] = mapped_column(String(20))
+    code: Mapped[str] = mapped_column(String(6))
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     name: Mapped[str | None] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
@@ -306,11 +323,14 @@ class ConceptSectorStock(Base):
 class CapitalFlow(Base):
     """个股资金流向。数据来源：Tushare moneyflow。"""
     __tablename__ = "capital_flow"
-    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_capital_flow_code_date"),)
+    __table_args__ = (
+        UniqueConstraint("code", "trade_date", name="uq_capital_flow_code_date"),
+        Index("idx_cf_td_main", "trade_date", "main_net_inflow_yi"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
-    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10))
     main_net_inflow_yi: Mapped[float | None] = mapped_column(Float)
     super_large_net_inflow_yi: Mapped[float | None] = mapped_column(Float)
     large_net_inflow_yi: Mapped[float | None] = mapped_column(Float)
@@ -326,11 +346,14 @@ class CapitalFlow(Base):
 class DragonTiger(Base):
     """龙虎榜。数据来源：Tushare top_list。"""
     __tablename__ = "dragon_tiger"
-    __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_dragon_tiger_code_date"),)
+    __table_args__ = (
+        UniqueConstraint("code", "trade_date", name="uq_dragon_tiger_code_date"),
+        Index("idx_dt_td_net", "trade_date", "net_amount_yi"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
-    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    code: Mapped[str] = mapped_column(String(6))
+    trade_date: Mapped[str] = mapped_column(String(10))
     name: Mapped[str | None] = mapped_column(String(80))
     reason: Mapped[str | None] = mapped_column(Text)
     buy_amount_yi: Mapped[float | None] = mapped_column(Float)
@@ -342,12 +365,15 @@ class DragonTiger(Base):
 class NewsAnnouncement(Base):
     """新闻公告。数据来源：eastmoney np-anotice API。"""
     __tablename__ = "news_announcement"
-    __table_args__ = (UniqueConstraint("source", "article_id", name="uq_news_announcement_src_aid"),)
+    __table_args__ = (
+        UniqueConstraint("source", "article_id", name="uq_news_announcement_src_aid"),
+        Index("idx_na_code_date", "code", "announce_date"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     source: Mapped[str] = mapped_column(String(40))
     article_id: Mapped[str] = mapped_column(String(80), index=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     announce_date: Mapped[str] = mapped_column(String(10), index=True)
     title: Mapped[str | None] = mapped_column(Text)
     summary: Mapped[str | None] = mapped_column(Text)
@@ -368,12 +394,13 @@ class MinuteKbar(Base):
             name="uq_minute_kbar_code_freq_time",
         ),
         Index("idx_mk_td_code", "trade_date", "code"),
+        Index("idx_mk_code_time", "code", "trade_time"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     code: Mapped[str] = mapped_column(String(6))  # 单列 code 索引与唯一键 (code, ...) 前缀冗余，2026-10-25 已从库中删除
     freq: Mapped[str] = mapped_column(String(5), default="1min")
-    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10))
     trade_time: Mapped[str] = mapped_column(String(19))  # YYYY-MM-DD HH:MM:SS
     open: Mapped[float] = mapped_column(Float, default=0)
     high: Mapped[float] = mapped_column(Float, default=0)
@@ -398,7 +425,7 @@ class IndexDaily(Base):
     __table_args__ = (UniqueConstraint("ts_code", "trade_date", name="uq_index_daily_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    ts_code: Mapped[str] = mapped_column(String(20), index=True)  # e.g. "000300.SH"
+    ts_code: Mapped[str] = mapped_column(String(20))  # e.g. "000300.SH"
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     close: Mapped[float] = mapped_column(Float, default=0)
     pct_chg: Mapped[float] = mapped_column(Float, default=0)      # 涨跌幅(%)
@@ -435,7 +462,7 @@ class MarginDetail(Base):
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_margin_detail_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     rzye: Mapped[float | None] = mapped_column(Float)        # 融资余额(亿)
     rqye: Mapped[float | None] = mapped_column(Float)        # 融券余额(亿)
@@ -471,7 +498,7 @@ class HsgtFlow(Base):
     __table_args__ = (UniqueConstraint("trade_date", name="uq_hsgt_flows_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    trade_date: Mapped[str] = mapped_column(String(10), index=True)
+    trade_date: Mapped[str] = mapped_column(String(10))
     north_money: Mapped[float | None] = mapped_column(Float)  # 北向资金(亿)
     south_money: Mapped[float | None] = mapped_column(Float)  # 南向资金(亿)
     hgt: Mapped[float | None] = mapped_column(Float)          # 沪股通(万元)
@@ -485,7 +512,7 @@ class HsgtTop10(Base):
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_hsgt_top10_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     name: Mapped[str | None] = mapped_column(String(20))
     close: Mapped[float | None] = mapped_column(Float)
@@ -504,7 +531,7 @@ class HkHolding(Base):
     __table_args__ = (UniqueConstraint("code", "trade_date", name="uq_hk_holdings_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     trade_date: Mapped[str] = mapped_column(String(10), index=True)
     vol: Mapped[float | None] = mapped_column(Float)   # 持股数量(股)
     ratio: Mapped[float | None] = mapped_column(Float)  # 持股比例(%)
@@ -517,7 +544,7 @@ class HolderNumber(Base):
     __table_args__ = (UniqueConstraint("code", "end_date", name="uq_holder_numbers_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     end_date: Mapped[str] = mapped_column(String(10), index=True)
     # 公告日。期末日之后才披露（中位 2 天、90 分位 10 天），按 end_date 判可见会让回放
     # 提前看到尚未公告的股东人数（L-160）。
@@ -536,7 +563,7 @@ class FinaIndicator(Base):
     __table_args__ = (UniqueConstraint("code", "end_date", name="uq_fina_code_end_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     end_date: Mapped[str] = mapped_column(String(8), index=True)       # 财报期末 YYYYMMDD
     ann_date: Mapped[str | None] = mapped_column(String(8), index=True)  # 公告日
     roe: Mapped[float | None] = mapped_column(Float)                    # 净资产收益率 %
@@ -583,12 +610,15 @@ class AuctionData(Base):
 class BrokerRecommend(Base):
     """券商金股。数据来源：Tushare broker_recommend。"""
     __tablename__ = "broker_recommends"
-    __table_args__ = (UniqueConstraint("code", "month", "broker", name="uq_broker_rec_code_month_broker"),)
+    __table_args__ = (
+        UniqueConstraint("code", "month", "broker", name="uq_broker_rec_code_month_broker"),
+        Index("idx_br_month", "month"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     name: Mapped[str | None] = mapped_column(String(80))
-    month: Mapped[str] = mapped_column(String(6), index=True)
+    month: Mapped[str] = mapped_column(String(6))
     broker: Mapped[str] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
@@ -596,9 +626,12 @@ class BrokerRecommend(Base):
 class HolderTrade(Base):
     """股东增减持。数据来源：Tushare stk_holdertrade。"""
     __tablename__ = "holder_trades"
+    __table_args__ = (
+        Index("idx_ht_code_ann", "code", "ann_date"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     ann_date: Mapped[str] = mapped_column(String(10), index=True)
     holder_name: Mapped[str | None] = mapped_column(String(120))
     holder_type: Mapped[str | None] = mapped_column(String(40))
@@ -613,9 +646,12 @@ class HolderTrade(Base):
 class InstitutionalSurvey(Base):
     """机构调研。数据来源：Tushare stk_surv。"""
     __tablename__ = "institutional_surveys"
+    __table_args__ = (
+        Index("idx_is_code_sd", "code", "surv_date"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     name: Mapped[str | None] = mapped_column(String(80))
     surv_date: Mapped[str] = mapped_column(String(10), index=True)
     fund_visitors: Mapped[int | None] = mapped_column(Integer)
@@ -627,9 +663,12 @@ class InstitutionalSurvey(Base):
 class ShareFloat(Base):
     """限售解禁。数据来源：Tushare share_float。"""
     __tablename__ = "share_floats"
+    __table_args__ = (
+        Index("idx_sf_code_fd", "code", "float_date"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     ann_date: Mapped[str | None] = mapped_column(String(10))
     float_date: Mapped[str] = mapped_column(String(10), index=True)
     float_share: Mapped[float | None] = mapped_column(Float)
@@ -644,7 +683,7 @@ class PledgeStat(Base):
     __table_args__ = (UniqueConstraint("code", "end_date", name="uq_pledge_stats_code_date"),)
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     end_date: Mapped[str] = mapped_column(String(10), index=True)
     pledge_count: Mapped[int | None] = mapped_column(Integer)
     unrest_pledge: Mapped[float | None] = mapped_column(Float)
@@ -660,9 +699,12 @@ class Repurchase(Base):
     新代码不要依赖本表做选股/风控；仅供历史研究与页面数据健康展示。
     """
     __tablename__ = "repurchases"
+    __table_args__ = (
+        Index("idx_rep_code_ann", "code", "ann_date"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    code: Mapped[str] = mapped_column(String(6), index=True)
+    code: Mapped[str] = mapped_column(String(6))
     ann_date: Mapped[str | None] = mapped_column(String(10))
     end_date: Mapped[str | None] = mapped_column(String(10))
     vol: Mapped[float | None] = mapped_column(Float)

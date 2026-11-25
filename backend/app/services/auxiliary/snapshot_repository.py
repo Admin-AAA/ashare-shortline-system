@@ -193,6 +193,15 @@ active_partition_snapshots = Table(
         ondelete="RESTRICT",
     ),
 )
+# MySQL 不会为外键自动建索引，但按 active_batch_id 反查指针需要覆盖外键列序列的索引。
+Index(
+    "fk_aux_active_partition_batch",
+    active_partition_snapshots.c.dataset,
+    active_partition_snapshots.c.provider,
+    active_partition_snapshots.c.endpoint,
+    active_partition_snapshots.c.partition_hash,
+    active_partition_snapshots.c.active_batch_id,
+)
 
 
 @dataclass(frozen=True, slots=True)

@@ -112,7 +112,7 @@ class PresetSkill(Base):
     __table_args__ = (UniqueConstraint("preset_id", "skill_id", name="uq_preset_skill"),)
 
     id: Mapped[str] = mapped_column(String(100), primary_key=True)
-    preset_id: Mapped[str] = mapped_column(String(80), index=True)
+    preset_id: Mapped[str] = mapped_column(String(80))
     skill_id: Mapped[str] = mapped_column(String(80), index=True)
     weight: Mapped[float] = mapped_column(Float, default=1.0)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)

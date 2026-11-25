@@ -203,7 +203,10 @@ def _db():
     return Session(engine)
 
 
-def _trace(tid="t1", corr="c1", final=FinalOutcome.SUCCESS, attempts=None):
+def _trace(tid="t1", corr=None, final=FinalOutcome.SUCCESS, attempts=None):
+    # (correlation_id, request_identity_hash) 是幂等键：同一次请求只允许一行 trace。
+    # 不同 trace 必须用不同 correlation_id，否则插入会撞 uq_trace_idempotency。
+    corr = corr or f"corr-{tid}"
     attempts = attempts or (
         AttemptContract(ordinal=1, provider="gw_a", outcome=DataSourceAttemptOutcome.SUCCESS, duration_ms=10),
     )

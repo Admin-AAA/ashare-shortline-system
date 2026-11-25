@@ -45,6 +45,9 @@ class CalibrationConfig(Base):
 
 class ModelRouteConfig(Base):
     __tablename__ = "model_route_config"
+    __table_args__ = (
+        Index("idx_mrc_enabled_priority", "enabled", "priority"),
+    )
 
     route_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
@@ -53,7 +56,7 @@ class ModelRouteConfig(Base):
     model: Mapped[str] = mapped_column(String(120))
     api_key: Mapped[str | None] = mapped_column(Text)
     priority: Mapped[int] = mapped_column(Integer, default=1, index=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     # 独立配置参数（可选，为空时使用系统默认值）
     max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
