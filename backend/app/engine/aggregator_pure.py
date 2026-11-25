@@ -1554,6 +1554,13 @@ def apply_pool_rules(
             "eliminated": True,
         })
     result = result[:remaining_daily_slots]
+    # 政策剔除发生在 per-card 分数线计算之前，被剔除的卡片拿不到
+    # score_line_meta.effective_score_line。统一在这里补上本次运行的市场级有效线，
+    # 让读侧能区分「真正拦下过线候选的规则」与「候选本来就低于有效线」。
+    _market_line = float(score_line_context["effective_score_line"])
+    for card in cards:
+        if card.get("policy_drop_owner") and card.get("policy_market_line") is None:
+            card["policy_market_line"] = round(_market_line, 2)
     # 小样本中的名次/形态假设与新增竞价维度只做前瞻 shadow 采集；
     # 未经冻结 OOS + Canary 前不得改变正式排序、选股或仓位。
     annotate_return_improvement_shadow(result)

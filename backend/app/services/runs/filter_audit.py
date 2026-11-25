@@ -473,20 +473,72 @@ def _data_quality_empty_reason(
 
 
 def _production_policy_empty_reason(
-    score_rows: list[dict[str, Any]], recommended_count: int
+    score_rows: list[dict[str, Any]],
+    recommended_count: int,
+    *,
+    run_score_line: float | None = None,
 ) -> str | None:
+    """零出票时说明是哪条生产政策拦下了候选。
+
+    必须区分「真正拦下过线候选的规则」与「候选本来就低于有效线」：后者即使没有
+    这条政策也不会出票，把它报成主因会把排查引向错误的规则（2026-10-01 以来 133 个
+    零推荐 run 里有 23 个属于这种情况，例如 11-23 有效线 64、最高候选 66.97 被
+    high_turnover_veto 拦下，却把 9 只 52~58 分的票记成 strong_climax_top_n 拦截）。
+
+    ``run_score_line`` 是本次运行的市场级有效线。政策否决发生在 per-card 分数线计算
+    之前，被剔除的卡片拿不到自己的 ``effective_score_line``，只能回退到市场级口径；
+    逐卡值存在时优先用逐卡值（它含证据质量与成交可行性调整）。
+    """
     if recommended_count or not score_rows:
         return None
-    owners = Counter(
-        str(row.get("policy_drop_owner") or "")
-        for row in score_rows
-        if row.get("policy_drop_owner")
-    )
-    if not owners:
+    dropped = [row for row in score_rows if row.get("policy_drop_owner")]
+    if not dropped:
         return None
-    blocked = sum(owners.values())
+
+    def _above_line(row: dict[str, Any]) -> bool:
+        line = row.get("effective_score_line")
+        if line is None:
+            line = row.get("policy_market_line")
+        if line is None:
+            line = run_score_line
+        score = row.get("final_score")
+        if line is None or score is None:
+            return False
+        return float(score) >= float(line)
+
+    binding = Counter(str(row["policy_drop_owner"]) for row in dropped if _above_line(row))
+    owners = Counter(str(row["policy_drop_owner"]) for row in dropped)
     detail = ", ".join(f"{owner}={count}" for owner, count in owners.most_common())
-    return f"production_policy_blocked: {blocked}/{len(score_rows)}；{detail}"
+    if binding:
+        binding_detail = ", ".join(f"{owner}={count}" for owner, count in binding.most_common())
+        return (
+            f"production_policy_blocked: {sum(binding.values())}/{len(score_rows)} 个已过线候选被政策拦下；"
+            f"{binding_detail}（全部政策命中：{detail}）"
+        )
+    return (
+        f"score_line_blocked: 无候选达到有效线；{len(score_rows)} 个已评分候选中 "
+        f"{len(dropped)} 个另被政策标记但分数本就不足（{detail}）"
+    )
+
+
+def _run_effective_score_line(
+    pipeline: dict[str, Any], score_rows: list[dict[str, Any]]
+) -> float | None:
+    """取本次运行的市场级有效线，供政策否决归因判断候选是否真的过线。
+
+    政策否决在 per-card 分数线计算之前执行，被剔除的卡片没有自己的
+    ``effective_score_line``。优先读 pipeline 落库的市场级有效线，其次退回任一卡片
+    的逐卡值（含证据质量与成交可行性调整）。
+    """
+    pipeline_line = (pipeline.get("score_line") or {}).get("effective_score_line") \
+        if isinstance(pipeline.get("score_line"), dict) else None
+    if pipeline_line is not None:
+        return float(pipeline_line)
+    for row in score_rows:
+        line = row.get("effective_score_line")
+        if line is not None:
+            return float(line)
+    return None
 
 
 def build_filter_audit(
@@ -677,6 +729,7 @@ def build_filter_audit(
             "skill_disagreement": card.get("skill_disagreement") or {},
             "strategy_signal_count": len(card.get("strategy_signals") or []),
             "policy_drop_owner": card.get("policy_drop_owner"),
+            "policy_market_line": card.get("policy_market_line"),
             "policy_verdict_steps": card.get("policy_verdict_steps") or [],
         }
         score_rows.append(score_row)
@@ -757,7 +810,9 @@ def build_filter_audit(
         "rows": rows,
     }
     empty_reason = _production_policy_empty_reason(
-        score_rows, len(recommended_cards)
+        score_rows,
+        len(recommended_cards),
+        run_score_line=_run_effective_score_line(pipeline, score_rows),
     ) or _data_quality_empty_reason(score_rows, len(recommended_cards))
     if empty_reason:
         audit["empty_reason"] = empty_reason

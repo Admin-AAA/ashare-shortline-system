@@ -181,7 +181,10 @@ def test_regime_hard_veto_is_persisted_as_policy_drop_owner() -> None:
         pipeline={},
     )
     assert cards[0]["policy_drop_owner"] == "oscillation_hard_veto"
-    assert audit["empty_reason"].startswith("production_policy_blocked:")
+    # 震荡硬否决通过把有效线抬到 999（不可达）生效，不是「拦下已过线候选」。
+    # empty_reason 必须如实说明这一点，不能把它报成拦下过线候选的规则。
+    assert audit["empty_reason"].startswith("score_line_blocked:")
+    assert "oscillation_hard_veto=1" in audit["empty_reason"]
 
 
 def test_regime_sentiment_line_overrides_precision() -> None:
@@ -480,3 +483,47 @@ def test_default_policy_fingerprint_is_not_pinned_to_legacy_value() -> None:
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.strong_high_ivol_veto_enabled is True
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.strong_high_ivol_regimes == ("强牛",)
     assert DEFAULT_PRODUCTION_SELECTION_POLICY.strong_high_ivol_pct_threshold == 0.80
+
+
+def test_empty_reason_separates_binding_veto_from_below_line_candidates() -> None:
+    """政策剔除早于 per-card 分数线计算，被剔除的卡片没有自己的 effective_score_line。
+
+    必须区分「真正拦下过线候选的规则」与「候选本来就低于有效线」：后者即使没有这条
+    政策也不会出票。2026-11-23 的实例——有效线 64，最高候选 66.97 被
+    high_turnover_veto 拦下，同时 9 只 52~58 分的票被记成 strong_climax_top_n 拦截，
+    旧实现把两者混在一起，把主因报成 strong_climax_top_n。
+    """
+    above = _card("600001", 99.0)
+    below = _card("600002", 50.0)
+    above["turnover_rate"] = 20.0
+    below["turnover_rate"] = 1.0
+
+    policy = DEFAULT_PRODUCTION_SELECTION_POLICY.with_rule_patch(
+        "high_turnover_veto_pct", 8.0
+    )
+    result = evaluate_selection_policy(
+        [above, below],
+        SelectionPolicyContext(
+            score_line=72.0,
+            output_count=6,
+            market_snapshot={"sample_count": 100, "up_count": 60, "limit_up_count": 1,
+                             "limit_down_count": 0, "market_regime": "偏多"},
+        ),
+        policy,
+    )
+    assert result.recommendations == ()
+    assert above["policy_drop_owner"] == "high_turnover_veto"
+    # 市场级有效线必须留在被剔除的卡片上，读侧才能判断是否过线
+    assert above["policy_market_line"] is not None
+
+    audit = build_filter_audit(
+        prefilter_audit={},
+        skill_gate_audit={},
+        scored_cards=[above, below],
+        recommended_cards=[],
+        pipeline={},
+    )
+    reason = audit["empty_reason"]
+    assert reason.startswith("production_policy_blocked:")
+    assert "1/2" in reason, reason
+    assert "high_turnover_veto=1" in reason
