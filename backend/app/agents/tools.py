@@ -17,6 +17,8 @@ from typing import Any
 
 from sqlalchemy import desc, func, select
 
+from agno.tools import tool
+
 from app.agents.session_registry import AgentSessionRegistry
 from app.db.session import SessionLocal
 from app.models.tables import (
@@ -31,16 +33,6 @@ from app.services.indicator_computer import (
     ma as _ic_ma,
     strict_upper_shadow_count as _upper_shadow_count,
 )
-
-
-# ── Agno tool 装饰器 ──────────────────────────────────────────────────
-
-try:
-    from agno.tools import tool
-except ImportError:
-    # 开发期兼容：agno 未安装时提供一个 no-op 装饰器
-    def tool(func):  # type: ignore[no-redef]
-        return func
 
 
 # ── 内部辅助函数 ──────────────────────────────────────────────────────

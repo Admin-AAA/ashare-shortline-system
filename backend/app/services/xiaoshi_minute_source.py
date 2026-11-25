@@ -111,12 +111,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _frame_for_file(path: Path, code: str) -> pd.DataFrame:
-    try:
-        frame = pd.read_parquet(path, engine="pyarrow")
-    except ImportError as exc:
-        raise XiaoshiMinuteSourceError("读取小石 Parquet 需要安装 pyarrow") from exc
-    except Exception as exc:
-        raise XiaoshiMinuteSourceError("小石分钟 Parquet 读取失败") from exc
+    frame = pd.read_parquet(path, engine="pyarrow")
     if frame.empty:
         return frame
     if any(name in {"trade_date", "trade_time"} for name in frame.index.names):

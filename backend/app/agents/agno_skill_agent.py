@@ -20,6 +20,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
+from app.db.session import SessionLocal
 from app.engine.skill_loader import StrategySkill
 
 from app.agents.circuit_breaker import check_circuit, record_result
@@ -33,7 +34,12 @@ from app.agents.tools import (
     query_stock_history,
 )
 from app.services.model_router_service import OPENAI_CLIENT_HEADERS, get_active_model_routes
-from app.services.llm_review_cache_service import build_review_cache_key, semantic_market_snapshot
+from app.services.llm_review_cache_service import (
+    build_review_cache_key,
+    get_cached_review,
+    semantic_market_snapshot,
+    write_cached_review,
+)
 from app.services.llm.prompt_context import (
     MARKET_SNAPSHOT_FIELDS,
     RULE_SIGNAL_FIELDS,
@@ -252,8 +258,6 @@ def _append_api_cost(
 def _load_cached_review(cache_key: str) -> dict[str, Any] | None:
     """查 LLM 审查结果缓存。命中返回 review dict，未命中或异常返回 None。"""
     try:
-        from app.db.session import SessionLocal
-        from app.services.llm_review_cache_service import get_cached_review
         with SessionLocal() as db:
             return get_cached_review(db, cache_key)
     except Exception as _ble_exc:  # noqa: BLE001 - best-effort fallback, now debug-logged
@@ -271,8 +275,6 @@ def _persist_review_cache(
 ) -> None:
     """写入 LLM 审查结果缓存。失败不影响主流程。"""
     try:
-        from app.db.session import SessionLocal
-        from app.services.llm_review_cache_service import write_cached_review
         with SessionLocal() as db:
             write_cached_review(
                 db,
@@ -309,13 +311,7 @@ def _register_tools(session_id: str) -> list:
     """为给定会话创建工具函数闭包（绑定 session_id）。"""
     tools_list = []
 
-    # Agno tool 导入（带 fallback 以支持开发期）
-    try:
-        from agno.tools import tool
-    except ImportError:
-        # 开发期兼容
-        def tool(func):
-            return func
+    from agno.tools import tool
 
     @tool
     def _query_market_snapshot() -> dict:
@@ -538,13 +534,8 @@ def create_skill_agent(skill: StrategySkill, session_id: str):
     system_prompt = _build_system_prompt(skill)
     tools = _register_tools(session_id)
 
-    try:
-        from agno.agent import Agent
-        from agno.models.openai import OpenAIChat
-    except ImportError as e:
-        raise RuntimeError(
-            "Agno 框架未安装。请运行: pip install 'agno>=2.6.0'"
-        ) from e
+    from agno.agent import Agent
+    from agno.models.openai import OpenAIChat
 
     # 路由表是唯一真相源：取优先级最高的有效路由（自带 key/base_url/model）。
     # 不再使用全局 env key 或 config 默认 key/url。

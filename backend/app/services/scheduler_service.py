@@ -1888,7 +1888,12 @@ def _retry_rate_limited_aux_datasets(db, auxiliary, result: dict, trade_date: st
         return
     for item in retry.orchestrated.results:
         entry = {
-            "status": _batch_sync_item_status(item.dataset_key, item.errors),
+            "status": _batch_sync_item_status(
+                item.dataset_key,
+                item.errors,
+                fallback_covered=_aux_snapshot_fallback_covered(
+                    db, item.dataset_key, item.errors, trade_date),
+            ),
             "count": item.coverage.record_count,
             "errors": [e.code.value for e in item.errors],
             "retried": True,

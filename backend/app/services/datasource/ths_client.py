@@ -25,6 +25,8 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as _FutTimeout
 from typing import Any
 
+from thsdk import THS
+
 from app.services.datasource.gateway import DataSourceError, ErrorKind
 
 logger = logging.getLogger(__name__)
@@ -98,12 +100,6 @@ def _client() -> Any:
     with _CLIENT_LOCK:
         if _CLIENT is not None:
             return _CLIENT
-        try:
-            from thsdk import THS
-        except ImportError as exc:  # pragma: no cover - 依赖缺失按配置错误处理
-            raise DataSourceError(
-                ErrorKind.CONFIGURATION, "thsdk 未安装（pip install thsdk）", provider=PROVIDER, dataset="ths"
-            ) from exc
         st = _settings()
         ops: dict[str, Any] = {}
         username = str(getattr(st, "ths_username", "") or "").strip()
