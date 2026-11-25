@@ -2332,3 +2332,35 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(c) 巡检项耗时用 `_CHECK_TIMINGS` 逐项打点，改完用同一入口复测，不要只看总耗时。**
 - 吸收位置：`backend/alembic/versions/0031_share_float_ratio_index.py`、`backend/app/services/data_health_service.py`（`_data_domain_coverage` 的 `latest_window_days`、`_shift_days`）、`backend/tests/test_data_health_service.py::test_column_data_domain_reports_true_max_date_when_older_than_window`。
 - 相关：L-207、L-215。
+
+## L-217 同构重复内容的大快照要压缩存储，外部 gzip 归档会在读路径留下静默空洞
+
+- 状态：encoded（2026-11-25 迁移 `0033_filter_audit_compressed` 完成）。
+- 适用：一 run/任务一行、内容是全市场同构逐票对象的审计快照；以及任何用「把 payload 搬到文件、DB 只留指针」做留存的方案。
+- 证据：
+  - `recommendation_run_filter_audits.payload_json` 1133 行合计 3.71GB，内容是重复键名与中文短句，zlib 压缩后只剩 6.4%（0.239GB）；单行 9.6MB 压缩 31ms、解压 5ms、解析 76ms。
+  - 表物理占用 3.753GB → **0.27GB**；健康巡检的 200 行批量读取从 5.12s / 626MB 降到 28ms / 44MB。
+  - 之前的 `scripts/archive_filter_audit.py` 把老快照搬到 `data/archive/filter_audit/*.json.gz` 并把 DB 值换成 `{"_archived": {...}}` 指针，但 `get_run_filter_audit` 从来没有还原指针的分支——已归档 run 的漏斗数据静默返回 `rows 0 / stage_summary 0`。同时它只搬走了 1 行，238 个 gzip 文件里有 237 个对应 run 早已被删除，成为孤儿文件。
+- 永久规则：
+  - **(a) 同构重复内容优先在列上压缩（zlib/LONGBLOB），不要为了省空间把 payload 搬出数据库：搬出去就多一条必须同时维护的读路径。**
+  - **(b) 任何「DB 存指针、内容在文件」的归档方案，落库的同一次提交里必须有还原读取分支和对应测试；只写不读的指针等于删数据。**
+  - **(c) 迁移里的分批回填走独立 AUTOCOMMIT 连接，且回填后的校验必须走同一条连接——alembic 事务连接在 REPEATABLE READ 下读不到新写入的值，会误判「全部为空」。**
+  - **(d) 清理归档目录前先按 run_id 反查哪些 run 还活着；只被 `_archived` 指针引用的文件与已删除 run 的孤儿文件要分开处理。**
+- 吸收位置：`backend/app/services/runs/audit_payload.py`、`backend/alembic/versions/0033_filter_audit_compressed.py`、`backend/app/models/recommendation.py`（`RecommendationRunFilterAudit.payload_z`）、`backend/tests/test_run_filter_audit_storage.py`。
+- 相关：L-215（同一张表先拆表、再压缩）、L-216。
+
+## L-218 恢复被停用的后台任务前，先查它停用的真实原因：静默失败常被误记成「功能没价值」
+
+- 状态：encoded（2026-11-25 恢复 LLM 风险备注）。
+- 适用：任何以「低收益/无明确收益」为由停用的后台任务；停用提交里同时出现「线程被杀」「随进程退出」等描述时尤其要查。
+- 证据：
+  - `LLM_RISK_NOTES_ENABLED = False` 自 2026-10-19 起生效，对外表现为「LLM 风险备注停 42 天」。停用提交 f79a29c 的说明写的是「原 daemon 线程随 Prefect 子进程退出被杀，10-14 起静默」——真正的失效原因是执行载体，不是 LLM 不可用。
+  - 2026-11-25 实测两条路由都正常：deepseek-reasoner 2.27s、qwen3.8-27b 0.77s 都返回预期文本；`/api/llm/route-health` 两条 reachable=true、熔断器未触发。
+  - 恢复后对 run_20261124_130417_4c2efb 实跑：`updated=1`，写入 stance 与 4 条风险标签；review-health 从 `disabled` 变为 `enabled=true / status=ok`。
+- 永久规则：
+  - **(a) 停用一个后台任务时，停用理由必须区分「实测无效」与「执行载体失效」；后者是缺陷，应修载体而不是关功能。**
+  - **(b) 正式流水线跑在 Prefect 子进程里时，任何 daemon 线程都会在子进程退出时被杀；长任务要么在调度协程里 await，要么走独立进程/队列。**
+  - **(c) 出票后的附加审查要并发挂载并隔离单点失败：单只票约 100s，串行会把 40~184s 的 run 再拉长一倍。**
+  - **(d) 恢复前先实测依赖本身（这里直接打两条 LLM 路由），不要仅凭开关注释判断。**
+- 吸收位置：`backend/app/services/async_llm_risk_notes.py`（`attach_llm_risk_notes`）、`backend/app/services/scheduler_service.py`（`_attach_risk_notes_concurrently`）、`backend/tests/test_async_llm_risk_notes.py`。
+- 相关：L-171（LLM 只做风控顾问 overlay，否决不挡票）。

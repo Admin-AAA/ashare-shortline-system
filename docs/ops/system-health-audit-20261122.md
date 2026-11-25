@@ -30,6 +30,8 @@
 | P1-4 | 中线 trades 183/492ms、metrics 218/279ms | `horizon_analytics.trades()` 结果按 (horizon, strategy_id, OUT_DIR) 缓存 30s，`/trades` 与 `/metrics` 共用一次全量结算；新批次落盘即失效 | trades 183/492 → **111/140ms**；metrics 218/279 → **90/91ms** |
 | P1-5 | `recommendation_runs` 6.1GB/631 行、单行 8MB | 写库前裁掉前端从不读的 `rows[].prefilter / trace_summary`（`compact_filter_audit_for_storage`）；新脚本 `scripts/compact_filter_audit.py` 处理历史 | 审计载荷 5.12GB → **2.96GB**（省 2.5GB / 48.8%，1103 个 run） |
 | P1-6 | 过滤审计快照原始 JSON 存 3.71GB / 1133 行 | 迁移 `0033_filter_audit_compressed` 改为 zlib 压缩列 `payload_z`（读写走 `app/services/runs/audit_payload.py`），`OPTIMIZE TABLE` 回收空间 | 3.753GB → **0.27GB**；健康巡检 200 行读取 5.12s/626MB → **28ms/44MB** |
+| P1-7 | `minute_kbars` 索引 9.96GB，`idx_mk_code_time` 与唯一键重复 | 迁移 `0034_drop_redundant_minute_index` 删除 `idx_mk_code_time`（所有查询都带 `freq`，唯一键已覆盖）；`OPTIMIZE TABLE` 回收 | 索引 9.96GB → **5.49GB**；单股查询 2ms、50 只批量 143ms |
+| P1-8 | 出票后 LLM 风险备注自 10-14 静默 | 根因是 daemon 线程随 Prefect 子进程被杀（不是 LLM 不可用）；改为出票全部落库后 `asyncio.gather` 并发挂载 | 实测 run_20261124_130417_4c2efb updated=1，写入 stance + 4 条风险标签；review-health 由 disabled 变 `enabled=true/status=ok` |
 | P2-1 | 重启端口风暴 + `dev.sh` 3s 误报失败 | `kick()` 改轮询到 90s 并验 HTTP 真实响应；失败提示区分「端口占用 / 已监听但无响应」 | 本次重启实测「等待 8s 就绪」 |
 | P2-2 | Prefect 502 冒成 500 | `/tasks/{id}/run` 增加 Prefect 传输异常 → 503 可读提示，其它异常照常抛 | 单测覆盖 |
 | P2-3 | readiness 因 `model_completion 0/0` 永久 degraded | 无调用证据判 `unknown`（info 级提示），不再算 degraded | `/api/admin/readiness` → **ready** |
