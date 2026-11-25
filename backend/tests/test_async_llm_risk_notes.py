@@ -83,12 +83,64 @@ def test_attach_writes_notes_without_touching_score(monkeypatch):
     assert any("LLM风险备注:veto" in t for t in tags)
 
 
-def test_schedule_is_disabled_noop():
-    from app.services.async_llm_risk_notes import schedule_attach_llm_risk_notes
-    assert schedule_attach_llm_risk_notes("run-x") is None
+def test_attach_disabled_writes_nothing(monkeypatch):
+    """停用时直接返回 disabled，不读库也不改任何推荐。"""
+    from app.services import async_llm_risk_notes as mod
+
+    monkeypatch.setattr(mod, "LLM_RISK_NOTES_ENABLED", False)
+    out = asyncio.run(mod.attach_llm_risk_notes("run-x"))
+    assert out == {"run_id": "run-x", "status": "disabled", "updated": 0}
 
 
-def test_standalone_runner_no_longer_schedules_llm():
+def test_attach_llm_risk_notes_failure_does_not_raise(monkeypatch):
+    """备注失败不得向上抛：出票已经落库，备注只是附加信息。"""
+    from app.services import async_llm_risk_notes as mod
+
+    async def _boom(_db, _rid):
+        raise RuntimeError("upstream 502")
+
+    monkeypatch.setattr(mod, "attach_llm_risk_notes_for_run", _boom)
+    out = asyncio.run(mod.attach_llm_risk_notes("run-y"))
+    assert out["status"] == "failed"
+    assert out["updated"] == 0
+    assert "upstream 502" in out["error"]
+
+
+def test_standalone_runner_attaches_notes_after_completion():
+    """出票调度必须在出票落库后挂备注，不得依赖 daemon 线程（会随 Prefect 子进程被杀）。"""
     import inspect
     import app.services.scheduler_service as ss
-    assert "schedule_attach_llm_risk_notes(" not in inspect.getsource(ss)
+
+    runner = inspect.getsource(ss._run_standalone_recommendations)
+    helper = inspect.getsource(ss._attach_risk_notes_concurrently)
+    assert "_attach_risk_notes_concurrently(" in runner
+    assert "attach_llm_risk_notes(" in helper
+    assert "asyncio.gather(" in helper
+    assert "schedule_attach_llm_risk_notes" not in runner + helper
+    assert "threading.Thread" not in runner + helper
+
+
+def test_attach_risk_notes_concurrently_isolates_failures(monkeypatch):
+    """单个 run 的备注异常不得中断其它 run，也不得改出票状态。"""
+    import asyncio
+    import app.services.async_llm_risk_notes as notes
+    import app.services.scheduler_service as ss
+
+    async def _fake(run_id):
+        if run_id == "bad":
+            raise RuntimeError("upstream 502")
+        return {"run_id": run_id, "status": "ok", "updated": 2}
+
+    monkeypatch.setattr(notes, "attach_llm_risk_notes", _fake)
+    monkeypatch.setattr(notes, "LLM_RISK_NOTES_ENABLED", True)
+    rows = [
+        {"skill_id": "a", "run_id": "ok-1", "status": "completed", "recommended_count": 2},
+        {"skill_id": "b", "run_id": "bad", "status": "completed", "recommended_count": 1},
+        {"skill_id": "c", "run_id": "failed-1", "status": "failed"},
+    ]
+    asyncio.run(ss._attach_risk_notes_concurrently(rows))
+    assert rows[0]["llm_risk_notes"] == "ok"
+    assert rows[0]["llm_risk_notes_updated"] == 2
+    assert rows[1]["llm_risk_notes"] == "failed"
+    assert "llm_risk_notes" not in rows[2]
+    assert all(r["status"] != "failed" or r["skill_id"] == "c" for r in rows)

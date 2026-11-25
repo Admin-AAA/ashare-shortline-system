@@ -15,7 +15,7 @@ from app.services import standalone_strategies as ss
 @pytest.fixture(autouse=True)
 def _no_async_llm_notes(monkeypatch):
     import app.services.async_llm_risk_notes as notes
-    monkeypatch.setattr(notes, "schedule_attach_llm_risk_notes", lambda run_id: None)
+    monkeypatch.setattr(notes, "LLM_RISK_NOTES_ENABLED", False)
 
 
 def _skill(sid, enabled=True, executable=True, name=None):
@@ -164,7 +164,7 @@ def test_run_standalone_recommendations_skips_already_completed(monkeypatch):
     monkeypatch.setattr(ws, "sync_skills", lambda db: [_skill("a"), _skill("b")])
     monkeypatch.setattr(sched, "STANDALONE_ENQUEUE_STAGGER_SECONDS", 0)
     monkeypatch.setattr(sched, "_completed_standalone_runs", lambda db, p: {"a": {"run_id": "old-a", "recommended_count": 3}})
-    monkeypatch.setattr(notes, "schedule_attach_llm_risk_notes", lambda run_id: None)
+    monkeypatch.setattr(notes, "LLM_RISK_NOTES_ENABLED", False)
     sent = []
 
     async def fake_run(db, payload):

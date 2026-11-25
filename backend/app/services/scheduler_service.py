@@ -2779,6 +2779,35 @@ def _gate_standalone_payloads(db, payload: dict, items: list[dict[str, Any]],
     return kept
 
 
+async def _attach_risk_notes_concurrently(strategy_runs: list[dict[str, Any]]) -> None:
+    """对本次所有已完成的 run 并发挂 LLM 风险备注，结果回写进 strategy_runs。
+
+    只处理 ``status == completed`` 且有 run_id 的项；单只票约 100s，并发把整体压到
+    一次调用的量级。备注失败只记日志与状态，绝不影响出票结果。
+    """
+    from app.services.async_llm_risk_notes import LLM_RISK_NOTES_ENABLED, attach_llm_risk_notes
+
+    targets = [r for r in strategy_runs if r.get("status") == "completed" and r.get("run_id")]
+    if not targets:
+        return
+    if not LLM_RISK_NOTES_ENABLED:
+        for row in targets:
+            row["llm_risk_notes"] = "disabled"
+        return
+    results = await asyncio.gather(
+        *(attach_llm_risk_notes(str(row["run_id"])) for row in targets),
+        return_exceptions=True,
+    )
+    for row, result in zip(targets, results):
+        if isinstance(result, BaseException):
+            logger.exception("LLM 风险备注异常 run=%s", row.get("run_id"), exc_info=result)
+            row["llm_risk_notes"] = "failed"
+            row["llm_risk_notes_updated"] = 0
+            continue
+        row["llm_risk_notes"] = str(result.get("status") or "unknown")
+        row["llm_risk_notes_updated"] = int(result.get("updated") or 0)
+
+
 async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
     """每个策略各跑一个 formal run（自己的分数线/出票上限/推荐/T+1 结算），分批并发。
 
@@ -2830,16 +2859,16 @@ async def _run_standalone_recommendations(db, payload: dict) -> dict[str, Any]:
                 strategy_runs.append({"skill_id": sid, "run_id": run_id, "status": "failed", "error": str(exc)[:300]})
                 continue
             status = str(final.get("status") or "failed")
-            # LLM 风险备注已停用（2026-10-19 用户决定：低 QPM、无明确收益，不得拖累主流水线）。
-            # 原 daemon 线程会随 Prefect 子进程退出被杀（10-14 起静默），已移除，不再调度。
             strategy_runs.append({
                 "skill_id": sid,
                 "run_id": run_id,
                 "status": status,
                 "recommended_count": int(final.get("recommended_count") or 0),
                 "error": final.get("error"),
-                "llm_risk_notes": "disabled",
             })
+    # 出票全部落库后再并发挂 LLM 风险备注：只写 agent_summary_json / risk_tags_json，
+    # 不改分不删票。单只票约 100s，串行会显著拉长流水线，这里并发跑且失败只记日志。
+    await _attach_risk_notes_concurrently(strategy_runs)
     failed = [r for r in strategy_runs if r.get("status") != "completed"]
     if failed:
         try:

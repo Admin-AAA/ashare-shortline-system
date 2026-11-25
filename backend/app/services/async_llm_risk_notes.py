@@ -1,8 +1,12 @@
-"""正式出票后的 LLM 风险备注（L-171）。2026-10-19 起停用：正式流水线不再调度（低 QPM、无明确收益）。
+"""正式出票后的 LLM 风险备注（L-171）。
 
 正式 run 在管线内关闭 LLM（disable_agent_review），先按规则出票落库；
 本模块在出票完成后对**已出票**股票做 LLM 审查，只写入 agent_summary_json /
 risk_tags_json，不改 final_score、不删票、不否决。
+
+2026-10-19 曾停用：原实现用 daemon 线程后台跑，而正式流水线跑在 Prefect 子进程里，
+子进程退出会把 daemon 线程直接杀掉，10-14 起审查静默。2026-11-25 恢复，改为在
+出票调度里同步 await（每日出票量 0~6 只，并发 10，耗时可忽略），不再依赖线程存活。
 """
 from __future__ import annotations
 
@@ -15,9 +19,8 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
-# 2026-10-19 起停用（f79a29c）：正式流水线不再调度 LLM 风险备注（低 QPM、无明确收益）。
-# review-health 的 enabled / status=disabled 与 schedule_attach 共用此开关。
-LLM_RISK_NOTES_ENABLED = False
+# review-health 的 enabled / status 与本开关同源。
+LLM_RISK_NOTES_ENABLED = True
 
 
 def _loads(raw: str | None, default: Any) -> Any:
@@ -139,18 +142,23 @@ async def attach_llm_risk_notes_for_run(db: Session, run_id: str) -> dict[str, A
     return {"run_id": run_id, "status": "ok", "updated": updated, "errors": errors}
 
 
-def schedule_attach_llm_risk_notes(run_id: str):
-    """已停用（2026-10-19）：正式流水线不再调度 LLM 风险备注。保留函数仅为兼容旧调用，直接返回 None。
-    需要时可手动 asyncio.run(attach_llm_risk_notes_for_run(db, run_id))。"""
+async def attach_llm_risk_notes(run_id: str) -> dict[str, Any]:
+    """出票完成后同步挂 LLM 风险备注；用独立 session，失败只记日志不影响出票。"""
     if not LLM_RISK_NOTES_ENABLED:
-        logger.info("LLM 风险备注已停用，跳过 run=%s", run_id)
-        return None
-    logger.warning("LLM_RISK_NOTES_ENABLED=True 但调度实现已移除，跳过 run=%s", run_id)
-    return None
+        return {"run_id": run_id, "status": "disabled", "updated": 0}
+
+    from app.db.session import SessionLocal
+
+    try:
+        with SessionLocal() as db:
+            return await attach_llm_risk_notes_for_run(db, run_id)
+    except Exception as exc:  # noqa: BLE001 - 备注失败不得回滚已完成的出票
+        logger.exception("LLM 风险备注失败 run=%s: %s", run_id, exc)
+        return {"run_id": run_id, "status": "failed", "updated": 0, "error": str(exc)[:300]}
 
 
 __all__ = [
     "LLM_RISK_NOTES_ENABLED",
+    "attach_llm_risk_notes",
     "attach_llm_risk_notes_for_run",
-    "schedule_attach_llm_risk_notes",
 ]
