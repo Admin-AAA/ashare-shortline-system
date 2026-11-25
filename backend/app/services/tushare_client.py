@@ -1359,9 +1359,11 @@ def fetch_limit_up_board(trade_date: str | None = None) -> list[dict[str, Any]]:
                     "last_time": str(row.get("last_time", "")),
                     "open_times": int(row.get("open_times") or 0),
                     "up_stat": str(row.get("up_stat", "")),
-                    "limit_amount_yi": _f(row.get("limit_amount")) / 1e8 if row.get("limit_amount") is not None else 0.0,
+                    # 上游按涨停/跌停分别给字段：U 只有 fd_amount（封单），D 只有 limit_amount，
+                    # Z 两者皆无。缺失写 NULL，写 0 会让「没有这个口径」看起来像「金额为零」。
+                    "limit_amount_yi": _f(row.get("limit_amount")) / 1e8 if row.get("limit_amount") is not None else None,
                     "turnover_ratio": _f(row.get("turnover_ratio")),
-                    "fd_amount": _f(row.get("fd_amount")) / 1e8 if row.get("fd_amount") is not None else 0.0,
+                    "fd_amount": _f(row.get("fd_amount")) / 1e8 if row.get("fd_amount") is not None else None,
                     "industry": str(row.get("industry", "")),
                 })
         except Exception as exc:  # noqa: BLE001 - logged or recorded, non-blocking by design

@@ -1379,6 +1379,15 @@ def check_e_item(db, hit_skills: set) -> None:
             return 'active'
     active_set = {s for s in registered if _status(s) == 'active'}
     disabled_set = set(registered) - active_set
+    # 退役策略与纯风险提示技能不参与每日独立出票（standalone_strategies 是唯一权威定义）。
+    # 把它们算进 active 会制造永久误报：high-position-volume-stall-warning 是 NON_PICKING，
+    # 近 60 天 0 命中是设计如此，不是覆盖缺口。
+    from app.services.standalone_strategies import NON_PICKING_SKILL_IDS, RETIRED_STRATEGY_IDS
+
+    non_picking_set = {s for s in active_set if s in NON_PICKING_SKILL_IDS or s in RETIRED_STRATEGY_IDS}
+    active_set -= non_picking_set
+    if non_picking_set:
+        print(f'E 项非出票技能（退役/纯风险提示，不参与盲区/曝光评估）: {sorted(non_picking_set)}')
 
     blind = [s for s in registered if s not in hit_skills and s in active_set]
     if disabled_set:
@@ -3161,9 +3170,9 @@ def _backtest_consistency_stats(trades: list) -> dict:
     return out
 
 
-def check_scheduler_health(db) -> None:
+def check_scheduler_health(db) -> list[str]:
     """盘后流水线调度健康（T12 可观测性）：报告 post_sync_formal_recommendation 的
-    last_run_at/last_status，让用户知道流水线是否正常执行。
+    last_run_at/last_status，让用户知道流水线是否正常执行。返回告警行，供测试断言。
 
     根因（2026-07-23 调研）：07-22 推荐未结算（outcome=None），因为盘后流水线
     post_sync_formal_recommendation last_status=failed（07-21 10:20），07-22 17:35
@@ -3176,24 +3185,27 @@ def check_scheduler_health(db) -> None:
         """)).fetchall()
     except Exception as exc:
         print(f'  ⚠️ 调度健康诊断查询失败: {exc}')
-        return
+        return []
     if not rows:
-        return
+        return []
     print('  调度健康（enabled tasks）:')
     from datetime import datetime
     now = datetime.now()
+    warnings: list[str] = []
     for r in rows:
         tid, ttype, cron, enabled, last_run, last_status, last_error = r
         # 盘后流水线 last_status=failed 或超过1交易日没跑 → 警告
         flag = ""
         if str(last_status) == "failed":
             flag = " ⚠️上次失败"
+            warnings.append(f'{tid}: 上次失败')
         if last_run:
             try:
                 last_dt = last_run if hasattr(last_run, 'date') else datetime.strptime(str(last_run), '%Y-%m-%d %H:%M:%S')
                 days_ago = (now - last_dt).days
                 if days_ago >= 2 and str(ttype) == "recommendation_run":
                     flag += f" ⚠️{days_ago}天未跑"
+                    warnings.append(f'{tid}: {days_ago}天未跑')
             except Exception:
                 pass
         err_str = f" err={str(last_error or '')[:60]}" if last_error else ""
@@ -3203,29 +3215,61 @@ def check_scheduler_health(db) -> None:
     if postclose and str(postclose[5]) == "failed":
         print('    ——盘后流水线上次失败：outcome 结算 + formal 推荐未执行，前瞻样本无法积累（D 项阻塞）。')
         print('      查 app.log 排查失败原因；手动触发 label_pending_outcomes 结算 pending 推荐。')
+        warnings.append('post_sync_formal_recommendation: 上次失败，outcome 结算 + formal 推荐未执行')
+    return warnings
 
 
 def check_registry_diagnostics(db) -> None:
-    """报告当前加载的策略/preset 注册问题；不修复、不改变推荐选择。"""
-    try:
-        from app.core.config import get_settings
-        from app.engine.skill_loader import load_skills
-        from app.services.registry.data_source import DEFAULT_PRESETS
-        from app.services.registry.diagnostics import build_registry_diagnostics
-        from app.services.registry.presets import list_presets
+    """报告当前策略注册链路的缺口；不修复、不改变推荐选择。
 
-        report = build_registry_diagnostics(
-            load_skills(get_settings().skills_dir),
-            list_presets(db),
-            canonical_presets=DEFAULT_PRESETS,
-        )
-    except Exception as exc:
-        print(f'  ⚠️ 策略/preset 注册诊断失败: {type(exc).__name__}: {exc}')
-        return
-    print(f'  策略/preset 注册诊断：{("OK" if report.ok else "BLOCKED")}，'
-          f'errors={len(report.errors)} info={len(report.informational)}')
-    for issue in (*report.errors, *report.informational):
-        print(f'    [{issue.severity}] {issue.code}: {issue.message}')
+    preset 层已退役，注册权威改为 standalone_strategies：磁盘 manifest active
+    → skill_registry.enabled → standalone_strategy_ids。三者不一致就是静默缺口。
+    """
+    from app.core.config import get_settings
+    from app.engine.skill_loader import load_skills
+    from app.services.standalone_strategies import (
+        NON_PICKING_SKILL_IDS,
+        RETIRED_STRATEGY_IDS,
+        standalone_strategy_ids,
+    )
+
+    skills = load_skills(get_settings().skills_dir)
+    by_id = {str(s.skill_id): s for s in skills}
+    standalone = set(standalone_strategy_ids(skills))
+    rows = db.execute(text('SELECT skill_id, enabled FROM skill_registry')).fetchall()
+    enabled_db = {str(r[0]) for r in rows if r[1]}
+
+    errors: list[str] = []
+    info: list[str] = []
+    for sid, skill in sorted(by_id.items()):
+        active = str(getattr(skill, 'status', 'active') or 'active') == 'active'
+        if not active:
+            continue
+        if sid in RETIRED_STRATEGY_IDS:
+            info.append(f'{sid}: manifest active 但已在 RETIRED_STRATEGY_IDS，不参与出票')
+            continue
+        if sid in NON_PICKING_SKILL_IDS:
+            info.append(f'{sid}: 纯风险提示技能，按设计不出票')
+            continue
+        if sid not in enabled_db:
+            errors.append(f'{sid}: manifest active 但 skill_registry.enabled=0，每日独立运行不会选中')
+            continue
+        if getattr(skill, 'executable', True) is False:
+            errors.append(f'{sid}: enabled 但 executable=False，规则门无法评估')
+            continue
+        if sid not in standalone:
+            errors.append(f'{sid}: enabled 且可执行，却不在 standalone_strategy_ids')
+
+    orphan = sorted(enabled_db - set(by_id))
+    for sid in orphan:
+        errors.append(f'{sid}: skill_registry.enabled=1 但 skills 目录未加载到该策略')
+
+    print(f'  策略注册诊断：{"OK" if not errors else "BLOCKED"}，'
+          f'errors={len(errors)} info={len(info)}，每日独立运行 {len(standalone)} 个')
+    for msg in errors:
+        print(f'    [error] {msg}')
+    for msg in info:
+        print(f'    [info] {msg}')
 
 
 def check_backtest_consistency(db) -> None:
@@ -3260,7 +3304,7 @@ def check_backtest_consistency(db) -> None:
           '（[[backtest-not-formal-evidence]]）。')
 
 
-def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
+def check_d_rule_coverage(db, win_rate_baseline: float | None) -> None:
     """D 项规则覆盖前瞻校验：用当前 strategy.yaml 重跑所有 LIVE formal 失败样本，
     统计已被当前规则覆盖（会被 hard_veto / universe / prefilter 排除）的失败笔。
 
@@ -3294,12 +3338,20 @@ def check_d_rule_coverage(db, win_rate_baseline: float) -> None:
 
     blocked, new_total, wins, total = _classify_failed_coverage(rows, skills)
     new_wr = round(wins * 100 / new_total, 1) if new_total else 0.0
-    delta = round(new_wr - win_rate_baseline, 1)
-    tag = f'↑ 高于基线 {delta}pp' if delta >= 0 else f'⚠️ 真退化 {abs(delta)}pp'
-    print(
-        f'D 项规则覆盖：{blocked} 笔失败已被当前规则覆盖（待前瞻验证），'
-        f'反事实胜率 {new_wr}% （n={new_total}，基线 {win_rate_baseline}%，{tag}）'
-    )
+    # 基线未登记同口径值时只报反事实胜率，不算 Δ（L-094）。调用方已打印说明，
+    # 这里必须同样短路：None 参与减法会抛 TypeError，把后面四项检查全部带崩。
+    if win_rate_baseline is None:
+        print(
+            f'D 项规则覆盖：{blocked} 笔失败已被当前规则覆盖（待前瞻验证），'
+            f'反事实胜率 {new_wr}% （n={new_total}，基线未登记，不算 Δ）'
+        )
+    else:
+        delta = round(new_wr - win_rate_baseline, 1)
+        tag = f'↑ 高于基线 {delta}pp' if delta >= 0 else f'⚠️ 真退化 {abs(delta)}pp'
+        print(
+            f'D 项规则覆盖：{blocked} 笔失败已被当前规则覆盖（待前瞻验证），'
+            f'反事实胜率 {new_wr}% （n={new_total}，基线 {win_rate_baseline}%，{tag}）'
+        )
 
     # 真残留毒区：未被当前任何规则覆盖的失败笔——下一轮 D 攻击的精确目标。
     # 旧实现只打印 blocked 而丢弃这段，导致每轮 D 攻击靠猜 targets（见函数 docstring）。

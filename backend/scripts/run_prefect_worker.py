@@ -11,7 +11,7 @@ import urllib.request
 from datetime import datetime, timezone
 
 from app.core.deployment_identity import resolve_application_revision
-from app.orchestration import schedule_all_enabled_tasks
+from app.orchestration import pause_disabled_task_deployments, schedule_all_enabled_tasks
 from app.orchestration.deployments import RECOMMENDATION_WORK_QUEUE, WORK_POOL_CONCURRENCY_LIMIT
 
 logger = logging.getLogger("run_prefect_worker")
@@ -142,6 +142,7 @@ def main() -> None:
     )
     _reap_orphan_running_flow_runs()
     schedule_all_enabled_tasks()
+    pause_disabled_task_deployments()
     raise SystemExit(
         subprocess.call([sys.executable, "-m", "prefect", "worker", "start", "--pool", "ashare-local"])
     )

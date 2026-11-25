@@ -237,27 +237,22 @@ def build_snapshot(raw: list[dict[str, Any]], *, now: datetime, func: str, tradi
 
 # ── fetch plumbing ──────────────────────────────────────────────────────
 def _pull_frame(func: str):
-    try:
-        from app.core import metrics as _m
+    from app.core import metrics as _m
 
-        if _m._process_role() == "pytest":  # 测试进程里绝不真去翻第三方页面（需要的测试自己注入 puller）
-            raise DataSourceError(ErrorKind.DISABLED, "akshare snapshot disabled under pytest", provider="akshare_snapshot", dataset=DATASET)
-    except DataSourceError:
-        raise
-    except Exception:  # noqa: BLE001
-        pass
+    if _m._process_role() == "pytest":  # 测试进程里绝不真去翻第三方页面（需要的测试自己注入 puller）
+        raise DataSourceError(ErrorKind.DISABLED, "akshare snapshot disabled under pytest", provider="akshare_snapshot", dataset=DATASET)
     import akshare as ak
 
     return ak.stock_zh_a_spot() if func == "sina" else ak.stock_zh_a_spot_em()
 
 
 def _metric(outcome: str, **kw: Any) -> None:
-    try:
-        from app.core import metrics as _m
+    from app.core import metrics as _m
 
+    try:
         _m.inc("akshare_snapshot", outcome=outcome, **kw)
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - 观测计数失败不能中断行情抓取
+        logger.warning("akshare_snapshot 计数写入失败 outcome=%s", outcome, exc_info=True)
 
 
 def _refresh(func: str, puller: Callable[[str], Any]) -> None:

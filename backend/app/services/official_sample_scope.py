@@ -54,11 +54,10 @@ def evaluation_scope_for_run(
         if normalized_mode == "formal" and generated_at is not None:
             from app.services.midterm_live_seal import generated_before_entry_open
 
-            try:
-                if generated_before_entry_open(str(trade_date_override), generated_at):
-                    return LIVE_FORWARD_SCOPE
-            except Exception:  # noqa: BLE001 - 判定不了时保守记为回放
-                pass
+            # 判定失败必须就地崩溃：静默记成回放会把真实前瞻证据从正式样本里悄悄剔除。
+            # 日历查不到的情况由 calendar_next_open 自己兜底，不会走到异常。
+            if generated_before_entry_open(str(trade_date_override), generated_at):
+                return LIVE_FORWARD_SCOPE
         return "historical_replay"
     return LIVE_FORWARD_SCOPE
 

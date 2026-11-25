@@ -126,13 +126,10 @@ def _tushare_api_has_supported_provider(api: str) -> bool:
     2026-11-15 重生成路由表后 `anns_d` 的 order 里出现了 teajoin，但 teajoin 的
     excluded_apis 排除了它，按表猜会得到「有源可用」的错结论，补数计划会白白尝试。
     """
-    try:
-        from app.services.datasource.akshare_backup import AKSHARE_BACKUP_APIS, backup_enabled
+    from app.services.datasource.akshare_backup import AKSHARE_BACKUP_APIS, backup_enabled
 
-        if api in AKSHARE_BACKUP_APIS and backup_enabled():
-            return True  # akshare backup behind tushare (gateway) can still serve it
-    except Exception:  # noqa: BLE001
-        pass
+    if api in AKSHARE_BACKUP_APIS and backup_enabled():
+        return True  # akshare backup behind tushare (gateway) can still serve it
     try:
         from app.services.tushare_client import get_pro
 

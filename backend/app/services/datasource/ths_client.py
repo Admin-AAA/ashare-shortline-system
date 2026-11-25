@@ -133,8 +133,8 @@ def close() -> None:
     if client is not None:
         try:
             client.disconnect()
-        except Exception:  # noqa: BLE001 - 已断开就忽略
-            pass
+        except Exception:  # noqa: BLE001 - 清理动作，抛出会盖掉原始错误
+            logger.warning("thsdk 会话断开失败", exc_info=True)
 
 
 _THS_LIMITER: list = []

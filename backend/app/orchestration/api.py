@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import httpx
 from prefect.client.orchestration import get_client
 from prefect.deployments import run_deployment
 
@@ -95,3 +96,13 @@ def get_orchestration_run(run_id: str) -> OrchestrationRunView:
         )
 
     return asyncio.run(_read())
+
+
+def is_prefect_transport_error(exc: BaseException) -> bool:
+    """Prefect server 不可用类异常：httpx 传输/状态错误、部署不存在。
+
+    判定放在 Prefect 客户端边界内，API 层只消费结论，不直接持有 HTTP 客户端类型。
+    """
+    if isinstance(exc, httpx.HTTPError):
+        return True
+    return "Prefect" in type(exc).__name__ and "Error" in type(exc).__name__

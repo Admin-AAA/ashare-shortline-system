@@ -140,7 +140,7 @@ for r in RULES[1:]:
     per = []
     for name, lo, hi in FOLDS:
         tr = [d for d in dates if d < lo][:-PURGE]; te = [d for d in dates if lo <= d < hi]
-        model = MODELS.get(name) if False else None
+        model = None
         if r[0] in ("rerank", "expand", "filter"):
             model = fit(tr)
         mb, mn = metrics(rows(BASE, te, model)), metrics(rows(r, te, model))

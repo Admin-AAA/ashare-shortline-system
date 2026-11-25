@@ -5,10 +5,13 @@ retry come from DatasetGateway, enabled switch is data_source_config(baostock, t
 """
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any, Mapping
 
 from app.services.datasource.gateway import DataSourceError, ErrorKind
+
+logger = logging.getLogger(__name__)
 
 PROVIDER_NAME = "baostock"
 CONFIG_KEY = (PROVIDER_NAME, "tushare_provider")
@@ -51,8 +54,8 @@ def query_open_days(start: str, end: str) -> tuple[set[str], str]:
         finally:
             try:
                 bs.logout()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception:  # noqa: BLE001 - 清理动作，抛出会盖掉原始错误
+                logger.warning("baostock logout 失败，全局 socket 会话可能残留", exc_info=True)
 
 
 class BaostockTradeCalProvider:

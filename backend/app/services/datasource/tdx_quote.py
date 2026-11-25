@@ -22,6 +22,7 @@ pytdx，默认还会做 best-IP 探测和心跳线程，和「快失败、把预
 """
 from __future__ import annotations
 
+import logging
 import re
 import socket
 import threading
@@ -32,6 +33,8 @@ from datetime import date
 from typing import Any, Callable, Mapping
 
 from app.services.datasource.gateway import DataSourceError, ErrorKind
+
+logger = logging.getLogger(__name__)
 
 DATASET = "quote.realtime"
 SOURCE = "tdx_quote"
@@ -252,8 +255,8 @@ def _acquire() -> None:
 def _safe_disconnect(api: Any) -> None:
     try:
         api.disconnect()
-    except Exception:  # noqa: BLE001 - 断开失败不影响降级
-        pass
+    except Exception:  # noqa: BLE001 - 清理动作，抛出会盖掉原始错误
+        logger.warning("tdx HQ 连接断开失败，socket 可能残留", exc_info=True)
 
 
 def _default_client() -> Any:

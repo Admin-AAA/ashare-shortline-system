@@ -37,7 +37,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, insert, select
+from sqlalchemy import case, func, insert, or_, select, text
 
 from app.models.tables import MarginDetail
 
@@ -56,6 +56,12 @@ _INCOMPLETE_COVERAGE_FLOOR = 0.8
 _INCOMPLETE_BACKOFF_ATTEMPTS = 4
 _INCOMPLETE_BACKOFF_SECONDS = 12 * 3600
 _VALUE_FIELDS = ("rzye", "rqye", "rzmre", "rzche", "rzrqye", "rqyl")
+# 行齐但列缺：2026-11-24 体检发现 11 个交易日行数完整（4490 行）而全部深市行的 rzche 为 NULL，
+# 沪市完整。行数口径的截断判定看不到这种缺口，_insert_missing 又因 code 已存在全部跳过，
+# 于是缺口永久留着。rzche 缺失会让「融资净买入 = 买入 − 偿还」把买入额整个当成净流入。
+# rqyl（融券余量数量）长期整列为空属上游常态，不纳入。
+_GAP_FIELDS = ("rzye", "rqye", "rzmre", "rzche", "rzrqye")
+_GAP_NULL_SHARE = 0.05
 _FILE_LOCK = threading.Lock()
 
 
@@ -152,6 +158,66 @@ def _baseline_counts(db, iso_day: str, days: int = BASELINE_DAYS) -> list[int]:
 
 def _existing_codes(db, iso_day: str) -> set[str]:
     return {c for (c,) in db.execute(select(MarginDetail.code).where(MarginDetail.trade_date == iso_day))}
+
+
+def detect_column_gaps(db, iso_day: str, *, null_share: float = _GAP_NULL_SHARE) -> dict[str, int]:
+    """当日 NULL 占比超过阈值的金额列 -> NULL 行数。行数完整也可能整批列缺。
+
+    计数必须用 case(...,1,0)：直接 sum(col.is_(None)) 的表达式类型是 Boolean，
+    SQLAlchemy 会把 2119 这样的计数结果强制转成 True，缺口永远检测不到。
+    """
+    cols = [func.sum(case((getattr(MarginDetail, f).is_(None), 1), else_=0)) for f in _GAP_FIELDS]
+    row = db.execute(
+        select(func.count(), *cols).where(MarginDetail.trade_date == iso_day)
+    ).one()
+    total = int(row[0] or 0)
+    if not total:
+        return {}
+    return {f: int(n or 0) for f, n in zip(_GAP_FIELDS, row[1:]) if int(n or 0) > total * null_share}
+
+
+def _null_field_rows(db, iso_day: str, fields: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """待修列存在 NULL 的已有行：code -> {列: 当前值}，用于只补 NULL、不覆盖已有值。"""
+    fields = tuple(fields)
+    if not fields:
+        return {}
+    cols = [getattr(MarginDetail, f) for f in fields]
+    cond = or_(*[c.is_(None) for c in cols])
+    rows = db.execute(
+        select(MarginDetail.code, *cols).where(MarginDetail.trade_date == iso_day, cond)
+    ).all()
+    return {str(r[0]): dict(zip(fields, r[1:])) for r in rows}
+
+
+def _fill_null_fields(db, iso_day: str, fetched: list[dict[str, Any]], gaps: dict[str, int]) -> int:
+    """用备份源补已有行的 NULL 金额列。只写 NULL 位置，非 NULL 一律不动。"""
+    if not gaps:
+        return 0
+    current = _null_field_rows(db, iso_day, gaps)
+    if not current:
+        return 0
+    updates: list[dict[str, Any]] = []
+    for r in fetched:
+        code = str(r.get("code") or "")
+        holes = current.get(code)
+        if not holes or _iso(r.get("trade_date") or iso_day) != iso_day:
+            continue
+        patch = {f: r[f] for f in gaps if holes.get(f) is None and r.get(f) is not None}
+        if patch:
+            updates.append({"b_code": code, "b_trade_date": iso_day, **{f"v_{k}": v for k, v in patch.items()}})
+            for f in patch:
+                holes[f] = patch[f]
+    if not updates:
+        return 0
+    filled = 0
+    for u in updates:
+        sets = ", ".join(f"{k[2:]} = :{k}" for k in u if k.startswith("v_"))
+        before = db.execute(
+            text(f"UPDATE margin_detail SET {sets} WHERE code = :b_code AND trade_date = :b_trade_date"), u
+        ).rowcount
+        filled += int(before or 0)
+    db.commit()
+    return filled
 
 
 def _insert_missing(db, rows: list[dict[str, Any]]) -> int:
@@ -352,15 +418,19 @@ def fill_margin_day(
     iso_day = _iso(trade_date)
     promax_rows = _count(db, iso_day)
     det = detect_truncation(promax_rows, _baseline_counts(db, iso_day))
+    gaps = detect_column_gaps(db, iso_day)
+    if gaps:
+        det["reasons"].append("column_gap")
     out: dict[str, Any] = {
         "trade_date": iso_day, "source": SOURCE, "promax_rows": promax_rows,
         "baseline_median": det["baseline_median"], "coverage_before": det["coverage"],
         "reasons": det["reasons"], "eastmoney_rows": 0, "eastmoney_inserted": 0,
         "rows_after": promax_rows, "coverage_after": det["coverage"], "status": "ok",
+        "column_gaps": gaps, "null_fields_filled": 0,
     }
     if promax_rows == 0 and not force and os.environ.get("ASHARE_MARGIN_FILL_ON_EMPTY", "0") != "1":
         out["status"] = "skipped_no_primary"  # 主源整日缺失属另一类故障，交给辅助数据补数重试
-    elif not det["truncated"] and not force:
+    elif not det["truncated"] and not gaps and not force:
         out["status"] = "not_truncated"
         pend = set(load_pending())
         if iso_day in pend:
@@ -389,19 +459,23 @@ def fill_margin_day(
                 seen.add(code)
                 new.append({"code": code, "trade_date": iso_day, **{k: r.get(k) for k in _VALUE_FIELDS}})
             inserted = _insert_missing(db, new)
+            null_filled = _fill_null_fields(db, iso_day, fetched, gaps)
             after = _count(db, iso_day)
             median = det["baseline_median"]
             coverage_after = round(after / median, 4) if median else None
+            gaps_left = detect_column_gaps(db, iso_day)
             out.update(
                 eastmoney_rows=len(fetched), eastmoney_inserted=inserted, rows_after=after,
                 coverage_after=coverage_after, status="filled",
+                null_fields_filled=null_filled, column_gaps_left=gaps_left,
             )
             out["inserted_codes"] = [r["code"] for r in new]
             pend = set(load_pending())
             # 备份源也没给全（上游当日未全量发布）时不能标 filled：否则该日会从
             # 待补清单里被删掉，次日断点直接跳过，缺口永久留着。实测 2026-11-13
             # promax 2019 行、东财也只给 2019 行，coverage_after=0.4498 却被判 filled。
-            if median and after / median < _INCOMPLETE_COVERAGE_FLOOR:
+            # 列缺口同理：行数达标但 rzche 仍整批为 NULL 时也要留在清单里。
+            if (median and after / median < _INCOMPLETE_COVERAGE_FLOOR) or gaps_left:
                 out["status"] = "incomplete"
                 _save_pending(pend | {iso_day})
             elif iso_day in pend:
@@ -409,8 +483,8 @@ def fill_margin_day(
         except Exception as exc:  # noqa: BLE001 - 备份路径不阻断日跑
             try:
                 db.rollback()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception:  # noqa: BLE001 - 恢复动作，抛出会盖掉原始错误
+                logger.warning("margin_detail_fill 回滚失败 td=%s", iso_day, exc_info=True)
             out.update(status="error", error=str(exc)[:200])
             _save_pending(set(load_pending()) | {iso_day})
     # 无缺口 / 主源未给数据只是例行巡检：自愈每 2 小时扫 5 个交易日，全打 WARNING

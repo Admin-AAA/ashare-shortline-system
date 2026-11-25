@@ -162,23 +162,18 @@ def _limiter(window: float, limit: int, intraday: bool):
 def _shared_path() -> str | None:
     # 与网关限流器共用同一份 shared_limiter_db_path 解析（相对路径按 backend 根目录归一），
     # 否则 promax 窗口会在 worker 的 CWD 下另建一个库，"共享"变成两份独立配额。
-    try:
-        from app.services.tushare_transport import shared_limiter_db_path
+    # 解析失败必须就地崩溃：静默换一份库正是上面这条注释要防的事故。
+    from app.services.tushare_transport import shared_limiter_db_path
 
-        raw = shared_limiter_db_path()
-        if raw:
-            return raw
-    except Exception:  # noqa: BLE001
-        pass
-    try:
-        from app.core import metrics
+    raw = shared_limiter_db_path()
+    if raw:
+        return raw
+    from app.core import metrics
 
-        if metrics._process_role() == "pytest":
-            return None
-        p = metrics._store_path()
-        return str(p.parent / "promax_window.sqlite") if p else None
-    except Exception:  # noqa: BLE001
+    if metrics._process_role() == "pytest":
         return None
+    p = metrics._store_path()
+    return str(p.parent / "promax_window.sqlite") if p else None
 
 
 def _rt_k_live_open_until() -> float:

@@ -402,8 +402,10 @@ def _select_latest_bootstrap_run(db: Session) -> RecommendationRun | None:
             RecommendationRun.run_id.in_(historical_run_ids),
         ),
     )
-    # defer 大字段：filter_audit_json 平均 5MB/行，首页只要摘要列（与 list_runs 同口径）；
+    # defer 大字段：filter_audit_json 平均 3MB/行，首页只要摘要列（与 list_runs 同口径）；
     # 否则排序 + 取行会把大 JSON 一起拖进 filesort，首页 bootstrap 白白多 6~7 秒。
+    # result_summary_json 平均 31KB/行也要 defer：ORDER BY 用的是 CASE 表达式，无法走索引，
+    # 1164 行全部进 filesort，实测冷查询 815ms vs 43ms。序列化时按主键补取这一行即可。
     return db.scalar(
         select(RecommendationRun)
         .options(
@@ -411,6 +413,7 @@ def _select_latest_bootstrap_run(db: Session) -> RecommendationRun | None:
             defer(RecommendationRun.market_snapshot_json),
             defer(RecommendationRun.filter_audit_json),
             defer(RecommendationRun.request_json),
+            defer(RecommendationRun.result_summary_json),
         )
         .where(
             or_(
@@ -602,8 +605,8 @@ def fail_orphaned_queued_run(db, repository, run_id: str, reason: str) -> bool:
         logger.warning("queued run %s 收尾失败: %r", run_id, exc)
         try:
             db.rollback()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 - 恢复动作，抛出会盖掉原始错误
+            logger.warning("queued run %s 收尾失败后回滚失败", run_id, exc_info=True)
         return False
 
 

@@ -16,6 +16,10 @@ pandas==2.2.3
 pyarrow==21.0.0
 pandera[pandas]==0.32.1
 pytest==9.0.3
+# 提交闸门：ruff 跑 backend/ruff.toml（静默吞异常门禁），pre-commit 装本地 git hook。
+# 版本与 .github/workflows/verify.yml 的 python-lint 任务一致。
+ruff==0.17.5
+pre-commit==4.7.0
 # tests/**/test_property_*.py 在收集期 import hypothesis；CI 回归任务安装本文件。
 hypothesis==6.170.12
 baostock==0.9.1

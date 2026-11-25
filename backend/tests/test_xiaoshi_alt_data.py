@@ -15,14 +15,36 @@ def test_margin_mapping_units():
     }]
 
 
-def test_float_mapping_percent_and_compact_date():
+def test_float_ratio_uses_total_shares_not_upstream_ratio():
+    """上游 unlock_ratio 的分母是流通股本，直接用会写出 1546% 这种值。
+
+    实测 688781：解禁 643,975,000 股，流通 41,628,998 股，总股本 1,000,000,000 股。
+    上游给 15.4697（=1546.97%），正确的占总股本口径是 64.3975%。
+    """
+    items = [{
+        "code": "688781", "event_date": "2027-03-25", "unlock_type": "首发原股东限售股份",
+        "unlock_shares": 643975000.0, "unlock_ratio": 15.4697,
+    }]
+    rows = xa.float_rows_from_xiaoshi(items, {"688781": 1000000000.0})
+    assert rows[0]["float_date"] == "20270325"
+    assert rows[0]["float_ratio"] == 64.3975
+    assert rows[0]["holder_name"].startswith(xa.XIAOSHI_FLOAT_PREFIX)
+
+
+def test_float_ratio_null_when_total_shares_unavailable():
     rows = xa.float_rows_from_xiaoshi([{
         "code": "301660", "event_date": "2027-04-13", "unlock_type": "首发机构配售股份",
         "unlock_shares": 2411759.0, "unlock_ratio": 0.0099,
-    }])
-    assert rows[0]["float_date"] == "20270413"
-    assert rows[0]["float_ratio"] == 0.99
-    assert rows[0]["holder_name"].startswith(xa.XIAOSHI_FLOAT_PREFIX)
+    }], {})
+    assert rows[0]["float_ratio"] is None
+    assert rows[0]["float_share"] == 2411759.0
+
+
+def test_upcoming_float_ratio_tolerates_null_ratio():
+    """feature_builder 汇总时 NULL 比例必须跳过：dict.get 的默认值只在键缺失时生效。"""
+    from app.services.feature_builder import _sum_float_ratio
+
+    assert _sum_float_ratio([{"float_ratio": 12.5}, {"float_ratio": None}, {}]) == 12.5
 
 
 def test_paged_stops_on_total_and_tolerates_growing_total():

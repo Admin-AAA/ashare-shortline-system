@@ -501,6 +501,53 @@ def check_daily_kbar_values(db, open_days: list[str], expected: str) -> dict[str
                  anomalous_rows=len(rows), new_listing_exempted=len(exempted))
 
 
+def check_margin_columns(db, open_days: list[str], expected: str) -> dict[str, Any]:
+    """两融明细的金额列缺口：行数齐全也可能整批列为 NULL。
+
+    2026-11-24 体检：11 个交易日行数完整（4490 行）而全部深市行的 rzche 为 NULL，沪市完整。
+    行数口径的 db:margin_detail 全绿，缺口存在 6 周无人发现。rzche 缺失会让
+    「融资净买入 = 买入 − 偿还」把买入额整个当成净流入。
+    """
+    from app.services.margin_detail_fill import detect_column_gaps
+
+    key, label = "db:margin_detail:columns", "两融金额列完整性"
+    impact = "偿还额缺失会把融资买入额整个当成净买入，凭空造出一倍净流入"
+    start = _window_start(open_days, expected, 5)
+    days = [d for d in open_days if start <= d <= expected]  # open_days 含未来日期，必须同时卡上界
+    bad: list[str] = []
+    for d in days:
+        gaps = detect_column_gaps(db, d)
+        if gaps:
+            bad.append(f"{d}(" + "、".join(f"{f} 缺{n}行" for f, n in sorted(gaps.items())) + ")")
+    if not bad:
+        return _item(key, label, "数据质量", GREEN, kind="quality", latest=expected, expected=expected,
+                     detail=f"最近 {len(days)} 个交易日金额列无整批缺口", impact=impact)
+    return _item(key, label, "数据质量", RED, kind="quality", latest=expected, expected=expected,
+                 detail=f"{len(bad)} 个交易日金额列整批为 NULL：{'；'.join(bad[:4])}",
+                 impact=impact, anomalous_days=len(bad))
+
+
+def check_share_float_ratio(db) -> dict[str, Any]:
+    """解禁比例口径：share_floats.float_ratio 是占总股本 %，超过 100 即口径错误。
+
+    2026-11-24 体检：xiaoshi 回退源写入的 958 行里 160 行 >100%（最大 1546.97%），
+    因为上游 unlock_ratio 的分母是流通股本而非总股本。这些值经 feature_builder 汇总后
+    在推荐里输出「占总股本 524.2%」这种不可能的风险提示，且长期没有任何检查覆盖。
+    """
+    key, label = "db:share_floats:ratio", "解禁比例口径（占总股本%）"
+    impact = "比例超 100% 会让解禁风险提示输出不可能的数字，并抬高回避门槛"
+    rows = db.execute(text(
+        "SELECT code, float_date, float_ratio, holder_name FROM share_floats "
+        "WHERE float_ratio > 100 ORDER BY float_ratio DESC LIMIT 200"
+    )).all()
+    if not rows:
+        return _item(key, label, "数据质量", GREEN, kind="quality", detail="全部解禁比例在 0~100% 区间", impact=impact)
+    sample = "、".join(f"{r[0]}@{norm_date(r[1])}({float(r[2]):.1f}%)" for r in rows[:6])
+    return _item(key, label, "数据质量", RED, kind="quality",
+                 detail=f"{len(rows)} 行解禁比例 >100%（占总股本口径不可能）：{sample}",
+                 impact=impact, anomalous_rows=len(rows))
+
+
 CHIP_HOLE_WINDOW_DAYS = 30
 
 
@@ -795,10 +842,8 @@ def check_capability_matrix(now: datetime | None = None, path: Path | None = Non
             else:
                 consistent += 1
     age_days = None
-    try:
+    if probed:  # 缺 probed_at 记「未知」；有值但格式不对就地崩溃，不静默当成未知
         age_days = ((now or _now()) - datetime.strptime(probed, "%Y-%m-%dT%H:%M:%S%z")).total_seconds() / 86400
-    except Exception:  # noqa: BLE001
-        pass
     sev = GREEN
     parts = [f"探测于 {probed}（{'%.1f 天前' % age_days if age_days is not None else '未知'}），{len(rows)} 项，异常 {len(bad)} 项"]
     if consistent:
@@ -1296,10 +1341,14 @@ def check_confirmation_coverage(db, open_days: list[str], now: datetime | None =
 
 # --------------------------------------------------------------------------- 汇总
 def _rollback(db) -> None:
+    """逐项检查之间重置会话，让上一项的失败不污染后面所有项。
+
+    回滚本身失败只记日志：这里抛出会盖掉真正的原始错误，而调用方需要继续跑完剩余检查。
+    """
     try:
         db.rollback()
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - 恢复动作，失败不能盖掉原始错误
+        logger.warning("数据质量巡检：会话回滚失败，后续检查可能读到失效事务", exc_info=True)
 
 
 ROLLING_R12_KEY = "formal:rolling_r12"
@@ -1392,6 +1441,9 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     items += _safe("日K值域", "db:daily_kbars:values", "数据质量", "quality",
                    lambda: [check_daily_kbar_values(db, open_days, expected)])
     items += _safe("筹码空洞", "db:daily_kbars:chip_history", "数据质量", "quality", lambda: [check_chip_history(db)])
+    items += _safe("解禁比例口径", "db:share_floats:ratio", "数据质量", "quality", lambda: [check_share_float_ratio(db)])
+    items += _safe("两融金额列完整性", "db:margin_detail:columns", "数据质量", "quality",
+                   lambda: [check_margin_columns(db, open_days, expected)])
     items += _safe("概念板块完整性", "db:concept_sector:completeness", "数据质量", "quality",
                    lambda: [check_concept_completeness(db, open_days, expected)])
     _rollback(db)
@@ -1512,32 +1564,26 @@ def check_provider_gateway(now: datetime | None = None, *, providers: tuple[str,
         keys = [str(b["key"]).replace("live:", "", 1) for b in open_live][:6]
         notes.append(f"实盘链路有 {len(open_live)} 个熔断打开：{'、'.join(keys)}")
     if "promax" in names:
-        try:
-            from app.core.config import get_settings as _gs
+        from app.core.config import get_settings as _gs
 
-            _st = _gs()
-            if bool(getattr(_st, "tushare_promax_rtk_reserved", True)):
-                notes.append("promax 额度专留实时行情 rt_k/rt_min（其余接口走 teajoin 等；补数进程"
-                             + ("不动用" if not bool(getattr(_st, "tushare_promax_research_enabled", False)) else "仍可动用") + " promax）")
-                if "promax" in exhausted:
-                    notes.append("⚠ promax 今日已耗尽：rt_k 现由 新浪→腾讯→AKShare 全市场快照→分钟→小石 依次兜底")
-        except Exception:  # noqa: BLE001
-            pass
+        _st = _gs()
+        if bool(getattr(_st, "tushare_promax_rtk_reserved", True)):
+            notes.append("promax 额度专留实时行情 rt_k/rt_min（其余接口走 teajoin 等；补数进程"
+                         + ("不动用" if not bool(getattr(_st, "tushare_promax_research_enabled", False)) else "仍可动用") + " promax）")
+            if "promax" in exhausted:
+                notes.append("⚠ promax 今日已耗尽：rt_k 现由 新浪→腾讯→AKShare 全市场快照→分钟→小石 依次兜底")
     if "teajoin" in names:
-        try:
-            from app.core.config import get_settings
-            from app.services.datasource import teajoin_capability as _tc
+        from app.core.config import get_settings
+        from app.services.datasource import teajoin_capability as _tc
 
-            if bool(getattr(get_settings(), "tushare_teajoin_lead", True)):
-                if bool(getattr(get_settings(), "tushare_teajoin_intraday_yield", False)):
-                    notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（盘中 {len(_tc.INTRADAY_SENSITIVE)} 个延迟敏感接口让原源先走，失败/超时自动降级）")
-                else:
-                    notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（含历史分钟 stk_mins；盘中不再让位，读超时收紧到 "
-                                 f"{get_settings().tushare_teajoin_intraday_read_timeout_seconds:g}s，超时/失败自动降级）")
+        if bool(getattr(get_settings(), "tushare_teajoin_lead", True)):
+            if bool(getattr(get_settings(), "tushare_teajoin_intraday_yield", False)):
+                notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（盘中 {len(_tc.INTRADAY_SENSITIVE)} 个延迟敏感接口让原源先走，失败/超时自动降级）")
             else:
-                notes.append("teajoin 主源开关已关闭（仅兜底）")
-        except Exception:  # noqa: BLE001
-            pass
+                notes.append(f"teajoin 为 {len(_tc.TEAJOIN_APIS)} 个接口的主源（含历史分钟 stk_mins；盘中不再让位，读超时收紧到 "
+                             f"{get_settings().tushare_teajoin_intraday_read_timeout_seconds:g}s，超时/失败自动降级）")
+        else:
+            notes.append("teajoin 主源开关已关闭（仅兜底）")
     return _item("gateway:providers", "数据网关承载（各上游额度/熔断）", "数据网关", sev, kind="gateway",
                  detail="；".join(notes),
                  impact="实盘 rt_k/日K/分钟线的主备源切换；额度耗尽后补数任务会自动暂停，避免挤占实盘",
@@ -1573,13 +1619,11 @@ def quality_score_penalty(report: dict[str, Any] | None, now: datetime | None = 
     if research_bad:
         note += f"；另有 {research_bad} 项研究/回测产物滞后（只展示不扣分）"
     gen = report.get("generated_at")
-    try:
+    if gen:  # 缺 generated_at 不扣「巡检停了」的分；有值但格式不对就地崩溃
         age_h = ((now or _now()) - datetime.strptime(str(gen), "%Y-%m-%d %H:%M:%S").replace(tzinfo=_CST)).total_seconds() / 3600
         if age_h > REPORT_STALE_HOURS:
             pen += 5
             note += f"；巡检报告已 {age_h:.0f} 小时未更新（再扣 5）"
-    except Exception:  # noqa: BLE001
-        pass
     return {"penalty": int(pen), "red": red, "yellow": yellow, "rule": rule, "note": note, "generated_at": gen}
 
 

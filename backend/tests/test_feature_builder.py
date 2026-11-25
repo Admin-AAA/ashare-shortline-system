@@ -7,8 +7,10 @@ from app.services.feature_builder import (
     MACD_SCORE_MAP,
     _bias_score,
     _compute_authenticity,
+    _margin_net_buy,
     _risk_score,
     _rsi_score,
+    _sum_float_ratio,
     _tag_features,
     build_features,
     market_regime_score,
@@ -775,3 +777,18 @@ def test_auxiliary_enrichment_populates_theme_tags_from_concepts():
     assert stock["theme_tags"] == ["金融科技", "跨境支付"]
     assert "theme_tags" not in stock["data_quality"]["missing_fields"]
     assert stock["data_quality"]["theme_tags_checked"] is True
+
+
+def test_margin_net_buy_null_when_repayment_missing():
+    """2026-11-16 全部深市行 rzche 为 NULL：按 0 相减会把买入额整个当成净买入。"""
+    assert _margin_net_buy({"rzmre": 1.46317, "rzche": 1.81487}) == -0.3517
+    assert _margin_net_buy({"rzmre": 1.46317, "rzche": None}) is None
+    assert _margin_net_buy({"rzmre": 1.46317}) is None
+    assert _margin_net_buy({"rzmre": None, "rzche": 1.0}) is None
+    assert _margin_net_buy({"rzmre": 0.0, "rzche": 0.0}) == 0.0
+
+
+def test_sum_float_ratio_skips_null_and_missing():
+    assert _sum_float_ratio([{"float_ratio": 64.3975}, {"float_ratio": None}, {}]) == 64.3975
+    assert _sum_float_ratio([{"float_ratio": None}]) == 0.0
+    assert _sum_float_ratio([]) == 0.0

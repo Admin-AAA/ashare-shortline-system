@@ -382,7 +382,8 @@ def test_late_repick_reruns_short_strategy_blocked_by_gate(monkeypatch):
     monkeypatch.setattr(ss, "_midlong_error_strategies", lambda d: [])
     monkeypatch.setattr(ss, "_formal_inflight_count", lambda db, d: 0)
     monkeypatch.setattr(seal, "generated_before_entry_open", lambda d, now: True)
-    monkeypatch.setattr(ss, "_diagnose_postclose_readiness", lambda db, d: {"can_run_local_recommendation": True})
+    monkeypatch.setattr(ss, "_diagnose_postclose_readiness",
+                        lambda db, d, fresh_session=False: {"can_run_local_recommendation": True})
     monkeypatch.setattr(ss, "_run_outcome_label", lambda db, p: {})
     from app.services.market_pool import kbar_cache
     monkeypatch.setattr(kbar_cache, "enabled", lambda: False)

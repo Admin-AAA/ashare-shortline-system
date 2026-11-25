@@ -62,6 +62,7 @@ def _bar(
     pct_chg: float,
     volume: float = 1000,
     amount: float = 10000,
+    adj_factor: float | None = None,
 ) -> DailyKbar:
     return DailyKbar(
         code="000001",
@@ -73,6 +74,7 @@ def _bar(
         pct_chg=pct_chg,
         volume=volume,
         amount=amount,
+        adj_factor=adj_factor,
     )
 
 
@@ -672,6 +674,81 @@ def test_simulate_outcome_real_ex_right_day_still_corrected():
     assert sim is not None
     # 除权修正后 executed_return 应基于 pct_chg 链（非价格跳变的虚假 -32%）
     assert sim["executed_return"] > -32.0, "除权日价格跳变不应造成虚假 -32% 收益"
+
+
+def test_simulate_outcome_window_metrics_adjusted_on_ex_right_day():
+    """除权窗口里的 min_return/max_return 也要按复权因子折算。
+
+    executed_return 早已做除权修正，窗口指标却仍用原始价格：缩股造成的价格跳升
+    被记成持仓期真实涨幅（10 元 → 21 元的缩股跳变 → max_return +110%）。
+    """
+    snapshot_dict = {"ideal_buy": 10.0, "stop_loss": 9.6, "take_profit": 40.0}
+    rec = SimpleNamespace(
+        code="688012",
+        trade_date="2026-05-28",
+        recommend_price=10.0,
+        feature_snapshot_json=json.dumps(snapshot_dict, ensure_ascii=False),
+    )
+    rows = [
+        dict(trade_date="2026-05-28", open=10.0, high=10.2, low=9.9, close=10.0, pct_chg=0.0),
+        dict(trade_date="2026-05-29", open=10.0, high=10.2, low=9.9, close=10.1, pct_chg=1.0),
+        # 06-01 缩股：价格跳升 +108%，pct_chg=3.0 为复权后真实涨跌
+        dict(trade_date="2026-06-01", open=20.8, high=21.0, low=20.5, close=20.8, pct_chg=3.0),
+        dict(trade_date="2026-06-02", open=20.8, high=21.2, low=20.6, close=21.0, pct_chg=1.0),
+    ]
+    plain = [_bar(**row) for row in rows]
+    dates = [str(b.trade_date) for b in plain]
+    without = _simulate_outcome(rec, plain, dates, horizon_days=5, entry_policy=CAUSAL_STRATEGY_ENTRY)
+
+    adjusted = []
+    for i, row in enumerate(rows):
+        bar = _bar(**row)
+        # 缩股后价格折算回入场日口径：1 股拆成 2 股，因子减半
+        bar.adj_factor = 1.0 if i < 2 else 0.5
+        adjusted.append(bar)
+    with_factors = _simulate_outcome(rec, adjusted, dates, horizon_days=5, entry_policy=CAUSAL_STRATEGY_ENTRY)
+
+    assert without is not None and with_factors is not None
+    assert without["max_return"] > 100.0, f"未折算时应看到缩股跳升造成的虚假涨幅，got {without['max_return']}"
+    assert with_factors["max_return"] < 10.0, f"复权折算后仍有虚假涨幅：{with_factors['max_return']}"
+
+
+def test_simulate_outcome_ex_right_day_in_window_is_not_a_stop_loss():
+    """持仓窗口内的除权跳空不得被当成跳空止损。
+
+    回归根因（300660 2026-05-26 送转 30.6%）：raw 开盘 -25%，止损线以入场价为基准，
+    除权日 raw 价格必然击穿止损线，出场被记为 stop_loss_gap；跳空止损上限（-15%）
+    还会把退出价定在除权日 bar 区间之外，结算直接抛 ExitPriceOutOfRangeError。
+    复权因子把窗口折算到入场日口径后，除权跳空消失，真实涨跌幅只有 -2.5%。
+    """
+    snapshot_dict = {"ideal_buy": 10.0, "stop_loss": 9.5, "take_profit": 40.0}
+    rec = SimpleNamespace(
+        code="300660",
+        trade_date="2026-05-26",
+        recommend_price=10.0,
+        feature_snapshot_json=json.dumps(snapshot_dict, ensure_ascii=False),
+    )
+    rows = [
+        dict(trade_date="2026-05-26", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0, adj_factor=1.0),
+        dict(trade_date="2026-05-27", open=10.0, high=10.1, low=9.9, close=10.0, pct_chg=0.0, adj_factor=1.0),
+        # 05-28 送转除权：raw 开盘 -24.8%，pct_chg=-2.5 为复权后真实涨跌
+        dict(trade_date="2026-05-28", open=7.6, high=7.8, low=7.5, close=7.7, pct_chg=-2.5, adj_factor=1.3062),
+        dict(trade_date="2026-05-29", open=7.7, high=7.9, low=7.6, close=7.8, pct_chg=1.3, adj_factor=1.3062),
+        dict(trade_date="2026-06-01", open=7.8, high=8.0, low=7.7, close=7.9, pct_chg=1.3, adj_factor=1.3062),
+    ]
+    bars = [_bar(**row) for row in rows]
+    dates = [str(b.trade_date) for b in bars]
+    sim = _simulate_outcome(rec, bars, dates, horizon_days=5, entry_policy=CAUSAL_STRATEGY_ENTRY)
+
+    assert sim is not None
+    assert not sim["exit_reason"].startswith("stop_loss"), (
+        f"除权跳空被误判为 {sim['exit_reason']}，executed_return={sim['executed_return']}"
+    )
+    assert sim["executed_return"] > -5.0, f"真实涨跌幅只有 -2.5%，got {sim['executed_return']}"
+    assert sim["min_return"] > -5.0, f"窗口指标仍被除权跳空污染：min_return={sim['min_return']}"
+    # 落库退出价必须是退出日真实成交价
+    exit_bar = next(b for b in bars if str(b.trade_date) == sim["exit_date"])
+    assert exit_bar.low * 0.995 <= sim["exit_price"] <= exit_bar.high * 1.005
 
 
 def test_simulate_outcome_min_return_truncated_to_exit_not_horizon():

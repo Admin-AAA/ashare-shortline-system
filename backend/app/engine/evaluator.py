@@ -63,7 +63,6 @@ ALLOWED_NAMES = {
     "dragon_tiger_net_buy_ratio",
     "dragon_tiger_net_amount_yi",
     "dragon_tiger_institution_net_buy_yi",
-    "hsgt_net_buy",
     "hsgt_rank",
     "volume_ratio_vs_20d",
     "dist20",

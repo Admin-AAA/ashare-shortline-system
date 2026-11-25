@@ -249,11 +249,13 @@ class TushareSinglePageEventProviderClient:
             )
         except TushareRawEnvelopeError as exc:
             raise EventSnapshotProviderError(
-                "event_provider_request_failed", "event provider request failed"
+                "event_provider_request_failed",
+                f"{self._contract.endpoint} request failed: {type(exc).__name__}: {str(exc)[:160]}",
             ) from exc
         except Exception as exc:
             raise EventSnapshotProviderError(
-                "event_provider_request_failed", "event provider request failed"
+                "event_provider_request_failed",
+                f"{self._contract.endpoint} request failed: {type(exc).__name__}: {str(exc)[:160]}",
             ) from exc
         if not isinstance(envelope, TushareRawEnvelope):
             raise EventSnapshotProviderError(
@@ -559,17 +561,22 @@ class EventSnapshotAuxiliaryHandler(Generic[ViewT]):
                     )
                 )
                 if not outcome.was_published:
+                    failure = outcome.provider_result.failure
                     code = (
-                        outcome.provider_result.failure.code
+                        failure.code
                         if outcome.provider_result.status is PartitionSnapshotStatus.FAILURE
-                        and outcome.provider_result.failure is not None
+                        and failure is not None
                         else AuxiliaryErrorCode.SNAPSHOT_PUBLISH_BLOCKED.value
                     )
+                    # 带上分区与上游原因：只报 code 时无法判断是哪一天、为什么没发布。
+                    detail = f" partition={partition.parameter_map}"
+                    if failure is not None:
+                        detail += f" detail={failure.message}"
                     errors.append(
                         AuxiliaryError(
                             AuxiliaryErrorCode.SNAPSHOT_PUBLISH_BLOCKED,
                             AuxiliaryStage.COVERAGE,
-                            f"event snapshot pointer was not published ({code})",
+                            f"event snapshot pointer was not published ({code}){detail}",
                             retriable=outcome.provider_result.status is PartitionSnapshotStatus.FAILURE,
                         )
                     )

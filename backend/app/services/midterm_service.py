@@ -2223,8 +2223,8 @@ def _generate_picks_inner(db, as_of: str, d, force: bool, horizon, strategy_ids,
                 result[cur] = {"error": f"{type(exc).__name__}: {str(exc)[:200]}", "exception": True}
                 try:
                     db.rollback()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception:  # noqa: BLE001 - 恢复动作，抛出会盖掉原始错误
+                    logger.warning("%s %s 选股异常后回滚失败", as_of, cur, exc_info=True)
                 remaining = [s for s in (strategy_ids or list(STRATEGIES)) if s not in result]
                 if not remaining:
                     break
@@ -2269,8 +2269,8 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 alert_gate_failure(f"midlong:{sid}", exc)
                 try:
                     db.rollback()
-                except Exception:  # noqa: BLE001
-                    pass
+                except Exception:  # noqa: BLE001 - 恢复动作，抛出会盖掉原始错误
+                    logger.warning("%s %s 就绪闸门异常后回滚失败", as_of, sid, exc_info=True)
             else:
                 if not g["ready"]:
                     from app.services.strategy_data_readiness import blocked_raw

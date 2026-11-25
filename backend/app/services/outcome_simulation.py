@@ -315,10 +315,14 @@ def _simulate_outcome(
     holding_bars = bars[holding_start : holding_start + max(1, horizon_days)]
     if not holding_bars:
         return None
+    # 窗口内出现除权/送转时，raw 价格整体跳变一次，止损/止盈/移动保护/入场日最低价
+    # 都以入场价为基准，必须在入场日复权口径里比较。否则除权跳空会被当成跳空止损
+    # （300660 2026-05-26 送转 30.6%：raw 开盘 -25%，真实涨跌幅只有 -2.5%）。
+    sim_bars, entry_adj, rebased = _rebase_holding_bars(holding_bars)
 
     if exit_resolver is None:
         exit_result = _resolve_exit_result(
-            holding_bars,
+            sim_bars,
             stop_loss_price,
             take_profit_price,
             code=str(rec.code),
@@ -331,34 +335,44 @@ def _simulate_outcome(
         if _ma_w and exit_result is not None:
             _first_hold = str(holding_bars[0].trade_date)
             _prior_src = ma_context_bars if ma_context_bars is not None else bars
-            _prior = [float(b.close or 0) for b in _prior_src if str(b.trade_date) < _first_hold][-60:]
-            _t = first_break_date(str(rec.code), holding_bars, _ma_w, entry_date, str(exit_result.trade_date),
+            if rebased:
+                # 入场前收盘同样折算到入场日复权口径，MA 兜底现算才不会跨越除权跳变
+                _prior = [
+                    _as_float(b.close) * _as_float(getattr(b, "adj_factor", None)) / entry_adj
+                    for b in _prior_src
+                    if str(b.trade_date) < _first_hold and _as_float(getattr(b, "adj_factor", None)) > 0
+                ][-60:]
+            else:
+                _prior = [float(b.close or 0) for b in _prior_src if str(b.trade_date) < _first_hold][-60:]
+            _t = first_break_date(str(rec.code), sim_bars, _ma_w, entry_date, str(exit_result.trade_date),
                                   prior_closes=_prior)
             if _t is not None:
-                _cut = [b for b in holding_bars if str(b.trade_date) <= _t]
+                _cut = [b for b in sim_bars if str(b.trade_date) <= _t]
                 _r2 = _resolve_exit_result(
                     _cut, stop_loss_price, take_profit_price, code=str(rec.code),
                     entry_price=executed_entry_price,
                     exit_overrides=exit_overrides_for(exit_strategy_id(feature_snapshot)),
                 )
                 if _r2 is not None and str(_r2.trade_date) == _t:
-                    holding_bars = _cut
+                    holding_bars = [b for b in holding_bars if str(b.trade_date) <= _t]
+                    sim_bars = _cut
                     exit_result = (
                         dataclasses.replace(_r2, reason=MA_BREAK_REASON)
                         if str(_r2.reason).startswith("horizon_close") else _r2
                     )
         # Sprint4 §185：逐策略破买入日最低价出场（与回测 _simulate_card 同口径）
         if entry_low_on and entry_low_enabled_for(exit_strategy_id(feature_snapshot)) and exit_result is not None:
-            _t2 = first_entry_low_break(str(rec.code), holding_bars, entry_date, str(exit_result.trade_date))
+            _t2 = first_entry_low_break(str(rec.code), sim_bars, entry_date, str(exit_result.trade_date))
             if _t2 is not None:
-                _cut2 = [b for b in holding_bars if str(b.trade_date) <= _t2]
+                _cut2 = [b for b in sim_bars if str(b.trade_date) <= _t2]
                 _r3 = _resolve_exit_result(
                     _cut2, stop_loss_price, take_profit_price, code=str(rec.code),
                     entry_price=executed_entry_price,
                     exit_overrides=exit_overrides_for(exit_strategy_id(feature_snapshot)),
                 )
                 if _r3 is not None and str(_r3.trade_date) == _t2:
-                    holding_bars = _cut2
+                    holding_bars = [b for b in holding_bars if str(b.trade_date) <= _t2]
+                    sim_bars = _cut2
                     exit_result = (
                         dataclasses.replace(_r3, reason=ENTRY_LOW_REASON)
                         if str(_r3.reason).startswith("horizon_close") else _r3
@@ -366,13 +380,19 @@ def _simulate_outcome(
         if exit_result is None:
             last = holding_bars[-1]
             exit_price = _as_float(last.close)
+            adjusted_exit_price = _as_float(sim_bars[-1].close)
             exit_date = str(last.trade_date)
             exit_reason = "horizon_close_t1_locked"
             canonical_exit_evidence = False
             intraday_exit_evidence = None
         else:
-            exit_price = exit_result.raw_price
             exit_date = exit_result.trade_date
+            adjusted_exit_price = exit_result.raw_price
+            exit_price = adjusted_exit_price
+            if rebased:
+                # 出场判定在复权口径，落库的退出价必须是当日真实成交价
+                exit_scale = next(b.scale for b in sim_bars if str(b.trade_date) == str(exit_date))
+                exit_price = adjusted_exit_price / exit_scale
             exit_reason = exit_result.reason
             canonical_exit_evidence = True
             intraday_exit_evidence = (
@@ -386,6 +406,7 @@ def _simulate_outcome(
             code=str(rec.code),
             entry_price=executed_entry_price,
         )
+        adjusted_exit_price = None
         canonical_exit_evidence = False
         intraday_exit_evidence = None
     incomplete_horizon = (
@@ -412,15 +433,21 @@ def _simulate_outcome(
             if str(_b.trade_date) == str(exit_date):
                 exit_bar_count = _i + 1
                 break
-    held_metrics = _compute_window_returns(executed_entry_price, holding_bars[:exit_bar_count])
+    held_metrics = _compute_window_returns(executed_entry_price, sim_bars[:exit_bar_count])
     if held_metrics is not None:
         # 用真实持仓期统计覆盖旁路 static_metrics；achievable_return 语义同（持仓期可达成收益）
         static_metrics = {**static_metrics, **held_metrics}
     executed_exit_price = round(exit_price * (1 - EXIT_SLIPPAGE_BPS / 10000.0), 4)
-    executed_return = round(((executed_exit_price - executed_entry_price) / executed_entry_price) * 100, 2)
+    return_basis_price = (
+        round(adjusted_exit_price * (1 - EXIT_SLIPPAGE_BPS / 10000.0), 4)
+        if adjusted_exit_price is not None
+        else executed_exit_price
+    )
+    executed_return = round(((return_basis_price - executed_entry_price) / executed_entry_price) * 100, 2)
 
     # 除权/复权检测：当 holding_bars 中存在除权日（open/prev_close 跳变 > 20% 但 pct_chg 在正常范围），
     # 用 pct_chg 链重新计算收益。除权日的价格跳变是除权调整，不是真实暴跌。
+    # 复权因子可用时（rebased）收益已在入场日口径算好，不走这条兜底链。
     # 不依赖 abs(executed_return) > 20 门槛——STOP_LOSS_GAP_CAP 可能已把 return cap 到 -15%，
     # 但除权日的虚假跳空仍需修正（如 688012 2026-05-29 除权：raw -32% → 真实 -5.47%）。
     # 涨跌停幅度按板块判定（创业/科创 20%、北交 30%、主板 10%）——旧实现只认科创板（68 前缀），
@@ -446,20 +473,14 @@ def _simulate_outcome(
             if abs(cur_pct) > limit_pct + 2.0 and abs(price_jump) < limit_pct * 0.6:
                 pct_chg_unreliable = True
     max_daily_pct = max(abs(_as_float(bar.pct_chg)) for bar in held_bars) if held_bars else 0
-    if has_ex_right_day or pct_chg_unreliable or (abs(executed_return) > 20 and max_daily_pct < limit_pct * 0.6):
-        entry_adj = _as_float(getattr(held_bars[0], "adj_factor", None)) if held_bars else 0.0
-        exit_adj = _as_float(getattr(held_bars[-1], "adj_factor", None)) if held_bars else 0.0
-        if has_ex_right_day and entry_adj > 0 and exit_adj > 0:
-            # 首选复权因子：退出价折算到入场价同一口径（后复权比值），退出价本身保持当日真实成交价。
-            executed_return = round(
-                ((executed_exit_price * exit_adj / entry_adj - executed_entry_price) / executed_entry_price) * 100, 2
-            )
-        else:
-            cum = 1.0
-            for bar in held_bars:
-                cum *= (1 + _as_float(bar.pct_chg) / 100.0)
-            executed_return = round((cum - 1) * 100, 2)
-        # 退出价保持退出日真实（含滑点）成交价，不再用链式收益反推合成价——
+    # 复权因子可用时 executed_return 已在入场日复权口径算好（_rebase_holding_bars）；
+    # 因子缺失或 pct_chg 字段本身失真时，才退回 pct_chg 链重算。
+    if not rebased and (has_ex_right_day or pct_chg_unreliable or (abs(executed_return) > 20 and max_daily_pct < limit_pct * 0.6)):
+        cum = 1.0
+        for bar in held_bars:
+            cum *= (1 + _as_float(bar.pct_chg) / 100.0)
+        executed_return = round((cum - 1) * 100, 2)
+        # 退出价保持退出日真实（含滑点）成交价，不用链式收益反推合成价——
         # 收益口径已在 executed_return 中完成复权。
     _validate_exit_price_in_bar(rec, holding_bars, exit_date, exit_price)
 
@@ -556,7 +577,10 @@ def _bar_tradeable(bar: DailyKbar) -> bool:
     )
 
 
-def _compute_window_returns(baseline_entry: float, bars: list[DailyKbar]) -> dict[str, float] | None:
+def _compute_window_returns(
+    baseline_entry: float,
+    bars: list[DailyKbar],
+) -> dict[str, float] | None:
     """对一组 bar 计算 max/min/close_return/achievable_return/max_drawdown（相对 baseline_entry）。
 
     纯函数，供 _static_window_metrics（未触发 entry 的旁路统计）与主路径（entry→exit 真实持仓期）
@@ -578,6 +602,46 @@ def _compute_window_returns(baseline_entry: float, bars: list[DailyKbar]) -> dic
         "achievable_return": round(achievable_return, 2),
         "max_drawdown": round(min_return, 2),
     }
+
+
+_REBASED_PRICE_FIELDS = frozenset({"open", "high", "low", "close", "ma5", "ma10", "ma20", "ma30", "ma60"})
+
+
+class _RebasedBar:
+    """把 bar 的价格字段折算到入场日复权口径，其余字段（成交量、涨跌幅、日期）原样透传。
+
+    持仓窗口内出现除权/送转时，raw 价格序列会整体跳变一次。止损线、止盈线、移动保护、
+    入场日最低价都以入场价为基准，必须在折算后的同一口径里比较，否则除权跳空会被当成真实暴跌。
+    """
+
+    __slots__ = ("_bar", "scale")
+
+    def __init__(self, bar: Any, scale: float) -> None:
+        self._bar = bar
+        self.scale = scale
+
+    def __getattr__(self, name: str) -> Any:
+        value = getattr(self._bar, name)
+        if name in _REBASED_PRICE_FIELDS:
+            return _as_float(value) * self.scale
+        return value
+
+
+def _rebase_holding_bars(bars: list[DailyKbar]) -> tuple[list[Any], float, bool]:
+    """持仓窗口按入场日复权因子折算；返回 (bars, entry_adj, 是否发生折算)。"""
+    entry_adj = _as_float(getattr(bars[0], "adj_factor", None)) if bars else 0.0
+    if entry_adj <= 0:
+        return list(bars), entry_adj, False
+    factors = [_as_float(getattr(bar, "adj_factor", None)) for bar in bars]
+    if not all(factor > 0 for factor in factors):
+        return list(bars), entry_adj, False
+    if all(abs(factor - entry_adj) <= 1e-9 for factor in factors):
+        return list(bars), entry_adj, False
+    return (
+        [_RebasedBar(bar, factor / entry_adj) for bar, factor in zip(bars, factors)],
+        entry_adj,
+        True,
+    )
 
 
 def _static_window_metrics(

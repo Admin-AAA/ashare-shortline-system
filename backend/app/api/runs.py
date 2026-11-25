@@ -273,8 +273,12 @@ def detail(run_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{run_id}/resume")
-async def resume(run_id: str, db: Session = Depends(get_db)):
-    """Dispatch completion of one database-verified persistence collection."""
+def resume(run_id: str, db: Session = Depends(get_db)):
+    """Dispatch completion of one database-verified persistence collection.
+
+    同步函数：get_run_detail / dispatch_workbench_run 都是阻塞的 DB 与派发调用，
+    写成 async 会占住事件循环，期间所有请求（含 /api/auth/status）一起卡住。
+    """
     run = get_run_detail(db, run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="run not found")

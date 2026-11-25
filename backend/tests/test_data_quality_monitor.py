@@ -235,6 +235,32 @@ def test_db_minute_lag_is_flagged_and_healthy_is_green(sdb):
     assert stale["severity"] == dq.RED and stale["lag_trade_days"] == 2
 
 
+def test_margin_column_gap_is_red_even_when_row_count_complete(sdb):
+    """行数齐全但整批列为 NULL：db:margin_detail 的行数口径全绿，必须单独报红。"""
+    from app.models.tables import MarginDetail
+
+    MarginDetail.__table__.create(sdb.get_bind())
+    sh = [{"code": f"{600000 + i:06d}", "trade_date": "2026-10-23", "rzye": 1.0, "rzche": 1.0} for i in range(60)]
+    sz = [{"code": f"{i:06d}", "trade_date": "2026-10-23", "rzye": 1.0, "rzche": None} for i in range(60)]
+    sdb.bulk_insert_mappings(MarginDetail, sh + sz)
+    sdb.commit()
+    it = dq.check_margin_columns(sdb, OPEN, "2026-10-23")
+    assert it["severity"] == dq.RED and it["anomalous_days"] == 1
+    assert "rzche 缺60行" in it["detail"]
+
+
+def test_share_float_ratio_over_100_is_red(sdb):
+    """占总股本口径不可能超 100%：xiaoshi 回退源曾按流通股本算，写出 1546.97%。"""
+    sdb.execute(text("CREATE TABLE share_floats (code TEXT, float_date TEXT, float_ratio REAL, holder_name TEXT)"))
+    assert dq.check_share_float_ratio(sdb)["severity"] == dq.GREEN
+    sdb.execute(text("INSERT INTO share_floats VALUES ('688781','20270325',1546.97,'xiaoshi:首发原股东限售股份')"))
+    sdb.execute(text("INSERT INTO share_floats VALUES ('603075','20270311',89.463,'xiaoshi:首发原股东限售股份')"))
+    sdb.commit()
+    it = dq.check_share_float_ratio(sdb)
+    assert it["severity"] == dq.RED and it["anomalous_rows"] == 1
+    assert "688781" in it["detail"] and "603075" not in it["detail"]
+
+
 def test_daily_kbar_value_anomalies(sdb):
     rows = [("000001", "2026-10-23", 10, 11, 9, 10, 100, 1.0), ("002731", "2026-10-23", 0.34, 0.38, 0.3, 0.31, 5, -59.7),
             ("000002", "2026-10-22", 10, 9, 11, 10, 100, 0.0)]  # 最高<最低

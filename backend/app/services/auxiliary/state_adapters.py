@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Protocol
 import logging
 import time
@@ -137,6 +137,56 @@ def _quarter_end_candidates(value: date, *, lookback_quarters: int = 6) -> list[
     return candidates
 
 
+def _pledge_disclosure_candidates(value: date, *, lookback_weeks: int = 10) -> list[str]:
+    """质押统计的候选披露日（YYYYMMDD），从近到远。
+
+    质押是**每周五**披露，不是季度。实测 end_date=20261120 有 2265 行、20261113 有 2262 行、
+    20261106 有 2247 行，而只按季末候选取到的是 20260930（2212 行），整整落后 8 周；
+    000001 的 pledge_ratio 在 09-30 是 0.13%、11-06 已是 0.23%，值确实变了。
+    本地表 2025-11-07 起每周五都有行，也印证周度节奏。
+
+    先给最近 lookback_weeks 个周五，再接季末候选作为更早历史的回退。
+    """
+    friday = value - timedelta(days=(value.weekday() - 4) % 7)
+    candidates = [_compact_day(friday - timedelta(weeks=i)) for i in range(lookback_weeks)]
+    candidates += [d for d in _quarter_end_candidates(value) if d not in set(candidates)]
+    return candidates
+
+
+def _freshness_upper_bound(column: Any, trade_date: date) -> Any:
+    """freshness 列「不晚于请求日」的 SQL 条件，右值按列的存储格式渲染。
+
+    格式由 schema 决定：String(10) 存 ISO 日、String(8) 存 YYYYMMDD、String(6) 存 YYYYMM。
+    """
+    length = getattr(column.type, "length", None)
+    if length == 6:
+        return column <= trade_date.strftime("%Y%m")
+    if length == 8:
+        return column <= _compact_day(trade_date)
+    return column <= trade_date.isoformat()
+
+
+def pledge_rows_from_frame(frame: Any, wanted: set[str]) -> list[dict[str, Any]]:
+    """pledge_stat 原始帧 → 入库行。wanted 非空时只保留请求的股票。"""
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for _, item in frame.sort_values("end_date").iterrows():
+        code = str(item.get("ts_code") or "").split(".")[0]
+        if len(code) != 6 or code in seen or (wanted and code not in wanted):
+            continue
+        seen.add(code)
+        pledge_count = _safe_int(item.get("pledge_count"))
+        rows.append({
+            "code": code,
+            "end_date": _iso_day(item.get("end_date")),
+            "pledge_count": pledge_count if pledge_count is not None else 0,
+            "unrest_pledge": _number(item.get("unrest_pledge")),
+            "rest_pledge": _number(item.get("rest_pledge")),
+            "pledge_ratio": _number(item.get("pledge_ratio")),
+        })
+    return rows
+
+
 def _iso_day(value: object) -> str:
     text = str(value or "").strip().replace("-", "")
     if len(text) == 8 and text.isdigit():
@@ -145,8 +195,6 @@ def _iso_day(value: object) -> str:
 
 
 def _days_before(iso_day: str, days: int) -> str:
-    from datetime import timedelta
-
     return (date.fromisoformat(iso_day) - timedelta(days=days)).isoformat()
 
 
@@ -268,6 +316,10 @@ class SQLAlchemyStateRepository:
             conditions.append(table.c.code.in_(request.requested_codes))
         if self._entry.freshness_field == "trade_date":
             conditions.append(freshness == request.trade_date.isoformat())
+        else:
+            # 期末/公告日这类 freshness 列必须卡请求日上界：整表 max(end_date) 会满足任意历史请求。
+            # 库里已有 2026-11-20 时，请求 2026-10-30 也判「新鲜」，历史补数永远取不到数。
+            conditions.append(_freshness_upper_bound(freshness, request.trade_date))
         if "code" in table.c and request.requested_codes:
             # 单条 GROUP BY code 同时得到 count / max(freshness) / 覆盖代码集（原 3 条查询）。
             # sum(count)=count(*)，max(各组 max)=max（均忽略 NULL），组键集合=distinct code。
@@ -288,8 +340,12 @@ class SQLAlchemyStateRepository:
         if conditions:
             count_stmt = count_stmt.where(*conditions)
             freshness_stmt = freshness_stmt.where(*conditions)
-        count = int(self._connection.scalar(count_stmt) or 0)
         observed = self._connection.scalar(freshness_stmt)
+        if observed is not None and self._entry.freshness_field != "trade_date":
+            # 期末/公告日类数据集的规模指最新一期披露的行数，历史累计行数永远超过任何行数下限。
+            # pledge_stats 的 2026-05-22 只有 116 行（上游 2245 行），按累计行数判永远发现不了。
+            count_stmt = count_stmt.where(freshness == observed)
+        count = int(self._connection.scalar(count_stmt) or 0)
         covered: frozenset[str] = frozenset()
         if "code" in table.c and request.requested_codes:
             covered = frozenset(
@@ -393,9 +449,10 @@ class TushareStateProvider:
                     "last_time": str(item.get("last_time") or ""),
                     "open_times": int(_number(item.get("open_times"))),
                     "up_stat": str(item.get("up_stat") or ""),
-                    "limit_amount_yi": _number(item.get("limit_amount")) / 1e8,
+                    # U 只给 fd_amount（封单），D 只给 limit_amount，Z 两者皆无：缺失写 NULL。
+                    "limit_amount_yi": _optional_yi(item.get("limit_amount")),
                     "turnover_ratio": _number(item.get("turnover_ratio")),
-                    "fd_amount_yi": _number(item.get("fd_amount")) / 1e8,
+                    "fd_amount_yi": _optional_yi(item.get("fd_amount")),
                     "industry": str(item.get("industry") or ""),
                 })
         if failures and not rows:
@@ -628,41 +685,27 @@ class TushareStateProvider:
         )
 
     def pledge_stat(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
-        # 质押统计按季度披露（慢变数据），用 end_date 批量一次拉全市场，再按
-        # requested_codes 过滤。逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。
-        # pledge_stat 披露日不规则（非严格季末有数据），按季末候选从近到远回退
-        # 到第一个有数据的日期。
+        # 质押统计每周五披露，用 end_date 批量一次拉全市场，再按 requested_codes 过滤。
+        # 逐股循环会触发 ~4948 次 Tushare 请求 + 429 限流。
+        # 当周可能尚未披露，按候选日从近到远回退到第一个有数据的日期。
         frame: Any = None
-        for candidate in _quarter_end_candidates(request.trade_date):
+        errors: list[str] = []
+        for candidate in _pledge_disclosure_candidates(request.trade_date):
             try:
                 candidate_frame = self._client.pledge_stat(end_date=candidate)
-            except Exception:
+            except Exception as exc:  # noqa: BLE001 - 单个候选日取数失败继续回退，但必须留痕
+                errors.append(f"{candidate}: {type(exc).__name__}: {str(exc)[:80]}")
                 continue
             if candidate_frame is not None and not candidate_frame.empty:
                 frame = candidate_frame
                 break
         if frame is None:
+            if errors:
+                logger.warning("pledge_stat 全部候选日取数失败（%s）：%s",
+                               request.trade_date, "; ".join(errors[:4]))
             return ()
         validate_market_frame("pledge_stat", frame, provider="tushare-auxiliary")
-        wanted = set(request.requested_codes)
-        rows: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        frame = frame.sort_values("end_date")
-        for _, item in frame.iterrows():
-            code = str(item.get("ts_code") or "").split(".")[0]
-            if len(code) != 6 or code in seen or (wanted and code not in wanted):
-                continue
-            seen.add(code)
-            pledge_count = _safe_int(item.get("pledge_count"))
-            rows.append({
-                "code": code,
-                "end_date": _iso_day(item.get("end_date")),
-                "pledge_count": pledge_count if pledge_count is not None else 0,
-                "unrest_pledge": _number(item.get("unrest_pledge")),
-                "rest_pledge": _number(item.get("rest_pledge")),
-                "pledge_ratio": _number(item.get("pledge_ratio")),
-            })
-        return rows
+        return pledge_rows_from_frame(frame, set(request.requested_codes))
 
     def broker_recommend(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         month = request.trade_date.strftime("%Y%m")

@@ -491,9 +491,10 @@ class HsgtTop10(Base):
     close: Mapped[float | None] = mapped_column(Float)
     change_pct: Mapped[float | None] = mapped_column(Float)
     rank: Mapped[int | None] = mapped_column(Integer)
-    amount: Mapped[float | None] = mapped_column(Float)       # 持股数量(股)
-    net_amount: Mapped[float | None] = mapped_column(Float)   # 持股变化(股)
-    buy: Mapped[float | None] = mapped_column(Float)          # 买入(股)
+    amount: Mapped[float | None] = mapped_column(Float)       # 成交金额(元)
+    # 上游 2024-08-16 之后停止披露个股买卖金额：2025/2026 共 8860 行 net_amount 与 buy 全为 0。
+    net_amount: Mapped[float | None] = mapped_column(Float)   # 净买入金额(元)
+    buy: Mapped[float | None] = mapped_column(Float)          # 买入金额(元)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)
 
 

@@ -23,6 +23,8 @@ node_modules
 frontend-v2/dist/
 frontend-v2/.vite/
 .env
+.env.*
+*.env.bak.*
 backend/logs/
 
 .claude/*

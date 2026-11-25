@@ -312,8 +312,8 @@ def alert_gate_failure(where: str, exc: BaseException) -> None:
         from app.core.alerts import emit_alert
 
         emit_alert("strategy_data_gate_failed", where, f"出票前数据就绪检查失败、本次未拦（{where}）：{type(exc).__name__}: {str(exc)[:160]}")
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:  # noqa: BLE001 - 告警通道故障不能盖掉上面已记录的闸门异常
+        logger.warning("数据就绪闸门告警发送失败（%s）", where, exc_info=True)
 
 
 # ---------------------------------------------------------------- 接口用：全部现役策略的依赖状态

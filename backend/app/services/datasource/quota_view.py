@@ -107,8 +107,8 @@ def _shared_hits(db_path: str | None) -> dict[str, int]:
     finally:
         try:
             conn.close()
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception:  # noqa: BLE001 - 清理动作，抛出会盖掉原始错误
+            logger.warning("共享限频库连接关闭失败", exc_info=True)
     return out
 
 
@@ -209,21 +209,15 @@ def _promax_section(cfg) -> dict[str, Any]:
     """promax 双口径：声明 RPM 与实际滚动窗口并列。"""
     from app.core import promax_window
 
-    intraday = False
-    insights: dict[str, Any] = {}
-    try:
-        intraday = bool(promax_window.in_trading_session())
-    except Exception:  # noqa: BLE001
-        intraday = False
-    try:
-        from app.core.runtime_env import env_flag, env_value
+    from app.core.runtime_env import env_flag
 
-        insights["rt_k_live_open_until"] = _num(promax_window._rt_k_live_open_until(), 0)
+    intraday = bool(promax_window.in_trading_session())
+    insights: dict[str, Any] = {
+        "rt_k_live_open_until": _num(promax_window._rt_k_live_open_until(), 0),
         # 用布尔解析而不是原样回显字符串：否则 .env 里写 0/false 会被当成"已启用"，
         # 空值时也应是明确的 False 而不是 null（前端不该自己猜）。
-        insights["research_enabled"] = env_flag("ASHARE_TUSHARE_PROMAX_RESEARCH_ENABLED", False)
-    except Exception:  # noqa: BLE001
-        pass
+        "research_enabled": env_flag("ASHARE_TUSHARE_PROMAX_RESEARCH_ENABLED", False),
+    }
     windows = []
     for window, off_limit, in_limit in promax_window.window_table():
         windows.append({

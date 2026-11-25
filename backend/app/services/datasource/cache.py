@@ -73,17 +73,14 @@ def in_formal_chain() -> bool:
 
 
 def ttl_for(dataset: str) -> float:
-    try:
-        from app.core.config import get_settings
+    from app.core.config import get_settings
 
-        raw = str(getattr(get_settings(), "datasource_cache_ttl", "") or "")
-        for part in raw.split(","):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                if k.strip() == dataset:
-                    return max(0.0, float(v))
-    except Exception:  # noqa: BLE001
-        pass
+    raw = str(getattr(get_settings(), "datasource_cache_ttl", "") or "")
+    for part in raw.split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            if k.strip() == dataset:
+                return max(0.0, float(v))
     return DATASET_TTL.get(dataset, 0.0)
 
 
