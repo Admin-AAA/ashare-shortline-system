@@ -181,7 +181,8 @@ def _record_api_metric(method: str, path: str, status_code: int, duration_ms: fl
 
 @app.middleware("http")
 async def catch_unhandled_exceptions(request: Request, call_next):
-    start = __import__("time").time()
+    # 时长用单调时钟：time.time() 受 NTP 校时/手动改钟影响，会算出负值或巨值
+    start = perf_counter()
     try:
         needs_auth = (
             request.url.path in _AUTH_PROTECTED_PATHS
@@ -191,7 +192,7 @@ async def catch_unhandled_exceptions(request: Request, call_next):
             if not _request_is_authorized(request):
                 return JSONResponse(status_code=401, content={"detail": "需要访问密码"})
         response = await call_next(request)
-        elapsed = (__import__("time").time() - start) * 1000
+        elapsed = (perf_counter() - start) * 1000
         if elapsed > 3000:
             access_logger.warning("%s %s → %s (%.0fms) [SLOW]", request.method, request.url.path, response.status_code, elapsed)
         else:
@@ -200,7 +201,7 @@ async def catch_unhandled_exceptions(request: Request, call_next):
             await run_in_threadpool(_record_api_metric, request.method, request.url.path, response.status_code, elapsed)
         return response
     except Exception:
-        elapsed = (__import__("time").time() - start) * 1000
+        elapsed = (perf_counter() - start) * 1000
         access_logger.error("%s %s → 500 (%.0fms) [ERROR]", request.method, request.url.path, elapsed)
         logger.exception("Unhandled request exception: %s %s", request.method, request.url.path)
         if not _is_perf_probe(request):
