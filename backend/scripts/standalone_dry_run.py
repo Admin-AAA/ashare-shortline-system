@@ -97,11 +97,12 @@ def main() -> None:
                     for r in recs
                 ]
                 from app.models.tables import RecommendationRun, RecommendationRunFilterAudit
+                from app.services.runs.audit_payload import decode_audit_payload
 
                 rr = db.get(RecommendationRun, run.get("run_id"))
                 audit_row = db.get(RecommendationRunFilterAudit, run.get("run_id"))
                 summary = json.loads(rr.result_summary_json or "{}") if rr else {}
-                audit = json.loads(audit_row.payload_json or "{}") if audit_row else {}
+                audit = decode_audit_payload(audit_row.payload_z if audit_row else None)
                 row = {"skill_id": sid, "status": run.get("status"), "score_line": p["score_line"],
                        "output_count": p["output_count"], "n": len(picks), "picks": picks,
                        "universe": getattr(rr, "universe_count", None),

@@ -145,6 +145,7 @@ from app.services.runs.filter_audit import (
     strip_audit_rows as _strip_audit_rows,
     upgrade_filter_audit as _upgrade_filter_audit,
 )
+from app.services.runs.audit_payload import decode_audit_payload, encode_audit_payload
 from app.services.candidates.trace import (
     coverage_heatmap as _coverage_heatmap,
     fallback_filter_audit as _fallback_filter_audit,
@@ -1678,12 +1679,12 @@ def get_recommendation_detail(db: Session, recommendation_id: str) -> dict[str, 
 
 def store_filter_audit(db: Session, run_id: str, audit: dict[str, Any]) -> None:
     """写入过滤审计快照（独立表，每 run 一行，重复写入覆盖）。"""
-    payload = _dumps(audit)
+    payload = encode_audit_payload(_json_safe(audit))
     row = db.get(RecommendationRunFilterAudit, run_id)
     if row is None:
-        db.add(RecommendationRunFilterAudit(run_id=run_id, payload_json=payload))
+        db.add(RecommendationRunFilterAudit(run_id=run_id, payload_z=payload))
     else:
-        row.payload_json = payload
+        row.payload_z = payload
 
 
 def get_run_filter_audit(db: Session, run_id: str) -> dict[str, Any] | None:
@@ -1698,7 +1699,7 @@ def get_run_filter_audit(db: Session, run_id: str) -> dict[str, Any] | None:
         or {}
     )
     stored = db.get(RecommendationRunFilterAudit, run_id)
-    audit = _loads(stored.payload_json if stored is not None else "{}", {})
+    audit = decode_audit_payload(stored.payload_z if stored is not None else None)
     if not audit:
         audit = pipeline.get("filter_audit") if isinstance(pipeline, dict) else None
     if not audit:

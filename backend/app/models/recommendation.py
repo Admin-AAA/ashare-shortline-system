@@ -164,15 +164,15 @@ class RecommendationRun(Base):
 class RecommendationRunFilterAudit(Base):
     """推荐 run 的过滤审计快照，按 run_id 一行。
 
-    这份快照平均 3MB/行、最大 9MB（2026-11-25 实测 1164 行合计 3.5GB，占
-    recommendation_runs 数据量 99%）。留在主表会让任何整行读取都搬几 MB，
-    拆表后主表只剩标量列与百 KB 级字段，审计快照只在 /runs/{id}/funnel 按需读取。
+    原始 JSON 平均 3.3MB/行、最大 9.6MB（2026-11-25 实测 1133 行合计 3.71GB），
+    内容是同构的重复键名，zlib 压缩后只剩 6.4%。存压缩字节流，读写统一走
+    ``app.services.runs.audit_payload``。
     """
 
     __tablename__ = "recommendation_run_filter_audits"
 
     run_id: Mapped[str] = mapped_column(String(60), primary_key=True)
-    payload_json: Mapped[str] = mapped_column(LONGTEXT().with_variant(Text(), "sqlite"))
+    payload_z: Mapped[bytes] = mapped_column(LONGBLOB().with_variant(LargeBinary(), "sqlite"))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime().with_variant(DATETIME(fsp=6), "mysql"),
         default=utcnow_naive,

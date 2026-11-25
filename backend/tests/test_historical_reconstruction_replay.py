@@ -21,6 +21,7 @@ from app.services.evidence import (
     identity_from_persisted_run,
 )
 from app.services.official_sample_scope import official_sample_conditions
+from app.services.runs.audit_payload import decode_audit_payload, encode_audit_payload
 from app.services.workbench_service import (
     invalidate_recommendation_history_cache,
     list_recommendation_history,
@@ -489,7 +490,7 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
     db.add_all([run, recommendation, outcome, metadata])
     db.add(RecommendationRunFilterAudit(
         run_id=run_id,
-        payload_json=json.dumps({"candidate_audit": {"retained": True}}),
+        payload_z=encode_audit_payload({"candidate_audit": {"retained": True}}),
     ))
     db.flush()
     finalize_reconstruction_run(db, run_id)
@@ -516,7 +517,7 @@ def test_historical_page_queries_reconstruction_by_trade_date_without_rewriting_
     assert "replay_setup_fixture" in result["facets"]["setup_types"]
     stored_audit = db.get(RecommendationRunFilterAudit, run_id)
     assert stored_audit is not None
-    assert json.loads(stored_audit.payload_json)["candidate_audit"]["retained"] is True
+    assert decode_audit_payload(stored_audit.payload_z)["candidate_audit"]["retained"] is True
     assert run.evaluation_scope == "historical_replay"
 
     live_count = db.scalar(

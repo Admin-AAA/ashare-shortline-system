@@ -24,6 +24,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zlib
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,8 @@ from typing import Any, Callable, Iterator
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.services.runs.audit_payload import decode_audit_payload  # noqa: E402
 
 DEFAULT_MEMORY_DIR = Path.home() / ".claude/projects/-Users-wangao/memory"
 
@@ -1592,8 +1595,12 @@ def summarize_policy_health(rows: list[tuple[Any, Any, Any]]) -> dict:
         )
         state["active"] = state["active"] or int(recommended_count or 0) > 0
         try:
-            audit = json.loads(raw_audit) if isinstance(raw_audit, str) else (raw_audit or {})
-        except (TypeError, json.JSONDecodeError):
+            audit = (
+                decode_audit_payload(raw_audit) if isinstance(raw_audit, bytes)
+                else json.loads(raw_audit) if isinstance(raw_audit, str)
+                else (raw_audit or {})
+            )
+        except (TypeError, json.JSONDecodeError, zlib.error):
             audit = {}
         if audit_has_opportunity(audit):
             state["opportunity"] = True
@@ -1622,7 +1629,7 @@ def _load_policy_health_from_db() -> dict:
 
     with SessionLocal() as db:
         rows = db.execute(text("""
-            SELECT r.trade_date, r.recommended_count, a.payload_json
+            SELECT r.trade_date, r.recommended_count, a.payload_z
             FROM recommendation_runs r
             LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id
             WHERE r.run_mode='formal' AND r.status='completed'

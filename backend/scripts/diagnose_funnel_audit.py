@@ -43,6 +43,8 @@ SCOPED_UNIVERSE_THRESHOLD = 200
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BACKEND_DIR)
 
+from app.services.runs.audit_payload import decode_audit_payload  # noqa: E402
+
 _SCORE_LINE_RE = re.compile(r"最终分\s*([\d.]+)\s*低于有效线\s*([\d.]+)")
 
 
@@ -252,12 +254,20 @@ def parse_funnel(
     trade_date: str,
     universe_count: int,
     recommended_count: int,
-    audit_json: str | dict,
+    audit_json: str | bytes | dict,
     floor: float = NOMINAL_FLOOR,
     top_k: int = 3,
 ) -> RunFunnel:
-    """解析单 run 的过滤审计快照 → RunFunnel（含分类）。纯函数，不依赖 DB。"""
-    audit = audit_json if isinstance(audit_json, dict) else (json.loads(audit_json) if audit_json else {})
+    """解析单 run 的过滤审计快照 → RunFunnel（含分类）。纯函数，不依赖 DB。
+
+    审计快照在库里是 zlib 压缩字节流，因此这里接受 dict、JSON 文本或压缩字节。
+    """
+    if isinstance(audit_json, dict):
+        audit = audit_json
+    elif isinstance(audit_json, bytes):
+        audit = decode_audit_payload(audit_json)
+    else:
+        audit = json.loads(audit_json) if audit_json else {}
     stages = extract_stages(audit)
     best_fs, eff_line, gap = extract_effective_line(audit)
     near = extract_near_misses(audit, top_k=top_k)
@@ -354,13 +364,13 @@ def compute_t1_counterfactual(db, run_funnels: list[RunFunnel]) -> list[T1Bucket
         # 直接从 filter_audit 重新提取全部被拦候选（near_misses 被 top_k 截断）
         # 这里 rf 已有 near_misses，但为拿全量重新查库一次
         row = db.execute(
-            text("SELECT payload_json FROM recommendation_run_filter_audits WHERE run_id=:rid"),
+            text("SELECT payload_z FROM recommendation_run_filter_audits WHERE run_id=:rid"),
             {"rid": rf.run_id},
         ).fetchone()
         if not row or not row[0]:
             continue
         try:
-            audit = json.loads(row[0])
+            audit = decode_audit_payload(row[0])
         except (TypeError, ValueError):
             continue
         for nm in extract_blocked_candidates(audit):
@@ -480,7 +490,7 @@ def audit_run(db, run_id: str, floor: float = NOMINAL_FLOOR, top_k: int = 3) -> 
     row = db.execute(
         text(
             "SELECT r.run_id, r.trade_date, r.universe_count, r.recommended_count, "
-            "a.payload_json AS filter_audit_json "
+            "a.payload_z AS filter_audit_json "
             "FROM recommendation_runs r "
             "LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id "
             "WHERE r.run_id=:rid"
@@ -498,7 +508,7 @@ def scan_recent_zero_runs(db, days: int = 10, floor: float = NOMINAL_FLOOR, top_
     rows = db.execute(
         text(
             "SELECT r.run_id, r.trade_date, r.universe_count, r.recommended_count, "
-            "a.payload_json AS filter_audit_json "
+            "a.payload_z AS filter_audit_json "
             "FROM recommendation_runs r "
             "LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id "
             "WHERE r.run_mode='formal' AND r.status='completed' AND r.recommended_count=0 "
@@ -536,7 +546,7 @@ def main() -> None:
             rows = db.execute(
                 text(
                     "SELECT r.run_id, r.trade_date, r.universe_count, r.recommended_count, "
-                    "a.payload_json AS filter_audit_json "
+                    "a.payload_z AS filter_audit_json "
                     "FROM recommendation_runs r "
                     "LEFT JOIN recommendation_run_filter_audits a ON a.run_id = r.run_id "
                     "WHERE r.run_mode='formal' AND r.status='completed' "

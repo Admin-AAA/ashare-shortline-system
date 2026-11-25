@@ -48,6 +48,7 @@ from app.models.tables import (
     Stock,
     StockQuote,
 )
+from app.services.runs.audit_payload import encode_audit_payload
 from app.services.feature_builder import build_features, market_regime_score
 from app.services.market_data import (
     _apply_relative_features,
@@ -847,7 +848,7 @@ def _persist_backtest_run(
     db.add(run)
     db.add(RecommendationRunFilterAudit(
         run_id=run_id,
-        payload_json=json.dumps(filter_audit, ensure_ascii=False),
+        payload_z=encode_audit_payload(filter_audit),
     ))
     db.commit()
     return run_id

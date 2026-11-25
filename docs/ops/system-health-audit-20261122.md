@@ -29,6 +29,7 @@
 | P1-3 | `/api/strategies` 28ms → 651ms | `read_rolled` 按 target fingerprint 缓存 300s（`invalidate_profile_cache`，`refresh()` 落库后自动失效） | 651/954ms → **30/32ms** |
 | P1-4 | 中线 trades 183/492ms、metrics 218/279ms | `horizon_analytics.trades()` 结果按 (horizon, strategy_id, OUT_DIR) 缓存 30s，`/trades` 与 `/metrics` 共用一次全量结算；新批次落盘即失效 | trades 183/492 → **111/140ms**；metrics 218/279 → **90/91ms** |
 | P1-5 | `recommendation_runs` 6.1GB/631 行、单行 8MB | 写库前裁掉前端从不读的 `rows[].prefilter / trace_summary`（`compact_filter_audit_for_storage`）；新脚本 `scripts/compact_filter_audit.py` 处理历史 | 审计载荷 5.12GB → **2.96GB**（省 2.5GB / 48.8%，1103 个 run） |
+| P1-6 | 过滤审计快照原始 JSON 存 3.71GB / 1133 行 | 迁移 `0033_filter_audit_compressed` 改为 zlib 压缩列 `payload_z`（读写走 `app/services/runs/audit_payload.py`），`OPTIMIZE TABLE` 回收空间 | 3.753GB → **0.27GB**；健康巡检 200 行读取 5.12s/626MB → **28ms/44MB** |
 | P2-1 | 重启端口风暴 + `dev.sh` 3s 误报失败 | `kick()` 改轮询到 90s 并验 HTTP 真实响应；失败提示区分「端口占用 / 已监听但无响应」 | 本次重启实测「等待 8s 就绪」 |
 | P2-2 | Prefect 502 冒成 500 | `/tasks/{id}/run` 增加 Prefect 传输异常 → 503 可读提示，其它异常照常抛 | 单测覆盖 |
 | P2-3 | readiness 因 `model_completion 0/0` 永久 degraded | 无调用证据判 `unknown`（info 级提示），不再算 degraded | `/api/admin/readiness` → **ready** |
@@ -84,6 +85,7 @@
 ## 数据
 
 - `filter_audit` 载荷 5.12GB → **2.96GB**；`OPTIMIZE TABLE recommendation_runs` 已跑，表物理占用 6.08GB → **3.53GB**（回收约 2.5GB）。
+- 过滤审计快照改 zlib 压缩存储（`0033_filter_audit_compressed`）：内容 3.71GB → **0.239GB**，表物理占用 3.753GB → **0.27GB**。1134 行逐行解压校验全部通过。
 - 库总量 49.62GB → **47.9GB** / 91 表（`minute_kbars` 14GB、`auxiliary_snapshot_rows` 11GB、`backtest_input_artifacts` 5.7GB 未动）。
 
 ---
