@@ -133,8 +133,8 @@ def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
     monkeypatch.setattr("app.orchestration.deployments.recommendation_flow", _FakeFlow("recommendation_flow"))
     monkeypatch.setattr("app.orchestration.deployments.manual_data_health_remediation_flow", _FakeFlow("manual_data_health_remediation_flow"))
     monkeypatch.setattr("app.orchestration.deployments.intraday_lock_poll_flow", _FakeFlow("intraday_lock_poll_flow"))
-    monkeypatch.setattr("app.orchestration.deployments.stale_run_recovery_flow", _FakeFlow("stale_run_recovery_flow"))
     monkeypatch.setattr("app.orchestration.deployments.execution_confirmation_poll_flow", _FakeFlow("execution_confirmation_poll_flow"))
+    monkeypatch.setattr("app.orchestration.deployments.retire_flow_deployments", lambda *a, **k: ())
     monkeypatch.setattr("app.orchestration.deployments.SessionLocal", lambda: SimpleNamespace(
         query=lambda *a, **k: SimpleNamespace(filter=lambda *a, **k: SimpleNamespace(all=lambda: [])),
         close=lambda: None,
@@ -144,13 +144,12 @@ def test_schedule_all_enabled_tasks_registers_every_flow(monkeypatch) -> None:
 
     # Every infrastructure flow must be registered, not just DB-backed tasks.
     assert "intraday_lock_poll_flow" in calls
-    assert "stale_run_recovery_flow" in calls
     assert "execution_confirmation_poll_flow" in calls
     # 推荐子 run 必须走独立队列，否则父 flow 占满 default 槽会死锁
     assert queues == ["recommendation"]
     assert result.scheduled_task_count == 0
-    # 5 non-DB flows: recommendation + 1 manual + 3 periodic (no enabled DB tasks).
-    assert len(applied) == 5
+    # 4 non-DB flows: recommendation + 1 manual + 2 periodic (no enabled DB tasks).
+    assert len(applied) == 4
     # Every deployment must pin the backend working_dir so the Process worker
     # does not spawn flow-run subprocesses in a throwaway temp directory.
     assert job_vars_list and all(
@@ -193,10 +192,10 @@ def test_business_tasks_are_isolated_from_high_frequency_polls(monkeypatch) -> N
         "recommendation_flow",
         "manual_data_health_remediation_flow",
         "intraday_lock_poll_flow",
-        "stale_run_recovery_flow",
         "execution_confirmation_poll_flow",
     ):
         monkeypatch.setattr(f"app.orchestration.deployments.{flow_name}", _FakeFlow(flow_name))
+    monkeypatch.setattr("app.orchestration.deployments.retire_flow_deployments", lambda *a, **k: ())
     monkeypatch.setattr("app.orchestration.deployments.SessionLocal", lambda: SimpleNamespace(
         query=lambda *a, **k: SimpleNamespace(filter=lambda *a, **k: SimpleNamespace(all=lambda: [task])),
         close=lambda: None,
@@ -205,7 +204,7 @@ def test_business_tasks_are_isolated_from_high_frequency_polls(monkeypatch) -> N
     schedule_all_enabled_tasks()
 
     business = [q for f, q in queues if f in ("scheduled_task_flow", "manual_data_health_remediation_flow")]
-    periodic = [q for f, q in queues if f.endswith("_poll_flow") or f == "stale_run_recovery_flow"]
+    periodic = [q for f, q in queues if f.endswith("_poll_flow")]
     assert business and all(q == RECOMMENDATION_WORK_QUEUE for q in business)
     assert periodic and all(q is None for q in periodic)  # 故意留在 default 队列
 

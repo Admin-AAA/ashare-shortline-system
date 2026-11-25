@@ -6,6 +6,7 @@ from pathlib import Path
 
 from prefect.client.orchestration import get_client
 from prefect.client.schemas.actions import DeploymentUpdate
+from prefect.exceptions import ObjectNotFound
 from prefect.schedules import Cron
 
 from app.core.prefect_bootstrap import require_resident_prefect_client
@@ -18,7 +19,6 @@ from app.orchestration.flows import (
     manual_data_health_remediation_flow,
     recommendation_flow,
     scheduled_task_flow,
-    stale_run_recovery_flow,
 )
 
 
@@ -32,7 +32,7 @@ MANUAL_REMEDIATION_DEPLOYMENT_NAME = "manual-data-health-remediation/default"
 RECOMMENDATION_WORK_QUEUE = "recommendation"
 # 2026-11-16/17 数据健康连续两天挂掉的根因修复：高频轮询与业务日更必须分队列。
 #
-# default 队列并发上限只有 2，而 intraday_lock_poll / stale_run_recovery /
+# default 队列并发上限只有 2，而 intraday_lock_poll /
 # execution_confirmation_poll 每 5 分钟各产生一条 run。这些 flow 单次可能跑
 # 60~90 分钟（thsdk 游客账户重连超时），两个槽被占满后，每 5 分钟新增的 run
 # 全部积压成 SCHEDULED；11-17 实测积压 123 条，17:35 盘后全量同步被挤在队尾
@@ -41,7 +41,7 @@ RECOMMENDATION_WORK_QUEUE = "recommendation"
 #
 # 因此：所有业务 ScheduledTask 与手动补数都走 recommendation 队列
 # （priority=2、无队列级并发上限），只受 work pool 上限 6 约束；
-# 只有下面 3 个高频 periodic flows 留在 default 队列，它们迟到即跳过、
+# 只有下面 2 个高频 periodic flows 留在 default 队列，它们迟到即跳过、
 # 堵死也不影响日更。推荐子 flow 本来就在 recommendation 队列，父子同队列
 # 且无队列限额，不会出现 2026-10-15 那种「父等子、子被队列饿死」的死锁。
 WORK_POOL_CONCURRENCY_LIMIT = 6
@@ -79,20 +79,13 @@ def schedule_all_enabled_tasks() -> DeploymentSyncResult:
         names.append(name)
     recommendation_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, work_queue_name=RECOMMENDATION_WORK_QUEUE, tags=["ashare", "recommendation"], job_variables=_JOB_VARIABLES).apply()
     manual_data_health_remediation_flow.to_deployment(name="default", work_pool_name=WORK_POOL_NAME, work_queue_name=RECOMMENDATION_WORK_QUEUE, tags=["ashare", "remediation"], job_variables=_JOB_VARIABLES).apply()
-    # 下面 3 个高频 periodic infrastructure flows 故意留在 default 队列（limit=2）：
+    # 下面 2 个高频 periodic infrastructure flows 故意留在 default 队列（limit=2）：
     # 它们迟到后 flow 内部会自行跳过，积压也不会再阻塞业务日更任务。
     # 不要给它们加 work_queue_name=RECOMMENDATION_WORK_QUEUE，否则又会把高优先队列占满。
     intraday_lock_poll_flow.to_deployment(
         name="default",
         work_pool_name=WORK_POOL_NAME,
         schedules=[Cron("*/5 9-11,13-14 * * mon-fri", timezone="Asia/Shanghai")],
-        tags=["ashare", "periodic"],
-        job_variables=_JOB_VARIABLES,
-    ).apply()
-    stale_run_recovery_flow.to_deployment(
-        name="default",
-        work_pool_name=WORK_POOL_NAME,
-        schedules=[Cron("*/5 * * * mon-fri", timezone="Asia/Shanghai")],
         tags=["ashare", "periodic"],
         job_variables=_JOB_VARIABLES,
     ).apply()
@@ -108,7 +101,32 @@ def schedule_all_enabled_tasks() -> DeploymentSyncResult:
         tags=["ashare", "periodic"],
         job_variables=_JOB_VARIABLES,
     ).apply()
+    retire_flow_deployments()
     return DeploymentSyncResult(len(tasks), tuple(sorted(names)))
+
+
+RETIRED_FLOW_NAMES = ("stale-run-recovery",)
+
+
+def retire_flow_deployments(flow_names: tuple[str, ...] = RETIRED_FLOW_NAMES) -> tuple[str, ...]:
+    """删除已退役 flow 留在 server 上的 deployment，返回本次删除的 ``flow/deployment``。
+
+    schedule_all_enabled_tasks 只 apply 现役 flow，退役 flow 的 deployment 会带着
+    active schedule 继续每 5 分钟拉起子进程。stale-run-recovery 已改为 API 进程内
+    的 run_watchdog，这里把旧 deployment 从 server 删掉，避免两处同时回收。
+    """
+    deleted: list[str] = []
+    with get_client(sync_client=True) as client:
+        for flow_name in flow_names:
+            try:
+                flow = client.read_flow_by_name(flow_name)
+            except ObjectNotFound:
+                continue
+            for deployment in client.read_deployments():
+                if deployment.flow_id == flow.id:
+                    client.delete_deployment(deployment.id)
+                    deleted.append(f"{flow_name}/{deployment.name}")
+    return tuple(sorted(deleted))
 
 
 def pause_disabled_task_deployments() -> tuple[str, ...]:

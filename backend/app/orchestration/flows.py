@@ -229,31 +229,3 @@ def poll_execution_confirmation(scheduled_at: str) -> dict:
 def execution_confirmation_poll_flow() -> None:
     _ensure_app_logging()
     poll_execution_confirmation(_scheduled_start_iso())
-
-
-@task(retries=0)
-def recover_stale_runs() -> int:
-    """Prefect-scheduled stale run recovery (replaces in-process interval job)."""
-    from app.services.workbench_service import recover_interrupted_runs
-    from app.db.session import SessionLocal
-    import logging
-
-    logger = logging.getLogger(__name__)
-    try:
-        db = SessionLocal()
-        try:
-            recovered = recover_interrupted_runs(db)
-            if recovered:
-                logger.warning("周期巡检回收 %d 个失联运行", recovered)
-            return recovered
-        finally:
-            db.close()
-    except Exception:
-        logger.exception("周期巡检回收失联运行失败")
-        return 0
-
-
-@flow(name="stale-run-recovery", timeout_seconds=900)
-def stale_run_recovery_flow() -> None:
-    _ensure_app_logging()
-    recover_stale_runs()

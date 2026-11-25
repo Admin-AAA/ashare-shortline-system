@@ -1,8 +1,7 @@
 """Regression tests for stale (orphaned) recommendation-run recovery.
 
-These cover the logic exercised by the periodic watchdog
-``recover_stale_runs`` Prefect flow (replaces the old in-process
-``_periodic_recover_stale_runs``), which calls ``recover_interrupted_runs``
+These cover the logic exercised by the in-process watchdog
+``app.services.run_watchdog``, which calls ``recover_interrupted_runs``
 on a timer so that runs whose background process died (e.g. on a backend
 restart) are marked ``interrupted`` even when no client hits the runs list
 endpoint.

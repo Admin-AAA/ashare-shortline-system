@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import secrets
@@ -66,9 +67,19 @@ async def application_lifespan(_app: FastAPI):
     lifecycle.add_cleanup("database_pool", close_database_pool)
     lifecycle.add_cleanup("provider_sessions", close_provider_sessions)
     lifecycle.startup(on_startup)
+    # 失联运行巡检改为进程内常驻任务（原 Prefect stale-run-recovery flow 每天拉起
+    # 288 个子进程只为跑一条查询）。API 常驻且启动时已执行同一段回收，频次保持 5 分钟。
+    from app.services.run_watchdog import watchdog_loop
+
+    watchdog = asyncio.create_task(watchdog_loop())
     try:
         yield
     finally:
+        watchdog.cancel()
+        try:
+            await watchdog
+        except asyncio.CancelledError:
+            pass
         failures = lifecycle.shutdown()
         if failures:
             logger.error("application shutdown cleanup failures: %s", ",".join(failures))
