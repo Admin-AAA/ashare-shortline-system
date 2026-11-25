@@ -3580,6 +3580,8 @@ def prefetch_realized(db, batches: list[tuple[str, str, list[str]]]) -> None:
     # 后进来的等它算完，再看还缺什么，通常已经不缺了。
     with _PREFETCH_LOCK:
         need = _missing_realized(batches)
+        if not need:  # 等锁期间前一个请求已经把同一批结算完（并发 3~4 个页面请求时必然发生）
+            return
         codes = sorted(need)
         # 每只票只需要 signal_date 之后的前 hold+11 根日K；旧实现按 OR 条件取到下界之后的全部行，
         # 实测 page7 取回 34131 行而实际最多需要 6200 行（信号越老越严重，2024 年信号约 20 倍）。

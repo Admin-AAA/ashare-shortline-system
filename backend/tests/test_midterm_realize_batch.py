@@ -43,6 +43,15 @@ def test_live_cache_dropped_when_version_changes(monkeypatch):
     assert not ms._REALIZED_LIVE
 
 
+def test_prefetch_realized_skips_when_peer_request_settled_everything(monkeypatch):
+    """并发页面请求共用一把结算锁：等锁期间别的请求已把同一批结算完时，
+    本请求复查得到空集合，不能再进批量查询（max() 对空序列抛 ValueError）。"""
+    missing = iter([{"A": [("2026-10-01", 20)]}, {}])
+    monkeypatch.setattr(ms, "_refresh_live_version", lambda db: None)
+    monkeypatch.setattr(ms, "_missing_realized", lambda batches: next(missing))
+    ms.prefetch_realized(object(), [("mid-x", "2026-10-01", ["A"])])
+
+
 @pytest.mark.integration
 @pytest.mark.requires_market_data
 def test_batch_settlement_matches_single_query(db):
