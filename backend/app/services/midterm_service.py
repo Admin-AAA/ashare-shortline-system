@@ -3581,6 +3581,9 @@ def prefetch_realized(db, batches: list[tuple[str, str, list[str]]]) -> None:
     with _PREFETCH_LOCK:
         need = _missing_realized(batches)
         codes = sorted(need)
+        # 每只票只需要 signal_date 之后的前 hold+11 根日K；旧实现按 OR 条件取到下界之后的全部行，
+        # 实测 page7 取回 34131 行而实际最多需要 6200 行（信号越老越严重，2024 年信号约 20 倍）。
+        max_bars = max(hold for pairs in need.values() for _, hold in pairs) + 11
         for i in range(0, len(codes), 200):
             chunk = codes[i:i + 200]
             # 每只股票各自的下界（该股最早的信号日），避免一只老信号把整批都拉长
@@ -3590,9 +3593,16 @@ def prefetch_realized(db, batches: list[tuple[str, str, list[str]]]) -> None:
                 params[f"c{j}"] = code
                 params[f"d{j}"] = min(d for d, _ in need[code])
             rows = db.execute(
-                text(_BAR_SQL.replace("SELECT k.trade_date", "SELECT k.code AS _code, k.trade_date")
-                     + f"WHERE ({conds}) AND k.close>0 ORDER BY k.code, k.trade_date"),
-                params,
+                text(
+                    "SELECT _code, trade_date, open, high, close, pct_chg, up_limit, down_limit FROM ("
+                    "SELECT k.code AS _code, k.trade_date, k.open, k.high, k.close, k.pct_chg, "
+                    "l.up_limit, l.down_limit, "
+                    "ROW_NUMBER() OVER (PARTITION BY k.code ORDER BY k.trade_date) AS _rn "
+                    "FROM daily_kbars k LEFT JOIN stk_limits l ON l.code=k.code AND l.trade_date=k.trade_date "
+                    f"WHERE ({conds}) AND k.close>0"
+                    ") t WHERE t._rn <= :max_bars ORDER BY t._code, t.trade_date"
+                ),
+                {**params, "max_bars": max_bars},
             ).all()
             by_code: dict[str, list[Any]] = {}
             for r in rows:

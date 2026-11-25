@@ -198,11 +198,7 @@ DB_DATASETS: list[dict[str, Any]] = [
      "entity": "COUNT(DISTINCT code)", "lag": 0, "cliff": True,
      "impact": "盘中/分钟级研究与部分短线确认；此前只查最大日期，不查每日覆盖股票数"},
 ]
-INDEX_CODES = ("000300.SH", "000905.SH", "000852.SH", "000001.SH", "399001.SZ", "399006.SZ",
-               # QVIX 不是真实指数，但同样落在 index_daily。rsi6-capitulation 的 QVIX 尖峰分支就读它，
-               # 缺数时该策略静默降级为「仅价格门」（market_trend 缺失按 0 处理）。2026-11-23 体检发现
-               # 它已缺 8 个交易日而巡检完全看不见——纳入后缺一天就黄，与真实指数同口径。
-               "QVIX50.SH", "QVIX300.SH")
+INDEX_CODES = ("000300.SH", "000905.SH", "000852.SH", "000001.SH", "399001.SZ", "399006.SZ")
 
 
 def _window_start(open_days: list[str], expected: str, n: int) -> str:
@@ -386,9 +382,7 @@ def check_index_daily(db, open_days: list[str], expected: str) -> list[dict[str,
         lag = trade_lag(open_days, mx, expected)
         sev = lag_severity(lag, 0)
         detail = f"最新 {mx}，共 {n} 行" + ("" if sev == GREEN else f"，滞后 {lag} 个交易日")
-        impact = ("rsi6-capitulation 的 QVIX 尖峰门（缺数时 market_trend 按 0 处理，策略静默降级为仅价格门）"
-                  if code.startswith("QVIX") else
-                  "小盘指数20日线开关(000905)、沪深300超额对照、市场环境判断")
+        impact = "小盘指数20日线开关(000905)、沪深300超额对照、市场环境判断"
         out.append(_item(f"db:index_daily:{code}", f"指数日线 {code}", "数据库表", sev, kind="db", latest=mx,
                          expected=expected, lag=lag, detail=detail, impact=impact))
     out.extend(_check_qvix_freshness(seen, open_days, expected))
@@ -400,11 +394,11 @@ def check_index_daily(db, open_days: list[str], expected: str) -> list[dict[str,
     return out
 
 
-# QVIX（期权隐含波动率）写 index_daily，但**没有常驻定时任务**（设计如此：
-# scripts/backfill_qvix.py 按需跑）。rsi6-capitulation 的 QVIX 尖峰分支在字段缺失时
-# 静默降级为「仅价格门」，所以它一旦停更没人会知道——2026-11-23 体检时已停更 8 个交易日
-# （QVIX50/QVIX300 最新 11-13，主指数已到 11-23）。上游本身有 2~3 个交易日发布延迟，
-# 因此按 5 个交易日容忍，超过才黄。
+# QVIX（期权隐含波动率）写 index_daily，由 qvix_daily_refresh 每日 21:10 增量。
+# rsi6-capitulation 的 QVIX 尖峰分支在字段缺失时静默降级为「仅价格门」，所以它一旦停更
+# 必须有人知道——2026-11-23 体检时已停更 8 个交易日（QVIX50/QVIX300 最新 11-13，主指数已到 11-23）。
+# 上游本身有 2~3 个交易日发布延迟，2026-11-19 起上游只给空行；按 5 个交易日容忍，超过才黄。
+# QVIX 单独检查，不并入 INDEX_CODES：真实指数按 0 日滞后判，QVIX 需要 5 日容忍，两套口径不能共用 key。
 _QVIX_CODES = ("QVIX50.SH", "QVIX300.SH")
 _QVIX_MAX_LAG_TRADE_DAYS = 5
 
@@ -588,18 +582,45 @@ def check_calendar_horizon(open_days: list[str], now: datetime) -> dict[str, Any
 
 
 # --------------------------------------------------------------------------- 文件数据集
-def _read_date_values(path: Path, cols: tuple[str, ...]) -> list[str]:
-    import pandas as pd
+def _normalize_date_values(values) -> list[str]:
+    out = []
+    for value in values:
+        text = str(value).replace("-", "")[:8]
+        if len(text) == 8 and text.isdigit():
+            out.append(text)
+    return out
 
+
+def _read_date_values(path: Path, cols: tuple[str, ...]) -> list[str]:
+    """读 parquet 日期列的 min/max。优先用 row-group 统计，列缺统计时才读该列。
+
+    实测（2026-11-24 体检）stk_limits.parquet 读整列 3.135s、daily_kbar.parquet 2.329s；
+    row-group 统计分别是 0.0027s / 0.0021s。
+    """
+    import pyarrow.parquet as pq
+
+    pf = pq.ParquetFile(path)
+    names = list(pf.schema.names)
     for c in cols:
-        try:
-            s = pd.read_parquet(path, columns=[c])[c]
-        except Exception:  # noqa: BLE001 - 列不存在就换下一个候选列
+        if c not in names:
             continue
-        vals = s.dropna().astype(str).str.replace("-", "", regex=False).str[:8]
-        vals = vals[vals.str.fullmatch(r"\d{8}")]
-        if len(vals):
-            return [str(vals.max()), str(vals.min())]
+        index = names.index(c)
+        mins: list = []
+        maxs: list = []
+        has_stats = True
+        for rg in range(pf.metadata.num_row_groups):
+            stats = pf.metadata.row_group(rg).column(index).statistics
+            if stats is None or not stats.has_min_max:
+                has_stats = False
+                break
+            mins.append(stats.min)
+            maxs.append(stats.max)
+        if has_stats:
+            vals = _normalize_date_values([*mins, *maxs])
+        else:
+            vals = _normalize_date_values(pf.read(columns=[c]).column(0).to_pylist())
+        if vals:
+            return [max(vals), min(vals)]
     return []
 
 

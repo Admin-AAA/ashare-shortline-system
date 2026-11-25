@@ -304,16 +304,20 @@ def test_missing_stocks_table_does_not_break_value_check(sdb):
 
 
 def test_index_daily_per_index_and_duplicates(sdb):
-    for code in dq.INDEX_CODES:
+    for code in (*dq.INDEX_CODES, *dq._QVIX_CODES):
         sdb.execute(text("INSERT INTO index_daily VALUES (:c, '2026-10-23', 1)"), {"c": code})
     sdb.execute(text("DELETE FROM index_daily WHERE ts_code='000300.SH'"))
     sdb.execute(text("INSERT INTO index_daily VALUES ('000300.SH', '2026-10-16', 1)"))
     sdb.execute(text("INSERT INTO index_daily VALUES ('000905.SH', '2026-10-23', 1)"))  # 重复键
     sdb.commit()
-    items = {i["key"]: i for i in dq.check_index_daily(sdb, OPEN, "2026-10-23")}
+    raw = dq.check_index_daily(sdb, OPEN, "2026-10-23")
+    items = {i["key"]: i for i in raw}
     assert items["db:index_daily:000300.SH"]["severity"] == dq.RED
     assert items["db:index_daily:000905.SH"]["severity"] == dq.GREEN
     assert items["db:index_daily:dup"]["severity"] == dq.RED
+    # QVIX 由 5 日容忍的独立检查出，不能同时被 0 日口径的指数检查重复输出（同 key 会重复计分）
+    qvix_keys = [i["key"] for i in raw if "QVIX" in i["key"]]
+    assert sorted(qvix_keys) == ["db:index_daily:QVIX300.SH", "db:index_daily:QVIX50.SH"]
 
 
 def test_calendar_horizon():
@@ -497,9 +501,9 @@ def test_provider_gateway_capacity_severity():
 
 
 def test_qvix_freshness_flags_silent_strategy_degradation():
-    """QVIX 写 index_daily 但没有常驻任务：停更时 rsi6-capitulation 的 QVIX 分支会静默
-    降级为仅价格门（2026-11-23 体检：已停更 8 个交易日没人发现）。上游本身有 2~3 天
-    延迟，所以容忍 5 个交易日。"""
+    """QVIX 停更时 rsi6-capitulation 的 QVIX 分支会静默降级为仅价格门（2026-11-23 体检：
+    已停更 8 个交易日没人发现）。上游本身有 2~3 天延迟，2026-11-19 起只给空行，所以容忍
+    5 个交易日。"""
     seen = {
         "QVIX50.SH": ("2026-10-27", 100),
         "QVIX300.SH": ("2026-10-15", 100),

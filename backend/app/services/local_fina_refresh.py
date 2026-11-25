@@ -147,19 +147,50 @@ def _fetch_small_pages(pro: Any, period: str, fields: str) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
+_PERIOD_INDEX = "_period_index.json"
+
+
 def local_period_index(fina_dir: Path = FINA_DIR, periods: list[str] | None = None) -> dict[str, set[str]]:
-    """{报告期: 本地有该期的股票}；每个文件只读一次 end_date 列。"""
+    """{报告期: 本地有该期的股票}。
+
+    5495 个文件逐个读 end_date 要 13.9s（2026-11-24 体检，78 项巡检里最慢）。改为维护
+    _period_index.json：按 mtime_ns + size 校验，只重读被改写过的文件；索引缺失或损坏时
+    全量重建一次。stat 5495 个文件约 0.1s。
+    """
     import pyarrow.parquet as pq
 
     want = set(periods or ())
     out: dict[str, set[str]] = {p: set() for p in want}
-    for f in fina_dir.glob("*.parquet"):
-        try:
-            ends = {str(v) for v in pq.read_table(f, columns=["end_date"]).column(0).to_pylist()}
-        except Exception:  # noqa: BLE001
-            continue
-        for p in (ends & want) if want else ends:
-            out.setdefault(p, set()).add(f.stem)
+    index_path = fina_dir / _PERIOD_INDEX
+    try:
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        index = {}
+    except (json.JSONDecodeError, OSError) as exc:
+        logger.warning("本地财务期间索引不可读，重建：%s", exc)
+        index = {}
+    changed = False
+    seen: set[str] = set()
+    for f in sorted(fina_dir.glob("*.parquet")):
+        st = f.stat()
+        key = f.stem
+        seen.add(key)
+        entry = index.get(key)
+        if entry and entry.get("mtime_ns") == st.st_mtime_ns and entry.get("size") == st.st_size:
+            ends = entry.get("end_dates") or []
+        else:
+            ends = sorted({str(v) for v in pq.read_table(f, columns=["end_date"]).column(0).to_pylist()})
+            index[key] = {"mtime_ns": st.st_mtime_ns, "size": st.st_size, "end_dates": ends}
+            changed = True
+        for p in (set(ends) & want) if want else set(ends):
+            out.setdefault(p, set()).add(key)
+    stale = set(index) - seen
+    if stale:
+        for key in stale:
+            del index[key]
+        changed = True
+    if changed:
+        _atomic_write_json(index_path, index)
     return out
 
 
