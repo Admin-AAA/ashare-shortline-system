@@ -429,9 +429,21 @@ def _skip_slow_known_gaps(datasets: tuple[str, ...], trade_date: str) -> tuple[t
     return tuple(d for d in datasets if d not in skipped), skipped
 
 
-def _batch_sync_item_status(dataset_key: str, errors) -> str:
+_SNAPSHOT_FALLBACK_CODES = frozenset({"snapshot_publish_blocked", "snapshot_pointer_missing"})
+
+
+def _error_code(error) -> str:
+    code = getattr(error, "code", error)
+    return str(getattr(code, "value", code))
+
+
+def _batch_sync_item_status(dataset_key: str, errors, *, fallback_covered: bool = False) -> str:
     if not errors:
         return "success"
+    # 事件快照指针缺失（主源熔断）但 MySQL 主表当日行数已达下限：兜底数据可用，
+    # 记 degraded 而不是 failed，避免每晚把整条补数流水线标成 partial_failed。
+    if fallback_covered and all(_error_code(error) in _SNAPSHOT_FALLBACK_CODES for error in errors):
+        return "degraded"
     return "known_gap" if dataset_key in _KNOWN_AUX_SOURCE_GAPS else "failed"
 
 

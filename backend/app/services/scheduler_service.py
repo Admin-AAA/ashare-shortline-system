@@ -19,7 +19,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.db.session import SessionLocal
 from app.models.tables import (
@@ -1683,10 +1683,7 @@ def _backfill_missing_local_indicators(db, days: int = 7) -> dict:
     scripts_dir = _Path(__file__).resolve().parent.parent.parent / "scripts"
     if str(scripts_dir) not in _sys.path:
         _sys.path.insert(0, str(scripts_dir))
-    try:
-        from backfill_indicators import _dates_needing_indicators, backfill_date
-    except ImportError:
-        return {"fixed_dates": [], "error": "backfill_indicators 不可导入"}
+    from backfill_indicators import _dates_needing_indicators, backfill_date
 
     dates = _dates_needing_indicators(db, days)
     fixed: list[dict] = []
@@ -1718,6 +1715,27 @@ def _run_data_health_remediation(payload: dict) -> dict:
         )
     finally:
         db.close()
+
+
+def _aux_snapshot_fallback_covered(db, dataset_key: str, errors, trade_date: str) -> bool:
+    """快照指针类错误且 MySQL 主表当日行数达到 inventory 下限时，判定兜底数据可用。"""
+    from app.services.auxiliary.production import AUXILIARY_DATASET_INVENTORY
+
+    codes = {str(getattr(getattr(error, "code", error), "value", getattr(error, "code", error))) for error in errors}
+    if not codes or not codes <= {"snapshot_publish_blocked", "snapshot_pointer_missing"}:
+        return False
+    entry = next((row for row in AUXILIARY_DATASET_INVENTORY if row.key == dataset_key), None)
+    if entry is None or entry.minimum_record_count <= 0:
+        return False
+    day = str(trade_date).replace("-", "")[:8]
+    if len(day) != 8:
+        return False
+    iso = f"{day[:4]}-{day[4:6]}-{day[6:8]}"
+    count = db.execute(
+        text(f"SELECT COUNT(*) FROM {entry.model.__tablename__} WHERE DATE({entry.freshness_field}) = :d"),
+        {"d": iso},
+    ).scalar()
+    return int(count or 0) >= entry.minimum_record_count
 
 
 def _run_auxiliary_remediation(payload: dict) -> dict:
@@ -1761,7 +1779,11 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
         result["trade_date"] = trade_date
         result["batch_sync"] = {
             item.dataset_key: {
-                "status": _batch_sync_item_status(item.dataset_key, item.errors),
+                "status": _batch_sync_item_status(
+                    item.dataset_key,
+                    item.errors,
+                    fallback_covered=_aux_snapshot_fallback_covered(db, item.dataset_key, item.errors, trade_date),
+                ),
                 "count": item.coverage.record_count,
                 "errors": [error.code.value for error in item.errors],
                 # 此前只留错误码（fetch_failed / persist_failed），根因无从查起；补上阶段、异常类型与上游原文。
@@ -1775,6 +1797,11 @@ def _run_auxiliary_remediation(payload: dict) -> dict:
         if known:
             result["known_source_gaps"] = known
             logger.warning("[WARN:AUX_KNOWN_GAP] 已知数据源长期缺口（不计失败）：%s", ", ".join(known))
+        degraded = sorted(k for k, v in result["batch_sync"].items() if v["status"] == "degraded")
+        if degraded:
+            result["degraded_datasets"] = degraded
+            logger.warning("[WARN:AUX_DEGRADED] 快照指针缺失但 MySQL 兜底行数达标（不计失败）：%s",
+                           ", ".join(degraded))
         # S4 application boundary 明确把事务所有权交给调用方；调度入口必须提交，
         # 否则 Session close 会把已经拉取和 upsert 的批量数据全部回滚。
         db.commit()
