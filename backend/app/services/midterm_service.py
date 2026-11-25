@@ -5,7 +5,6 @@
 """
 from __future__ import annotations
 
-import bisect
 import contextlib
 import contextvars
 import datetime as _dt
@@ -3582,40 +3581,42 @@ def prefetch_realized(db, batches: list[tuple[str, str, list[str]]]) -> None:
         need = _missing_realized(batches)
         if not need:  # 等锁期间前一个请求已经把同一批结算完（并发 3~4 个页面请求时必然发生）
             return
-        codes = sorted(need)
-        # 每只票只需要 signal_date 之后的前 hold+11 根日K；旧实现按 OR 条件取到下界之后的全部行，
-        # 实测 page7 取回 34131 行而实际最多需要 6200 行（信号越老越严重，2024 年信号约 20 倍）。
-        max_bars = max(hold for pairs in need.values() for _, hold in pairs) + 11
-        for i in range(0, len(codes), 200):
-            chunk = codes[i:i + 200]
-            # 每只股票各自的下界（该股最早的信号日），避免一只老信号把整批都拉长
-            conds = " OR ".join(f"(k.code=:c{j} AND k.trade_date>:d{j})" for j in range(len(chunk)))
+        # 每个 (code, signal_date, hold) 各自只需要 signal_date 之后的前 hold+11 根日K。
+        # 按三元组做 LATERAL 取数，每个三元组独立截断；同一只票有多个信号日时不会互相挤掉。
+        triples = sorted({(code, sd, hold) for code, pairs in need.items() for sd, hold in pairs})
+        max_bars = max(hold for _, _, hold in triples) + 11
+        for i in range(0, len(triples), 200):
+            chunk = triples[i:i + 200]
+            values_sql = " UNION ALL ".join(
+                f"SELECT :c{j} AS code, :d{j} AS sd, :h{j} AS hold" for j in range(len(chunk)))
             params: dict[str, Any] = {}
-            for j, code in enumerate(chunk):
+            for j, (code, sd, hold) in enumerate(chunk):
                 params[f"c{j}"] = code
-                params[f"d{j}"] = min(d for d, _ in need[code])
+                params[f"d{j}"] = sd
+                params[f"h{j}"] = hold
             rows = db.execute(
                 text(
-                    "SELECT _code, trade_date, open, high, close, pct_chg, up_limit, down_limit FROM ("
-                    "SELECT k.code AS _code, k.trade_date, k.open, k.high, k.close, k.pct_chg, "
-                    "l.up_limit, l.down_limit, "
-                    "ROW_NUMBER() OVER (PARTITION BY k.code ORDER BY k.trade_date) AS _rn "
-                    "FROM daily_kbars k LEFT JOIN stk_limits l ON l.code=k.code AND l.trade_date=k.trade_date "
-                    f"WHERE ({conds}) AND k.close>0"
-                    ") t WHERE t._rn <= :max_bars ORDER BY t._code, t.trade_date"
+                    "SELECT p.code AS _code, p.sd AS _sd, p.hold AS _hold, "
+                    "k.trade_date, k.open, k.high, k.close, k.pct_chg, l.up_limit, l.down_limit "
+                    "FROM (" + values_sql + ") p "
+                    "JOIN LATERAL ("
+                    "  SELECT kk.trade_date, kk.open, kk.high, kk.close, kk.pct_chg, kk.code "
+                    "  FROM daily_kbars kk "
+                    "  WHERE kk.code = p.code AND kk.trade_date > p.sd AND kk.close > 0 "
+                    f"  ORDER BY kk.trade_date LIMIT {max_bars}"
+                    ") k ON TRUE "
+                    "LEFT JOIN stk_limits l ON l.code = k.code AND l.trade_date = k.trade_date "
+                    "ORDER BY p.code, p.sd, k.trade_date"
                 ),
-                {**params, "max_bars": max_bars},
+                params,
             ).all()
-            by_code: dict[str, list[Any]] = {}
+            by_key: dict[tuple[str, str, int], list[Any]] = {}
             for r in rows:
-                by_code.setdefault(r._code, []).append(r)
-            for code in chunk:
-                bars = by_code.get(code, [])
-                dates = [r.trade_date for r in bars]
-                for signal_date, hold in need[code]:
-                    start = bisect.bisect_right(dates, signal_date)  # 第一根 trade_date > signal_date
-                    sub = bars[start:start + hold + 11]
-                    _remember_realized((code, signal_date, hold), _realize_rows(sub, hold), version)
+                by_key.setdefault((r._code, r._sd, r._hold), []).append(r)
+            for code, sd, hold in chunk:
+                _remember_realized((code, sd, hold),
+                                   _realize_rows(by_key.get((code, sd, hold), [])[:hold + 11], hold),
+                                   version)
 
 
 def _missing_realized(batches: list[tuple[str, str, list[str]]]) -> dict[str, list[tuple[str, int]]]:

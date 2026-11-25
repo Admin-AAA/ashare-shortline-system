@@ -69,3 +69,35 @@ def test_batch_settlement_matches_single_query(db):
     ms.prefetch_realized(db, [(sid, d, [c]) for c, d in samples])
     for (c, d), want in expected.items():
         assert ms._realize(db, c, d, hold) == want
+
+
+@pytest.mark.integration
+@pytest.mark.requires_market_data
+def test_batch_settlement_keeps_every_signal_date_of_same_code(db):
+    """同一只票有多个信号日时，批量取数必须为每个信号日各自截断前 hold+11 根，
+    不能用该股最早信号日做统一下界（后面的信号日会被挤掉、结算成 pending）。"""
+    rows = db.execute(text(
+        "SELECT code, COUNT(*) AS n FROM daily_kbars WHERE close > 0 "
+        "GROUP BY code HAVING n >= 80 ORDER BY n DESC LIMIT 5"
+    )).all()
+    if not rows:
+        pytest.skip("测试库没有日K")
+    code = rows[0].code
+    dates = [str(r.trade_date) for r in db.execute(text(
+        "SELECT trade_date FROM daily_kbars WHERE code = :c AND close > 0 ORDER BY trade_date"
+    ), {"c": code}).all()]
+    if len(dates) < 80:
+        pytest.skip("该股票日K不足")
+    # 同一只票取三个相隔较远的信号日，且最后一个信号日之后仍有足够根日K
+    sid = next(k for k, v in ms.STRATEGIES.items() if v.get("horizon") == "long")
+    hold = ms._hold(sid)
+    span = hold + 11
+    signal_dates = [dates[0], dates[len(dates) // 2 - span], dates[len(dates) - span - 2]]
+    expected = {(code, d): ms._realize_query(db, code, d, hold) for d in signal_dates}
+    # 最晚的信号日之后还有 span 根日K，必须能算出实际状态；被挤掉时会退化成 pending
+    assert expected[(code, signal_dates[-1])]["status"] != "pending"
+    ms._REALIZED_FINAL.clear()
+    ms._REALIZED_LIVE.clear()
+    ms.prefetch_realized(db, [(sid, d, [code]) for d in signal_dates])
+    for d in signal_dates:
+        assert ms._realize(db, code, d, hold) == expected[(code, d)], f"signal_date={d}"
