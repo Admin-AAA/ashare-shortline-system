@@ -89,7 +89,7 @@ class RetryablePostcloseReadinessError(RuntimeError):
 
 
 # 已退役：策略曝光补跑（experiment 模式样本补齐，2026-10-19 移除）。保留 ID 仅用于启动时禁用旧行
-# 与识别历史 task_run；17:35 盘后流水线已为每个现役策略独立出 formal 票，正式 KPI 只认 formal。
+# 与识别历史 task_run；21:30 盘后流水线已为每个现役策略独立出 formal 票，正式 KPI 只认 formal。
 EXPOSURE_TASK_ID = "strategy_exposure_run"
 
 
@@ -101,7 +101,7 @@ BLOCK_TRADE_BACKUP_CRON = "3 8 * * mon-fri"  # 周一到周五 08:03（开盘前
 TASK_TYPE_DATA_FRESHNESS_CHECK = "data_freshness_check"
 DATA_FRESHNESS_TASK_ID = "data_freshness_check_daily"
 # 股票身份（stocks + stock_metadata_history）每日增量刷新：08:10 盘前一次（新股 / ST 戴帽摘帽通常前一晚公告），
-# 17:10 盘后一次（在 17:35 日更之前补齐当天新股，让日更和 18:00 对账看到最新身份）。只读上游、只写 stocks / 元数据区间。
+# 17:10 盘后一次（在 21:00 晚间补数与 21:30 出票之前补齐当天新股，让日更和对账看到最新身份）。只读上游、只写 stocks / 元数据区间。
 TASK_TYPE_STOCK_IDENTITY_REFRESH = "stock_identity_refresh"
 STOCK_IDENTITY_TASK_ID = "stock_identity_refresh_daily"
 STOCK_IDENTITY_CRON = "10 8,17 * * mon-fri"
@@ -132,7 +132,7 @@ DATA_HEALTH_SNAPSHOT_CRON = "55 22 * * mon-fri"
 DATA_HEALTH_RECHECK_TASK_ID = "data_health_snapshot_recheck"
 DATA_HEALTH_RECHECK_CRON = "55 8 * * mon-fri"
 # 现役策略近12个月指标每月滚动重算（rolling_r12）：每个交易日 22:30 触发，本月已算过就跳过，
-# 所以实际是每月第一个交易日晚上算一次（失败次日自动再试）。避开 09:15–15:05 与 16:35–18:35，也在 21:00 晚间补数之后。
+# 所以实际是每月第一个交易日晚上算一次（失败次日自动再试）。避开 09:15–15:05 交易时段，也在 21:00 晚间补数与 21:30 出票之后。
 TASK_TYPE_ROLLING_R12 = "rolling_r12_recompute"
 ROLLING_R12_TASK_ID = "rolling_r12_monthly"
 ROLLING_R12_CRON = "30 22 * * mon-fri"
@@ -166,7 +166,7 @@ MIDTERM_BASIC_CRON = "0 10 * * sat"
 
 # ── 盘中锁利影子链路（只记录不交易，见 intraday_lock_service）────────────────
 # 调度时机由 outcome 出入场时序决定（见 outcome_simulation.py §51-53 + T+1 锁仓）：
-# 盘后推荐（post_sync_formal_recommendation 17:35）→ T+1 入场（当天锁仓不可卖，
+# 盘后推荐（post_sync_formal_recommendation 21:30）→ T+1 入场（当天锁仓不可卖，
 # outcome 暂记 provisional=今收占位）→ T+2 才是首个可卖日。因此：
 #   create  每日 09:20 盘前建监控，目标=trade_date 为前天（T+2）的已入场持仓
 #           —— 昨天入场、今天首个可卖日，正是盘中冲高回落的高发日；

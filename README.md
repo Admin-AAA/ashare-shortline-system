@@ -6,17 +6,18 @@
 
 ---
 
-## 一、现役策略（2026-10-27）
+## 一、现役策略（2026-11-26）
 
 上线不靠感觉：先在 `docs/strategy-research.md` 预注册规则，回测扣成本后达到上线标准才上线，不达标就进淘汰列表，不事后放宽。
 
 | 周期 | 持有 | 现役策略 | 代码位置 |
 |---|---|---|---|
-| 短线 | T+1 起按策略离场 | 炒股养家、陈小群（观察）、超跌资金反包、主线相对强度龙头 | `backend/skills/*/strategy.yaml`，参与名单见 `backend/app/services/standalone_strategies.py` |
-| 中线 | 20 日 | 小市值周度、低价小市值周度、小盘高股息周度、小盘低市销率周度、小盘超跌反转周度、回购预案、业绩加速、业绩预告预喜、期权激励、大宗溢价 | `backend/app/services/midterm_service.py` 的 `STRATEGIES` |
-| 长线 | 60 日 | 低换手低波、红利低波、连续 4 期双增长、净负债转净现金 | 同上 |
+| 短线 | T+1 起按策略离场 | 炒股养家、超跌资金反包、主线相对强度龙头、恐慌出清 RSI6+QVIX（观察） | `backend/skills/*/strategy.yaml`，参与名单与退役名单见 `backend/app/services/standalone_strategies.py` |
+| 中线 | 20 日（两个深跌策略 5 日） | 30 个：小市值系 4 个周度策略、回购预案、业绩加速/预告预喜/期权激励/大宗溢价及其放量版、费用率下降、分红增加、SUE 盈余加速系列及其组合 | `backend/app/services/midterm_service.py` 的 `STRATEGIES` |
+| 长线 | 60 日 | 红利低波、连续 4 期双增长 | 同上 |
 
 - 上线标准（2026-10-25）：近 12 个月（R12）和扩展窗口（N3）扣成本后每笔为正、各至少 30 笔；PF ≥ 1.3；最大回撤 短线 ≤ 35% / 中线 ≤ 25% / 长线 ≤ 20%；8 个阶段至少 6 段为正（短线 4 窗口至少 3 段）；熊市段每笔 ≥ -5%。
+- 策略去留看全期扣费净收益（减 0.07% 往返税费）与同期同持有期全市场等权基准的超额，不只看近期。
 - 被拒策略：中线/长线写在 `backend/app/api/midterm.py` 的 `MID_REJECTED` / `LONG_REJECTED`，短线退役名单是 `standalone_strategies.py` 的 `RETIRED_STRATEGY_IDS`。退役策略的目录和代码保留，便于复现。
 - 新上线策略会自动回补近 3 个月的回放记录，标记 `origin=replay`，不和实盘（`live_forward`）混在一起统计。
 - 长线研究目前暂停，已上线的长线策略照常运行。
@@ -41,16 +42,22 @@
 | 08:03 | 大宗交易盘前备份（补上一交易日） |
 | 08:10 / 17:10 | 股票身份数据刷新（名称、ST、上市状态，三方对账） |
 | 08:30 | 正式推荐安全网：检查最近 5 个交易日的出票缺口并补跑 |
+| 08:50 / 22:50 | 数据质量巡检（只读）；08:55 健康分次日复核 |
 | 09:20 | 盘中锁利监控建立 |
-| 17:35 | 盘后主流程：同步当日数据 → 健康闸门 → 结算 → 每个策略各自出票（短线 + 中长线） |
 | 17:40 | 锁利结果回填 |
-| 18:00 | 数据新鲜度巡检（只读） |
 | 19:40 | 策略画像补跑 |
-| 21:00 | 晚到数据修复 |
+| 21:00 | 晚间补数（当日日K、指数、涨停板等到齐） |
+| 21:10 | QVIX 增量同步 |
+| 21:30 | 盘后主流程：健康闸门 → 结算 → 每个策略各自出票（短线 + 中长线） |
+| 21:50 | 数据新鲜度巡检 |
+| 22:30 | 现役策略近 12 个月指标滚动重算（每月首个交易日实际执行） |
+| 22:55 | 数据健康分每日快照 |
+| 23:30 | 开盘啦涨停榜研究缓存日更 |
+| 周六 10:00 | 中长线周度基本面快照 |
 
 时间常量都在 `backend/app/services/scheduler_pure.py`。
 
-运维窗口：09:15–15:05（交易时段）和 16:35–18:35（日更）不要重启服务。
+运维窗口：09:15–15:05（交易时段）和 21:00–23:35（晚间补数与出票）不要重启服务。
 
 ---
 
@@ -71,11 +78,13 @@
 
 | 数据源 | 用途 | 备注 |
 |---|---|---|
-| teajoin | 日线、基本面、涨停榜、竞价、筹码、资金流、历史分钟等（约 204 个接口） | 优先级最高；420 次/分钟；不支持 rt_k、实时分钟、公告新闻。见 `docs/datasource-teajoin.md` |
-| promax | 实时 `rt_k` / `rt_min` 主源，其他接口备源 | 限流窗口短（5 分钟 / 30 分钟 / 1 小时重置） |
-| quantdata | Tushare 协议备源 | 有日额度 |
-| 小石 xiaoshi | 全市场实时快照、分钟数据、公告 | 独立 market source |
-| 东方财富、新浪、巨潮、AkShare、Baostock | 实时行情、公告新闻、备用日线/分钟 | 兜底 |
+| teajoin | 日线、基本面、涨停榜、竞价、筹码、资金流等 Tushare 协议接口 | 主源；480 次/分钟；不支持 rt_k、实时分钟、公告新闻。见 `docs/datasource-teajoin.md` |
+| promax | 实时 `rt_k` 主源，其他接口备源 | 限流窗口短（5 分钟 / 30 分钟 / 1 小时重置）；2026-11-25 实测全线网络不可达 |
+| quantdata | 实时 `rt_min`，Tushare 协议备源 | 有日额度；2026-11-25 实测额度耗尽 |
+| 同花顺 thsdk | 实时行情、板块广度、市场快讯 | |
+| Baostock、东方财富、新浪、腾讯、通达信、巨潮、AkShare | 历史分钟、公告新闻、实时行情兜底、QVIX | 兜底 |
+
+能力矩阵 `backend/docs/datasource_capability_matrix.md` 由 `backend/scripts/probe_datasource_capabilities.py` 生成。小石（xiaoshi）2026-11-15 永久退役（`datasource/retired.py`）。
 
 补数范围：最近 3 年，不补 2023 年 10 月以前。
 
@@ -190,7 +199,7 @@ cd backend && .venv/bin/python -m pytest -q tests/<某个测试文件>.py
 ```
 
 - 测试自动连 `ashare_test` 库，不会碰生产库。
-- 本机内存 16GB，只跑相关的小范围测试，不跑全量。
+- 全量回归 `cd backend && .venv/bin/python -m pytest -q tests`，约 4350 个用例。
 - 提交前至少跑一次 `.venv/bin/python -c "import app.main"`。
 
 ---
@@ -204,7 +213,7 @@ cd backend && .venv/bin/python -m pytest -q tests/<某个测试文件>.py
 | `ASHARE_DATABASE_URL` | 本机 MySQL `ashare_workbench` | 数据库 |
 | `ASHARE_MAX_DAILY_PICKS_PER_STRATEGY` | `5` | 每策略每日前几只（第 N 名同分顺延），0 = 不限 |
 | `ASHARE_TUSHARE_TEAJOIN_TOKEN` | 空 | teajoin Key |
-| `ASHARE_TUSHARE_TEAJOIN_RATE_LIMIT_PER_MINUTE` | `420` | teajoin 限速 |
+| `ASHARE_TUSHARE_TEAJOIN_RATE_LIMIT_PER_MINUTE` | `480` | teajoin 限速（实测软顶 550） |
 | `ASHARE_TUSHARE_TEAJOIN_LEAD` | `true` | teajoin 做主源；关掉则只做末位兜底 |
 | `ASHARE_TUSHARE_PROMAX_API_KEY` | 空 | promax Key |
 | `ASHARE_TUSHARE_PROMAX_RATE_LIMIT_PER_MINUTE` | `180` | promax 限速 |
