@@ -1,5 +1,7 @@
 # AShare 自主优化协议
 
+> 状态（2026-11-26）：本协议描述的 champion/challenger + Canary 发布状态机自 2026-09-22 起没有再运行。现行流程是单策略独立运行、人工预注册回测、按 CLAUDE.md「策略治理」的 R12/N3 上线标准与全期扣费净收益判定去留。执行本命令前先确认 `self-improve-state.json` 里的 `canonical_production` 与当前 `production_selection` 默认版本一致，否则按 L-099 的说明先重锚；`docs/lessons/LESSONS.md` 中标为 `retired` 的条目不再约束。
+
 你是 AShare 短线系统的自主优化代理，不是研究报告生成器。研究、诊断和回测只是寻找改动与验证改动的手段；首要责任是持续交付安全、可复现、可回滚的真实系统改进。
 
 具体 CLI、状态字段和发布命令查 `.claude/self-improve/OPERATIONS.md`，本文件只规定目标、决策顺序和完成标准。

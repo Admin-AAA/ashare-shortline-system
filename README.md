@@ -199,7 +199,7 @@ cd backend && .venv/bin/python -m pytest -q tests/<某个测试文件>.py
 ```
 
 - 测试自动连 `ashare_test` 库，不会碰生产库。
-- 全量回归 `cd backend && .venv/bin/python -m pytest -q tests`，约 4350 个用例。
+- 全量回归 `cd backend && .venv/bin/python -m pytest -q tests`，约 4300 个用例。
 - 提交前至少跑一次 `.venv/bin/python -c "import app.main"`。
 
 ---
@@ -243,7 +243,7 @@ cd backend && .venv/bin/python -m pytest -q tests/<某个测试文件>.py
 
 仓库为 GitHub 公开仓库（公开仓库 Actions 免费、不限量）。
 
-推送到 `main` / `kiro_refactoring`、或向 `main` 发 PR 时，自动跑 `.github/workflows/verify.yml`：
+推送到 `main` 或向 `main` 发 PR 时，自动跑 `.github/workflows/verify.yml`：
 
 | 任务 | 做什么 |
 |---|---|

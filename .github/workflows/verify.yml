@@ -2,7 +2,7 @@ name: verify
 
 on:
   push:
-    branches: [main, kiro_refactoring]
+    branches: [main]
   pull_request:
     branches: [main]
 
