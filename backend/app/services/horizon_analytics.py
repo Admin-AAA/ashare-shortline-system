@@ -4,6 +4,8 @@
 这里只做平铺和聚合，不另存一份结果，口径因此与复盘页一致：
 - 只有 status=closed 的笔计入胜率/盈亏比（已扣 0.3% 成本）；持有中为浮动收益，不计入。
 - 胜：ret>0；盈亏比 = 平均盈利 / |平均亏损|；PF = 盈利总和 / |亏损总和|。
+- 基准：bench_ret/excess_ret 为同信号日、同持有期、同成本的全市场等权基准（index_daily 的 EWALL.A）与超额；
+  stats 汇总为 bench_avg_ret / excess_avg_ret / bench_n。基准缺日时该笔不计入超额。
 - 来源：origin=replay 为历史回放重建；无 origin 且 status/ 有当天运行记录的为实盘（LIVE）；
   两者都不是的旧文件记为 legacy，单列，不混进实盘。
 """
@@ -102,9 +104,31 @@ def _trades_uncached(db, horizon: str, strategy_id: str | None) -> list[dict[str
         for p in b["picks"]:
             row = {k: p.get(k) for k in _PICK_FIELDS}
             row.update(strategy_id=b["strategy_id"], strategy_name=b["strategy_name"], signal_date=b["signal_date"],
-                       hold_days=b["hold_days"], origin=o)
+                       hold_days=b["hold_days"], origin=o, bench_ret=None, excess_ret=None)
             rows.append(row)
+    _attach_benchmark(db, rows)
     return rows
+
+
+def _attach_benchmark(db, rows: list[dict[str, Any]]) -> None:
+    """给已平仓的笔附上同期等权基准收益（EWALL.A，同持有期、同 0.3% 成本）与超额。
+
+    基准曲线缺该信号日或持有期未走完时留 None。db 为 None（纯文件口径的单测）时不附。"""
+    if db is None:
+        return
+    from app.services.market_benchmark import equal_weight_curve, holding_benchmark_return
+
+    dates, pct = equal_weight_curve(db)
+    if not dates:
+        return
+    for r in rows:
+        if r.get("status") != "closed" or r.get("ret") is None:
+            continue
+        b = holding_benchmark_return(dates, pct, str(r["signal_date"]), int(r.get("hold_days") or ms.HOLD_DAYS))
+        if b is None:
+            continue
+        r["bench_ret"] = b
+        r["excess_ret"] = round(float(r["ret"]) - b, 2)
 
 
 def _r(x: float | None, nd: int = 2) -> float | None:
@@ -139,6 +163,11 @@ def stats(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
         "skipped": sum(1 for r in rows if r.get("status") == "skipped"),
         "total_picks": len(rows),
     }
+    # 同期全市场等权基准与超额（L-224）：只统计能算出基准的已平仓笔；净均值为负但超额为正，说明是市场在跌。
+    benched = [r for r in closed if r.get("bench_ret") is not None]
+    out["bench_n"] = len(benched)
+    out["bench_avg_ret"] = _r(sum(float(r["bench_ret"]) for r in benched) / len(benched)) if benched else None
+    out["excess_avg_ret"] = _r(sum(float(r["ret"]) - float(r["bench_ret"]) for r in benched) / len(benched)) if benched else None
     # 收益质量与组合口径（只增字段，不改上面任何既有字段）。
     # 收益质量用于识别「去掉极端笔后不赚钱」的策略；组合口径（槽位滚动）用于识别
     # 「每笔看着行、组合风险却集中」的策略。口径说明见 app/services/return_quality.py。

@@ -1566,8 +1566,11 @@ def _execute_plan_item(db: Session, item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _index_ts_codes(db: Session) -> list[str]:
+    from app.services.market_benchmark import EW_TS_CODE
+
     rows = db.scalars(select(IndexDaily.ts_code).distinct().order_by(IndexDaily.ts_code.asc())).all()
-    existing = [str(code) for code in rows if str(code or "").strip()]
+    # EWALL.A 是本地合成的等权基准，不是上游指数，不能拿去调 index_daily 接口。
+    existing = [str(code) for code in rows if str(code or "").strip() and str(code) != EW_TS_CODE]
     return existing or list(DEFAULT_INDEX_TS_CODES)
 
 
@@ -1915,10 +1918,15 @@ def _backfill_index_daily_dates(
         stmt = mysql_insert(IndexDaily).values(payload).prefix_with("IGNORE")
         db.execute(stmt)
         db.commit()
+    # 合成等权基准 EWALL.A 跟随真实指数一起补到目标日（当日日K不足 4000 行时自动跳过，晚间补数后再补）。
+    from app.services.market_benchmark import upsert_equal_weight
+
+    equal_weight = upsert_equal_weight(db, max(normalized_dates))
     return {
         "row_count": len(payload),
         "requested_date_count": len(normalized_dates),
         "requested_ts_code_count": len(ts_codes),
+        "equal_weight": equal_weight,
     }
 
 

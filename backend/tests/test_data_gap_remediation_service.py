@@ -970,12 +970,17 @@ def test_backfill_index_daily_dates_normalizes_target_dates(monkeypatch):
         ]
 
     monkeypatch.setattr("app.services.data_gap_remediation_service.fetch_index_daily", _fake_fetch)
+    # 真实指数写完后会顺带把等权基准 EWALL.A 补到目标日；这里只验证真实指数那一段。
+    ew_calls: list[str] = []
+    monkeypatch.setattr("app.services.market_benchmark.upsert_equal_weight",
+                        lambda _db, upto: ew_calls.append(upto) or {"written": []})
 
     result = _backfill_index_daily_dates(db, ["20260601", "2026-06-04"], ["000300.SH"])
 
     assert result["row_count"] == 2
     assert result["requested_date_count"] == 2
     assert result["requested_ts_code_count"] == 1
+    assert ew_calls == ["2026-06-04"]
     db.execute.assert_called_once()
     db.commit.assert_called_once()
 
