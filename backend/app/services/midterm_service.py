@@ -847,15 +847,6 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 60,
         "schedule": "month_end",
     },
-    # §269 营收与扣非净利连续多期双增长（scripts/midterm/lt_research102.py CG4_h60，预注册、未调参；2026-10-25 起直接上线）
-    "long-growth-streak": {
-        "name": "营收与扣非净利连续4期双增长（持60日）",
-        "horizon": "long",
-        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：本期及之前连续至少4个报告期（逐期相连、不跳期），营业收入同比和扣非净利润同比都≥5%（稳健增长、不看一次性大涨）；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按连续双增期数（封顶12期）从多到少排序、同期数再按扣非净利同比（封顶100%）从高到低，次日开盘买，持有60个交易日（已持有不重复买）。",
-        "kind": "cg_streak",
-        "hold_days": 60,
-        "schedule": "daily",
-    },
 }
 
 
@@ -863,6 +854,7 @@ STRATEGIES: dict[str, dict[str, Any]] = {
 # §282 重评时 long-net-cash-switch 曾恢复上线；§1055（2026-11-08）生产滚动 R12 每笔 −7.16%、verdict=negative，重新移入此处。
 # 不再出票、不再在 /long 展示；仅保留定义（候选函数/历史 picks 文件/测试）以便复现与追溯，原因见 app/api/midterm.py LONG_REJECTED 与 docs/strategy-research.md §278。
 # §338（2026-10-27）long-lowturn-lowvol：现行生产代码近12个月满期卖出每笔为负（40 笔 −1.13%、中位数 −2.54%），owner 决定下线，同样方式移入此处。
+# §1069（2026-11-26）long-growth-streak：生产滚动 R12 每笔 −2.20%、verdict=negative，同样方式移入此处。
 RETIRED_STRATEGIES: dict[str, dict[str, Any]] = {
     # §98 防御型异象（scripts/midterm/lt_research16.py LTV_h60）；§338 下线
     "long-lowturn-lowvol": {
@@ -882,6 +874,18 @@ RETIRED_STRATEGIES: dict[str, dict[str, Any]] = {
         "horizon": "long",
         "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：去年同期有息负债多于账上现金（净负债>0、有息负债>0），本期变成现金多于有息负债（净负债≤0，即净现金），且本期扣非净利润为正；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按「净负债减少额÷去年有息负债」从大到小排序（封顶3倍），次日开盘买，持有60个交易日（已持有不重复买）。",
         "kind": "ncs_switch",
+        "hold_days": 60,
+        "schedule": "daily",
+    },
+    # §269 营收与扣非净利连续多期双增长（scripts/midterm/lt_research102.py CG4_h60，预注册、未调参；2026-10-25 起直接上线）
+    # §1069（2026-11-26）long-growth-streak：生产滚动 R12（cutoff 2026-11-02）241 笔 −2.20%/笔、PF0.84、
+    # 胜率 32.0%、median −10.12%、trim5 −5.97%、verdict=negative。10-25 用户授权「保留监控、近12个月每笔转负再下线」，
+    # 现触发该条件，owner 决定下线；历史 picks/指标保留，候选函数不动。
+    "long-growth-streak": {
+        "name": "营收与扣非净利连续4期双增长（持60日）",
+        "horizon": "long",
+        "summary": "每个交易日盘后，扫描上一交易日收盘后至今首次披露的定期报告（同一报告期只取第一次公告）：本期及之前连续至少4个报告期（逐期相连、不跳期），营业收入同比和扣非净利润同比都≥5%（稳健增长、不看一次性大涨）；剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万的，按连续双增期数（封顶12期）从多到少排序、同期数再按扣非净利同比（封顶100%）从高到低，次日开盘买，持有60个交易日（已持有不重复买）。",
+        "kind": "cg_streak",
         "hold_days": 60,
         "schedule": "daily",
     },
@@ -1056,6 +1060,11 @@ NON_SUE_NEAR_DUP_DEMOTE_REASONS: dict[str, str] = {
     "mid-sector-dip-stabilize": "板块企稳。LIVE 27 笔净均值 -0.38%，样本不足。退出。",
     # mid-repurchase-incentive-dip：4 笔样本完全不足。
     "mid-repurchase-incentive-dip": "回购×激励×回踩。LIVE 仅 4 笔且 -7.54%，样本不足。退出。",
+    # §1069（2026-11-26）mid-earnings-accel-dip：生产滚动 R12（rolling_r12_latest.json，cutoff 2026-11-02，
+    # 现行生产代码重放、扣 0.3%、只算满期卖出，卖出日可晚于截止日）71 笔 −3.28%/笔、median −2.43%、胜率 42.3%、PF0.48、
+    # trim5 −3.46%、verdict=negative。上线研究 recent_12m 34 笔 +3.47%/PF3.18：两边都有的 28 笔收益完全一样，
+    # 差距来自窗口（生产多了 2026-10-17~11-02 三季报季 41 笔、平均 −8.98%，少了 2025-10 的 6 笔 −3.62%）；按每笔转负下线。
+    "mid-earnings-accel-dip": "财报业绩加速×公告前深跌（持5）。§1069 生产滚动近12个月（现行代码重放、扣0.3%、只算满期卖出）71 笔 −3.28%/笔、中位数 −2.43%、胜率 42.3%、PF0.48，每笔转负。上线研究近12个月 34 笔 +3.47%：两边都有的 28 笔收益完全一样，差距来自窗口，生产窗口多了 2026-10-17 后三季报季 41 笔（平均 −8.98%）。退出。",
     # 注：mid-forecast-beat 与 mid-turn-days-vol 虽然超额为负/接近零，但两者分别在冠军元组
     # （预喜宽池覆盖已反应预喜、营业周期效率轴唯一代表），下线会破坏覆盖结构，保留观察。
     "mid-repurchase-plan": "回购预案全量母集（金额/市值≥0.5%，持20，按比例排序）。R12 +1.35/PF1.32/n194、回撤 −14.0，中位数 +0.05。同事件弱反应持20（mid-repurchase-plan-underreact）R12 +2.98/PF1.80/n118。全量预案是弱母集，日频只留弱反应持20。",

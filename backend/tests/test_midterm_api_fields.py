@@ -101,20 +101,24 @@ def test_generate_picks_horizon_filter(monkeypatch, tmp_path):
     for fn in ("cld_candidates", "dinc_candidates", "udp_candidates", "ncs_candidates", "cg_candidates"):
         monkeypatch.setattr(fe, fn, lambda db, d: None)
     res = ms.generate_picks(None, "2026-10-16", horizon="long")
-    assert set(res) == {"long-dividend-lowvol", "long-growth-streak"}
+    assert set(res) == {"long-dividend-lowvol"}
     res = ms.generate_picks(None, "2026-10-16", strategy_ids=["long-dividend-lowvol"])
     assert set(res) == {"long-dividend-lowvol"}
     # §338 已下线的低换手低波：按 id 指名也不再出票（generate_picks 只遍历现役 STRATEGIES）
     assert ms.generate_picks(None, "2026-10-30", strategy_ids=["long-lowturn-lowvol"]) == {}
+    # §1069 已下线的连续4期双增长：按 id 指名也不再出票
+    assert ms.generate_picks(None, "2026-11-26", strategy_ids=["long-growth-streak"]) == {}
 
 
 def test_retired_strategies_not_live():
     """§278/§282/§1055：不达标的 /long 策略已下线，不在现役 STRATEGIES，也不出票。
     §338：long-lowturn-lowvol 近12个月满期卖出每笔为负，下线。
     §1055：long-net-cash-switch 生产滚动 R12 每笔 −7.16%、verdict=negative，重新下线。
+    §1069：long-growth-streak 生产滚动 R12 每笔 −2.20%、verdict=negative，下线。
     2026-11-03：SUE∩质量家族非冠军一并退出日频，定义留在 RETIRED_STRATEGIES。"""
     long_retired = {"long-repurchase-big", "long-current-debt-down", "long-dividend-increase",
-                    "long-undist-profit-growth", "long-lowturn-lowvol", "long-net-cash-switch"}
+                    "long-undist-profit-growth", "long-lowturn-lowvol", "long-net-cash-switch",
+                    "long-growth-streak"}
     sue_demoted = set(ms.SUE_LADDER_DEMOTED)
     near_dup = set(ms.NON_SUE_NEAR_DUP_DEMOTED)
     assert long_retired <= set(ms.RETIRED_STRATEGIES)
@@ -161,7 +165,7 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     champs = set(ms.NON_SUE_NEAR_DUP_CHAMPIONS)
     protected = set(ms.NON_SUE_CULL_PROTECTED)
     sue = set(ms.SUE_LADDER_CHAMPIONS)
-    assert len(demoted) == 21 and len(champs) == 8
+    assert len(demoted) == 22 and len(champs) == 8
     assert not demoted & champs and not demoted & protected and not demoted & sue
     assert demoted <= set(ms.RETIRED_STRATEGIES)
     assert not demoted & set(ms.STRATEGIES)
@@ -170,7 +174,9 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     # 47→30 收敛后 +3：§997 mid-divplan-dip、§1000 mid-earnings-accel-dip（持5）、§1011 mid-sector-dip-stabilize（持5）
     # 2026-11-26 再退役 4 个（mid-earnings-accel / mid-fina-exp-drop / mid-sector-dip-stabilize /
     # mid-repurchase-incentive-dip，见 NON_SUE_NEAR_DUP_DEMOTE_REASONS 的新增注释），30 → 26。
-    assert len(live_mid) == 30
+    # §1069 再退役 mid-earnings-accel-dip（生产滚动 R12 每笔 −3.28%）：30 → 29。
+    assert len(live_mid) == 29
+    assert "mid-earnings-accel-dip" in demoted
     assert live_mid & sue == sue
     overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
     assert live_mid == overview

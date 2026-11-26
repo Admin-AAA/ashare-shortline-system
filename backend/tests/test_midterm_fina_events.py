@@ -255,7 +255,8 @@ def test_cg_streak_rules_and_order(monkeypatch):
 
 
 def test_cg_registered_no_caps():
-    meta = ms.STRATEGIES["long-growth-streak"]
+    # §1069 已下线，定义留在 RETIRED_STRATEGIES（本文件 fixture 临时并回注册表）
+    meta = ms.RETIRED_STRATEGIES["long-growth-streak"]
     assert meta["horizon"] == "long" and meta["hold_days"] == 60 and meta["schedule"] == "daily"
     assert meta["kind"] == "cg_streak" and "k_slots" not in meta and "max_new" not in meta
     assert fe._shift_period("20260331", 1) == "20251231" and fe._shift_period("20260930", 5) == "20250630"
