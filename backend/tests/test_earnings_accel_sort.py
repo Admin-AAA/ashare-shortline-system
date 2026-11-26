@@ -140,7 +140,7 @@ def test_earnings_accel_copy_keeps_hold_and_leaves_forecast():
     # 2026-11-26：mid-earnings-accel 退役，EA 冠军改为放量版 mid-earnings-accel-vol
     # （§975 EAVOL_combo 排序：信号日涨跌幅 + 事件反应平均秩百分位，等权）。
     ea = ms.STRATEGIES["mid-earnings-accel-vol"]
-    fb = ms.STRATEGIES["mid-forecast-beat"]
+    fb = ms.RETIRED_STRATEGIES["mid-forecast-beat"]  # 2026-11-26 宽池退役，定义保留
     assert ea["hold_days"] == 20 and fb["hold_days"] == 20
     assert "EAVOL_combo" in ea["summary"] and "百分位" in ea["summary"]
     assert "放量" in ea["summary"]

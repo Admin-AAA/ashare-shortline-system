@@ -77,6 +77,7 @@ def test_fetch_failure_returns_none(monkeypatch):
 
 
 def test_strategy_registered():
-    meta = ms.STRATEGIES["mid-forecast-beat"]
+    # 2026-11-26 退役（独有信号 352 笔超额 -0.20%），定义保留在 RETIRED_STRATEGIES。
+    meta = ms.RETIRED_STRATEGIES["mid-forecast-beat"]
     assert meta["horizon"] == "mid" and meta["kind"] == "forecast_beat" and meta["hold_days"] == 20
     assert "k_slots" not in meta and "max_new" not in meta and meta["schedule"] == "daily"

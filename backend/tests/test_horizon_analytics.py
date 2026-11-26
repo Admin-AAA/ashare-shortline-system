@@ -26,7 +26,7 @@ def _setup(tmp_path, monkeypatch, realized):
     status.mkdir()
     _write(status, "2026-10-16.json", {
         "mid-repurchase-plan-underreact": {"status": "ok", "raw": 2, "recorded_at": "2026-10-16T10:00:00Z"},
-        "mid-forecast-beat": {"status": "slots_full", "raw": {"skipped": "slots_full", "held": 25}},
+        "mid-forecast-beat-underreact": {"status": "slots_full", "raw": {"skipped": "slots_full", "held": 25}},
         "long-dividend-lowvol": {"status": "ok", "raw": 1},
     })
     monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: dict(realized[c]))
@@ -140,7 +140,7 @@ def test_runs(tmp_path, monkeypatch):
     days = ha.runs("mid")
     assert len(days) == 1 and days[0]["date"] == "2026-10-16"
     items = {i["strategy_id"]: i for i in days[0]["items"]}
-    assert items["mid-repurchase-plan-underreact"]["picks"] == 2 and items["mid-forecast-beat"]["detail"] == "slots_full"
+    assert items["mid-repurchase-plan-underreact"]["picks"] == 2 and items["mid-forecast-beat-underreact"]["detail"] == "slots_full"
     assert "long-dividend-lowvol" not in items
     assert [i["strategy_id"] for i in ha.runs("long")[0]["items"]] == ["long-dividend-lowvol"]
 

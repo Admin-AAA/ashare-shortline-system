@@ -1034,10 +1034,8 @@ NON_SUE_NEAR_DUP_CHAMPIONS: tuple[str, ...] = (
     "mid-forecast-preincrease-underreact-vol",  # 预增：弱反应∩放量
     "mid-forecast-preincrease-underreact",      # 预增：弱反应宽池（R12 仍强，不是弱母集）
     "mid-forecast-beat-underreact",             # 预喜合集：弱反应
-    "mid-forecast-beat",                        # 预喜合集宽池（略增/扭亏单拆退出后仍要覆盖已反应的预喜）
     "mid-incentive-vol",                        # 激励：期权∩放量
     "mid-incentive-option",                     # 激励：期权草案宽池（n 约为放量版 3 倍，R12 仍强）
-    "mid-turn-days-vol",                        # 资产负债表三兄弟全退后的效率轴
 )
 # 明确不因本轮近重复退出的策略。不在冠军元组里，但退役函数必须看见它们仍在 STRATEGIES。
 NON_SUE_CULL_PROTECTED: tuple[str, ...] = (
@@ -1065,8 +1063,13 @@ NON_SUE_NEAR_DUP_DEMOTE_REASONS: dict[str, str] = {
     # trim5 −3.46%、verdict=negative。上线研究 recent_12m 34 笔 +3.47%/PF3.18：两边都有的 28 笔收益完全一样，
     # 差距来自窗口（生产多了 2026-10-17~11-02 三季报季 41 笔、平均 −8.98%，少了 2025-10 的 6 笔 −3.62%）；按每笔转负下线。
     "mid-earnings-accel-dip": "财报业绩加速×公告前深跌（持5）。§1069 生产滚动近12个月（现行代码重放、扣0.3%、只算满期卖出）71 笔 −3.28%/笔、中位数 −2.43%、胜率 42.3%、PF0.48，每笔转负。上线研究近12个月 34 笔 +3.47%：两边都有的 28 笔收益完全一样，差距来自窗口，生产窗口多了 2026-10-17 后三季报季 41 笔（平均 −8.98%）。退出。",
-    # 注：mid-forecast-beat 与 mid-turn-days-vol 虽然超额为负/接近零，但两者分别在冠军元组
-    # （预喜宽池覆盖已反应预喜、营业周期效率轴唯一代表），下线会破坏覆盖结构，保留观察。
+    # 2026-11-26 第二批（独有信号口径：同日同票没有被其他现役策略推的信号，才是该策略对组合的边际贡献；
+    # 基准 = 同期同持有期全市场等权 pct_chg 链扣 0.07%。中线整体 beta≈1.1、逐笔 alpha≈+1.5%/20 日，
+    # 下面四条的独有信号 alpha 为零或负，只贡献市场风险，不贡献收益）：
+    "mid-forecast-beat": "预喜合集宽池。LIVE 480 笔总超额 -0.11%；独有信号 352 笔净均 +1.88%/超额 -0.20%（beta 调整 -0.41%），10 个月里 5 个月为正。宽池覆盖的「已反应预喜」没有 alpha，退出；预喜由弱反应变体代表。",
+    "mid-sales-exp-drop": "销售费用率同比下降宽池。LIVE 323 笔总超额 +0.62%，全部来自与放量版重叠的信号；独有信号 213 笔超额 -0.04%。正 alpha 全在放量过滤（mid-sales-exp-vol 独有 79 笔 +0.34%），宽池退出。",
+    "mid-turn-days-vol": "营业周期缩短∩放量。LIVE 215 笔总超额 +0.48%；独有信号 97 笔超额 -0.28%，6 个月里 2 个月为正。原因「效率轴唯一代表」是覆盖论证，覆盖零 alpha 的信号只增加敞口，退出。",
+    "mid-dividend-increase-vol": "现金分红同比增加∩放量。LIVE 157 笔总超额 +1.76% 全部来自与不放量母集重叠的信号；独有信号 47 笔超额 -1.92%，3 个月全部为负。此处放量过滤在减分，分红事件由 mid-dividend-increase（独有 120 笔 +0.61%）代表。",
     "mid-repurchase-plan": "回购预案全量母集（金额/市值≥0.5%，持20，按比例排序）。R12 +1.35/PF1.32/n194、回撤 −14.0，中位数 +0.05。同事件弱反应持20（mid-repurchase-plan-underreact）R12 +2.98/PF1.80/n118。全量预案是弱母集，日频只留弱反应持20。",
     "mid-repurchase-underreact": "与冠军 mid-repurchase-plan-underreact 同一预案池、同一弱反应带（信号日 −1%~+2%、未涨停）、同一信号日涨跌排序，只把持有期改成 5 日。R12 +1.20/PF1.56/n127，低于持20的 +2.98。2026-11-03 日推持5的三只（神开股份、无锡振华、紫光国微）也出现在同日全量预案里。持有期是参数，不是第二条日频策略。",
     "mid-forecast-preincrease": "预增全量母集。R12 +1.73/PF1.36/n122、中位数 −0.65、彩票型。弱反应∩放量冠军 mid-forecast-preincrease-underreact-vol 为 R12 +5.90/PF3.31。全量预增退出日频。",
@@ -1092,7 +1095,7 @@ def non_sue_near_dup_rejected_rows() -> list[dict[str, str]]:
     """/mid 淘汰清单：非 SUE 近重复收敛说明 + 每条已退出日频的策略。"""
     champs = "、".join(NON_SUE_NEAR_DUP_CHAMPIONS)
     rows = [{
-        "name": "非 SUE 近重复日频收敛（中线现役 47→30）",
+        "name": "非 SUE 近重复与零 alpha 宽池日频收敛（中线现役 47→25）",
         "reason": (
             f"回购、预告、激励和资产负债表近重复退出 17:35 出票与 /mid 现役列表。各簇保留 {champs}。"
             "同一事件源只改持有期、弱反应带或放量门槛，做成参数或过滤器，不再新开 strategy_id。"
