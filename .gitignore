@@ -36,14 +36,11 @@ output/
 /backend/output
 .workbuddy/
 overview.md
-test.py
 package-lock.json
 package.json
 !frontend-v2/package.json
 !frontend-v2/package-lock.json
 
-# UX 审计临时产物（截图/JSON/脚本，可重新生成）
-ux-audit/
 .git-self-improve.lock
 .git-self-improve-publish.lock
 .strategy-profile-refresh.lock
@@ -58,6 +55,3 @@ backend/scripts/.failure_attr_baseline.json
 backup_replay_20260801/
 .golutra/
 .reasonix/
-
-# 根目录临时连通性脚本（key 一律从环境变量 对应 provider 的 ASHARE_TUSHARE_* 环境变量 读取）
-test2.py
