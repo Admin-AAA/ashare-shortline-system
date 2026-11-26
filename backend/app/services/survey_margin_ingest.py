@@ -72,7 +72,9 @@ def fetch_surv_day(pro: Any, day: str) -> tuple[list[dict[str, Any]], str]:
             row = {
                 "code": code, "name": _str_or_none(rec.get("name"), 80),
                 "surv_date": f"{sd[:4]}-{sd[4:6]}-{sd[6:]}",
-                "fund_visitors": _int_or_none(rec.get("fund_visitors")),
+                # fund_visitors 是接待人员姓名文本（不是数字），机构家数在 org_count
+                "fund_visitors": _str_or_none(rec.get("fund_visitors"), 255),
+                "org_count": _int_or_none(rec.get("org_count")),
                 "rece_org": _str_or_none(rec.get("rece_org"), 120),
                 "org_type": _str_or_none(rec.get("org_type"), 40),
             }
@@ -106,8 +108,8 @@ def ingest_institutional_surveys(db, start: str, end: str, pro: Any = None) -> d
             for sd in sorted({r["surv_date"] for r in rows}):
                 db.execute(text("DELETE FROM institutional_surveys WHERE surv_date=:d"), {"d": sd})
             db.execute(text(
-                "INSERT INTO institutional_surveys (code, name, surv_date, fund_visitors, rece_org, org_type, created_at) "
-                "VALUES (:code, :name, :surv_date, :fund_visitors, :rece_org, :org_type, UTC_TIMESTAMP())"), rows)
+                "INSERT INTO institutional_surveys (code, name, surv_date, fund_visitors, org_count, rece_org, org_type, created_at) "
+                "VALUES (:code, :name, :surv_date, :fund_visitors, :org_count, :rece_org, :org_type, UTC_TIMESTAMP())"), rows)
             db.commit()
             out["written"] += len(rows)
         out["days"][iso] = f"{status}:{len(rows)}"

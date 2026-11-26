@@ -120,7 +120,7 @@ def test_earnings_accel_sort_is_ea_combo_not_capped_yoy(monkeypatch):
     assert [r["dt_netprofit_yoy"] for r in res] == [1750.7, 80.0, 532.6, 784.7]
     assert res[0]["ann_pct"] == 0.875 and res[0]["mv_pct"] == 0.75
     assert res[0]["ann_pct_chg"] == 5.0 and res[0]["total_mv"] == 100.0
-    shown = [ms.annotate_pick("mid-earnings-accel", dict(r), i) for i, r in enumerate(res, 1)]
+    shown = [ms.annotate_pick("mid-earnings-accel-vol", dict(r), i) for i, r in enumerate(res, 1)]
     assert shown[0]["rule_score_label"] == "公告日涨幅百分位+小市值百分位"
     assert shown[0]["rule_score_better"] == "higher"
     assert shown[0]["rule_score"] == 1.625
@@ -130,22 +130,21 @@ def test_earnings_accel_sort_is_ea_combo_not_capped_yoy(monkeypatch):
     assert "信号日涨跌幅 5.00%" in shown[0]["selection_reason"]
     assert [p["selection_rank"] for p in shown] == [1, 2, 3, 4]
     # 旧批次没有百分位字段：仍展示真实扣非同比，不把封顶分说成 EA_combo
-    old = ms.annotate_pick("mid-earnings-accel", {"code": "1", "score": 300.0, "dt_netprofit_yoy": 592.1})
+    old = ms.annotate_pick("mid-earnings-accel-vol", {"code": "1", "score": 300.0, "dt_netprofit_yoy": 592.1})
     assert old["rule_score"] == 592.1
     assert old["rule_score_label"] == "扣非净利同比(%)"
     assert old["rule_score_note"] == "排序时≥300%同等优先，平手按代码"
 
 
 def test_earnings_accel_copy_keeps_hold_and_leaves_forecast():
-    ea = ms.STRATEGIES["mid-earnings-accel"]
+    # 2026-11-26：mid-earnings-accel 退役，EA 冠军改为放量版 mid-earnings-accel-vol
+    # （§975 EAVOL_combo 排序：信号日涨跌幅 + 事件反应平均秩百分位，等权）。
+    ea = ms.STRATEGIES["mid-earnings-accel-vol"]
     fb = ms.STRATEGIES["mid-forecast-beat"]
     assert ea["hold_days"] == 20 and fb["hold_days"] == 20
-    assert "EA_combo" in ea["summary"] and "百分位" in ea["summary"]
-    assert "封顶300%" not in ea["summary"]
+    assert "EAVOL_combo" in ea["summary"] and "百分位" in ea["summary"]
+    assert "放量" in ea["summary"]
     assert "按预告增幅下限（封顶300%）" in fb["summary"]
     metrics = json.loads((Path(__file__).resolve().parents[1] / "app/services/midterm_backtest_metrics.json").read_text())
-    cfg = metrics["mid-earnings-accel"]["config"]
-    assert "EA_combo" in cfg and "平均秩百分位" in cfg and "持20日" in cfg
-    assert "扣非同比封顶 300%" in metrics["mid-earnings-accel"]["note"]
-    assert "+3.09%" in metrics["mid-earnings-accel"]["note"]
-    assert "min(p_change_min,300)" in metrics["mid-forecast-beat"]["config"]
+    cfg = metrics["mid-earnings-accel-vol"]["config"]
+    assert "EAVOL_combo" in cfg and "持20日" in cfg

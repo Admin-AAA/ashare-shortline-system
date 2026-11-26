@@ -381,11 +381,14 @@ def _load_survey_feature_map(
     code_list = [str(c) for c in codes if c]
     if not code_list:
         return {}
+    # 上游 Tushare stk_surv 是「一行一机构」口径（同一 code+surv_date 有 N 行 = N 家机构），
+    # 所以接待机构数 = 该股在窗口内的总行数，调研场次 = distinct surv_date 数。
+    # 2026-11-26 修正：原实现用 sum(fund_visitors)，但该列是接待人员姓名文本，求和恒 0。
     rows = db.execute(
         select(
             InstitutionalSurvey.code,
             func.count(InstitutionalSurvey.id),
-            func.coalesce(func.sum(InstitutionalSurvey.fund_visitors), 0),
+            func.count(func.distinct(InstitutionalSurvey.surv_date)),
             func.max(InstitutionalSurvey.surv_date),
         )
         .where(
@@ -396,10 +399,10 @@ def _load_survey_feature_map(
         .group_by(InstitutionalSurvey.code)
     ).all()
     out: dict[str, dict[str, Any]] = {}
-    for code, cnt, visitors, latest in rows:
+    for code, org_rows, sessions, latest in rows:
         out[str(code)] = {
-            "survey_count": int(cnt or 0),
-            "survey_fund_visitors": int(visitors or 0),
+            "survey_count": int(sessions or 0),
+            "survey_fund_visitors": int(org_rows or 0),
             "survey_latest_date": str(latest or ""),
         }
     return out

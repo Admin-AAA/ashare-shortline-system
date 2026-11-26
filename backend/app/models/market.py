@@ -643,7 +643,13 @@ class HolderTrade(Base):
 
 
 class InstitutionalSurvey(Base):
-    """机构调研。数据来源：Tushare stk_surv。"""
+    """机构调研。数据来源：Tushare stk_surv（主）/ akshare jgdy_em（备）。
+
+    注意字段语义（2026-11-26 修正）：``fund_visitors`` 是**接待人员姓名文本**
+    （如「董事、董事会秘书 王珏」），不是数字；机构家数在 ``org_count``。
+    原表把 fund_visitors 定义成 INT，采集时转失败写 NULL、视图 sum() 恒 0，
+    ``survey_fund_visitors`` 从上线起就没有过有效值。
+    """
     __tablename__ = "institutional_surveys"
     __table_args__ = (
         Index("idx_is_code_sd", "code", "surv_date"),
@@ -653,7 +659,8 @@ class InstitutionalSurvey(Base):
     code: Mapped[str] = mapped_column(String(6))
     name: Mapped[str | None] = mapped_column(String(80))
     surv_date: Mapped[str] = mapped_column(String(10), index=True)
-    fund_visitors: Mapped[int | None] = mapped_column(Integer)
+    fund_visitors: Mapped[str | None] = mapped_column(Text)
+    org_count: Mapped[int | None] = mapped_column(Integer)
     rece_org: Mapped[str | None] = mapped_column(String(120))
     org_type: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow_naive)

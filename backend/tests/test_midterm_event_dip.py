@@ -70,10 +70,12 @@ def test_filter_threshold_limits_and_order():
 
 
 def test_registered_with_quality_card():
-    meta = ms.STRATEGIES["mid-repurchase-incentive-dip"]
+    # 2026-11-26 退役（LIVE 仅 4 笔且 -7.54%，样本不足）：不再注册进 STRATEGIES，
+    # 但定义留在 RETIRED_STRATEGIES，历史 picks 与 annotate_pick 仍可读。
+    assert "mid-repurchase-incentive-dip" not in ms.STRATEGIES
+    assert "mid-repurchase-incentive-dip" in ms.RETIRED_STRATEGIES
+    meta = ms.RETIRED_STRATEGIES["mid-repurchase-incentive-dip"]
     assert meta["kind"] == "event_dip" and meta["hold_days"] == 10 and meta["max_r20"] == -0.15
-    q = json.loads(ms.METRICS_FILE.read_text())["mid-repurchase-incentive-dip"]["quality"]
-    assert q["pass"] and q["R12"]["n"] >= 30 and q["N3"]["n"] >= 30
     p = ms.annotate_pick("mid-repurchase-incentive-dip", {"code": "600001", "r20": -0.2, "event": "回购预案",
                                                           "ratio": 0.01, "repurchase_amount": 1e8, "signal_pct": 0.5})
     assert p["rule_score"] == -20.0 and p["rule_score_better"] == "lower"

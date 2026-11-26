@@ -15,7 +15,7 @@ class _Pro:
 
 def _page(n, start=0):
     return pd.DataFrame([{"ts_code": f"{600000 + start + i}.SH", "name": "x", "surv_date": "20261016",
-                          "fund_visitors": "3", "rece_org": f"org{start + i}", "org_type": "基金"} for i in range(n)])
+                          "fund_visitors": "张三,李四", "rece_org": f"org{start + i}", "org_type": "基金"} for i in range(n)])
 
 
 def test_fetch_surv_day_pages_until_short_page():
@@ -23,7 +23,9 @@ def test_fetch_surv_day_pages_until_short_page():
     rows, status = fetch_surv_day(pro, "20261016")
     assert status == "ok" and len(rows) == 405
     assert pro.calls[1]["offset"] == 400 and pro.calls[1]["limit"] == 400
-    assert rows[0]["surv_date"] == "2026-10-16" and rows[0]["fund_visitors"] == 3
+    # fund_visitors 现在是接待人员姓名文本（2026-11-26 语义修正），不再转 int
+    assert rows[0]["surv_date"] == "2026-10-16" and rows[0]["fund_visitors"] == "张三,李四"
+    assert rows[0]["org_count"] is None
 
 
 def test_fetch_surv_day_akshare_backup_not_written():
