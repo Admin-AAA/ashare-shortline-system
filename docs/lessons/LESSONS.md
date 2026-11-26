@@ -9,12 +9,15 @@
 - `active`：仍需在研究或实现时显式约束。
 - `encoded`：已有代码、测试、护栏或操作手册承载；本条保留上位原则。
 - `superseded`：已被更准确的教训替代，保留用于历史追溯。
+- `retired`：所依赖的机制、目标或数据前提已经下线（如 self-improve 循环、预设管理层、20cm-only、小石），规则不再约束当前工作，保留用于历史追溯。
 
 ## 迁移说明
 
 本文件由项目外的历史 self-improve 教训快照迁入。历史快照有重复的 `L-045`～`L-050` 编号；迁移时按出现顺序重新分配为唯一的 `L-001`～`L-057`，每条保留“原始编号”字段。后续只能使用本文件的 canonical 编号，新条目追加到文件末尾。
 
 2026-08-15 可靠性核验后，L-020、L-026、L-027、L-029、L-031、L-034、L-035、L-036、L-055、L-056 因证据不合格、无法同口径复现或被当前数据反驳而从注册表删除。上述编号永久退役，不得复用；删除原因见 [`VALIDATION.md`](./VALIDATION.md)，原文仅通过 Git 历史追溯。
+
+2026-11-26 复核后，L-006、L-008、L-019、L-022、L-028、L-032、L-037、L-038、L-097～L-100、L-102、L-103、L-120、L-122、L-131、L-134、L-155 标为 `retired`，L-060、L-110、L-114、L-130、L-170、L-191 标为 `superseded`，L-163 改为 `encoded`；依据见 [`VALIDATION.md`](./VALIDATION.md) 的 2026-11-26 节。
 
 ## L-001 回测与 LIVE 口径污染
 
@@ -72,7 +75,7 @@
 
 - 原始编号：L-006
 
-- 状态：active
+- 状态：retired（2026-11-26：本条约束的是定时 self-improve 循环的证据路径切换；该循环 2026-09-22 后停止运行，策略研究改为人工预注册 + R12/N3 上线标准）
 - 适用：定时自我优化
 - 证据：OOS 固定在 `n=27/30` 时，凌晨连续产生十余次完全相同的等待或“否证”记录。
 - 永久规则：代码和 LIVE 水位未变化时，不重复查询同一批 LIVE outcome；立即切换到历史回测、未测试 OOS 窗口、测量修复或新策略研究。LIVE 的 `blocked_until` 只约束 LIVE 路径，不得阻断整轮收益优化。
@@ -93,7 +96,7 @@
 
 - 原始编号：L-008
 
-- 状态：active
+- 状态：retired（2026-11-26：self-improve 并发实例与共享 state 文件的约束；该循环已停止运行。多 worktree 共享生产 MySQL 的风险仍成立，但由 CLAUDE.md 运维窗口规则承载）
 - 适用：并发 self-improve
 - 证据：多个实例虽使用独立 worktree，仍共享 production MySQL、champion 和 Markdown 日志，产生重复轮号、乱序记录及基线竞争。
 - 永久规则：默认只允许一个 self-improve 实例；运行记录按 `run_id` 结构化写入。并行只允许明确证明互不共享数据、基线和发布路径的只读任务。
@@ -194,7 +197,6 @@
 - 适用：任何退出、止损、止盈或 trailing 候选
 - 证据：trailing 0.90 曾在全板旧 champion 上通过并被另一分支记为 production；但本地 `main` 已先发布 20cm-only，而退出候选仍把 10cm 历史交易算入。2026-07-30 按真实发布顺序重放 20cm population 后，0.50→0.90 的平均净收益 1.5130%→1.4458%、PF 1.7584→1.7246%，均退化；累计净收益 -2.4014%→-1.4112% 改善，胜率和 MDD 持平，故不满足 L-010，判定 FALSIFIED。
 - 永久规则：退出候选先套用当前 production 的全部入场、过滤和仓位规则，再在同一最终 population 上比较；旧 champion 的实验结果不得跨生产版本复用。
-- 当前生产：20cm-only + 结构性强势 hard veto + trailing profit_floor 0.50；0.90 不得视为已发布或待自动合并。
 - 复现脚本：`backend/scripts/si_sequential_champion_replay.py`。
 
 ## L-017 发布状态必须由 Git 与生产配置共同证明
@@ -223,7 +225,7 @@
 
 - 原始编号：L-019
 
-- 状态：encoded
+- 状态：retired（2026-11-26：champion/provisional 状态机属已停止运行的 self-improve 循环；小样本不得宣告穷举的方法学由 L-058/L-091 承载）
 - 适用：所有 champion 发布后状态维护和后续轮次选题
 - 证据：bf509b8 champion n=14（20cm-only + no-DS 过滤后）来自同一样本的两步修剪，WR71.43%/avg_net5.84% 是幸存者偏差，不是策略 alpha。但提示词没有 champion 有效性门槛，网格穷举后系统只能输出 `ALL-GRIDS-EXHAUSTED → AWAIT LIVE OOS`，形成死锁。
 - 永久规则：
@@ -248,7 +250,7 @@
 
 - 原始编号：L-022
 
-- 状态：encoded（已修 + 回归测试）
+- 状态：retired（2026-11-26：self_improve_state.py 状态补丁规则，循环已停止运行；代码与回归测试仍在，仅供历史追溯）
 - 适用：所有 publish-champion / publish-finding / commit-update 调用方
 - 证据：`state.update(state_patch)` 顶层浅替换。publish-finding 传 `{"scanned_grids":{"profit_floor_ratio...":{...}}}` 时，整个 `scanned_grids` 被替换成只含新键的对象，把已完成的 `entry_gap_filter_on_current_champion` 扫描记录一起丢掉。方向池 `_list_unscanned_grid_params` 于是重新分配已 FALSIFIED 的 entry_gap 方向，浪费一轮。类似风险覆盖 `archived_falsified_directions`、`published_findings` 等累加型 list。
 - 永久规则：任何通过 state_patch 写入的累加型字段必须用深合并：`scanned_grids` dict merge、`archived_falsified_directions`/`published_findings` list union；`canonical_production`/`researcher_registry` 等幂等顶层键仍可整体替换。已固化为 `_apply_state_patch`（三处调用点统一替换）+ 2 个回归测试（test_state_patch_deep_merges_scanned_grids_and_unions_lists / test_publish_champion_patch_deep_merges_scanned_grids）。
@@ -295,7 +297,7 @@
 
 - 原始编号：L-028
 
-- 状态：encoded（已修 + 回归测试 + 合并 main）
+- 状态：retired（2026-11-26：self-improve 方向池去重规则，循环已停止运行）
 - 适用：方向池分配、网格去重、已 FALSIFIED 方向归档
 - 证据：`_list_unscanned_grid_params` 用参数列表名（`score_line_threshold`、`stop_loss`）做子串匹配 scanned_keys，但历史扫描键用主题词命名（`score_line_on_2025_2026`、`stop_loss_on_2025_2026`）。`"score_line_threshold" in "score_line_on_2025_2026"` → False，导致旧 score-line 扫描记录未被识别，下轮又 claim 到 grid_scan:score_line_threshold。同理 take_profit/trailing_activate/trailing_callback/trailing_min_lock/strategy_filter 全部无匹配，会被重复扫描。
 - 永久规则：scanned_grids 记录键必须用**主题词**命名（score_line_on_...、stop_loss_on_...、horizon_on_...），`_GRID_PARAM_TOPICS` 映射参数名→主题词列表，任一主题词命中扫描键即视为已扫。发布 FINDING 时检查记录键是否会被方向池误判为未扫描。
@@ -317,7 +319,7 @@
 
 - 原始编号：L-032
 
-- 状态：encoded（已修 + 回归测试 + 合并 main）
+- 状态：retired（2026-11-26：self-improve 方向池去重规则，循环已停止运行）
 - 适用：方向池分配、已否证因子归档
 - 证据：`_list_unscanned_factor_directions` 的 falsified 判断用 `"factor" in d or "因子" in d` 子串匹配 archived，但 archived 条目是 `new_strategy:capital_flow_momentum:做多资金流入被否证(787笔已结算)...`（含 momentum 不含 factor/因子），不被匹配 → 已否证的资金流因子被方向池反复分配。与 L-028 同类（参数名/记录键命名不一致导致去重失效）。
 - 永久规则：**归档已否证方向时，字符串必须以 `new_strategy:<factor>:` 前缀命名**；方向池用前缀解析已否证集合，不用松散子串。发布 FINDING 归档时检查前缀是否会被方向池误判。
@@ -338,7 +340,7 @@
 
 - 原始编号：L-037
 
-- 状态：active
+- 状态：retired（2026-11-26：daily_kbars 已回填到 2022 年起全市场约 5400 只（2022/2023/2024 各 242 个交易日），「2024 仅 300 只、0 只 20cm」的前提不再成立；正式推荐也已不再是 20cm-only）
 - 适用：OOS 窗口选择、方向池 oos_validation 方向
 - 证据：daily_kbars 覆盖：2021-2023 仅 5 只、2024 仅 300 只且 **0 只 20cm**、2025 起才有 5500+ 全市场。生产 champion 是 20cm-only，2024-H1 完全无 20cm 样本，无法作 OOS 窗口。有效 OOS 窗口：2025_H1/H2/2026_H1（已在 path A 三分窗口验证，覆盖强势→震荡→弱势三种 regime）。
 - 永久规则：**20cm champion 的 OOS 验证只能用 2025 起的窗口**（2025_H1/H2/2026_H1 已覆盖）。方向池 `_list_unchecked_oos_windows` 列出的 2024-H1/H2/2023 等窗口依赖不足数据，claim 到时应确认数据深度后归档，不硬跑失真回测。**数据回填 2024 及之前全市场是回测深度的硬前置**（需 Tushare daily 批量回填 + backfill_indicators）。
@@ -348,7 +350,7 @@
 
 - 原始编号：L-038
 
-- 状态：encoded（已修 + 回归测试 + 合并 main）
+- 状态：retired（2026-11-26：self-improve 方向池去重规则，循环已停止运行）
 - 适用：方向池分配、OOS 窗口归档
 - 证据：`_allocate_direction` 对 OOS 窗口用 `d not in archived` 精确匹配，但 archived 条目带后缀原因（`oos_validation:2024-H1:2024-H1仅300只且0只20cm`），精确匹配漏判 → 方向池反复分配已归档窗口（L-037 归档后下轮又 claim 到 2024-H1）。与 L-028/L-032 同类（命名不一致导致去重失效）。
 - 永久规则：**归档方向时字符串可带后缀原因，但方向池匹配必须用前缀**（`d` 或 `d + ":"` 开头）。发布 FINDING 归档时检查前缀是否会被方向池误判。
@@ -566,7 +568,7 @@
 
 ## L-060 regime/情绪抬线错杀正期望 regime，应按 regime×情绪精细区分而非一刀切
 
-- 状态：active（FINDING + walk-forward OOS 验证通过，待 PRODUCTION 发布流程）
+- 状态：superseded（被 L-070 替代：本条的部分放松在真前瞻窗被证明为窗口过拟合，v2 只保留非强牛高潮硬排除；本条「待 PRODUCTION/Canary 发布」的待办随 self-improve 发布流程一并作废）
 - 适用：production selection policy 的分数线调整（market_base/sentiment/climax_nonweak_extra）
 - 证据：frozen snapshot holdout_244d（生产口径 final_score + 因果出场 + 费用）对比——当前规则（含 regime/情绪抬线到85-91）OOS 期 65% 日子 0 出票。按 regime×情绪分解被拦的票：**强牛·高潮 57%胜率+2.60%、震荡·活跃 51%+2.57%、强牛·活跃 61%+1.65%（均被错杀的正期望）**；偏多·高潮 36%-1.88%（真毒区，拦对了）。精细方案（放行强牛·高潮/强牛·活跃/震荡·活跃用72线，其余维持抬线）walk-forward OOS：WR 47.7%→51.4%、均净 +0.767%→+1.785%（2.3倍）、PF 1.31→1.72、出票天数 34→67、0出票 65%→32%。OOS 改善幅度>训练期，非过拟合。
 - 永久规则：**regime 提线不得一刀切**——同一 regime（强牛）在高潮与活跃下期望相反（+2.6 vs +1.6 正），不同 regime 在同一情绪（高潮）下期望相反（强牛+2.6 vs 偏多-1.8）。历史"强牛·高潮58.3%胜率需高门槛"是 n=12 小样本误判，大样本证伪。任何 regime 规则必须按 regime×情绪二维大样本验证。
@@ -942,7 +944,7 @@
 
 ## L-097 D 项基线必须由 state `canonical_production` 驱动并过「口径 + 重放身份」双守卫；基线不可跨 population 借用
 
-- 状态：active（测量能力修复 MEASUREMENT_FIX，已落地 `scripts/self_check.py` + 单测 20 例；本轮不声称提高收益、不改任何生产策略）。
+- 状态：retired（2026-11-26：D 项基线由 self-improve state `canonical_production` 驱动的规则；该循环已停止运行，self_check.py 相关守卫代码保留）
 - 问题（真实性/测量能力）：`scripts/self_check.py` 的 D 项三块基线 `WIN_RATE_BASELINE` / `MAX_LOSS_BASELINE`（函数内硬编码 `None`）与 `PL_RATIO_BASELINE`（模块级 `None`）使 `check_d_rule_coverage()` 与 `_forward_verification_flag()` **永久短路**——D 项诊断每轮只报数、不算 Δ，且不给出可推进的路径（state 里其实已注册 canonical 基线，只是没人读）。这与 L-086/L-094 的「口径守卫靠人记」是同一类失效：诊断能力静默为 0。
 - 修复：新增 `load_canonical_baseline()`（纯函数，只读 state JSON，可单测）+ `print_canonical_baseline_status()`；`main()` 启动时一次性解析并显式打印守卫结果。
   - **硬门禁（任一不过即 `ok=False`，退回「只报数不算 Δ」）**：① 有 `canonical_production.metrics`；② `source == 'champion_replay'`（必须由当前代码重放未修改 production，排除 challenger / 研究重构，L-088/L-091）；③ `caliber` 同时含 `canonical` 与 `live_forward`（L-094 跨 `evidence_class` 汇总一律判污染）；④ `population_all` 的 n/win_rate_pct/max_loss_pct/profit_factor 齐全且 n>0（bool 不当数值）；⑤ 登记了 `replay_identity` 时，horizon / 生产止损 / 成本必须与当前生产逐一相等。
@@ -960,7 +962,7 @@
 
 ## L-098 audit 阶段 `canonical_production` 只读是设计约束：诊断口径基线须走 `d_baseline_registry`（publish-finding 可写），且必须显式声明 diagnostic
 
-- 状态：active（测量能力修复 MEASUREMENT_FIX；`scripts/self_check.py` + 单测 30 例；不改生产策略、不声称提高收益）。
+- 状态：retired（2026-11-26：self-improve state 的 audit 阶段写入规则，循环已停止运行）
 - 问题：T-097 的 D 项守卫已能读 state `canonical_production`，但 `check_d_rule_coverage()`（规则覆盖反事实）跑的是**全部 formal** wide 口径，其基线需要 `population_legacy_wide`（n=368 / WR 42.1%）。而 `publish_champion()` 在 `audit_only=true` 下**一律拒绝**任何含 `canonical_production` 的 patch——即使 `proposed_policy is None`（见 `_autonomous_canary_publish_allowed`：要求 `phase=='canary_passed'` + 完整 Canary 回执 + `proposed_policy` 为 dict，纯元数据更新不可能满足）。所以上一轮移交的"把 legacy_wide 登记进 canonical_production"**在 audit 阶段结构性不可达**，不是流程疏漏。
 - 解决（不绕过状态机）：`publish-finding` 只禁 `canonical_production`/`selection_policy_governance`/`release_state`/`researcher_registry` 四键，其余顶层键合法。新增顶层 `d_baseline_registry`：`{registered_by, populations:{legacy_wide:{source,caliber,win_rate_pct,n,profit_factor,max_loss_pct,evidence}}, replay_identity:{...}}`，由 `_load_d_baseline_registry()` 校验后并入 D 项守卫。
 - 守卫规则（`_load_d_baseline_registry`）：
@@ -974,7 +976,7 @@
 - 相关：L-097（D 项基线口径/身份守卫本体）、L-094/L-096（发布证据唯一口径、跨 evidence_class 汇总即污染）、L-086（+8.3pp 口径污染实例）、L-002（重放未修改 production 才可比较）。
 ## L-099 政策指纹随代码版本漂移：champion 指纹在 dataclass 演化后不可复现，migrate-state setdefault + publish-champion 门禁构成发布死锁；新增 CAS 守卫的 reanchor-policy 逃生门
 
-- 状态：active（MEASUREMENT_FIX，状态机工具修复；不改生产策略语义）。
+- 状态：retired（2026-11-26：self-improve 状态机的政策指纹重锚规则，循环已停止运行）
 - 现象：v3 强牛高 ivol 否决按 L-093/L-094 三窗 canonical 证据合并 main 并设默认（256daa0/0df3bbf）后，`refresh-policy-health` 持续报 `policy_artifact_mismatch=true`；`publish-champion` 的 `policy_artifact_identity` 门禁（要求 mismatch=false 且 governance 指纹==当前 identity）永远不过，任何新 candidate 都无法发布。
 - 根因（两层）：①`ProductionSelectionPolicy.fingerprint = canonical_fingerprint(canonical_payload())`，payload 随 dataclass 演化——champion 于 2026-09-11 在 commit 253543d（v1 artifact + 当时字段集）注册的指纹 b2b46f4e，在当前代码下用同一 v1 artifact 重算得 3dfac57a≠b2b46f4e，历史指纹不可复现；②`migrate_state` 对 `governance.policy_artifact_fingerprint` 只 `setdefault`（永不更新）、champion.selection_policy 仅在键集不同才替换，而唯一合法写入者 publish-champion 又被 mismatch 门禁挡住 → 死锁，状态机在任何改变 payload 的落地后永久冻结。
 - 修复：`self_improve_state.py` 新增 `reanchor-policy` 子命令（`reanchor_policy_identity()`）：CAS 守卫（governance 指纹必须等于 `--from-fingerprint`，否则 CAS_MISMATCH）、已锚定拒重复（ALREADY_ANCHORED）、把 `canonical_production.selection_policy` 与 `governance.policy_artifact_fingerprint` 重绑到 repo 当前 artifact identity（v3=8c4821b9），记录 `canonical_production.policy_reanchor` 与 `state_migration.policy_reanchor_history`，不触碰 champion commit/metrics/release_state。2026-09-13 已对真实状态执行：v1/b2b46f4e → v3/8c4821b9，mismatch=false。
@@ -996,7 +998,7 @@
 - 相关：L-058（时间窗选择偏差）、L-096（live_forward 唯一发布口径，replay 不回填）、L-097/L-098（D 项基线守卫与诊断注册表）、L-067（大表无索引聚合会拖垮诊断链路）。
 ## L-100 政策指纹随"执行树"漂移：多实例共享 state 时，从未提交 WIP 的树跑状态工具会让 policy_artifact_mismatch 反复翻动；migrate/refresh 必须记录 identity_context（commit+dirty），且未提交的政策语义改动不得进入 LIVE 导入路径
 
-- 状态：active（测量完整性 MEASUREMENT_FIX + 一条治理隐患标记）。
+- 状态：retired（2026-11-26：self-improve 状态机的执行树指纹规则，循环已停止运行；「未提交的政策语义改动不得被 LIVE 进程导入」由 CLAUDE.md「回放/重建期间不要对主工作树做 fast-forward」承载）
 - 现象（2026-09-13 实测）：上轮 reanchor 后 state 锚定 main eb78093 的 v3 指纹 8c4821b9、mismatch=false；同日下午从**主树**（checkout 在 feat/strong-bull-ivol-veto-v3@ d3e7e60 且带未提交 WIP）跑 `migrate-state`，identity 变成 9707a4ca → mismatch 又翻 true。main 提交历史零变化——翻动完全来自"状态工具从哪棵树执行"。
 - 根因：`_current_policy_identity` 导入的 `app` 包 = 脚本所在树的工作区代码；主树 WIP 含**未提交的政策语义改动**（production_selection.v3.json 新增 non_main_theme_veto_enabled/toxic_phase_veto_enabled/toxic_phase_pairs/weak_rsi_veto_enabled/weak_rsi_floor + production_policy.py +52 行），canonical_payload 变了指纹就变。多个并行实例共享同一 state 文件但各自从不同树执行 migrate/refresh → mismatch 是"执行树"的函数，不是"政策是否漂移"的函数。
 - 治理隐患（须上报）：若 LIVE API/prefect worker 从主树导入且在 WIP 写入后重启过，等于在执行**从未过证据管道的未提交政策规则**。政策语义只允许以提交进 main 的 artifact + dataclass 形态存在；工作区 WIP 不得作为任何 LIVE/回测口径的依据。
@@ -1008,7 +1010,7 @@
 
 ## L-102 脏执行树不仅"漂移"还会"重绑"：migrate-state 用 WIP 指纹重算 mismatch、reanchor 可能把 WIP 指纹写进治理状态；指纹重绑/重算/重锚必须在干净树上执行
 
-- 状态：encoded
+- 状态：retired（2026-11-26：self-improve 状态机的脏树守卫，循环已停止运行）
 - 适用：`backend/scripts/self_improve_state.py` 的 migrate-state / refresh-policy-health / reanchor-policy；多实例并行共享 self-improve-state.json 的所有场景
 - 证据：2026-09-13 实测——主工作树停在 `feat/strong-bull-ivol-veto-v3`（d3e7e60，早于 T-100 修复）且 backend 带未提交政策语义 WIP，从主树跑 `migrate-state`（每次开局流程第一步）会以 WIP 指纹 9707a4ca 重算 `policy_artifact_mismatch`，把 L-098 重锚后的 false 翻回 true；干净 main 树（32b96e2）同一 v3 artifact 指纹为 8c4821b9。L-100 只做了"记录 identity_context 使翻动可审计"，未阻止脏树写入。修复 commit 见本轮 T-102 提交；测试 `backend/tests/test_self_improve_state_dirty_tree_guard.py`（5 项）+ 既有 58 项全过。
 - 永久规则：(a) `policy_artifact_fingerprint` 的 setdefault/重算、`policy_artifact_mismatch` 的重算、champion selection_policy 的重绑，只在执行树 backend 干净（`backend_dirty=False` 且无 git 错误）时进行；脏树运行仅记录 identity_context。(b) 干净树的 refresh-policy-health 自愈重算 mismatch（脏树污染可被下一次干净树巡检纠正）。(c) reanchor-policy 在脏树上直接拒绝（`DIRTY_TREE`），重锚目标必须是 repo-owned 指纹。(d) 例外：champion selection_policy 缺失/畸形（bootstrap）时总是补绑，否则状态机无法启动。(e) 研究员开局一律从自己干净 worktree 跑状态工具，不得从主工作树跑（主工作树常被并行实例停在 feature 分支+dirty）。
@@ -1018,7 +1020,7 @@
 
 ## L-103 「干净」不等于「生产真值」：mismatch 自愈重算只允许在 HEAD==main 生产点的执行树发生；干净的分叉 worktree 会用分支代码指纹翻动治理标志
 
-- 状态：active
+- 状态：retired（2026-11-26：self-improve 状态机的 production_owned 守卫，循环已停止运行）
 - 适用：`backend/scripts/self_improve_state.py` 的 `_resolve_policy_identity()` / `migrate_state` / `refresh_policy_health` / `reanchor_policy_identity`；多实例并行、worktree 常驻的共享 state 场景。
 - 证据：2026-09-13 实测（第四轮值班巡检）——T-102 修复后 `policy_artifact_mismatch` 第三次翻 true。identity_context 显示：另一实例的 worktree `si-si-20260913-1635` 停在 `feat/si-fina-indicator-pit`（31759cf，未合并、落后 main），该树 backend 干净，从那里跑状态工具时 `_resolve_policy_identity` 判定 repo_owned=True，用**分叉分支代码**算出的 v3 指纹重算 mismatch（≠治理注册的 8c4821b9）→ 翻 true。main 提交历史零变化；同一 v3 artifact 在 main 生产点（79d91d3）重算恒为 8c4821b9。L-102 的「干净树即可重算」对 WIP 成立，但对「干净但非生产点」的树不成立——分叉树的指纹是已提交 artifact 的指纹，却不是**生产** artifact 的指纹。
 - 永久规则：**(a) `repo_owned` 必须同时满足三条件：backend 干净、git 可用、HEAD 恰为 main tip（`production_owned`）；任一不满足则 migrate/refresh 只记录 identity_context、不得重绑治理指纹或重算 mismatch，reanchor 拒绝。(b) `identity_context` 必须含 `main_tip` 与 `production_owned` 字段；mismatch 翻动仲裁先看这两个字段再看 commit。(c) 治理指纹重算的合法执行点只有一个：干净且处于 main tip 的树（研究员 worktree ff 到 main tip 后、或 main 检出树）。(d) 分叉分支上算出的指纹差异不得驱动任何发布/回滚决策。**
@@ -1119,7 +1121,7 @@
 
 ## L-110 分策略"整策略剔除/降权"三窗生产同构消融全否：path-A solo 亏损传不进生产组合；全管线重放让逐策略边际贡献首次三窗可测；v4 上两个候选剔除 CI 全跨 0、主线第三窗翻号，生产聚合 + v3/v4 风险否决已中和弱策略
 
-- 状态：active（否定性 FINDING + 方法学增量 + 生产驱动图谱）；生产维持当前默认 v4，本轮不改任何生产代码/政策/策略 yaml，只新增 3 个只读研究脚本与本条。
+- 状态：superseded（被 L-169/L-219 替代：2026-10-14 起正式推荐改为单策略独立运行，组合层与「退役三窗反事实」不再存在；策略去留按单策略全期扣费净收益与同期基准超额判定）
 - 假设来源：path-A 单策略并行评估（winrate_per_strategy_parallel，探索层、非生产同构）显示 weak-market-strong-stock-reversal 三窗 solo 均净 -0.419/-0.426/-0.424、daily-stock-analysis-skill(DSA) -0.279/-0.203/-0.726，看似该砍。但 L-071/L-023 已立 path-A 与生产不同构（small-cap 在 path-A 冻结 0 出票、生产却是主力即证），故 solo 亏损不能作落地依据，必须做生产同构"剔除某 skill"反事实。
 - 方法学增量（绕开 L-084(c)/L-093 时代"评分内部旋钮因持久化快照折叠而不可三窗"的限制）：用 `ProductionRuleReplayCandidateBuilder(historical_replay=True + StockMetadataHistoryProvider)` 全管线重放——A=全部启用技能、B=允许列表去掉目标技能，两臂同一进程同一时刻同一份代码构建，再走真实 `evaluate_selection_policy` + `_simulate_card`（因果出场，sellable=tradable），按交易日对齐 cohort（空日记 0）做配对日差 bootstrap 4000(seed7) 与逐月同号。当前 `_pre_policy_card` 已保留每个 signal 的 strategy_id/phase/score/hard_veto，故可对每张【生产选中卡】导出"主导策略（signal 最高分者）/背书策略数 n_sig/离散度"（provenance）。这是不改造持久化 schema 也能三窗复现逐策略轴的可行路径：整段重放打分管线而非从压缩快照反推。
 - 生产驱动图谱（provenance，v4 三窗，主导=卡内最高分背书策略）：**chao-gu-yang-jia（炒股养家）主导 683/300/42 = 67%/55%/76% 选中卡（+0.32/-0.16/-1.67，随大盘 beta，是真正的生产引擎，而 path-A 给它 0 出票）**；chen-xiaoqun（陈小群龙头）138/116/9 张、三窗全正 +0.58/+0.22/+3.27、WR 0.61/0.56/0.78（稳定优质主导）；trend-pullback 21/19 张 +0.40/+1.67、WR0.67/0.79（稳定优质、稀疏）；DSA 75/59/1 张 ≈0（中性）；dragon-tiger 52/35/2 张 +0.94/-2.32/-0.56（regime 翻号）；sector-relative 45/11/1 张 -1.55/+3.41/-8.20（剧烈翻号）；small-cap 作主导仅 3/2/0 张 -2.77/-1.14（方向差但合计 5 张，L-091 n<10 只能观察）。共识数 n_sig 三窗不单调（冻结 3/5 最好、前瞻 n_sig=4 最好、run3 反是 n_sig=1 最好），与 L-084 一致，否决"共识数"轴。
@@ -1163,7 +1165,7 @@
 
 ## L-114【正面 FINDING + 两条口径硬规则】按策略身份修剪的首个三窗全过候选来自低权重技能（dragon-tiger 剔除三窗全过闸门）；同轮暴露"裸 ExecutionPolicy() ≠ 已发布出场产物"与"面板口径 vs 全管线重放口径在 W3 符号相反"
 
-- 状态：active（已落地 1 个退役 + 3 个零贡献退役；附 2 条测量口径硬规则）。
+- 状态：superseded（被 L-169/L-219 替代：组合层已退役，「退役必须跑生产同构组合 A/B」不再适用；(b)(c) 两条测量口径规则并入 L-112/L-115 同类约束）
 - 背景：用户要求"删掉完全负收益的策略"。L-110 已立"必须用生产同构 A/B 消融，path-A solo 亏损不能砍策略"。本轮把消融器改成**单次重放 × 多臂复用**（`scripts/research_strategy_ablation_fast.py`：最贵的 universe+特征+逐 skill 规则扫描每天只做一次，各剔除臂只重跑 gate+aggregate），把 12 个技能 × 3 窗从 ~24h 压到 ~2h（W1 105min / W2 55min / W3 17min，可并行）。产物 `output/research/per_strategy/ablate_fast_W{1,2,3}.json`。
 - 正面 FINDING：**`dragon-tiger-smart-money` 是 L-110 之后首个"整策略剔除"三窗全部通过 `evaluate_challenger` 的候选**。基线 A（全部 12 技能）W1 n=1127 WR56.4% avg+0.2997 PF1.152 sum+337.72 / W2 n=656 57.2% +0.3347 1.153 +219.56 / W3 n=108 45.4% −0.5510 0.782 −59.50；剔除 B 为 W1 1089/57.5%/+0.3568/1.193/+388.52、W2 655/56.8%/+0.3521/1.163/+230.66、W3 107/45.8%/−0.4082/0.839/−43.67 → 三窗 avg 与 sum **同向改善**。同向的三层证据：该技能主导的选中卡 W1 avg −1.30%（n=111）/W3 −0.33%；三窗背书 208 张平均 −0.560%（唯一 n≥100 仍为负）；LIVE 分桶 n=56 WR50.0% avg−0.407% PF0.89 max_loss−15.16%。为什么此前没发现：L-110 只测了 small-cap/sector 两个候选，且当时的树还没有 C1 低权重真加权平均修复（该修复抬高了低权重技能的影响力，剔除它的收益才露出来）。
 - 反例同样是核心结论：**`daily-stock-analysis-skill` 是 LIVE 分桶最差单元**（n=166 WR27.7% avg−2.077% PF0.39），也是 path-A solo 三窗全负，但 W3 剔除它 Δ=−1.391 CI[−2.660,−0.464]（**CI 下界<0，剔除显著变差**），W1 −0.009 / W2 −0.079 → 组合净正贡献，必留。"自己的票最亏"与"拿掉它更好"是两个不同的量，本轮给出最干净的对照。`trend-pullback-continuation`（LIVE n=42 WR38.1% avg−2.223% PF0.25）剔除点估计三窗为正但闸门 W1/W2 FALSIFIED（WR/MDD 退化）；`small-cap` W1/W2 PASS 但 W3 FALSIFIED；`overnight-holding` W1 FALSIFIED；`sector` 三窗全 FALSIFIED。
@@ -1218,7 +1220,7 @@
 
 ## L-120【口径勘误 + 正面候选】生产用 preset 逐技能权重、研究重放器默认等权；把 DSA↓/陈小群↑ 的权重配置作为候选
 
-- 状态：active（口径勘误 + 一条候选配置；发布与否取决于三窗端到端）。
+- 状态：retired（2026-11-26：预设管理层与逐技能权重已于 2026-11-15 随 refactor/retire-preset-layer 删除；陈小群 2026-11-25 退役）
 - 勘误：生产 LIVE 的 `signal.weight` 来自 `preset_skills`（`_build_recommendation_card` 里 `signal["weight"] = selected["weight"]`），
   DB 实测为 sector 1.5 / chen 1.5 / chao-gu 1.1 / high-position 0.3 …；而研究重放器
   `_selected_skills` 把所有权重固定为 1.0。**本轮之前 v5/v6/v7 的三窗数字都是等权口径**，
@@ -1247,7 +1249,7 @@
 
 ## L-122【机制 + 证伪】逐技能权重对单信号卡无效；"配额槽"是唯一能改变被排序挤掉技能出票量的机制，端到端 W2 让价
 
-- 状态：active（一条机制结论 + 一个"已验证但不作为默认"的候选 artifact `production_selection.v9.json`）。
+- 状态：retired（2026-11-26：预设管理层已删除，配额槽候选 artifact 不再有载体；单策略独立运行后不存在「被排序挤掉的技能」）
 - 现象（用户 2026-09-16 问"其他策略一整年都推不出几只票，会不会只靠 DSA 出票"）：
   三窗选中卡 93-95% 来自 chao-gu/DSA/chen-xiaoqun，其余 7 个技能合计 5%，其中 limit-up-reseal / overnight
   在 W1 整年 0 笔（W3 的 overnight 也是 0）。但它们不是找不到票——W1 内策略信号触发卡数
@@ -1397,7 +1399,7 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 
 ## L-130【反事实硬规则】单策略负收益 ≠ 组合应删策略：必须做"退役三窗反事实"再决定
 
-- 状态：active（硬规则 + 一个被数据否决的删除动作）。
+- 状态：superseded（被 L-169/L-219 替代：组合层已退役，单策略运行下策略自身的全期扣费净收益与基准超额就是删除依据）
 - 背景：`high-range-breakout-momentum` 的单策略口径三窗全负（W1 28 笔/39%/−54、W2 16 笔/38%/−3、
   W3 2 笔/0%/−7），按 L-009/用户"删除完全是负收益策略"的授权被退役（skills 目录 + preset 引用）。
 - **退役反事实**（同配置 v27 + 出场 v5，仅移除该技能）：
@@ -1416,7 +1418,7 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 
 ## L-131【正面 FINDING + 交付】炒股养家单策略三窗端到端全达标；陈小群存在"静态规则无法同时满足三窗"的窗口冲突
 
-- 状态：active（一个已认证的单策略 + 一个仍未解决的单策略冲突；新增预设 `preset_single_chao_gu`）。
+- 状态：retired（2026-11-26：`preset_single_chao_gu` 随预设层删除；陈小群 2026-11-25 按 L-219 退役，「窗口冲突未解决」不再是待办。炒股养家三窗数字保留作历史证据）
 - **炒股养家单策略**（`production_selection v27` + `execution v5`，`--only-skill chao-gu-yang-jia-skill`，
   path A 全管线端到端，逐窗独立复跑）：
 
@@ -1482,7 +1484,7 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 
 ## L-134【口径与目标冲突】WR 70% 需要同时处理入场质量和盈利保留，单轴改动会在 W1/W2 与 W3 之间发生冲突
 
-- 状态：active（连续五轮 FALSIFIED；生产策略未改变）。
+- 状态：retired（2026-11-26：「三窗 WR 70%」目标已于 2026-10-25 被 R12/N3 上线标准（每笔为正、PF≥1.3、回撤上限、8 阶段 6 段为正）替代；(a) 两条成交模拟逐笔一致的要求由 L-095/L-133 承载）
 - 证据：当前生产成交口径为 W1 354/WR63.28%/PF1.548/Σ+271.63、W2 201/61.19%/1.602/+192.65、W3 60/66.67%/1.913/+84.90。单字段保护、双字段保护、市场日级保护、最高分策略成交方式和出场盈利保护均未让三个窗口同时达到 WR70%。
 - 最接近的选择候选是全卡 `final_score >= 70`：W1 66.05%、W2 61.64%、W3 69.77%，三个窗口均获 `evaluate_challenger()` 的 `PRODUCTION`，仍未满足绝对 WR70%。最接近的出场候选是 `take_profit=1%`：W1 74.25%、W2 72.73%、W3 68.75%，W3 PF 1.187，同时三个窗口均为 `FALSIFIED`。
 - 口径冲突：同一批 366/209/66 张卡和同一批日线，`outcome_simulation` 与 canonical pure execution 的已结算笔数为 354/201/60 对 365/209/62；逐笔差异为 76/47/18。主要差异包含目标价未触发在 pure execution 中成交，以及止损、trailing、到期退出收益不一致。
@@ -1686,7 +1688,7 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 
 ## L-155 数据源能力边界按它当前的官方操作清单逐项实测定性；适配器只调用清单里存在且用法合规的端点
 
-- 状态：encoded（xiaoshi 报价能力如实声明缺失 + 删除五个清单外的 client 方法与孤儿辅助函数）
+- 状态：retired（2026-11-26：小石 2026-11-15 永久退役，适配器已不在任何运行时链路；「先读官方能力清单再逐端点实测」的方法由 L-149 承载）
 - 适用：任何第三方数据源的适配器；任何数据源「最新数据停在某天」的排查；任何会枚举全市场代码去调用小批量接口的设计
 - 证据：2026-09-28 `pool-status` 显示 xiaoshi 报价停在 2026-09-02，数据源注册表里 xiaoshi 的 `quote` 与 `kline` 均为 `enabled=False`。`XiaoshiMarketSourceAdapter.fetch_quotes` 依赖 `get_stocks`（`/api/v3/data/stocks`）与 `get_market_snapshot`（`/api/v3/data/market-snapshot`），两者实测 404；client 另有 `get_sources`、`get_factor_library`、`get_market_sentiment` 同样 404。读 `/api/v3/capabilities` 的 38 个操作：market 段只有 `market/capabilities`、`market/quote/{symbol}`（单标的）与 `POST market/quotes`（官方用途写「小批量跨市场行情」，请求体 `{"requests":[{"market":"CN","symbol":"000001"}]}`，两只股票实测 200）。用 1000 只代码调用 `market/quotes`，平台返回 `429 bulk_download_required`「检测到全市场逐代码枚举，该类请求已暂停 24 小时」，并在 `alternative` 里指向 `/api/v3/data/market-snapshot`；该地址返回 `404 operation_not_in_public_contract`「该路径不属于当前公开 Agent 契约」。`QuoteRequest` 的语义是完整市场快照，公开操作清单里没有满足它的端点。
 - 永久规则：**（一）排查一个数据源，先读它当前的官方操作清单，再对清单里每个相关端点做一次真实调用。** 能力清单是判定「有没有」的唯一依据；本地 client 里定义了某个方法，不代表平台仍提供它。**（二）适配器只调用清单里存在、且调用方式符合官方用途的端点。** 清单外的端点恒 404，会把「能力不在清单里」持续误报成「连接失败」；把小批量接口当作全市场枚举使用会触发平台封禁，连带影响同一 key 的其他实时报价能力。**（三）能力缺失时返回明确的 `SOURCE_UNAVAILABLE`，并在消息里写清原因与替代源。** 不要在缺能力的地方组合其他接口去拼凑同一语义。**（四）平台错误里给出的替代地址也要对照能力清单核实。** 本次 `alternative` 指向的地址本身就不在公开操作清单里。**（五）删除清单外方法时同步清理它们留下的孤儿，并更新以它们为前提的测试。** 测试断言已移除能力的成功路径，会把错误的能力假设一直保留下来。
@@ -1766,7 +1768,7 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 
 ## L-163 龙虎榜在 17:35 正式推荐时还没有当日数据，回放却能看到；辅助数据的可见性要按实际入库时刻核对
 
-- 状态：active（FINDING，影响已量化为可忽略；发布时刻已实测，未改调度）
+- 状态：encoded（2026-11-24 盘后流水线迁到 21:30，晚于龙虎榜 18:05 的发布时刻，实盘与回放的龙虎榜可见性已一致）
 - 适用：任何在盘后定时推荐里使用、但由晚间作业补齐的辅助数据；回放里按 `trade_date == 信号日` 读取的辅助表
 - 证据：2026-10-13 按入库时间（`created_at` 为 UTC，+8 换算北京时间）统计 09-15 以来每个信号日的首条入库时刻：涨停池、资金流、两融、竞价、概念、涨跌停价都在 17:36-17:42 由推荐运行自己拉取写入；`dragon_tiger` 14 天全部在 21:00 才首次入库，即 17:35 运行时 `top_list` 取不到当日数据。回放直接查表，看得到当日龙虎榜，陈小群（集中 +8、分散 -6）和涨停回封（集中 +8）的龙虎榜规则在回放里生效、在实盘里从不生效。量化：6 策略面板 567 张入选卡里只有 2 张用到龙虎榜；把「龙虎榜分散」扣分加回去模拟实盘口径，4 天入选变化，累计 +582.2 → +574.7，PF 1.651 → 1.639，不改变 Stage 3/4 任何结论。发布时刻实测（2026-10-13，每 15 分钟调一次 `top_list(trade_date=当日)`）：16:05 ~ 17:50 全部 0 行，18:05 首次 65 行，之后稳定在 65 行；即 Tushare 当日龙虎榜在 17:50 ~ 18:05 之间发布。同日正式推荐 17:54 启动，`dragon_tiger` 记录数为 0。
 - 永久规则：**（一）新接入或依赖一份辅助数据前，先查它在正式推荐时刻是否已入库**（按 `created_at` 统计首条入库时刻，不看接口文档）。**（二）回放可见性要和实盘时刻一致**；做不到时至少量化差异。**（三）龙虎榜规则二选一：把正式推荐挪到 18:15 之后，或改用 T-1 及更早的上榜记录。** 当前影响可忽略，暂不改调度；若以后新增依赖当日龙虎榜的规则，必须先做其中一项。
@@ -1836,6 +1838,7 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 规则：新增策略不再走组合启用闸门；判断一个策略好坏看它自己的近 12 个月 n / 胜率 / 平均 / PF / 回撤（L-167 口径）。
 
 ## L-170 单策略近 12 个月均值为负、轻量调参转不正的策略直接删除；只出 0 张票的策略不启用
+- 状态：superseded（被 L-219 替代：去留必须看全期扣费净收益与同期基准超额，不能只看近 12 个月均值）
 
 - 现象：round3（2025-10-01~2026-10-09，only:<sid> + v27 + 6 张 + 72 分）单策略结果里，涨停回封接力（n=1，-5.67%）、低位首板（n=82，-1.43%，PF 0.52）、
   龙头二板接力（n=12，-3.54%）、行业内短期反转（n=699，-0.25%，回撤 -87）、龙虎榜净买次日跟随（n=23，-0.39%）均值为负。
@@ -1975,6 +1978,7 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 超跌资金反转同次对照：12m +3.18 vs 随机中位 +3.10，EXT +1.08，W0 +0.21，W00 +0.83——4 窗全正，保留。
 
 ## L-191 撤销 L-189/L-190：删除标准只看绝对收益
+- 状态：superseded（被 L-219 替代：删除标准在绝对收益之外加入同期同持有期全市场等权基准的超额；陈小群已于 2026-11-25 按该标准退役）
 - 用户规则是「近 12 个月单策略平均收益调参后仍为负则删」。同池随机对照比较的是策略自己合格池内的排序增量，池子本身可能已优于全市场，且用户追求的是收益率，所以它只能作诊断，不能作删除依据。
 - 陈小群（12m 233 张 +0.86% PF1.52 MDD −30.5%）、高位区间突破（12m 20 张 +1.89% PF2.76 MDD −5.7%）近 12 月为正 → 移出 RETIRED_STRATEGY_IDS，恢复每日独立运行，列入 WATCH_STRATEGY_IDS（/strategies 显示「运行中·观察」）。
 - 删除前必看：近 12 月每笔均值、总收益、MDD；老窗口与同池对照写进研究记录供参考。

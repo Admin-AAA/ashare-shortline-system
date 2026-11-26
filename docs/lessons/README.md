@@ -20,7 +20,7 @@
 1. 有明确证据，能回指报告、脚本、测试、commit 或数据库查询。
 2. 结论可以跨一次运行复用，并会改变研究、开发、验证或发布决策。
 3. 能写成一条可执行的永久规则，而不只是一次性的样本数字。
-4. 已说明当前状态：`active`、`encoded` 或 `superseded`。
+4. 已说明当前状态：`active`、`encoded`、`superseded` 或 `retired`。
 
 ### 不直接写入 `LESSONS.md`
 
@@ -44,7 +44,7 @@
 ```markdown
 ## L-### 标题
 
-- 状态：active | encoded | superseded
+- 状态：active | encoded | superseded | retired
 - 适用：适用的流程、模块或决策范围
 - 证据：可复核的文件、测试、commit、查询或实验结果
 - 永久规则：下一次遇到同类问题时必须遵守的动作
@@ -66,7 +66,7 @@
     ↓
 把规则吸收到代码、测试、命令或操作手册
     ↓
-验证后将状态更新为 encoded；被替代时标记 superseded
+验证后将状态更新为 encoded；被替代时标记 superseded；所依赖的机制或目标下线时标记 retired
 ```
 
 新增教训前先搜索已有编号、标题和相关关键词，避免重复登记；一次运行的临时数字写入结构化运行记录，不把运行日志膨胀成长期教训。
