@@ -84,8 +84,10 @@ def test_registered_with_quality_card():
 
 def test_dip_cards_registered_with_quality():
     data = json.loads(ms.METRICS_FILE.read_text())
+    # §1069 mid-earnings-accel-dip 已下线，定义留在 RETIRED_STRATEGIES，历史标注仍可读
+    assert "mid-earnings-accel-dip" not in ms.STRATEGIES
     for sid, kind in (("mid-divplan-dip", "divplan_dip"), ("mid-earnings-accel-dip", "ea_dip")):
-        meta = ms.STRATEGIES[sid]
+        meta = ms._strategy_meta(sid)
         assert meta["kind"] == kind and meta["hold_days"] == 5 and meta["max_r20"] == -0.15
         q = data[sid]["quality"]
         assert q["pass"] and q["R12"]["n"] >= 30 and q["N3"]["n"] >= 30

@@ -13345,3 +13345,12 @@ N3 回测里被≥2 个成员同时买入的 (票,入场日) 占比 7%。
   4. **首次覆盖（ACI）样本太少且翻号**（P19 +8 / P20 −3.6 / W0 −2.4），不可依赖。
   5. 研报数据 2026 年行数比往年少 20%～40%（预注册已写明），R12 的 ARU/ACI 信号偏少，但 ARU 在 R12 仍有 157 笔，结论不受样本量影响。
 - 结论：四个全部否决，不调参重试。「卖方研报盈利预测上调 / 首次覆盖」「券商月度金股共荐」「股权质押大幅解押」三类新数据在 T+1 开盘买、持 20 日的口径下都没有稳定收益，见 L-223。
+
+## §1069 [长线+中线] long-growth-streak、mid-earnings-accel-dip 下线（2026-11-26）
+
+- 依据：`backend/output/strategy_health/rolling_r12_latest.json`（2026-11-24 22:30 生成，cutoff 2026-11-02）。口径：现行生产选股代码重放（开每日上限），只算窗口内信号、截止日前已满期卖出的笔，扣 0.3%；未卖出的笔不计入。
+- `long-growth-streak`（营收与扣非净利连续4期双增长，持60日）：**241 笔 −2.20%/笔、中位数 −10.12%、胜率 32.0%、PF0.84、去掉最赚5%后 −5.97%、verdict=negative**；另有 88 笔截止日尚未卖出，未计入。`midterm_backtest_metrics.json` 的 recent_12m 也是 330 笔 −1.91%/笔、PF0.84、彩票型。它是 2026-10-25 用户授权「保留并监控、近12个月每笔转负再下线」的 3 个不达标现役策略之一（另两个是短线炒股养家、陈小群），§1055 时还是 189 笔 +3.56%（右尾型、中位数 −6.85%），现已转负，触发下线条件。
+- `mid-earnings-accel-dip`（财报业绩加速×公告前深跌，持5日，§1000 上线）：**71 笔 −3.28%/笔、中位数 −2.43%、胜率 42.3%、PF0.48、去掉最赚5%后 −3.46%、verdict=negative**。上线研究的 recent_12m 只有 34 笔 +3.47%/笔、PF3.18；两者差距很大，原因（窗口不同、研究口径仓位上限、或事件源差异）本轮没有查，不据此调规则。
+- 处置：`long-growth-streak` 从 `midterm_service.STRATEGIES` 移入 `RETIRED_STRATEGIES`，`app/api/midterm.py` 的 `LONG_REJECTED` 补下线原因；`mid-earnings-accel-dip` 加进 `NON_SUE_NEAR_DUP_DEMOTE_REASONS`（加载时移入 `RETIRED_STRATEGIES`，/mid 淘汰清单显示原因）。两者都不再出新推荐、不进 /long、/mid 现役列表；候选函数、历史 picks、回测指标都保留，按策略 id 仍可查旧批次。已有持仓的结算不受影响。
+- 下线后：/long 现役只剩 `long-dividend-lowvol`；/mid 现役 30 → 29。
+- 验证：`test_midterm_*`、`test_safety_net*`、`test_forecast_slight_pick_flow`、`test_strategy_data_readiness`、`test_rolling_r12_resilience`、`test_research_data_readiness`、`test_strategies_api` 共 134 passed 3 skipped（ashare_test 库）；`import app.main` 通过。
