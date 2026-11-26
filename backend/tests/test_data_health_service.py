@@ -414,7 +414,11 @@ def _seed_stale_cache(monkeypatch, score: int = 90) -> None:
     data_health_service._set_cached_diagnosis(
         {"reference_trade_date": "2026-05-27", "score": score}, None
     )
-    data_health_service._diagnosis_cache["ts"] = 0.0
+    # 不能写 ts=0.0：time.monotonic() 是「开机至今」秒数，CI 虚拟机开机不到 5 分钟就跑到这里，
+    # 0.0 离现在不足 TTL，缓存仍算新鲜。按当前时刻往前推 TTL+1 秒才是真的过期。
+    data_health_service._diagnosis_cache["ts"] = (
+        time.monotonic() - data_health_service._DIAGNOSIS_CACHE_TTL_SECONDS - 1.0
+    )
     monkeypatch.setattr(data_health_service, "_diagnosis_data_version", lambda _db: None)
 
 
