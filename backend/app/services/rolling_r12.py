@@ -263,9 +263,15 @@ def find_unavailable_strategies(no_data: dict, midlong: dict, window_days: int) 
 
 
 def midlong_window_stats(db, staging: Path, window_start: str, cutoff: str) -> dict[str, dict[str, Any]]:
+    """只算信号日在 [window_start, cutoff]、且卖出日 ≤ cutoff 的笔。
+
+    _load_batch 按库里最新日K结算，重算时已经过了 cutoff 好几天，卖出日在 cutoff 之后的笔也会是 closed；
+    这些笔到截止日还在持有，算作 open，不进每笔收益（2026-11 PR #56 审查发现原来混进去了）。
+    它们的收益单列在 sold_after_cutoff，只展示、不判正负。"""
     from app.services import midterm_service as ms
 
     rets: dict[str, list[float]] = {sid: [] for sid in ms.STRATEGIES}
+    late: dict[str, list[float]] = {sid: [] for sid in ms.STRATEGIES}
     opened: dict[str, int] = {sid: 0 for sid in ms.STRATEGIES}
     for f in sorted(staging.glob("*.json")):
         b = ms._load_batch(db, f)
@@ -274,13 +280,19 @@ def midlong_window_stats(db, staging: Path, window_start: str, cutoff: str) -> d
             continue
         for p in b["picks"]:
             if p.get("status") == "closed" and p.get("ret") is not None:
-                rets[sid].append(float(p["ret"]))
+                if str(p.get("exit_date") or "")[:10] <= cutoff:
+                    rets[sid].append(float(p["ret"]))
+                else:
+                    late[sid].append(float(p["ret"]))
+                    opened[sid] += 1
             elif p.get("status") in ("holding", "pending"):
                 opened[sid] += 1
     out = {}
     for sid, rr in rets.items():
+        lt = late[sid]
         out[sid] = {"name": ms.STRATEGIES[sid].get("name", sid), "horizon": ms.STRATEGIES[sid].get("horizon"),
-                    "hold_days": ms._hold(sid), **trade_stats(rr, opened[sid])}
+                    "hold_days": ms._hold(sid), **trade_stats(rr, opened[sid]),
+                    "sold_after_cutoff": {"n": len(lt), "avg": round(sum(lt) / len(lt), 2) if lt else None}}
     return out
 
 
@@ -436,7 +448,7 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
                    "upstream_calls": dict(upstream["calls"]), "local_served": dict(upstream["local"]),
                    "local_covered_through": upstream["covered"]},
         "method": ("中长线：现行生产选股代码重放（开每日上限），财报/分红/回购/业绩预告/股权激励草案优先读本地库与事件存档，本地未覆盖的日期才走网关；"
-                   "只算窗口内信号、截止日前已卖出的笔，扣 0.3%。"
+                   "只算窗口内信号、卖出日 ≤ 截止日的笔，扣 0.3%；截止日后才卖出的笔算持有中，收益另列「最近已卖出」（sold_after_cutoff）作预警，不进正负判定。"
                    f"短线：{short['replay_coverage_end']}（来源 {short['replay_coverage_end_source']}）及以前只用历史重建、"
                    "之后只用实盘，两段分开列，已成交净收益（未成交不摊 0%）。"
                    "样本 < 30 笔不判正负"),
