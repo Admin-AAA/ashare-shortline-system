@@ -7,7 +7,7 @@
 - 中线/长线：用现行生产选股代码（midterm_service.generate_picks，与实盘同一套，开每日新推荐上限）在独立 staging 目录里
   把 [窗口起点 − 预热, cutoff] 逐交易日重放一遍，不碰生产 picks 目录；收益用生产 _load_batch/_realize 按日K结算
   （次日开盘买、持有期满开盘卖、涨停不买、跌停顺延、扣 0.3%）。只算信号日在窗口内、且到 cutoff 已卖出的笔。
-- 短线：读库里已有的已结算推荐，只算已成交的笔（净收益，没成交的不当 0% 摊）。两段不重叠、不混算：
+- 短线：读库里已有的已结算推荐，只算已成交、卖出日 ≤ cutoff 的笔（净收益，没成交的不当 0% 摊）。两段不重叠、不混算：
   SHORT_REPLAY_COVERAGE_END（回放覆盖终点）及以前只用历史重建（historical_replay），之后只用实盘（live_forward），
   输出里两段分开列笔数和每笔。不另跑回放。
 - 重放尽量只读本地库（local_first），本地覆盖不到的日期才走网关，每个接口走了几次上游写进结果。
@@ -296,37 +296,60 @@ def midlong_window_stats(db, staging: Path, window_start: str, cutoff: str) -> d
     return out
 
 
+def short_segment_returns(db, seg: dict[str, Any] | None, cutoff: str,
+                          expected) -> dict[str, tuple[list[float], list[float]]]:
+    """短线一段里各策略已成交的净收益，按卖出日分两组：(卖出日 ≤ cutoff, 截止日后才卖出)。
+
+    人群（去重、正式样本、回放 cohort）和每笔净收益与 outcome_service.metrics_by_strategy 完全一样，只多一道卖出日过滤。
+    原来直接用 metrics_by_strategy 按信号日取：重算时已过了 cutoff 好几天，最后 1~3 个信号日在截止日后才卖出的笔
+    也被算进来了（2026-11 PR #57 审查发现，中长线已在 PR #57 改掉）。没卖出日的笔不能确认在截止日前卖出，算后一组。"""
+    from app.services import outcome_service as os_
+
+    out: dict[str, tuple[list[float], list[float]]] = {}
+    if seg is None:
+        return out
+    for rec in os_._scoped_recommendation_rows(db, seg["start"], seg["end"], sample_scope=seg["scope"]):
+        if os_.normalized_outcome_label(rec) in (os_.OUTCOME_PENDING, os_.OUTCOME_PROVISIONAL):
+            continue
+        m = os_._metric_record_from_row(rec)
+        if not m["executed"]:
+            continue
+        sold = str(getattr(rec, "exit_date", "") or "")[:10]
+        group = 0 if sold and sold <= cutoff else 1
+        for signal in os_._loads(rec.skill_breakdown_json, []):
+            sid = str(signal.get("strategy_id") or "unknown")
+            if sid in expected:
+                out.setdefault(sid, ([], []))[group].append(float(m["net_return_pct"]))
+    return out
+
+
+def _seg_summary(seg: dict[str, Any] | None, rets: list[float], late: list[float]) -> dict[str, Any]:
+    return {**(seg or {}), "n": len(rets), "avg": round(sum(rets) / len(rets), 2) if rets else None,
+            "sold_after_cutoff": {"n": len(late), "avg": round(sum(late) / len(late), 2) if late else None}}
+
+
 def short_window_stats(db, window_start: str, cutoff: str) -> dict[str, Any]:
+    """短线：只算信号日在窗口内、卖出日 ≤ cutoff 的已成交笔（与中长线同口径）；
+    截止日后才卖出的算持有中（open），收益按段单列 sold_after_cutoff，只展示、不判正负。"""
     from app.services.daily_output_check import expected_short_strategies
-    from app.services.outcome_service import metrics_by_strategy
 
     expected = expected_short_strategies(db)
     boundary, boundary_source = short_replay_coverage_end(db)
     segments = short_segments(window_start, cutoff, boundary)
-
-    def seg_rows(seg: dict[str, Any] | None) -> dict[str, tuple[int, float]]:
-        if seg is None:
-            return {}
-        out_: dict[str, tuple[int, float]] = {}
-        for row in metrics_by_strategy(db, start_date=seg["start"], end_date=seg["end"], sample_scope=seg["scope"]):
-            sid = row.get("strategy_id")
-            n = int(row.get("triggered_count") or 0)
-            if sid in expected and n:
-                out_[sid] = (n, float(row.get("avg_return") or 0.0))
-        return out_
-
-    replay_rows, live_rows = seg_rows(segments["replay"]), seg_rows(segments["live"])
+    replay_rets = short_segment_returns(db, segments["replay"], cutoff, expected)
+    live_rets = short_segment_returns(db, segments["live"], cutoff, expected)
     out: dict[str, Any] = {}
     for sid in expected:
-        rn, ra = replay_rows.get(sid, (0, 0.0))
-        ln, la = live_rows.get(sid, (0, 0.0))
-        tot_n = rn + ln
-        avg = (rn * ra + ln * la) / tot_n if tot_n else None
-        verdict = "insufficient_sample" if tot_n < MIN_TRADES else ("positive" if (avg or 0) > 0 else "negative")
+        r_in, r_late = replay_rets.get(sid, ([], []))
+        l_in, l_late = live_rets.get(sid, ([], []))
+        tot = r_in + l_in
+        avg = sum(tot) / len(tot) if tot else None
+        verdict = "insufficient_sample" if len(tot) < MIN_TRADES else ("positive" if (avg or 0) > 0 else "negative")
         out[sid] = {
-            "n": tot_n, "avg": round(avg, 2) if avg is not None else None, "verdict": verdict,
-            "replay_segment": {**(segments["replay"] or {}), "n": rn, "avg": round(ra, 2) if rn else None},
-            "live_segment": {**(segments["live"] or {}), "n": ln, "avg": round(la, 2) if ln else None},
+            "n": len(tot), "avg": round(avg, 2) if avg is not None else None, "verdict": verdict,
+            "open": len(r_late) + len(l_late),
+            "replay_segment": _seg_summary(segments["replay"], r_in, r_late),
+            "live_segment": _seg_summary(segments["live"], l_in, l_late),
         }
     return {"strategies": out, "replay_coverage_end": boundary, "replay_coverage_end_source": boundary_source}
 
@@ -382,6 +405,24 @@ def _month_done(month: str) -> bool:
     return _now() - gen < _dt.timedelta(hours=_INCOMPLETE_RETRY_HOURS)
 
 
+def verdict_summary(midlong: dict[str, Any], short: dict[str, Any]) -> dict[str, Any]:
+    """counts 与 positive_ratio：分母只算可判定的（为正/为负），样本不足、抛异常、指标不可得不进分母。"""
+    allv = [v["verdict"] for v in midlong.values()] + [v["verdict"] for v in short["strategies"].values()]
+    judged = [v for v in allv if v not in ("insufficient_sample", "error", "unavailable")]
+    return {"positive_ratio": round(judged.count("positive") / len(judged), 3) if judged else None,
+            "counts": {"positive": allv.count("positive"), "negative": allv.count("negative"),
+                       "insufficient_sample": allv.count("insufficient_sample"), "error": allv.count("error"),
+                       "unavailable": allv.count("unavailable")}}
+
+
+def method_text(short: dict[str, Any]) -> str:
+    return ("中长线：现行生产选股代码重放（开每日上限），财报/分红/回购/业绩预告/股权激励草案优先读本地库与事件存档，本地未覆盖的日期才走网关；"
+            "只算窗口内信号、卖出日 ≤ 截止日的笔，扣 0.3%；截止日后才卖出的笔算持有中，收益另列「最近已卖出」（sold_after_cutoff）作预警，不进正负判定。"
+            f"短线：{short['replay_coverage_end']}（来源 {short['replay_coverage_end_source']}）及以前只用历史重建、"
+            "之后只用实盘，两段分开列，已成交且卖出日 ≤ 截止日的净收益（未成交不摊 0%），截止日后才卖出的按段另列 sold_after_cutoff。"
+            "样本 < 30 笔不判正负")
+
+
 def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
                 out_root: Path | None = None) -> dict[str, Any]:
     from app.services import midterm_service as ms
@@ -425,8 +466,6 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
     unavailable = find_unavailable_strategies(no_data, midlong, window_days)
     for sid, n in unavailable.items():
         midlong[sid] = {**midlong[sid], "verdict": "unavailable", "unavailable_days": n}
-    allv = [v["verdict"] for v in midlong.values()] + [v["verdict"] for v in short["strategies"].values()]
-    judged = [v for v in allv if v not in ("insufficient_sample", "error", "unavailable")]
     incomplete = {k: v for k, v in no_data.items() if v} | \
                  {k: v for k, v in (replay.get("errors") or {}).items() if v}
     doc = {
@@ -435,10 +474,7 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
         "window": {"signal_start": window_start, "signal_end": cutoff, "replay_start": replay_start},
         "generated_at": now.isoformat(timespec="seconds"),
         "status": "completed",
-        "positive_ratio": round(judged.count("positive") / len(judged), 3) if judged else None,
-        "counts": {"positive": allv.count("positive"), "negative": allv.count("negative"),
-                   "insufficient_sample": allv.count("insufficient_sample"), "error": allv.count("error"),
-                   "unavailable": allv.count("unavailable")},
+        **verdict_summary(midlong, short),
         "crashed": {sid: {k: c.get(k) for k in ("error", "first_day", "days")} for sid, c in crashed.items()},
         "midlong": midlong,
         "short": short,
@@ -447,11 +483,7 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
                    "unavailable_strategies": sorted(unavailable),
                    "upstream_calls": dict(upstream["calls"]), "local_served": dict(upstream["local"]),
                    "local_covered_through": upstream["covered"]},
-        "method": ("中长线：现行生产选股代码重放（开每日上限），财报/分红/回购/业绩预告/股权激励草案优先读本地库与事件存档，本地未覆盖的日期才走网关；"
-                   "只算窗口内信号、卖出日 ≤ 截止日的笔，扣 0.3%；截止日后才卖出的笔算持有中，收益另列「最近已卖出」（sold_after_cutoff）作预警，不进正负判定。"
-                   f"短线：{short['replay_coverage_end']}（来源 {short['replay_coverage_end_source']}）及以前只用历史重建、"
-                   "之后只用实盘，两段分开列，已成交净收益（未成交不摊 0%）。"
-                   "样本 < 30 笔不判正负"),
+        "method": method_text(short),
     }
     root.mkdir(parents=True, exist_ok=True)
     payload = json.dumps(doc, ensure_ascii=False, indent=1)

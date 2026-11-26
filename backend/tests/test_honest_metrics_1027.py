@@ -300,12 +300,17 @@ def test_short_window_stats_lists_segments_separately(monkeypatch):
     monkeypatch.setattr(doc, "expected_short_strategies", lambda db: ["s1"])
     seen = []
 
+    from types import SimpleNamespace
+
+    from app.engine.trading_costs import net_return_after_cost
+
     def fake(db, start_date, end_date, sample_scope):
         seen.append((sample_scope, start_date, end_date))
-        return [{"strategy_id": "s1", "triggered_count": 90 if sample_scope == "historical_replay" else 6,
-                 "avg_return": 1.8 if sample_scope == "historical_replay" else -4.6}]
+        n, g = (90, 2.1) if sample_scope == "historical_replay" else (6, -4.3)
+        return [SimpleNamespace(outcome_label="success", entry_triggered=True, executed_return=g,
+                                exit_date="2026-10-01", skill_breakdown_json='[{"strategy_id": "s1"}]')] * n
 
-    monkeypatch.setattr(os_, "metrics_by_strategy", fake)
+    monkeypatch.setattr(os_, "_scoped_recommendation_rows", fake)
 
     class _DB:
         def execute(self, *a, **k):
@@ -316,9 +321,11 @@ def test_short_window_stats_lists_segments_separately(monkeypatch):
 
     out = rr.short_window_stats(_DB(), "2025-10-26", "2026-10-26")["strategies"]["s1"]
     assert seen == [("historical_replay", "2025-10-26", "2026-10-16"), ("live_forward", "2026-10-17", "2026-10-26")]
+    r_net, l_net = net_return_after_cost(2.1), net_return_after_cost(-4.3)
     assert out["replay_segment"]["n"] == 90 and out["live_segment"] == {
-        "scope": "live_forward", "start": "2026-10-17", "end": "2026-10-26", "n": 6, "avg": -4.6}
-    assert out["n"] == 96 and out["avg"] == pytest.approx((90 * 1.8 - 6 * 4.6) / 96, abs=0.01)
+        "scope": "live_forward", "start": "2026-10-17", "end": "2026-10-26", "n": 6, "avg": round(l_net, 2),
+        "sold_after_cutoff": {"n": 0, "avg": None}}
+    assert out["n"] == 96 and out["avg"] == pytest.approx((90 * r_net + 6 * l_net) / 96, abs=0.01)
 
 
 def test_month_staging_and_manifest_reused(tmp_path):
