@@ -1,8 +1,8 @@
-"""Independent watchdog for the 17:35 post_sync_formal_recommendation run.
+"""Independent watchdog for the 21:30 post_sync_formal_recommendation run.
 
 Runs from its own launchd agent (not Prefect), so it still fires when the
 Prefect server/worker are down (2026-10-13~15 silent outage). Mon-Fri: if no
-ScheduledTaskRun for the task started since 17:00 today (Asia/Shanghai), or Prefect is
+ScheduledTaskRun for the task started since 21:00 today (Asia/Shanghai), or Prefect is
 unreachable, or every run today failed, emit ``[ALERT:DAILY_RUN_MISSING]`` /
 ``[ALERT:DAILY_RUN_FAILED]`` / ``[ALERT:PREFECT_DOWN]`` to
 backend/logs/app.log. Exit code 2 when an alert fired.
@@ -23,12 +23,16 @@ from app.core.alerts import emit_alert
 from app.core.logger import setup_logging
 
 TASK_ID = "post_sync_formal_recommendation"
+# 当天窗口起点（CST）：只数这个小时之后启动的 run，与 21:30 的 cron 对应。
+WINDOW_START_HOUR = 21
 CST = ZoneInfo("Asia/Shanghai")
 PREFECT_HEALTH_URL = "http://127.0.0.1:4200/api/health"
 BACKEND_BASE_URL = "http://127.0.0.1:8765"
-# 2026-11-17：watchdog 此前只告警不修复，17:35 漏跑后当天数据一整天不入库，
+# 2026-11-17：watchdog 此前只告警不修复，盘后出票漏跑后当天数据一整天不入库，
 # 数据健康页直接 blocked。改为自动补跑一次，用日期 marker 做幂等，避免同一天
-# 重复触发（launchd 每天 18:30 只跑一次，但手动重跑/补跑也要安全）。
+# 重复触发（launchd 每天 22:15 只跑一次，但手动重跑/补跑也要安全）。
+# 2026-11-26：盘后流水线已迁到 21:30（L-208），watchdog 从 18:30 改到 22:15、窗口起点 17:00 改为 21:00；
+# 旧时点会在数据未到齐前判「漏跑」并补跑，每天制造 3 次必失败的 run。
 AUTORETRY_STATE_PATH = (
     Path(__file__).resolve().parents[1] / "data" / "runtime" / "daily_run_watchdog_autoretry.json"
 )
@@ -43,12 +47,12 @@ def _prefect_up(url: str = PREFECT_HEALTH_URL) -> bool:
 
 
 def started_today_count(db, now_cst: dt.datetime) -> int:
-    """DB stores naive UTC; count runs started since today 17:00 CST.
+    """DB stores naive UTC; count runs started since today 21:00 CST.
 
-    Window starts at 17:00 (not midnight) so a morning catch-up of the previous
-    day's missed run doesn't mask today's missing 17:35 run.
+    Window starts at 21:00 (not midnight) so a morning catch-up of the previous
+    day's missed run doesn't mask today's missing 21:30 run.
     """
-    day_start_cst = now_cst.replace(hour=17, minute=0, second=0, microsecond=0)
+    day_start_cst = now_cst.replace(hour=WINDOW_START_HOUR, minute=0, second=0, microsecond=0)
     day_start_utc = day_start_cst.astimezone(dt.timezone.utc).replace(tzinfo=None)
     return int(
         db.execute(
@@ -60,8 +64,8 @@ def started_today_count(db, now_cst: dt.datetime) -> int:
 
 
 def status_counts_today(db, now_cst: dt.datetime) -> dict[str, int]:
-    """Per-status count of today's (since 17:00 CST) runs of TASK_ID."""
-    day_start_cst = now_cst.replace(hour=17, minute=0, second=0, microsecond=0)
+    """Per-status count of today's (since 21:00 CST) runs of TASK_ID."""
+    day_start_cst = now_cst.replace(hour=WINDOW_START_HOUR, minute=0, second=0, microsecond=0)
     day_start_utc = day_start_cst.astimezone(dt.timezone.utc).replace(tzinfo=None)
     rows = db.execute(
         text(
@@ -125,7 +129,7 @@ def evaluate(
         return alerts
     day = now_cst.date().isoformat()
     if run_count == 0:
-        alerts.append(("DAILY_RUN_MISSING", f"{TASK_ID} 今日({day}) 截至 {now_cst:%H:%M} CST 未启动（17:35 cron），调度可能静默中断"))
+        alerts.append(("DAILY_RUN_MISSING", f"{TASK_ID} 今日({day}) 截至 {now_cst:%H:%M} CST 未启动（21:30 cron），调度可能静默中断"))
     elif status_counts is not None:
         # 2026-10-15：17:35 run 以 KeyError 失败，但 runs_today=1 → 旧 watchdog alerts=0 漏报。
         ok = status_counts.get("completed", 0) + status_counts.get("running", 0)
