@@ -125,6 +125,17 @@ export function HorizonMetricsPage({ horizon }: { horizon: H }) {
                     <td className={`r hz-num ${pnl(t.avg_ret)}`}>{pct(t.avg_ret)}</td><td className="r hz-num">{num(t.profit_factor)}</td></tr>))}</tbody>
               </table></div>
             </section>
+            {m.by_overlap && (
+              <section className="panel hz-pad">
+                <div className="hz-sechead"><b>按同推策略数</b><span className="hz-muted">同一天同一只票被几个策略同时推；{m.distinct_signals ?? "—"} 个去重信号展开成 {o.n} 笔。多策略同推的票超额更高，但跟着全部策略买会把同一只票买成多倍仓位</span></div>
+                <div className="hz-tablewrap"><table className="hz-table">
+                  <thead><tr><th>同推策略数</th><th className="r">笔数</th><th className="r">胜率</th><th className="r">平均/笔</th><th className="r" title={BENCH_HINT}>超额/笔</th><th className="r">PF</th></tr></thead>
+                  <tbody>{m.by_overlap.map((t) => (
+                    <tr key={t.bucket}><td>{t.bucket}</td><td className="r hz-num">{t.n}</td><td className="r hz-num">{t.win_rate == null ? "—" : `${t.win_rate.toFixed(1)}%`}</td>
+                      <td className={`r hz-num ${pnl(t.avg_ret)}`}>{pct(t.avg_ret)}</td><td className={`r hz-num ${pnl(t.excess_avg_ret)}`}>{pct(t.excess_avg_ret)}</td><td className="r hz-num">{num(t.profit_factor)}</td></tr>))}</tbody>
+                </table></div>
+              </section>
+            )}
             <section className="panel hz-pad">
               <div className="hz-sechead"><b>按信号月</b><span className="hz-muted">看收益是否集中在少数月份</span></div>
               <div className="hz-tablewrap"><table className="hz-table">

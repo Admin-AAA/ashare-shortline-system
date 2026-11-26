@@ -27,6 +27,8 @@ _PICK_FIELDS = (
     "rule_score_label", "selection_reason", "ret_includes_cost",
 )
 TOP_K = (1, 3, 5, 10)
+# 同日同票被几个策略推：1 / 2 / 3-4 / ≥5。
+OVERLAP_BUCKETS = (("1 个策略", 1, 1), ("2 个策略", 2, 2), ("3-4 个策略", 3, 4), ("≥5 个策略", 5, 10**6))
 ORIGINS = ("live", "late", "replay", "legacy")
 # 策略画像「回放已平仓」：信号日 >= 锚点往前 365 个自然日（含锚点当天）。
 # 与 rolling_r12.month_manifest 的 window_start = cutoff - 365 天同一长度，按信号日而不是平仓日。
@@ -107,6 +109,14 @@ def _trades_uncached(db, horizon: str, strategy_id: str | None) -> list[dict[str
                        hold_days=b["hold_days"], origin=o, bench_ret=None, excess_ret=None)
             rows.append(row)
     _attach_benchmark(db, rows)
+    # 同一信号日同一只票被几个策略推（本次加载范围内）。≥5 个策略同推的票是组合里最大的集中度来源：
+    # 2026-10 这一桶 97 笔净均 -20.7%，2026-03 同一桶 +17.9%，是高 beta 而不是毒区（L-224）。
+    overlap: dict[tuple[str, str], int] = {}
+    for r in rows:
+        k = (str(r["signal_date"]), str(r["code"]))
+        overlap[k] = overlap.get(k, 0) + 1
+    for r in rows:
+        r["overlap_count"] = overlap[(str(r["signal_date"]), str(r["code"]))]
     return rows
 
 
@@ -246,12 +256,17 @@ def metrics(db, horizon: str, *, origin: str = "all", window_days: int | None = 
         months.setdefault(r["signal_date"][:7], []).append(r)
     by_month = [{"month": m, **stats(v)} for m, v in sorted(months.items(), reverse=True)]
 
+    by_overlap = [{"bucket": label, **stats(r for r in sel if lo <= (r.get("overlap_count") or 1) <= hi)}
+                  for label, lo, hi in OVERLAP_BUCKETS]
+    distinct = {(r["signal_date"], r["code"]) for r in sel}
+
     dates = [r["signal_date"] for r in sel]
     return {
         "horizon": horizon, "origin": origin or "all", "window_days": window_days, "window_start": start,
         "date_range": {"first_signal": min(dates, default=None), "last_signal": max(dates, default=None)},
         "overview": stats(sel), "by_origin": by_origin, "by_strategy": by_strategy, "top_k": top_k,
-        "by_month": by_month, "portrait_realized_12m": portrait,
+        "by_month": by_month, "by_overlap": by_overlap, "distinct_signals": len(distinct),
+        "portrait_realized_12m": portrait,
     }
 
 

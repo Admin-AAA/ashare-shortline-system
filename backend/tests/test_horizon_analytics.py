@@ -78,6 +78,12 @@ def test_metrics_breakdowns(tmp_path, monkeypatch):
     top = {x["k"]: x for x in m["top_k"]}
     assert top[1]["n"] == 2 and top[10]["n"] == 3    # A(排名1) C(排名1)；B 排名2
     assert [x["month"] for x in m["by_month"]] == ["2026-10", "2026-09"]
+    # 同日同票同推策略数：夹具里每只票只被一个策略推；四桶 n 之和 = 已平仓 n；去重信号数 = 全部 pick 数
+    assert [b["bucket"] for b in m["by_overlap"]] == ["1 个策略", "2 个策略", "3-4 个策略", "≥5 个策略"]
+    assert [b["n"] for b in m["by_overlap"]] == [3, 0, 0, 0] and m["distinct_signals"] == 5  # mid 五只票（F 是长线）
+    assert all(r["overlap_count"] == 1 for r in ha.trades(None, "mid"))
+    # db=None（纯文件口径）不附基准
+    assert m["overview"]["bench_n"] == 0 and m["overview"]["excess_avg_ret"] is None
     assert ha.metrics(None, "mid", origin="replay")["overview"]["n"] == 2
     w = ha.metrics(None, "mid", window_days=30, today=dt.date(2026, 10, 21))
     assert w["window_start"] == "2026-09-21" and w["overview"]["n"] == 0 and w["overview"]["holding"] == 1

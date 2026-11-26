@@ -287,6 +287,8 @@ export type HorizonStats = { n: number; win_rate: number | null; avg_ret: number
   /** 同信号日、同持有期、同成本的全市场等权基准（EWALL.A）：平均基准收益与平均超额；能算出基准的笔数。 */
   bench_n?: number; bench_avg_ret?: number | null; excess_avg_ret?: number | null };
 export type HorizonStrategyStats = HorizonStats & { strategy_id: string; strategy_name: string; hold_days: number; first_signal: string | null; last_signal: string | null };
+/** 同一信号日同一只票被几个策略同时推荐；≥5 是组合里最大的集中度来源。 */
+export type HorizonOverlapStats = HorizonStats & { bucket: string };
 /** 策略画像「回放已平仓」：后端按信号日截近 365 天，不随诊断页 window_days 改变。 */
 export type HorizonPortraitRealized = {
   window_days: number; window_basis: string; window_start: string; window_end: string; note?: string;
@@ -298,6 +300,7 @@ export type HorizonMetricsResponse = { horizon: string; origin: string; window_d
   date_range: { first_signal: string | null; last_signal: string | null }; overview: HorizonStats; by_origin: Record<HorizonOrigin, HorizonStats>;
   by_strategy: HorizonStrategyStats[];
   top_k: (HorizonStats & { k: number })[]; by_month: (HorizonStats & { month: string })[];
+  by_overlap?: HorizonOverlapStats[]; distinct_signals?: number;
   portrait_realized_12m?: HorizonPortraitRealized };
 export type HorizonRunItem = { strategy_id: string; strategy_name: string; status: string; recorded_at?: string | null; picks: number | null; detail: string | null };
 export type HorizonRunsResponse = { horizon: string; days: { date: string; items: HorizonRunItem[] }[] };
