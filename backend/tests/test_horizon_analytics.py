@@ -74,7 +74,7 @@ def test_metrics_breakdowns(tmp_path, monkeypatch):
     assert m["by_origin"]["replay"]["n"] == 2 and m["by_origin"]["legacy"]["n"] == 1 and m["by_origin"]["live"]["n"] == 0
     by = {s["strategy_id"]: s for s in m["by_strategy"]}
     assert set(by) == {k for k, v in ms.STRATEGIES.items() if v["horizon"] == "mid"}
-    assert by["mid-repurchase-plan-underreact"]["n"] == 2 and by["mid-earnings-accel"]["n"] == 0
+    assert by["mid-repurchase-plan-underreact"]["n"] == 2 and by["mid-earnings-accel-vol"]["n"] == 0
     top = {x["k"]: x for x in m["top_k"]}
     assert top[1]["n"] == 2 and top[10]["n"] == 3    # A(排名1) C(排名1)；B 排名2
     assert [x["month"] for x in m["by_month"]] == ["2026-10", "2026-09"]

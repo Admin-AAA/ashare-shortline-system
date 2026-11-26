@@ -75,7 +75,7 @@ def test_cancel_fields():
 def test_pagination_and_horizon(tmp_path, monkeypatch):
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     for d in ("2026-10-12", "2026-10-13", "2026-10-14"):
-        for sid in ("mid-earnings-accel", "long-dividend-lowvol"):
+        for sid in ("mid-earnings-accel-vol", "long-dividend-lowvol"):
             (tmp_path / f"{d}_{sid}.json").write_text(json.dumps(
                 {"strategy_id": sid, "signal_date": d, "picks": [{"code": "000001", "ratio": 0.02}]}))
     monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: {"status": "pending"})
@@ -132,7 +132,7 @@ def test_sue_ladder_daily_pool_is_six_champions(tmp_path, monkeypatch):
     assert live_sue == champs
     assert demoted <= set(ms.RETIRED_STRATEGIES)
     assert set(ms.SUE_LADDER_DEMOTE_REASONS) == demoted
-    for sid in ("mid-forecast-beat", "mid-repurchase-plan-underreact", "mid-earnings-accel",
+    for sid in ("mid-forecast-beat", "mid-repurchase-plan-underreact",
                 "mid-ea-td-vol", "mid-turn-days-vol"):
         assert sid in ms.STRATEGIES
     for sid in ("mid-repurchase-plan", "mid-ncs-td-vol"):
@@ -161,15 +161,16 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     champs = set(ms.NON_SUE_NEAR_DUP_CHAMPIONS)
     protected = set(ms.NON_SUE_CULL_PROTECTED)
     sue = set(ms.SUE_LADDER_CHAMPIONS)
-    assert len(demoted) == 17 and len(champs) == 8
+    assert len(demoted) == 21 and len(champs) == 8
     assert not demoted & champs and not demoted & protected and not demoted & sue
     assert demoted <= set(ms.RETIRED_STRATEGIES)
     assert not demoted & set(ms.STRATEGIES)
     assert champs | protected | sue <= set(ms.STRATEGIES)
     live_mid = {sid for sid, meta in ms.STRATEGIES.items() if meta.get("horizon") == "mid"}
-    # 47→30 收敛后 +3：§993 mid-repurchase-incentive-dip（持10）、§997 mid-divplan-dip、§1000 mid-earnings-accel-dip（持5）
-    # +1：§1011 mid-sector-dip-stabilize（持5）
-    assert len(live_mid) == 34
+    # 47→30 收敛后 +3：§997 mid-divplan-dip、§1000 mid-earnings-accel-dip（持5）、§1011 mid-sector-dip-stabilize（持5）
+    # 2026-11-26 再退役 4 个（mid-earnings-accel / mid-fina-exp-drop / mid-sector-dip-stabilize /
+    # mid-repurchase-incentive-dip，见 NON_SUE_NEAR_DUP_DEMOTE_REASONS 的新增注释），30 → 26。
+    assert len(live_mid) == 30
     assert live_mid & sue == sue
     overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
     assert live_mid == overview

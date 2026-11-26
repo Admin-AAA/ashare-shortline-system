@@ -1038,13 +1038,26 @@ NON_SUE_NEAR_DUP_CHAMPIONS: tuple[str, ...] = (
 # 明确不因本轮近重复退出的策略。不在冠军元组里，但退役函数必须看见它们仍在 STRATEGIES。
 NON_SUE_CULL_PROTECTED: tuple[str, ...] = (
     "mid-sales-exp-vol",
-    "mid-earnings-accel",
     "mid-earnings-accel-vol",
     "mid-ea-td-vol",
     "mid-small-cap-weekly",
     "mid-smallcap-reversal-weekly",
 )
 NON_SUE_NEAR_DUP_DEMOTE_REASONS: dict[str, str] = {
+    # 2026-11-26 新增（LIVE formal 5064 笔扣费净收益 + 同期同持有期全市场基准超额，L-219 口径）：
+    # mid-earnings-accel 是唯一不放量的 EA 宽池，313 笔净均值 -1.30%/超额 -0.78%；
+    # 其中 126 笔独有信号 -3.64%（全表最差），187 笔被放量版覆盖的只有 +0.28%——
+    # 正 alpha 全部来自放量过滤（mid-earnings-accel-vol 独有 +2.08%），宽池本身在减分。
+    "mid-earnings-accel": "EA 事件不放量宽池。LIVE 313 笔净均值 -1.30%/超额 -0.78%，独有信号 126 笔 -3.64%，被放量版覆盖的 187 笔 +0.28%。正 alpha 全在放量过滤（mid-earnings-accel-vol），宽池退出。",
+    # mid-fina-exp-drop：财务同比下滑（负向事件），310 笔 -0.86%/超额 -2.34%，三窗仅 R12 +0.35。
+    # 负向事件的信息已被财报侧其他策略与风控覆盖，日频不值得单独出票。
+    "mid-fina-exp-drop": "财务同比下滑（负向事件）。LIVE 310 笔净均值 -0.86%/超额 -2.34%。负向信息量不足，退出。",
+    # mid-sector-dip-stabilize：板块企稳 27 笔净均值 -0.38%，样本不足且不稳。
+    "mid-sector-dip-stabilize": "板块企稳。LIVE 27 笔净均值 -0.38%，样本不足。退出。",
+    # mid-repurchase-incentive-dip：4 笔样本完全不足。
+    "mid-repurchase-incentive-dip": "回购×激励×回踩。LIVE 仅 4 笔且 -7.54%，样本不足。退出。",
+    # 注：mid-forecast-beat 与 mid-turn-days-vol 虽然超额为负/接近零，但两者分别在冠军元组
+    # （预喜宽池覆盖已反应预喜、营业周期效率轴唯一代表），下线会破坏覆盖结构，保留观察。
     "mid-repurchase-plan": "回购预案全量母集（金额/市值≥0.5%，持20，按比例排序）。R12 +1.35/PF1.32/n194、回撤 −14.0，中位数 +0.05。同事件弱反应持20（mid-repurchase-plan-underreact）R12 +2.98/PF1.80/n118。全量预案是弱母集，日频只留弱反应持20。",
     "mid-repurchase-underreact": "与冠军 mid-repurchase-plan-underreact 同一预案池、同一弱反应带（信号日 −1%~+2%、未涨停）、同一信号日涨跌排序，只把持有期改成 5 日。R12 +1.20/PF1.56/n127，低于持20的 +2.98。2026-11-03 日推持5的三只（神开股份、无锡振华、紫光国微）也出现在同日全量预案里。持有期是参数，不是第二条日频策略。",
     "mid-forecast-preincrease": "预增全量母集。R12 +1.73/PF1.36/n122、中位数 −0.65、彩票型。弱反应∩放量冠军 mid-forecast-preincrease-underreact-vol 为 R12 +5.90/PF3.31。全量预增退出日频。",

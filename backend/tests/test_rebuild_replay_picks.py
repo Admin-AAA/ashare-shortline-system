@@ -64,24 +64,28 @@ def test_replay_midlong_default_cap_writes_audit_and_overwrites(tmp_path, monkey
     monkeypatch.setattr("app.core.config.get_settings", lambda: SimpleNamespace(max_daily_picks_per_strategy=5))
     scores = [100, 90, 80, 70, 60, 60, 50]
     state = {"picks": [{"code": f"{i:06d}", "name": "n", "score": s} for i, s in enumerate(scores, 1)]}
-    monkeypatch.setattr(ms, "earnings_accel_candidates", lambda db, d: state["picks"])
+    # 2026-11-26：mid-earnings-accel 退役，改用放量版（走 eavol_candidates + ea_combo_rank）。
+    # ea_combo_rank 依赖 ann_pct_chg/total_mv 字段，mock 数据里没有，mock 成恒等保持原序。
+    import app.services.midterm_eavol as eavol
+    monkeypatch.setattr(eavol, "eavol_candidates", lambda db, d: state["picks"])
+    monkeypatch.setattr(ms, "ea_combo_rank", lambda rows: rows)
 
     staging = tmp_path / "stg" / "picks"
-    stats = rr.replay_midlong(None, "2026-10-16", "2026-10-16", ["mid-earnings-accel"], staging)
-    doc = json.loads((staging / "2026-10-16_mid-earnings-accel.json").read_text())
+    stats = rr.replay_midlong(None, "2026-10-16", "2026-10-16", ["mid-earnings-accel-vol"], staging)
+    doc = json.loads((staging / "2026-10-16_mid-earnings-accel-vol.json").read_text())
     assert doc["origin"] == "replay"
     assert [p["code"] for p in doc["picks"]] == [f"{i:06d}" for i in range(1, 7)]
     assert doc["daily_cap"]["cap"] == 5
     assert doc["daily_cap"]["cap_unit"] == "top_n_with_ties"
     assert doc["daily_cap"]["truncated_count"] == 1
     assert doc["daily_cap"]["truncated_codes"] == ["000007"]
-    assert stats["by_strategy"]["mid-earnings-accel"] == {"batches": 1, "picks": 6}
+    assert stats["by_strategy"]["mid-earnings-accel-vol"] == {"batches": 1, "picks": 6}
     assert list(prod.glob("*.json")) == [prod / "keep.json"]
 
     (staging.parent / "progress.json").unlink()
     state["picks"] = [{"code": f"{i:06d}", "name": "n", "score": 10 - i} for i in range(1, 4)]
-    rr.replay_midlong(None, "2026-10-16", "2026-10-16", ["mid-earnings-accel"], staging)
-    doc = json.loads((staging / "2026-10-16_mid-earnings-accel.json").read_text())
+    rr.replay_midlong(None, "2026-10-16", "2026-10-16", ["mid-earnings-accel-vol"], staging)
+    doc = json.loads((staging / "2026-10-16_mid-earnings-accel-vol.json").read_text())
     assert [p["code"] for p in doc["picks"]] == ["000001", "000002", "000003"]
     assert "daily_cap" not in doc
     assert ms.OUT_DIR == prod

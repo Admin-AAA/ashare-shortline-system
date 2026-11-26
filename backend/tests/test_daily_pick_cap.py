@@ -112,12 +112,17 @@ def test_generate_picks_end_to_end_cap_only_when_flagged(monkeypatch, tmp_path):
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     _set_cap(monkeypatch, 5)
     monkeypatch.setattr(ms, "_held_codes", lambda db, sid, d: {"000001"})  # 已持有的先剔除，再取前 5
-    monkeypatch.setattr(ms, "earnings_accel_candidates", lambda db, d: _picks(9))
-    res = ms.generate_picks(None, "2026-10-26", force=True, strategy_ids=["mid-earnings-accel"])
-    assert res == {"mid-earnings-accel": 8}  # generate_picks 默认不截断；rebuild_replay_picks 会传 apply_daily_cap=True
-    res = ms.generate_picks(None, "2026-10-26", force=True, strategy_ids=["mid-earnings-accel"], apply_daily_cap=True)
-    assert res == {"mid-earnings-accel": 5}
-    doc = json.loads((tmp_path / "2026-10-26_mid-earnings-accel.json").read_text())
+    # 2026-11-26：mid-earnings-accel 退役，改用放量版（走 eavol_candidates）。
+    # ea_combo_rank 依赖 ann_pct_chg/total_mv 字段做排序，mock 数据里没有，
+    # 同时把它 mock 成恒等，保持 _picks 的原始顺序以便断言。
+    import app.services.midterm_eavol as eavol
+    monkeypatch.setattr(eavol, "eavol_candidates", lambda db, d: _picks(9))
+    monkeypatch.setattr(ms, "ea_combo_rank", lambda rows: rows)
+    res = ms.generate_picks(None, "2026-10-26", force=True, strategy_ids=["mid-earnings-accel-vol"])
+    assert res == {"mid-earnings-accel-vol": 8}  # generate_picks 默认不截断；rebuild_replay_picks 会传 apply_daily_cap=True
+    res = ms.generate_picks(None, "2026-10-26", force=True, strategy_ids=["mid-earnings-accel-vol"], apply_daily_cap=True)
+    assert res == {"mid-earnings-accel-vol": 5}
+    doc = json.loads((tmp_path / "2026-10-26_mid-earnings-accel-vol.json").read_text())
     assert [p["code"] for p in doc["picks"]] == ["000002", "000003", "000004", "000005", "000006"]
     assert doc["daily_cap"]["truncated_count"] == 3
 
