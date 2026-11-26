@@ -775,6 +775,28 @@ class TushareStateProvider:
         rows = list(by_key.values())
         return rows
 
+    def daily_basic(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
+        # 每日估值快照按 trade_date 一次拉全市场（Tushare daily_basic，约 5500 行）并全量落库，
+        # 读侧 _StateViews.daily_basic 再按 requested_codes 取。缺值写 NULL，不写 0（L-213）。
+        target = _compact_day(request.trade_date)
+        frame = self._client.daily_basic(trade_date=target, fields="ts_code,trade_date,turnover_rate,pe_ttm,total_mv,circ_mv")
+        if frame is None or frame.empty:
+            return ()
+        rows: list[dict[str, Any]] = []
+        for _, item in frame.iterrows():
+            code = str(item.get("ts_code") or "").split(".")[0]
+            if len(code) != 6 or not code.isdigit():
+                continue
+            rows.append({
+                "code": code,
+                "trade_date": _iso_day(item.get("trade_date") or target),
+                "turnover_rate": _optional_number(item.get("turnover_rate")),
+                "pe_ttm": _optional_number(item.get("pe_ttm")),
+                "total_mv": _optional_number(item.get("total_mv")),
+                "circ_mv": _optional_number(item.get("circ_mv")),
+            })
+        return rows
+
     def auction(self, request: AuxiliaryDatasetRequest) -> Sequence[Mapping[str, Any]]:
         # 集合竞价按 trade_date 批量一次拉全市场（Tushare stk_auction）。
         # 逐股循环调 stk_auction 在无权限账号下会触发 N 次 API 错误；这里改成
