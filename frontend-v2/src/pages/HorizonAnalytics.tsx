@@ -27,8 +27,8 @@ const STATUS: Record<string, [string, string]> = {
 };
 const Status = ({ s }: { s: string }) => { const [l, c] = STATUS[s] ?? [s, "gray"]; return <span className={`hz-pill hz-pill--${c}`}>{l}</span>; };
 const Origin = ({ o }: { o: HorizonOrigin }) => <span className={`hz-pill hz-pill--${o === "live" ? "blue" : o === "replay" ? "amber" : "gray"}`} title={ORIGIN_TIP[o]}>{ORIGIN_LABEL[o]}</span>;
-const Kpi = ({ label, value, cls, sub }: { label: string; value: string; cls?: string; sub?: string }) => (
-  <div className="hz-kpi"><div className="hz-kpi__l">{label}</div><div className={`hz-kpi__v ${cls ?? ""}`}>{value}</div>{sub && <div className="hz-muted" style={{ fontSize: 11 }}>{sub}</div>}</div>
+const Kpi = ({ label, value, cls, sub, title }: { label: string; value: string; cls?: string; sub?: string; title?: string }) => (
+  <div className="hz-kpi" title={title}><div className="hz-kpi__l">{label}</div><div className={`hz-kpi__v ${cls ?? ""}`}>{value}</div>{sub && <div className="hz-muted" style={{ fontSize: 11 }}>{sub}</div>}</div>
 );
 function Seg<T extends string | number | null>({ value, options, onChange }: { value: T; options: [T, string][]; onChange: (v: T) => void }) {
   return (
@@ -41,13 +41,16 @@ function Seg<T extends string | number | null>({ value, options, onChange }: { v
 }
 
 /* ---------- 诊断 / 研究 ---------- */
-const STAT_HEAD = ["笔数", "胜率", "平均/笔", "中位", "盈亏比(PF)", "均盈/均亏", "最大亏损", "持有中"];
+const STAT_HEAD = ["笔数", "胜率", "平均/笔", "同期大盘", "超额/笔", "中位", "盈亏比(PF)", "均盈/均亏", "最大亏损", "持有中"];
+const BENCH_HINT = "同期大盘 = 同一信号日、同持有期买全市场等权组合（扣同样 0.3% 成本）的平均收益；超额 = 平均/笔 − 同期大盘。平均为负但超额为正，说明是市场在跌，不是选股出错。";
 function StatCells({ s }: { s: HorizonStats }) {
   return (
     <>
       <td className="r hz-num">{s.n}</td>
       <td className="r hz-num">{s.win_rate == null ? "—" : `${s.win_rate.toFixed(1)}%`}</td>
       <td className={`r hz-num ${pnl(s.avg_ret)}`}>{pct(s.avg_ret)}</td>
+      <td className={`r hz-num ${pnl(s.bench_avg_ret)}`} title={BENCH_HINT}>{pct(s.bench_avg_ret)}</td>
+      <td className={`r hz-num ${pnl(s.excess_avg_ret)}`} title={BENCH_HINT}>{pct(s.excess_avg_ret)}</td>
       <td className={`r hz-num ${pnl(s.median_ret)}`}>{pct(s.median_ret)}</td>
       <td className={`r hz-num ${s.profit_factor != null && s.profit_factor < 1 ? "hz-down" : ""}`}>{num(s.profit_factor)}</td>
       <td className="r hz-num">{num(s.pl_ratio)}</td>
@@ -87,6 +90,7 @@ export function HorizonMetricsPage({ horizon }: { horizon: H }) {
               <Kpi label="盈亏比（PF）" value={num(o.profit_factor)} />
               <Kpi label="均盈 / 均亏" value={num(o.pl_ratio)} sub={`${pct(o.avg_win)} / ${pct(o.avg_loss)}`} />
               <Kpi label="平均 / 笔" value={pct(o.avg_ret)} cls={pnl(o.avg_ret)} sub={`中位 ${pct(o.median_ret)}`} />
+              <Kpi label="超额 / 笔（对等权大盘）" value={pct(o.excess_avg_ret)} cls={pnl(o.excess_avg_ret)} sub={`同期大盘 ${pct(o.bench_avg_ret)} · ${o.bench_n ?? 0} 笔可比`} title={BENCH_HINT} />
               <Kpi label="逐笔累计" value={pct(o.total_ret, 1)} cls={pnl(o.total_ret)} />
               <Kpi label="最大单笔" value={`${pct(o.max_gain)} / ${pct(o.max_loss)}`} />
               <Kpi label="平均持有（交易日）" value={num(o.avg_days, 1)} sub={o.delayed_exit ? `跌停顺延 ${o.delayed_exit} 笔` : undefined} />
@@ -124,10 +128,11 @@ export function HorizonMetricsPage({ horizon }: { horizon: H }) {
             <section className="panel hz-pad">
               <div className="hz-sechead"><b>按信号月</b><span className="hz-muted">看收益是否集中在少数月份</span></div>
               <div className="hz-tablewrap"><table className="hz-table">
-                <thead><tr><th>月份</th><th className="r">已平仓</th><th className="r">胜率</th><th className="r">平均/笔</th><th className="r">累计</th><th className="r">持有中</th></tr></thead>
+                <thead><tr><th>月份</th><th className="r">已平仓</th><th className="r">胜率</th><th className="r">平均/笔</th><th className="r" title={BENCH_HINT}>同期大盘</th><th className="r" title={BENCH_HINT}>超额/笔</th><th className="r">累计</th><th className="r">持有中</th></tr></thead>
                 <tbody>{m.by_month.map((x) => (
                   <tr key={x.month}><td className="hz-num">{x.month}</td><td className="r hz-num">{x.n}</td><td className="r hz-num">{x.win_rate == null ? "—" : `${x.win_rate.toFixed(1)}%`}</td>
-                    <td className={`r hz-num ${pnl(x.avg_ret)}`}>{pct(x.avg_ret)}</td><td className={`r hz-num ${pnl(x.total_ret)}`}>{pct(x.total_ret, 1)}</td><td className="r hz-num">{x.holding}</td></tr>))}</tbody>
+                    <td className={`r hz-num ${pnl(x.avg_ret)}`}>{pct(x.avg_ret)}</td><td className={`r hz-num ${pnl(x.bench_avg_ret)}`}>{pct(x.bench_avg_ret)}</td><td className={`r hz-num ${pnl(x.excess_avg_ret)}`}>{pct(x.excess_avg_ret)}</td>
+                    <td className={`r hz-num ${pnl(x.total_ret)}`}>{pct(x.total_ret, 1)}</td><td className="r hz-num">{x.holding}</td></tr>))}</tbody>
               </table></div>
             </section>
           </div>

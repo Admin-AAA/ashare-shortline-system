@@ -283,7 +283,9 @@ export type HorizonTrade = Omit<HorizonPick, "total_mv"> & { strategy_id: string
 export type HorizonTradesResponse = { horizon: string; origin: string; total: number; trades: HorizonTrade[] };
 export type HorizonStats = { n: number; win_rate: number | null; avg_ret: number | null; median_ret: number | null; total_ret: number | null;
   pl_ratio: number | null; profit_factor: number | null; avg_win: number | null; avg_loss: number | null; max_gain: number | null; max_loss: number | null;
-  avg_days: number | null; delayed_exit: number; holding: number; pending: number; skipped: number; total_picks: number };
+  avg_days: number | null; delayed_exit: number; holding: number; pending: number; skipped: number; total_picks: number;
+  /** 同信号日、同持有期、同成本的全市场等权基准（EWALL.A）：平均基准收益与平均超额；能算出基准的笔数。 */
+  bench_n?: number; bench_avg_ret?: number | null; excess_avg_ret?: number | null };
 export type HorizonStrategyStats = HorizonStats & { strategy_id: string; strategy_name: string; hold_days: number; first_signal: string | null; last_signal: string | null };
 /** 策略画像「回放已平仓」：后端按信号日截近 365 天，不随诊断页 window_days 改变。 */
 export type HorizonPortraitRealized = {
