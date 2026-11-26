@@ -132,7 +132,7 @@ def active_alert_records(kind: str | None = None) -> list[dict[str, Any]]:
 # 还在，下一次 emit_alert 会重新登记，不会丢。
 ALERT_TTL_HOURS = float(os.environ.get("ASHARE_ALERT_TTL_HOURS", "24") or 24)
 _expire_lock = threading.Lock()
-_last_expire_at: float = 0.0
+_last_expire_at: float = float("-inf")  # monotonic 从开机起算，初值 0.0 会让开机后头一个冷却期内的第一次被误拦；-inf 表示「从没做过」
 EXPIRE_INTERVAL_SECONDS = 300.0
 
 

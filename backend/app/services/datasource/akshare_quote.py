@@ -52,7 +52,7 @@ _LOCK = threading.Lock()
 _STATE: dict[str, Any] = {
     "snap": None,        # {"rows": {code6: row}, "built_at": monotonic, "wall": datetime, "func": str, "n_raw": int}
     "inflight": None,    # Future
-    "last_start": 0.0,   # monotonic
+    "last_start": float("-inf"),   # monotonic；-inf=从没翻过页（0.0 会让开机后头 20 秒被误判限频）
     "fail_streak": 0,
     "cool_until": 0.0,
     "last_error": "",
@@ -292,7 +292,7 @@ def status() -> dict[str, Any]:
 
 def reset_for_tests() -> None:
     with _LOCK:
-        _STATE.update(snap=None, inflight=None, last_start=0.0, fail_streak=0, cool_until=0.0, last_error="", last_ok_wall=None)
+        _STATE.update(snap=None, inflight=None, last_start=float("-inf"), fail_streak=0, cool_until=0.0, last_error="", last_ok_wall=None)
 
 
 class AkshareSnapshotProvider:

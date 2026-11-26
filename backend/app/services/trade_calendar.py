@@ -38,7 +38,7 @@ EXCHANGE = "SSE"
 SYNC_BACK_DAYS = 400
 SYNC_AHEAD_DAYS = 60
 SYNC_COOLDOWN_SECONDS = 600.0
-_last_sync_attempt = 0.0
+_last_sync_attempt = float("-inf")  # monotonic 从开机起算，初值 0.0 会让开机后头一个冷却期内的第一次被误拦；-inf 表示「从没做过」
 _sync_lock = threading.Lock()
 
 
