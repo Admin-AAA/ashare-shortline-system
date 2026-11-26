@@ -24,8 +24,7 @@ import polars as pl
 
 from lt_research46 import PH
 from lt_research import fixed
-from lt_research46 import full_metrics
-from realistic import run_real
+from realistic import metrics_real, run_real
 
 c = pl.col
 R = os.path.join(os.path.dirname(__file__), "..", "..", "output", "research")
@@ -93,7 +92,8 @@ if __name__ == "__main__":
             w = sim.filter(c(sig) & c("trade_date").is_between(pl.lit(s), pl.lit(e)))
             res.setdefault("_info", {}).setdefault(ph, {})[name] = {"n_sig": w.height, "sigdays": w["trade_date"].n_unique()}
             t, cur = run_real(sim, sig, sc, fixed(HOLD), s, e, k_slots=K, max_new=MAX_NEW, max_hold=HOLD)
-            m = full_metrics(sim, t, cur)
+            # 同市值超额在评估脚本里另算（cohort_bench 的分位按 liq 老股池，次新股自身不在池内）
+            m = {k: float(v) for k, v in metrics_real(t, cur).items()}
             if t is not None and t.height:
                 m["p05"] = round(100 * float(t["ret"].quantile(0.05)), 2)
                 t.write_csv(os.path.join(od, f"trades_{name}_{ph.split()[0]}.csv"))

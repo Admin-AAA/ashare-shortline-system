@@ -21,10 +21,11 @@ import polars as pl
 
 c = pl.col
 B = os.path.join(os.path.dirname(__file__), "..", "..")
-D = os.path.join(B, "output", "research", "s1059")
+# 用法：pan_s1059_eval.py [研究目录名 s1059|s1063|...] [版本名...]；默认 s1059 的五个版本
+D = os.path.join(B, "output", "research", sys.argv[1] if len(sys.argv) > 1 else "s1059")
 PANEL = os.path.join(B, "output", "research", "s1058", "panel_qvix.parquet")
-NAMES = ["RPDROP_h5", "SMALL_h5", "VALUE_h5", "RPLAN_h5", "REF_LIQ"]
-NEW = NAMES[:4]
+NAMES = sys.argv[2:] or ["RPDROP_h5", "SMALL_h5", "VALUE_h5", "RPLAN_h5", "REF_LIQ"]
+NEW = [n for n in NAMES if n != "REF_LIQ"]
 R12_S, R12_E = "2025-10-01", "2026-10-16"
 
 
@@ -121,9 +122,11 @@ if __name__ == "__main__":
             t = trades(name, tag)
             if t is None:
                 continue
-            bench = round(100 * float(cohort_bench(pan, t.select("code", "entry", "exit"))["bench"].mean()), 2)
+            bm = cohort_bench(pan, t.select("code", "entry", "exit"))["bench"].mean()
+            # 次新股不在 liq 分位池里时取不到同市值对照，记 None
+            bench = None if bm is None else round(100 * float(bm), 2)
             avg = allres.get(name, {}).get(ph, {}).get("avg")
             out.setdefault("excess", {}).setdefault(name, {})[tag] = {
-                "bench": bench, "excess": None if avg is None else round(avg - bench, 2)}
+                "bench": bench, "excess": None if avg is None or bench is None else round(avg - bench, 2)}
     json.dump(out, open(os.path.join(D, "overlap.json"), "w"), indent=1, ensure_ascii=False)
     print(json.dumps(out, indent=1, ensure_ascii=False))
