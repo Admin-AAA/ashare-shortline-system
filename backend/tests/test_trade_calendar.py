@@ -14,7 +14,7 @@ def db(monkeypatch):
     engine = create_engine("sqlite:///:memory:")
     TradeCalendar.__table__.create(engine)
     s = Session(engine)
-    monkeypatch.setattr(tc, "_last_sync_attempt", 0.0)
+    monkeypatch.setattr(tc, "_last_sync_attempt", float("-inf"))
     yield s
     s.close()
 

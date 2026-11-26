@@ -241,7 +241,7 @@ def _resolve_aux_prefetch_count(
     return min(prefiltered_count, max(min_prefilter_count, bounded_max), bounded_max)
 
 
-_outcome_backfill_ts = 0.0
+_outcome_backfill_ts = float("-inf")  # monotonic 从开机起算，初值 0.0 会让开机后头一个冷却期内的第一次被误拦；-inf 表示「从没做过」
 _trigger_recommendation = trigger_recommendation
 
 

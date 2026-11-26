@@ -75,7 +75,7 @@ def open_days_after(db: Session, start_exclusive: str, end_inclusive: str) -> li
 CALENDAR_GAP_ALERT_KIND = "trade_calendar_not_covering"
 CALENDAR_GAP_ALERT_KEY = "SSE"
 _RESOLVE_CHECK_INTERVAL = 600.0
-_last_resolve_check = 0.0
+_last_resolve_check = float("-inf")  # monotonic 从开机起算，初值 0.0 会让开机后头一个冷却期内的第一次被误拦；-inf 表示「从没做过」
 
 
 def _alert_calendar_gap(last: str | None, needed: str) -> None:
