@@ -2,7 +2,7 @@
 """删除现有推荐记录并用当前上线策略回放重建（短线 + 中线 + 长线）。
 
 默认 --dry-run：只读盘点 + 计划 + 中长线在临时目录试跑，**不删、不写生产表/生产 picks 目录**。
-真正执行需同时给 --execute --confirm DELETE-AND-REBUILD，且不得在 16:35–18:35 运行。
+真正执行需同时给 --execute --confirm DELETE-AND-REBUILD，且不得在 21:00–23:35（晚间补数 / 21:30 出票 / 22:30 R12 / 23:30 研究缓存）运行。
 
 口径：
 - 短线：委托 scripts/replay_all_days.py（正式管线 + local_pool + trade_date_override 截断到当日，
@@ -400,13 +400,13 @@ def onboard_strategy(db, strategy_id: str, *, today: str | None = None, dry_run:
 
 # ---------------------------------------------------------------- execute
 def _in_blackout(now: dt.datetime) -> bool:
-    return dt.time(16, 35) <= now.time() <= dt.time(18, 35)
+    return dt.time(21, 0) <= now.time() < dt.time(23, 35)
 
 
 def execute(db, args, short_rng, mid_rng, strategies) -> dict:
     from app.services import midterm_service as ms
     if _in_blackout(dt.datetime.now()):
-        raise SystemExit("16:35–18:35 禁止运行（17:35 日更窗口）")
+        raise SystemExit("21:00–23:35 禁止运行（晚间补数 / 21:30 出票 / 22:30 R12 / 23:30 研究缓存）")
     keep = args.keep_live_forward
     report: dict = {"deleted": {}}
     # 1) 中长线先在 staging 生成，成功后再删再换，避免删了生成失败

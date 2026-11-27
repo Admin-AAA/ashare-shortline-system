@@ -98,8 +98,10 @@ def test_onboard_disabled_by_default(monkeypatch):
 
 def test_blackout_window():
     import datetime as dt
-    assert rr._in_blackout(dt.datetime(2026, 10, 19, 17, 35))
-    assert not rr._in_blackout(dt.datetime(2026, 10, 19, 19, 0))
+    assert rr._in_blackout(dt.datetime(2026, 10, 19, 21, 0))
+    assert rr._in_blackout(dt.datetime(2026, 10, 19, 23, 34))
+    assert not rr._in_blackout(dt.datetime(2026, 10, 19, 17, 35))  # 出票 2026-11-24 起已不在 17:35
+    assert not rr._in_blackout(dt.datetime(2026, 10, 19, 23, 35))
 
 
 def test_delete_order_children_first():

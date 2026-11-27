@@ -1,6 +1,6 @@
 """回填 daily_basic（换手率/PE/市值）——经统一网关，按交易日幂等覆盖。
 
-守卫：research: 熔断命名空间；盘中 9:15–15:05 与日更窗口 16:35–18:35 拒绝运行；
+守卫：research: 熔断命名空间；盘中 9:15–15:05 与晚间补数/出票窗口 21:00–23:35 拒绝运行；
 任一上游当日额度用到 60%（或报日限）即停。
 
   PYTHONPATH=. .venv/bin/python scripts/backfill_daily_basic.py --start 2026-10-12 --end 2026-10-16
@@ -22,7 +22,7 @@ from app.db.session import SessionLocal  # noqa: E402
 from app.services.daily_basic_ingest import check_daily_basic_staleness, ingest_daily_basic  # noqa: E402
 
 PROVIDERS = ("promax", "quantdata")
-BLOCKED_WINDOWS = ((time(9, 15), time(15, 5), "盘中"), (time(16, 35), time(18, 35), "日更窗口"))
+BLOCKED_WINDOWS = ((time(9, 15), time(15, 5), "盘中"), (time(21, 0), time(23, 35), "晚间补数/出票窗口"))
 
 
 def blocked_window(now: datetime | None = None) -> str | None:

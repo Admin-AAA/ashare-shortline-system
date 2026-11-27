@@ -1,4 +1,4 @@
-"""按交易日回填历史全市场 日K / daily_basic / 资金流（Tushare，一日 3 次调用，限速、可续跑、避开日更窗口）。
+"""按交易日回填历史全市场 日K / daily_basic / 资金流（Tushare，一日 3 次调用，限速、可续跑、避开晚间补数/出票窗口）。
 
 为 2–3 年多市况回测补数据（sprint2）。只写 OHLCV/成交额/涨跌幅/换手（daily+daily_basic），
 指标列不在这里写——跑完后用 scripts/backfill_indicators.py --start/--end 本地算（MA/MACD/RSI/KDJ/BOLL 等）。
@@ -17,8 +17,8 @@ from app.db.session import SessionLocal
 from app.services.tushare_client import get_pro
 from app.services.data_gap_remediation_service import _daily_kbar_payload, _upsert_daily_kbar_payload
 
-# 生产日更（17:35 post_sync，约 20 分钟；21:00 兜底补数）期间暂停，避免抢 Tushare 配额。
-QUIET = ((17, 0, 19, 45), (20, 50, 21, 45))
+# 生产晚间任务（21:00 补数、21:30 出票、22:15 watchdog、22:30 R12、23:30 研究缓存）期间暂停，避免抢 Tushare 配额。
+QUIET = ((20, 50, 23, 40),)
 
 def _quiet_wait():
     while True:

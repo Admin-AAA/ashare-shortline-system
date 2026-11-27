@@ -94,7 +94,9 @@ def test_backfill_script_blocked_windows():
     tz = timezone(timedelta(hours=8))
     mon = datetime(2026, 10, 19, tzinfo=tz)
     assert mod.blocked_window(mon.replace(hour=10)) == "盘中"
-    assert mod.blocked_window(mon.replace(hour=17)) == "日更窗口"
+    assert mod.blocked_window(mon.replace(hour=21, minute=30)) == "晚间补数/出票窗口"
+    assert mod.blocked_window(mon.replace(hour=17)) is None  # 出票 2026-11-24 起已不在 17:35
+    assert mod.blocked_window(mon.replace(hour=23, minute=35)) is None
     assert mod.blocked_window(mon.replace(hour=15, minute=10)) is None
     assert mod.blocked_window(datetime(2026, 10, 18, 10, tzinfo=tz)) is None
 

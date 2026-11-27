@@ -36,7 +36,8 @@ OUT_ROOT = BACKEND_ROOT / "output" / "strategy_health"
 LATEST = OUT_ROOT / "rolling_r12_latest.json"
 MIN_TRADES = 30
 WARMUP_DAYS = 100  # 自然日，约 70 个交易日，覆盖长线 60 日持有，让窗口开头的「已持有不重复买」与实盘一致
-BLACKOUTS = ((_dt.time(9, 15), _dt.time(15, 5)), (_dt.time(16, 35), _dt.time(18, 35)))
+# 交易时段 + 21:00 晚间补数到 21:30 出票跑完（22:15 watchdog 之后）；22:30 本任务自己的定时不在窗口内。
+BLACKOUTS = ((_dt.time(9, 15), _dt.time(15, 5)), (_dt.time(21, 0), _dt.time(22, 30)))
 # 短线回放（历史重建 historical_reconstruction）覆盖终点：这天及以前只用回放，之后只用实盘，两段不重叠、不混算。
 # 优先从库里读（short_replay_coverage_end），读不到才用这个常量兜底：
 # 2025-10-20 ~ 2026-10-16 的全量重建（scripts/rebuild_replay_picks.py，2026-10-19）。
@@ -457,7 +458,7 @@ def run_monthly(db, *, force: bool = False, now: _dt.datetime | None = None,
 
     now = now or _now()
     if in_blackout(now) and not force:
-        return {"status": "skipped", "summary_text": "交易时段 / 盘后日更窗口内不跑滚动重算"}
+        return {"status": "skipped", "summary_text": "交易时段 / 21:00–22:30 晚间补数与出票窗口内不跑滚动重算"}
     cutoff = _latest_trade_date(db)
     month = now.strftime("%Y-%m")
     root = out_root or OUT_ROOT

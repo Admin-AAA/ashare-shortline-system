@@ -2,7 +2,7 @@
 
 判定：被删索引的列序列是另一个（保留）索引列序列的前缀（或完全相同）；唯一键/主键永不删除。
 执行前逐个校验覆盖关系，不满足则跳过；用 ALGORITHM=INPLACE, LOCK=NONE（仅元数据，瞬时）。
-默认 dry-run；--apply 才执行。执行应在非交易时段、非 16:35–18:35 窗口、active_work_check 为 idle 时进行。
+默认 dry-run；--apply 才执行。执行应在非交易时段、非 21:00–23:35 晚间补数/出票窗口、active_work_check 为 idle 时进行。
 
   PYTHONPATH=. .venv/bin/python scripts/p2_drop_redundant_indexes.py            # dry-run
   PYTHONPATH=. .venv/bin/python scripts/p2_drop_redundant_indexes.py --apply
@@ -57,7 +57,7 @@ def in_blocked_window(now: datetime | None = None) -> bool:
     t = now.time()
     if now.weekday() < 5 and time(9, 15) <= t < time(15, 5):
         return True
-    return time(16, 35) <= t < time(18, 35)
+    return time(21, 0) <= t < time(23, 35)
 
 
 def main() -> int:

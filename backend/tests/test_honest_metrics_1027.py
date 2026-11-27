@@ -402,7 +402,8 @@ def test_rolling_trade_stats_and_blackout():
     assert st["n"] == 30 and st["avg"] == pytest.approx(0.33, abs=0.01) and st["verdict"] == "positive"
     assert trade_stats([1.0] * 5)["verdict"] == "insufficient_sample"
     assert trade_stats([-1.0] * 40)["verdict"] == "negative"
-    assert in_blackout(dt.datetime(2026, 10, 27, 10, 0)) and in_blackout(dt.datetime(2026, 10, 27, 17, 0))
+    assert in_blackout(dt.datetime(2026, 10, 27, 10, 0)) and in_blackout(dt.datetime(2026, 10, 27, 21, 30))
+    assert not in_blackout(dt.datetime(2026, 10, 27, 17, 0))  # 出票 2026-11-24 起已不在 17:35
     assert not in_blackout(dt.datetime(2026, 10, 27, 22, 30))
 
 

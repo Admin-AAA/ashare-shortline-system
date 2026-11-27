@@ -5,7 +5,7 @@
 
 约束（不要抢日更的限流窗口 / quantdata 日额度）：
 - 默认只走 promax provider（不碰 quantdata 日额度；--provider quantdata 可提速，但受 --budget-fraction 日额度预算限制）；两次请求间隔 --sleep 秒（默认 8）；
-- 17:25-18:45、20:55-21:50 自动暂停（日更 17:35 / 晚间补数 21:00），工作日 09:10-15:10 也暂停；
+- 20:55-23:40 自动暂停（21:00 晚间补数 / 21:30 出票 / 22:30 R12 / 23:30 研究缓存），工作日 09:10-15:10 也暂停；
 - 可断点续跑：已有 >= --min-rows 行的日期跳过；失败的日期稍后在下一轮重试。
 
 用法（backend 目录）：
@@ -27,7 +27,7 @@ from sqlalchemy.dialects.mysql import insert as mysql_insert  # noqa: E402
 from app.db.session import SessionLocal  # noqa: E402
 from app.models.tables import StkLimit  # noqa: E402
 
-BLOCKED = ((dt.time(17, 25), dt.time(18, 45)), (dt.time(20, 55), dt.time(21, 50)))
+BLOCKED = ((dt.time(20, 55), dt.time(23, 40)),)
 MARKET_HOURS = (dt.time(9, 10), dt.time(15, 10))
 
 
@@ -40,7 +40,7 @@ def _blocked_now(now: dt.datetime) -> bool:
 
 def _wait_if_blocked() -> None:
     while _blocked_now(dt.datetime.now()):
-        print(f"{dt.datetime.now():%H:%M:%S} 处于日更/交易时段，暂停 5 分钟", flush=True)
+        print(f"{dt.datetime.now():%H:%M:%S} 处于晚间补数出票/交易时段，暂停 5 分钟", flush=True)
         time.sleep(300)
 
 
