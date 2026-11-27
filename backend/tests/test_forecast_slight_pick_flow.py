@@ -36,7 +36,7 @@ class _DB:
 
 @pytest.fixture
 def isolated(monkeypatch, tmp_path):
-    # 略增两只 2026-11-28 按全期复核恢复现役（L-239），直接用现役定义，防止分支再次落穿通用选股池。
+    # 略增两只 2026-11-28 按全期复核恢复现役（L-240），直接用现役定义，防止分支再次落穿通用选股池。
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     monkeypatch.setattr(ms, "_held_codes", lambda db, sid, d: set())
     monkeypatch.setattr(ms, "check_daily_basic_staleness", lambda *a, **k: {"stale": False})

@@ -954,7 +954,7 @@ SUE_LADDER_CHAMPIONS: tuple[str, ...] = (
     "mid-qn-sue-vol",      # 单季总资产净利率
     "mid-curr-sue-vol",    # 流动比率
     "mid-sue-td-vol",      # 营业周期
-    # 2026-11-28 全期复核恢复（L-239）：相对其余现役的独有信号全期扣费合计为正、0.27% 费用下仍为正，去掉会少赚。
+    # 2026-11-28 全期复核恢复（L-240）：相对其余现役的独有信号全期扣费合计为正、0.27% 费用下仍为正，去掉会少赚。
     # 独有票都很少（1–4 笔，全在 2022-04~2025-09 研究段），列为观察项。
     "mid-udp-sue-vol",     # 每股未分配利润
     "mid-ocf-sue-vol",     # 经营现金流同比
@@ -1006,7 +1006,7 @@ def sue_ladder_rejected_rows() -> list[dict[str, str]]:
             f"日频只留 {champs}。"
             "其余同骨架策略（SUE≥2.2∩业绩加速∩放量，再叠一条财务轴）退出 21:30 盘后出票与 /mid 现役列表；"
             "定义、回测指标与历史选股保留，按策略 id 仍可查旧批次。"
-            "去留按全期（2022-04 起）独有信号扣费合计判断（L-235、L-239）：下面各条的独有票与现役冠军重叠后为 0～1 笔或合计不为正，"
+            "去留按全期（2022-04 起）独有信号扣费合计判断（L-235、L-240）：下面各条的独有票与现役冠军重叠后为 0～1 笔或合计不为正，"
             "单条原因里的近 12 个月数字只是当初的退役记录。"
         ),
     }]
@@ -1059,7 +1059,7 @@ NON_SUE_CULL_PROTECTED: tuple[str, ...] = (
     "mid-sales-exp-drop",
     "mid-dividend-increase-vol",
     "mid-forecast-preincrease-underreact-vol",
-    # 2026-11-28 全期复核恢复（L-239）：相对其余现役的独有信号全期扣费合计为正、0.27% 费用下仍为正。
+    # 2026-11-28 全期复核恢复（L-240）：相对其余现役的独有信号全期扣费合计为正、0.27% 费用下仍为正。
     # 除 mid-repurchase-underreact 与 mid-smallcap-dividend-weekly 外超额合计为负，是观察项。
     "mid-forecast-slight",
     "mid-forecast-turnaround",
@@ -1087,7 +1087,7 @@ NON_SUE_NEAR_DUP_DEMOTE_REASONS: dict[str, str] = {
     # 全期扣费合计为负，去掉不少赚，维持退出：
     "mid-turn-days-vol": "营业周期缩短∩放量。全期（2022-04 起）独有信号扣费净收益合计为负（约 −185%），去掉不少赚，退出。",
     "mid-ea-cas-vol": "业绩加速∩流动资产占比上升∩放量。全期（2022-04 起）独有信号扣费净收益合计约 −40%、超额为负，去掉不少赚，退出；业绩加速放量与流动资产占比放量仍各自出票。",
-    # 2026-11-28 全期复核（L-239；output/research/fullhist-retire-20261127/audit2.txt），相对现役的独有信号：
+    # 2026-11-28 全期复核（L-240；output/research/fullhist-retire-20261127/audit2.txt），相对现役的独有信号：
     "mid-repurchase-plan": "回购预案全量母集。全期独有 153 笔扣 0.07% 合计 +24%，按生产 0.27% 费用合计 −6%，扣真实成本后不赚，维持退出。",
     "mid-forecast-preincrease": "预增全量母集。单独看全期独有 89 笔 +111%，但与恢复的预增放量版重叠后只剩 36 笔，0.27% 费用下 −0.3%，维持退出。",
     "mid-incentive-underreact": "期权激励再套弱反应硬过滤。全期独有 0 笔，推的票现役期权宽池与放量版全部覆盖，维持退出。",

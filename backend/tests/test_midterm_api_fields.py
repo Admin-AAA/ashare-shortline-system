@@ -127,7 +127,7 @@ def test_retired_strategies_not_live():
 
 
 def test_sue_ladder_daily_pool_is_baseline_only(tmp_path, monkeypatch):
-    """日频留 SUE 基线 mid-sue-accel-vol 和十条质量轴变体（L-235、L-239 全期复核）；其余 30 条不进 STRATEGIES / generate_picks / /mid 列表。历史标注仍走 RETIRED。"""
+    """日频留 SUE 基线 mid-sue-accel-vol 和十条质量轴变体（L-235、L-240 全期复核）；其余 30 条不进 STRATEGIES / generate_picks / /mid 列表。历史标注仍走 RETIRED。"""
     champs = set(ms.SUE_LADDER_CHAMPIONS)
     demoted = set(ms.SUE_LADDER_DEMOTED)
     assert champs == {"mid-sue-accel-vol", "mid-sexp-sue-vol", "mid-ocfs-sue-vol", "mid-qn-sue-vol",
@@ -168,7 +168,7 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     sue = set(ms.SUE_LADDER_CHAMPIONS)
     restored = {"mid-repurchase-incentive-dip", "mid-earnings-accel-dip", "mid-forecast-beat", "mid-sales-exp-drop",
                 "mid-dividend-increase-vol", "mid-forecast-preincrease-underreact-vol",
-                # 2026-11-28 第二轮全期复核（L-239）
+                # 2026-11-28 第二轮全期复核（L-240）
                 "mid-forecast-slight", "mid-forecast-turnaround", "mid-forecast-slight-vol",
                 "mid-forecast-slight-underreact", "mid-forecast-preincrease-vol", "mid-ncs-td-vol",
                 "mid-repurchase-underreact", "mid-tad-etd-vol", "mid-smallcap-dividend-weekly"}
@@ -192,7 +192,7 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     # 2026-11-27 夜全期（2022-04 起）复核：SUE 五条与 mid-repurchase-incentive-dip / mid-earnings-accel-dip /
     # mid-forecast-beat / mid-sales-exp-drop / mid-dividend-increase-vol / mid-forecast-preincrease-underreact-vol
     # 的独有信号扣费合计为正，去掉会少赚，恢复（L-238）：18 → 29。
-    # 2026-11-28 更早退役的 57 条按同一口径（相对现役、0.27% 费用下仍为正）复核，再恢复 14 条（L-239）：29 → 43。
+    # 2026-11-28 更早退役的 57 条按同一口径（相对现役、0.27% 费用下仍为正）复核，再恢复 14 条（L-240）：29 → 43。
     assert len(live_mid) == 43
     assert restored <= live_mid
     assert live_mid & sue == sue
