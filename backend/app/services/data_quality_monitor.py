@@ -1515,6 +1515,35 @@ def check_short_replay_version(db) -> dict[str, Any]:
     return short_replay_version_item(short_replay_version_rows(db))
 
 
+# 长远目标三指标（goal_metrics）：去重近 12 月滚动超额 > 0、逐月为正 ≥ 8/12、每策略独有信号超额 > 0。
+GOAL_METRICS_KEY = "formal:goal_metrics_mid"
+
+
+def goal_metrics_item(g: dict[str, Any]) -> dict[str, Any]:
+    from app.services.goal_metrics import summary_text
+
+    fails = []
+    if not g["rolling_excess_pass"]:
+        fails.append("滚动超额未>0")
+    if not g["positive_months_pass"]:
+        fails.append(f"逐月为正 {g['positive_months']}/{g['month_count']}")
+    if g["strategies_failing"]:
+        fails.append(f"{len(g['strategies_failing'])} 个策略独有信号超额为负")
+    sev = GREEN if not fails else YELLOW
+    detail = summary_text(g) + ("" if sev == GREEN else "。未达标：" + "、".join(fails))
+    return _item(GOAL_METRICS_KEY, "中线长远目标三指标", "盘后出票", sev, kind="job", latest=g["window_end"], detail=detail,
+                 impact="去重口径下系统是否稳定跑赢买全市场；独有信号超额为负的策略只贡献敞口不贡献收益（L-224/L-229）")
+
+
+def check_goal_metrics(db) -> dict[str, Any]:
+    from app.services import goal_metrics as gm
+    from app.services import horizon_analytics as ha
+    from app.services import midterm_service as ms
+
+    g = gm.compute(ha.trades(db, "mid"), [k for k, v in ms.STRATEGIES.items() if v.get("horizon") == "mid"])
+    return goal_metrics_item(g)
+
+
 def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -> dict[str, Any]:
     now = now or _now()
     _CHECK_TIMINGS.clear()
@@ -1580,6 +1609,8 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     _rollback(db)
     items += _safe("rolling_r12", ROLLING_R12_KEY, "盘后出票", "job", lambda: [check_rolling_r12(db, open_days, now)])
     items += _safe("短线回放版本", SHORT_REPLAY_VERSION_KEY, "盘后出票", "job", lambda: [check_short_replay_version(db)])
+    _rollback(db)
+    items += _safe("中线长远目标三指标", GOAL_METRICS_KEY, "盘后出票", "job", lambda: [check_goal_metrics(db)])
     _rollback(db)
     _rollback(db)
     items += _safe("log", "log:*", "静默失败", "log", lambda: check_log_signals(now))
