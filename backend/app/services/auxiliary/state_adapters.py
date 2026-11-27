@@ -1053,7 +1053,7 @@ class _StateViews:
                 "trade_date_covered": bool(rows),
                 "covered_trade_date": target if rows else None,
                 # 读的是前一交易日（按 L-163/L-167 口径盘后决策时刻可见的最新一期），覆盖校验要按「为哪个信号日
-                # 服务」判定；只有恰好是前一交易日才算覆盖，入库断档时仍判缺失（L-170）。
+                # 服务」判定；只有恰好是前一交易日才算覆盖，入库断档时仍判缺失（L-173）。
                 "decision_visible_for": (
                     self._target(request) if rows and target == self._previous_trading_day(request) else None
                 ),

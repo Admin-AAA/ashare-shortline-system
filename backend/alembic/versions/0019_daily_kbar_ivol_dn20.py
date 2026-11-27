@@ -1,4 +1,4 @@
-"""Add daily_kbars.ivol_dn20 (个股20日特质下行半波动，对中证500残差下行半标准差；L-099 v4 否决用)."""
+"""Add daily_kbars.ivol_dn20 (个股20日特质下行半波动，对中证500残差下行半标准差；L-109 v4 否决用)."""
 from __future__ import annotations
 
 from alembic import op

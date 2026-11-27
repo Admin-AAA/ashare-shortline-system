@@ -66,7 +66,7 @@ def test_empty_window_returns_none():
     assert res is None
 
 
-# ── L-099：D 项待结算管道（防「n 不变 = 系统停摆/闸门饿死」误读）─────────────
+# ── L-101：D 项待结算管道（防「n 不变 = 系统停摆/闸门饿死」误读）─────────────
 
 def test_pending_pipeline_stats_basic():
     rows = [("2026-09-09", 7), ("2026-09-10", 8), ("2026-09-11", 10)]

@@ -51,7 +51,7 @@ def _session_with_kbars(*days):
 
 
 def test_dragon_tiger_previous_day_counts_as_covered_for_signal_day():
-    """L-170：读前一交易日榜单是设计行为，覆盖校验不能因此把全市场判成龙虎榜缺失。"""
+    """L-173：读前一交易日榜单是设计行为，覆盖校验不能因此把全市场判成龙虎榜缺失。"""
     from app.services.feature_builder import _dragon_tiger_trade_date_covered
 
     s = _session_with_kbars("2026-09-01", "2026-09-02")
