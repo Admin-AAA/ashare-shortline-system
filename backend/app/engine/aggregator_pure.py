@@ -354,7 +354,7 @@ def resolve_score_line_context(
     weak_cap = getattr(selection_policy, "weak_regime_score_cap", None)
     if weak_cap is not None and market_base == "弱势":
         effective = round(min(effective, float(weak_cap)), 2)
-    # regime×情绪 组合硬覆盖（L-060，最高优先级）：对 policy 声明的组合直接用
+    # regime×情绪 组合硬覆盖（L-070，最高优先级）：对 policy 声明的组合直接用
     # 指定分数线，盖过 market_base/sentiment/climax/weak_cap 的一切叠加。用于
     # 精细放行已验证正期望的组合（具体阈值由版本化 policy artifact 持有），
     # 而保持负期望组合（偏多·高潮）的拦截。
@@ -1092,7 +1092,7 @@ def apply_pool_rules(
                 "eliminated": True,
             })
         deduped = kept_after_dd
-    # v28 均线支撑闸门（L-131）：要求当日站上 MA5 或 MA10。
+    # v28 均线支撑闸门：要求当日站上 MA5 或 MA10。
     if selection_policy is not None and bool(getattr(selection_policy, "require_ma_support", False)):
         kept_after_support: list[dict[str, Any]] = []
         for card in deduped:
@@ -1108,7 +1108,7 @@ def apply_pool_rules(
             card.setdefault("policy_verdict_steps", []).append({
                 "rule_id": "require_ma_support",
                 "action": "drop",
-                "reason": "当日既未站上 MA5 也未站上 MA10（L-131 均线支撑闸门）",
+                "reason": "当日既未站上 MA5 也未站上 MA10（均线支撑闸门）",
                 "eliminated": True,
             })
         deduped = kept_after_support
@@ -1289,7 +1289,7 @@ def apply_pool_rules(
         # 以决策时口径读取，不受任何回溯重标影响。regime_strong_penalty 默认 0.0，
         # 仅在结构性强势(+4)/强势(+8) 分支被覆盖（见下方 if/elif）。
         card["_regime_strong_penalty"] = 0.0
-        # L-060: 市场级 regime×情绪 override 已放行该组合时,跳过 per-card 的
+        # L-070: 市场级 regime×情绪 override 已放行该组合时,跳过 per-card 的
         # 强势/结构性强势/support_ma5 regime 惩罚——否则市场级放行会被 per-card
         # 惩罚(结构性强势+4等)抵消,override 失效。override 组合已经大样本 OOS
         # 验证正期望,该组合下不再叠加 regime 侧门槛。
@@ -1325,7 +1325,7 @@ def apply_pool_rules(
         if _snapshot_regime == STRUCTURAL_STRONG_HARD_VETO_REGIME:
             # 结构性强势：+4 提线（历史验证的筛选价值）与 veto（999 全拦）解耦——
             # 2026-08-02 用户决策默认关闭 veto，但 +4 门槛仍保留。
-            # L-060: 市场级 regime×情绪 override 已放行该组合时跳过此 +4（大样本
+            # L-070: 市场级 regime×情绪 override 已放行该组合时跳过此 +4（大样本
             # OOS 验证结构性强势日放行 +1.77%/WR51%,与旧小样本 n=14 结论相反）。
             card["_regime_strong_penalty"] = 4.0
             if _structural_veto:

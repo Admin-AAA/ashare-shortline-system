@@ -106,7 +106,7 @@
 
 # 2026-11-27 复核：删除失效条目
 
-核验对象：L-001～L-225 中状态为 `retired`、`superseded` 的条目，以及引用已下线机制或一次性观察的 `active`/`encoded` 条目。核验方法：在当前 `main` 上搜索每条约束的字段、函数、脚本与配置是否仍被现行代码使用，对照 `production_selection.v31.json` 与生产库，并检查后续条目是否已完整承载其规则。共删除 32 条，编号永久退役，原文只通过 Git 历史追溯。
+核验对象：L-001～L-225 中状态为 `retired`、`superseded` 的条目，以及引用已下线机制或一次性观察的 `active`/`encoded` 条目。核验方法：在当前 `main` 上搜索每条约束的字段、函数、脚本与配置是否仍被现行代码使用，对照 `production_selection.v31.json` 与生产库，并检查后续条目是否已完整承载其规则。共删除 34 条，编号永久退役，原文只通过 Git 历史追溯。
 
 ## self-improve 循环专属规则
 
@@ -119,6 +119,8 @@ L-017、L-050：约束的 `published_candidates` 字段与 `with-publish-lock` �
 L-110、L-114、L-130：「单策略亏损不能直接删策略，必须做组合退役反事实」。2026-10-14 起正式推荐按单策略独立运行，组合层不存在；去留标准由 L-169/L-219 替代。L-114 中的两条测量规则由 L-112/L-115 承载。
 
 L-120、L-122：逐技能权重与配额槽。预设管理层 2026-11-15 删除，这两种机制没有载体。
+
+L-131：炒股养家单策略预设 `preset_single_chao_gu` 的三窗达标记录和陈小群的窗口冲突待办。预设已删除，陈小群 2026-11-25 按 L-219 退役；`require_ma_support` 闸门的依据数字保留在 `production_policy.py` 的字段注释里。
 
 L-132：命令式技能不得写进选股预设。预设层已删除，条目列出的阻断级诊断 `imperative_strategy_declares_preset_group` 与 `tests/test_registry_diagnostics.py` 都已不存在；命令式技能现由 `standalone_strategies.py` 的 NON_PICKING 排除出选股。
 
@@ -142,7 +144,6 @@ L-155：小石 2026-11-15 永久退役；「先读官方能力清单再逐端点
 
 L-134：「三窗 WR 70%」目标已被 2026-10-25 的上线标准替代；两条成交模拟逐笔一致的要求由 L-095、L-133 承载。
 
-## 保留的 retired / superseded 条目
+## 被后续条目替代
 
-- L-060（superseded）：`aggregator_pure.py` 与 `production_policy.py` 的注释仍引用它说明「放行档跳过逐卡扣分」的机制。
-- L-131（retired）：`aggregator_pure.py` 与 `production_policy.py` 用它说明 v28 `require_ma_support` 闸门，闸门的原因文字会显示给用户。
+L-060：regime×情绪分数线精细放行。其中的部分放松已被 L-070 证明是窗口过拟合，现行 v2 起的分数线覆盖规则由 L-070 承载，代码注释改为引用 L-070。

@@ -58,7 +58,7 @@ class ProductionSelectionPolicy:
     daily_output_limit: int = 10
     climax_output_divisor: int = 2
     weak_ice_output_limit: int = 2
-    # regime×情绪 组合的分数线硬覆盖（L-060）：优先级高于 market_base/sentiment/
+    # regime×情绪 组合的分数线硬覆盖（L-070）：优先级高于 market_base/sentiment/
     # climax 调整叠加。键为 "regime·sentiment"（如 "强牛·高潮"），值为固定分数线。
     # 用于精细放行已验证正期望且能恢复活跃度的组合；具体阈值由版本化 artifact 持有，
     # 而保持负期望组合（偏多·高潮85）的拦截——单参数叠加无法表达这种二维区分。
@@ -176,7 +176,7 @@ class ProductionSelectionPolicy:
     # （W2 +2.8pp、W1 +1.0pp、W3 +2.0pp）——"一路平滑新高"的票在 T+1 短线里胜率更差。
     max_dd60_veto: float | None = None
 
-    # v28（L-131）：均线支撑闸门 —— 要求候选卡当日站上 MA5 或 MA10（None/False = 关闭）。
+    # v28：均线支撑闸门 —— 要求候选卡当日站上 MA5 或 MA10（None/False = 关闭）。
     # 依据：单策略精修（2026-09-17，面板 v27 口径）——陈小群臂叠加"必须有 MA 支撑"后
     # W1 WR 57→62%、W3 57→71%，PF 1.30→1.61 / 1.43→2.59；是三窗同时达标的必要一条。
     # 与 v8 的"高 ivol 且无支撑 → 剔除"同源（L-121），此处把"要有支撑"作为正向必要条件。

@@ -276,7 +276,7 @@ def test_normal_active_market_overrides_restore_output_without_relaxing_weak_mar
         selection_policy=policy,
     )
 
-    # v2 相对 v1 的唯一变化是硬排除偏多/震荡/弱势·高潮；活跃档沿用 L-060 精细放行：
+    # v2 相对 v1 的唯一变化是硬排除偏多/震荡/弱势·高潮；活跃档沿用 v1 的精细放行：
     # 强牛·活跃 64、强牛·高潮 64、偏多·活跃 71.4；弱势·活跃仍受 weak cap=60 放行。
     assert strong_active["effective_score_line"] == 64.0
     assert strong_climax["effective_score_line"] == 64.0
