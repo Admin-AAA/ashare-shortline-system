@@ -7,6 +7,7 @@
 
 数据源：backend/output/research/solo_20261026/<skill>/panel/entry_panel_WX.json
         （2026-10-26 真单策略回放，生产 v27 + execution v5.0.0 口径）
+        交易日历与同排期基准：本地库 index_daily 的 EWALL.A（只读）。
 
 用法：
   cd backend && .venv/bin/python scripts/research_portfolio_diag.py
@@ -14,16 +15,19 @@
 from __future__ import annotations
 
 import json
-import os
 import statistics
 import sys
 from collections import defaultdict
+from functools import lru_cache
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE))
 SOLO = BASE / "output" / "research" / "solo_20261026"
-OUT = BASE / "output" / "research" / "portfolio_diag_20261115"
+# 2026-11-15 的旧口径结果留在 portfolio_diag_20261115/，这里另起目录，不覆盖证据。
+OUT = BASE / "output" / "research" / "portfolio_diag_20261127"
+# 面板只有离场原因、没有卖出日：每笔按短线执行政策的最长持有 5 个交易日（horizon_days）近似。
+HOLD_DAYS = 5
 
 
 def load_skill(skill_dir: Path):
@@ -91,33 +95,62 @@ def concentration(rets: list[float]) -> dict:
     }
 
 
+@lru_cache(maxsize=1)
+def _calendar() -> tuple[list[str], dict[str, float]]:
+    """EWALL.A 交易日历与当日等权涨跌幅（%），只读库。"""
+    from app.db.session import SessionLocal
+    from app.services.market_benchmark import equal_weight_curve
+
+    with SessionLocal() as db:
+        return equal_weight_curve(db)
+
+
 def day_portfolio(rows: list[dict]) -> dict:
-    """槽位滚动组合（统一走 app.services.return_quality.portfolio_metrics）。
+    """账户组合，统一走 app.services.overlap_portfolio（交易日历固定槽位，L-203 2026-11-27 修订）。
 
-    2026-11-15 修正：旧实现把每笔「5 日总收益」当作「当日收益」复利，
-    等于把 5 日收益重复计算 5 次，累计收益与回撤被放大约 5 倍
-    （陈小群曾算出 MDD −42.6%，真实槽位口径约 −4.7%）。
-    正确模型：资金等分 N 份（N=持有天数），每日投 1 份，到期自动卖出。
+    资金等分 5 份，每个信号日用 1 份买当天入选的票（批内每笔一份），T+1 买入、持 5 个交易日后这份收回；
+    没有信号的交易日那份留现金，曲线一直走到最后一笔卖出。面板没有卖出日，所有票都按持满 5 日近似：
+    多数票实际更早被止损或移动止盈卖出，这只改变收益在窗口内的分布，不改变每笔总收益。
+    2026-11-15 修过「5 日收益当日收益复利」的 5 倍放大；2026-11-27 再改掉旧
+    return_quality.portfolio_metrics 的三个问题（已删除）：以信号日为时间轴（无信号日被压掉）、
+    止于最后一个信号日（最后一批持有期被截掉）、按当天覆盖的批数均分资金（空槽不算现金）。
     """
-    from app.services.return_quality import portfolio_metrics
+    from app.services import overlap_portfolio
 
-    p = portfolio_metrics(rows, holding_days=5)
+    cal, pct = _calendar()
+    idx = {d: i for i, d in enumerate(cal)}
+    picks = []
+    for r in rows:
+        i = idx.get(r["signal_date"])
+        if i is None or i + 1 + HOLD_DAYS >= len(cal):
+            continue
+        picks.append({
+            "signal_date": r["signal_date"], "code": r["code"], "status": "closed", "hold_days": HOLD_DAYS,
+            "entry_date": cal[i + 1], "exit_date": cal[i + 1 + HOLD_DAYS],
+            # 面板 net_pct 是模拟器净收益，已扣 0.07% 往返税费；build 对 ret_includes_cost=False 的笔会再扣一次，先加回。
+            "ret": r["net_pct"] + overlap_portfolio.COST_PCT, "ret_includes_cost": False,
+        })
+    p = overlap_portfolio.build(picks, cal, pct) if picks else None
     if not p:
         return {}
+    a, b = p["A"], p["B"]
     return {
         "trade_days": len({r["signal_date"] for r in rows}),
-        "day_avg_pct": None,  # 旧字段：日均组合收益不再单列，见 portfolio_ann_ret_pct
-        "cum_pct": p.get("portfolio_total_ret_pct"),
-        "portfolio_mdd_pct": p.get("portfolio_mdd_pct"),
-        "portfolio_ann_ret_pct": p.get("portfolio_ann_ret_pct"),
-        "portfolio_ann_vol_pct": p.get("portfolio_ann_vol_pct"),
-        "portfolio_calmar": p.get("portfolio_calmar"),
-        "portfolio_sharpe": p.get("portfolio_sharpe"),
-        "scaled_ann_ret_pct": p.get("scaled_ann_ret_pct"),
-        "max_concurrent_batches": p.get("max_concurrent_batches"),
-        "avg_holding_days": p.get("avg_holding_days"),
-        "avg_concurrent_positions": p.get("avg_concurrent_positions"),
-        "capital_utilization_pct": p.get("capital_utilization_pct"),
+        "picks": p["eligible_picks"],
+        "outside_calendar": len(rows) - len(picks),
+        "slots": p["slots"],
+        "calendar_days": len(p["curves"]["dates"]),
+        "first_day": p["curves"]["dates"][0],
+        "last_day": p["curves"]["dates"][-1],
+        "cum_pct": a["net_ret"],
+        "bench_pct": a["bench_ret"],
+        "excess_pct": a["excess_ret"],
+        "portfolio_mdd_pct": a["max_drawdown"],
+        "avg_invested_pct": a["avg_invested_pct"],
+        "avg_positions": a["avg_positions"],
+        # 同日同票多策略重复只买一份（L-227 的 B），只在合并多个策略时与上面不同。
+        "dedup_cum_pct": b["net_ret"],
+        "dedup_mdd_pct": b["max_drawdown"],
     }
 
 
@@ -266,10 +299,9 @@ def main() -> None:
             f"({it.get('within_day_std_pct')} / {it.get('overall_std_pct')})"
         )
         print(
-            f"  组合（槽位）：累计 {pf.get('cum_pct')}%  年化 {pf.get('portfolio_ann_ret_pct')}%  "
-            f"MDD {pf.get('portfolio_mdd_pct')}%  Calmar {pf.get('portfolio_calmar')}  "
-            f"槽位 {pf.get('max_concurrent_batches')}  持 {pf.get('avg_holding_days') or 5} 日  "
-            f"利用 {pf.get('capital_utilization_pct')}%"
+            f"  组合（交易日历 {pf.get('slots')} 槽，{pf.get('first_day')}~{pf.get('last_day')}）：累计 {pf.get('cum_pct')}%  "
+            f"同排期基准 {pf.get('bench_pct')}%  超额 {pf.get('excess_pct')}pp  MDD {pf.get('portfolio_mdd_pct')}%  "
+            f"平均投入 {pf.get('avg_invested_pct')}%"
         )
         du = s.get("industry_dedup") or {}
         if du:
@@ -295,9 +327,9 @@ def main() -> None:
         print(f"  笔数 {c['n']}  每笔均值 {c['avg_pct']}%  中位数 {c['median_pct']}%  PF {c['profit_factor']}")
         print(f"  前10笔利润占比 {c['top10_profit_share_pct']}%  去两端5%均值 {c['trim5_avg_pct']}%")
         print(
-            f"  组合（槽位）：累计 {pf.get('cum_pct')}%  年化 {pf.get('portfolio_ann_ret_pct')}%  "
-            f"MDD {pf.get('portfolio_mdd_pct')}%  Calmar {pf.get('portfolio_calmar')}  "
-            f"槽位 {pf.get('max_concurrent_batches')}  利用 {pf.get('capital_utilization_pct')}%"
+            f"  组合（交易日历 {pf.get('slots')} 槽）：每笔一份 累计 {pf.get('cum_pct')}%  MDD {pf.get('portfolio_mdd_pct')}%  "
+            f"超额 {pf.get('excess_pct')}pp  |  同日同票只买一份 累计 {pf.get('dedup_cum_pct')}%  "
+            f"MDD {pf.get('dedup_mdd_pct')}%  平均投入 {pf.get('avg_invested_pct')}%"
         )
     print(f"\n输出: {OUT / 'diag.json'}")
 

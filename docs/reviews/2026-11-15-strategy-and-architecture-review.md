@@ -276,6 +276,7 @@ mid-ocfs-sue-vol   R12 +11.47%  vs 历史中位 +2.30%   （+9.17pp）
 - 现状：全部决策基于单笔；组合 MDD 从未计算。
 - 后果：陈小群单笔口径看是「每笔 +0.40%、回撤偏大」，槽位组合口径看是「年化 +2.1%、MDD −8.0%、Calmar 0.26」——**四个策略里唯一 Calmar < 1**。
 - 落地（已完成）：`portfolio_metrics()` 实现槽位滚动组合（资金等分 N 份、每日投 1 份、到期换仓），输出组合年化/MDD/Calmar/Sharpe/槽位数/在手票数；已接同一批调用点。
+- 2026-11-27 更正：`portfolio_metrics()` 以信号日为时间轴、止于最后一个信号日、按当天覆盖的批数均分资金，数字偏乐观，已删除；组合口径改为交易日历固定槽位模型 `app/services/overlap_portfolio.py`，见 L-203 修订。
 
 **3. 存活判定：§282 已有标准，但 `pass=false` 不驱动任何状态**
 
@@ -393,7 +394,7 @@ mid-ocfs-sue-vol   R12 +11.47%  vs 历史中位 +2.30%   （+9.17pp）
 | 函数 | 产出字段 | 用途 |
 |---|---|---|
 | `quality_metrics(rets)` | `trim_avg_ret`、`top10_profit_share_pct`、`top10_share_of_gross_pct`、`median_ret`、`ret_std`、`worst_ret`、`best_ret` | 识别「去掉极端笔后不赚钱」与彩票型 |
-| `portfolio_metrics(rows)` | `portfolio_ann_ret_pct`、`portfolio_mdd_pct`、`portfolio_calmar`、`portfolio_sharpe`、`portfolio_ann_vol_pct`、`scaled_ann_ret_pct`、`max_concurrent_batches`、`capital_utilization_pct`、`avg_concurrent_positions`、`holding_days_std`、`date_density` | 槽位滚动组合风险 |
+| `portfolio_metrics(rows)` | `portfolio_ann_ret_pct`、`portfolio_mdd_pct`、`portfolio_calmar`、`portfolio_sharpe`、`portfolio_ann_vol_pct`、`scaled_ann_ret_pct`、`max_concurrent_batches`、`capital_utilization_pct`、`avg_concurrent_positions`、`holding_days_std`、`date_density` | 槽位滚动组合风险（2026-11-27 已删除，见 L-203 修订） |
 
 **与 §282 的关系（避免两套口径）**：`quality_metrics` 的字段定义与 §282 一致（trim 两头各 5%、前 10 笔对净利润、中位数），区别只在**数据源**——§282 用 2018-2026 八段回测窗口，本模块用 `picks` 表里实际落盘的明细。所以前者回答「这策略历史上是不是彩票型」，后者回答「它最近落盘的这些票是不是彩票型」。
 

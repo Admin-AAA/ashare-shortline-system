@@ -121,10 +121,10 @@ def main():
             if r is None: return {"n": 0}
             out = {"n": int(r["n"]), "win_rate": round(r["wr"] * 100, 1), "avg_return_pct": round(r["avg"], 2),
                    "pf": round(r["pf"], 2) if r["pf"] is not None else None, "max_drawdown_pct": round(r["mdd"], 1)}
-            # 收益质量 + 组合口径（只增字段）：识别「去掉极端笔后不赚钱」与「每笔行但组合回撤深」。
-            from app.services.return_quality import portfolio_metrics, quality_metrics
+            # 收益质量（只增字段）：识别「去掉极端笔后不赚钱」。账户组合口径不在这里算（L-203 2026-11-27 修订）：
+            # 旧 portfolio_* 以信号日为时间轴、止于最后一个信号日，已删除；组合看 research_portfolio_diag.py。
+            from app.services.return_quality import quality_metrics
             out.update(quality_metrics([x["net"] for x in sel]))
-            out.update(portfolio_metrics(sel, holding_days=5))
             return out
         w12, wr = m("0", "9"), m(a.split, "9")
         status = "positive" if (w12.get("avg_return_pct") or 0) > 0 and (wr.get("avg_return_pct") or 0) > 0 else "watch"

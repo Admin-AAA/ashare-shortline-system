@@ -53,6 +53,22 @@ def test_steady_state_does_not_inflate_multi_day_returns():
     assert res["curves"]["bench"][-1] == pytest.approx(res["A"]["bench_ret"], abs=0.01)
 
 
+def test_sparse_signals_keep_empty_slots_in_cash_and_run_to_last_exit():
+    """L-203 2026-11-27 修订：信号稀疏时空槽是现金，曲线走到最后一笔卖出。
+
+    每 40 个交易日才一批、每批 20 日赚 2%：每批只占 1/20 资金，全期 ≈ 3 × 2% / 20 ≈ +0.3%。
+    旧 portfolio_metrics 按「当天覆盖的批数」均分资金，会把每个孤立批次当成满仓（≈ +6%），
+    并且时间轴止于最后一个信号日，最后一批的持有期被截掉。"""
+    cal = _calendar(140)
+    rows = [_pick(cal, i, f"S{i}", "s1", 2.0) for i in (0, 40, 80)]
+    res = op.build(rows, cal, _flat(cal))
+    d = 1.02 ** (1 / 20) - 1
+    assert res["slots"] == 20 and res["signal_days"] == 3
+    assert res["A"]["net_ret"] == pytest.approx(round(((1 + d / 20) ** 60 - 1) * 100, 2))
+    assert res["A"]["net_ret"] < 0.4
+    assert res["curves"]["dates"][0] == cal[2] and res["curves"]["dates"][-1] == cal[80 + 1 + 20]
+
+
 def test_overlap_weighting_dedup_split_and_exclusions():
     """同一信号日 X 被 2 个策略推、Y 被 1 个：A 每笔一份（X 占 2/3），B 每票一份（X 两笔各 1/4）。"""
     cal = _calendar(40)

@@ -65,6 +65,8 @@ def test_stats_definitions():
     assert (s["holding"], s["skipped"], s["pending"], s["total_picks"]) == (1, 1, 1, 6)
     empty = ha.stats([])
     assert empty["n"] == 0 and empty["win_rate"] is None and empty["profit_factor"] is None
+    # 账户组合口径只走 overlap_portfolio（交易日历）；按信号日为轴的 portfolio_* 不得回到 stats（L-203 2026-11-27 修订）。
+    assert not [k for k in s if k.startswith("portfolio_") or k in ("capital_utilization_pct", "max_concurrent_batches")]
 
 
 def test_metrics_overlap_portfolios_only_for_mid_with_benchmark(monkeypatch):

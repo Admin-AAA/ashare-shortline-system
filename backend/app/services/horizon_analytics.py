@@ -19,7 +19,7 @@ from statistics import median
 from typing import Any, Iterable
 
 from app.services import midterm_service as ms
-from app.services.return_quality import portfolio_metrics, quality_metrics
+from app.services.return_quality import quality_metrics
 
 _PICK_FIELDS = (
     "code", "name", "status", "entry_date", "entry_price", "exit_date", "exit_price", "mark_date", "mark_price",
@@ -43,7 +43,7 @@ _trades_cache_lock = threading.Lock()
 
 
 def _live_runs() -> set[tuple[str, str]]:
-    """(信号日, 策略) 在 status/ 里有盘后运行记录的组合——只有真实盘后流程（17:35 / 手动出票）会写 status。"""
+    """(信号日, 策略) 在 status/ 里有盘后运行记录的组合——只有真实盘后流程（21:30 盘后主流程 / 手动出票）会写 status。"""
     sd = ms._status_dir()
     out: set[tuple[str, str]] = set()
     if sd.exists():
@@ -178,12 +178,11 @@ def stats(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
     out["bench_n"] = len(benched)
     out["bench_avg_ret"] = _r(sum(float(r["bench_ret"]) for r in benched) / len(benched)) if benched else None
     out["excess_avg_ret"] = _r(sum(float(r["ret"]) - float(r["bench_ret"]) for r in benched) / len(benched)) if benched else None
-    # 收益质量与组合口径（只增字段，不改上面任何既有字段）。
-    # 收益质量用于识别「去掉极端笔后不赚钱」的策略；组合口径（槽位滚动）用于识别
-    # 「每笔看着行、组合风险却集中」的策略。口径说明见 app/services/return_quality.py。
+    # 收益质量（只增字段，不改上面任何既有字段）：识别「去掉极端笔后不赚钱」的策略，口径见 return_quality。
     # 注：quality_metrics 也返回 median_ret，与本函数上面的定义同源同值，覆盖无副作用。
+    # 账户层面的组合收益与回撤不在 stats 里按切片算：中线看 metrics() 的 overlap_portfolios（交易日历固定槽位，
+    # 走完全部持有期，L-203 2026-11-27 修订 / L-227）。原 portfolio_* 字段以信号日为时间轴、止于最后一个信号日，已删除。
     out.update(quality_metrics(rets))
-    out.update(portfolio_metrics(closed))
     return out
 
 
