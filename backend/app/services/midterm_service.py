@@ -24,6 +24,11 @@ OUT_DIR = Path(__file__).resolve().parents[2] / "output" / "midterm" / "picks"
 METRICS_FILE = Path(__file__).resolve().parent / "midterm_backtest_metrics.json"
 EVENTS_DIR = Path(__file__).resolve().parents[2] / "data" / "midterm" / "events"
 HOLD_DAYS = 20
+# 中长线结算成本（小数）：税费 0.07% + 执行政策双边滑点 0.20%，与短线同源（trading_costs.TOTAL_ROUND_TRIP_COST_PCT）。
+from app.engine.trading_costs import TOTAL_ROUND_TRIP_COST_PCT as _TOTAL_COST_PCT  # noqa: E402
+
+MIDTERM_ROUND_TRIP_COST = round(_TOTAL_COST_PCT / 100.0, 6)
+
 
 STRATEGIES: dict[str, dict[str, Any]] = {
     "mid-small-cap-weekly": {
@@ -3708,7 +3713,8 @@ def warm_realized_cache() -> None:
 
 
 def _realize_query(db, code: str, signal_date: str, hold: int) -> dict[str, Any]:
-    """次日开盘买入（一字/开盘涨停买不进 -> skipped）；第 hold 个交易日开盘卖出，跌停封死顺延；0.3% 成本。"""
+    """次日开盘买入（一字/开盘涨停买不进 -> skipped）；第 hold 个交易日开盘卖出，跌停封死顺延；
+    扣 MIDTERM_ROUND_TRIP_COST（税费 + 双边滑点，与短线执行政策同源，当前 0.27%）。"""
     rows = db.execute(text(
         _BAR_SQL + "WHERE k.code=:c AND k.trade_date>:d AND k.close>0 ORDER BY k.trade_date LIMIT :n"),
         {"c": code, "d": signal_date, "n": hold + 11}).all()
@@ -3728,7 +3734,7 @@ def _realize_rows(rows: list[Any], hold: int) -> dict[str, Any]:
         if i > 0:
             tri *= 1 + (r.pct_chg or 0) / 100
         if i >= hold and not (r.down_limit and r.high <= r.down_limit + 0.005):
-            ret = (r.open / r.close * tri) / (e.open / e.close) - 1 - 0.003
+            ret = (r.open / r.close * tri) / (e.open / e.close) - 1 - MIDTERM_ROUND_TRIP_COST
             return {"status": "closed", "entry_date": e.trade_date, "exit_date": r.trade_date,
                     "ret": round(ret * 100, 2), "days": i, "entry_price": e.open, "exit_price": r.open,
                     "exit_delayed_days": i - hold}

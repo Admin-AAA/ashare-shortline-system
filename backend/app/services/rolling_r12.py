@@ -6,7 +6,7 @@
 口径（结果写清截止日 cutoff 与窗口）：
 - 中线/长线：用现行生产选股代码（midterm_service.generate_picks，与实盘同一套，开每日新推荐上限）在独立 staging 目录里
   把 [窗口起点 − 预热, cutoff] 逐交易日重放一遍，不碰生产 picks 目录；收益用生产 _load_batch/_realize 按日K结算
-  （次日开盘买、持有期满开盘卖、涨停不买、跌停顺延、扣 0.3%）。只算信号日在窗口内、且到 cutoff 已卖出的笔。
+  （次日开盘买、持有期满开盘卖、涨停不买、跌停顺延、扣 0.27% 税费加滑点）。只算信号日在窗口内、且到 cutoff 已卖出的笔。
 - 短线：读库里已有的已结算推荐，只算已成交、卖出日 ≤ cutoff 的笔（净收益，没成交的不当 0% 摊）。两段不重叠、不混算：
   SHORT_REPLAY_COVERAGE_END（回放覆盖终点）及以前只用历史重建（historical_replay），之后只用实盘（live_forward），
   输出里两段分开列笔数和每笔。不另跑回放。
@@ -445,7 +445,7 @@ def verdict_summary(midlong: dict[str, Any], short: dict[str, Any]) -> dict[str,
 
 def method_text(short: dict[str, Any]) -> str:
     return ("中长线：现行生产选股代码重放（开每日上限），财报/分红/回购/业绩预告/股权激励草案优先读本地库与事件存档，本地未覆盖的日期才走网关；"
-            "只算窗口内信号、卖出日 ≤ 截止日的笔，扣 0.3%；截止日后才卖出的笔算持有中，收益另列「最近已卖出」（sold_after_cutoff）作预警，不进正负判定。"
+            "只算窗口内信号、卖出日 ≤ 截止日的笔，扣 0.27%（税费 0.07% + 滑点 0.20%）；截止日后才卖出的笔算持有中，收益另列「最近已卖出」（sold_after_cutoff）作预警，不进正负判定。"
             f"短线：{short['replay_coverage_end']}（来源 {short['replay_coverage_end_source']}）及以前只用历史重建、"
             "之后只用实盘，两段分开列，已成交且卖出日 ≤ 截止日的净收益（未成交不摊 0%），截止日后才卖出的按段另列 sold_after_cutoff。"
             "样本 < 30 笔不判正负")

@@ -2,7 +2,7 @@
 
 数据来源与「按批次复盘」完全相同（picks/*.json + midterm_service._load_batch 实时按日K结算），
 这里只做平铺和聚合，不另存一份结果，口径因此与复盘页一致：
-- 只有 status=closed 的笔计入胜率/盈亏比（已扣 0.3% 成本）；持有中为浮动收益，不计入。
+- 只有 status=closed 的笔计入胜率/盈亏比（已扣 0.27% 成本：税费 0.07% + 双边滑点 0.20%，与短线执行政策同源）；持有中为浮动收益，不计入。
 - 胜：ret>0；盈亏比 = 平均盈利 / |平均亏损|；PF = 盈利总和 / |亏损总和|。
 - 基准：bench_ret/excess_ret 为同信号日、同持有期、同成本的全市场等权基准（index_daily 的 EWALL.A）与超额；
   stats 汇总为 bench_avg_ret / excess_avg_ret / bench_n。基准缺日时该笔不计入超额。
@@ -121,7 +121,7 @@ def _trades_uncached(db, horizon: str, strategy_id: str | None) -> list[dict[str
 
 
 def _attach_benchmark(db, rows: list[dict[str, Any]]) -> None:
-    """给已平仓的笔附上同期等权基准收益（EWALL.A，同持有期、同 0.3% 成本）与超额。
+    """给已平仓的笔附上同期等权基准收益（EWALL.A，同持有期、同一往返成本）与超额。
 
     基准曲线缺该信号日或持有期未走完时留 None。db 为 None（纯文件口径的单测）时不附。"""
     if db is None:

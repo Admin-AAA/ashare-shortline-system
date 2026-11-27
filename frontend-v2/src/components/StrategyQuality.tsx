@@ -77,8 +77,8 @@ export function QualityStrip({ quality, realized, realizedKind = "前瞻", reali
   return (
     <div className="qs" style={style}>
       <div className="qs__chipcol"><QualityChip quality={quality} /></div>
-      <Pair label="近12个月" tip={`回测，已扣 0.3% 成本，每笔平均 / 中位数 / 笔数\n两头各去5%后的均值 ${fmt(a?.trim_both5)}`} avg={a?.avg} median={a?.median} n={a?.n} />
-      <Pair label="2024-01 至今" tip={`2024-01 至今（约2.8年）回测，已扣 0.3% 成本，每笔平均 / 中位数 / 笔数`} avg={b?.avg} median={b?.median} n={b?.n}
+      <Pair label="近12个月" tip={`回测，已扣 0.27% 成本，每笔平均 / 中位数 / 笔数\n两头各去5%后的均值 ${fmt(a?.trim_both5)}`} avg={a?.avg} median={a?.median} n={a?.n} />
+      <Pair label="2024-01 至今" tip={`2024-01 至今（约2.8年）回测，已扣 0.27% 成本，每笔平均 / 中位数 / 笔数`} avg={b?.avg} median={b?.median} n={b?.n}
         extra={<i title="两头各去 5% 后的平均">去极值 <span className={cls(b?.trim_both5)}>{fmt(b?.trim_both5)}</span></i>} />
       <Pair label={copy.label} tip={copy.tip} avg={realized?.avg} median={realized?.median} n={realized?.n ?? 0} low={low} />
       {replay && <Pair label={replay.label} tip={replay.tip + replayNote} avg={replay.stats?.avg} median={replay.stats?.median} n={pn} low={replayLow} />}
@@ -90,11 +90,11 @@ export function QualityStrip({ quality, realized, realizedKind = "前瞻", reali
 
 export const SHORT_LIVE_COPY = {
   label: "实盘已卖出",
-  tip: "真实盘后出票（不含回放），已成交并卖出的笔，扣 0.3% 成本，每笔平均 / 中位数 / 笔数。没买进、还没卖出的不算。",
+  tip: "真实盘后出票（不含回放），已成交并卖出的笔，扣 0.27% 成本，每笔平均 / 中位数 / 笔数。没买进、还没卖出的不算。",
 };
 export const SHORT_REPLAY_COPY = {
   label: "回放已卖出·近12个月",
-  tip: "用现行策略在历史上回放重建的推荐，近 12 个月（按信号日）已成交并卖出的笔，扣 0.3% 成本。是研究证据，不是实盘，和左边实盘分开算。",
+  tip: "用现行策略在历史上回放重建的推荐，近 12 个月（按信号日）已成交并卖出的笔，扣 0.27% 成本。是研究证据，不是实盘，和左边实盘分开算。",
 };
 
 /** 短线：质量画像 + 实盘/回放已卖出，取自 /api/strategies 与 /api/metrics/by-strategy（只读 GET，react-query 共享缓存）。
@@ -128,7 +128,7 @@ export function ShortReturnInline({ id }: { id: string }) {
   const rn = realized?.n ?? 0;
   const liveText = rn >= MIN_SAMPLE ? fmt(realized?.avg) : `${rn} 笔，样本不足`;
   return (
-    <span className="qinline" title={`回测近12个月：每笔 ${fmt(r12?.avg)}（${r12?.n ?? "—"} 笔，扣 0.3% 成本）\n实盘已卖出：每笔 ${fmt(realized?.avg)}，中位数 ${fmt(realized?.median)}，${rn} 笔（扣成本，不含回放）`}>
+    <span className="qinline" title={`回测近12个月：每笔 ${fmt(r12?.avg)}（${r12?.n ?? "—"} 笔，扣 0.27% 成本）\n实盘已卖出：每笔 ${fmt(realized?.avg)}，中位数 ${fmt(realized?.median)}，${rn} 笔（扣成本，不含回放）`}>
       <QualityChip quality={quality} />
       <span className="qinline__k">回测近12月</span><b className={cls(r12?.avg)}>{fmt(r12?.avg)}</b>
       <span className="qinline__k">实盘</span><b className={rn >= MIN_SAMPLE ? cls(realized?.avg) : ""}>{liveText}</b>

@@ -8,7 +8,7 @@ import { OverlapPortfolioSection } from "./HorizonOverlap";
 
 /** 中线 / 长线的「诊断 / 研究」「持仓 / 待卖」「交易明细」「运行记录」四页。
  * 数据全部来自 /api/horizons/{h}/metrics|trades|runs，口径与「按批次复盘」一致：
- * 只有已平仓笔计入胜率/盈亏比（含 0.3% 成本），持有中为浮动收益。 */
+ * 只有已平仓笔计入胜率/盈亏比（含 0.27% 成本：税费 0.07% + 双边滑点 0.2%），持有中为浮动收益。 */
 type H = "mid" | "long";
 type Target = { sid: string; date: string; code: string };
 
@@ -43,7 +43,7 @@ function Seg<T extends string | number | null>({ value, options, onChange }: { v
 
 /* ---------- 诊断 / 研究 ---------- */
 const STAT_HEAD = ["笔数", "胜率", "平均/笔", "同期大盘", "超额/笔", "中位", "盈亏比(PF)", "均盈/均亏", "最大亏损", "持有中"];
-const BENCH_HINT = "同期大盘 = 同一信号日、同持有期买全市场等权组合（扣同样 0.3% 成本）的平均收益；超额 = 平均/笔 − 同期大盘。平均为负但超额为正，说明是市场在跌，不是选股出错。";
+const BENCH_HINT = "同期大盘 = 同一信号日、同持有期买全市场等权组合（扣同样的 0.27% 成本）的平均收益；超额 = 平均/笔 − 同期大盘。平均为负但超额为正，说明是市场在跌，不是选股出错。";
 function StatCells({ s }: { s: HorizonStats }) {
   return (
     <>
@@ -71,7 +71,7 @@ export function HorizonMetricsPage({ horizon }: { horizon: H }) {
     <div className="hz">
       <section className="panel hz-pad">
         <div className="hz-sechead"><b>{hzName(horizon)} · 诊断 / 研究</b>
-          <span className="hz-muted">只统计已平仓（含 0.3% 成本）；PF = 盈利总和 / 亏损总和，均盈/均亏 = 平均盈利 / 平均亏损</span></div>
+          <span className="hz-muted">只统计已平仓（含 0.27% 成本：税费 0.07% + 双边滑点 0.2%）；PF = 盈利总和 / 亏损总和，均盈/均亏 = 平均盈利 / 平均亏损</span></div>
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap", alignItems: "center" }}>
           <span className="hz-muted">来源</span>
           <Seg value={origin} onChange={setOrigin} options={[["all", "全部"], ["live", "实盘"], ["late", "开盘后补跑"], ["replay", "回放"], ["legacy", "旧数据"]]} />

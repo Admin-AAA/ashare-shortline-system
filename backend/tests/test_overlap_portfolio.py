@@ -16,10 +16,10 @@ def _calendar(n: int, start: str = "2026-01-05") -> list[str]:
 
 
 def _pick(cal, i, code, sid, net, *, hold=20, status="closed", name=None):
-    """信号日 cal[i]、T+1 入场、持有 hold 个交易日卖出；net 为扣 0.07% 后的目标净收益（结算 ret 按扣 0.3% 回推）。"""
+    """信号日 cal[i]、T+1 入场、持有 hold 个交易日卖出；net 为扣 0.07% 后的目标净收益（结算 ret 按结算成本回推，加回量取模块常量）。"""
     return {"signal_date": cal[i], "code": code, "name": name or code, "strategy_id": sid, "strategy_name": f"策略{sid}",
             "status": status, "entry_date": cal[i + 1], "exit_date": cal[i + 1 + hold] if status == "closed" else None,
-            "ret": None if net is None else net - 0.23, "ret_includes_cost": status == "closed", "hold_days": hold,
+            "ret": None if net is None else round(net - op._COST_ADDBACK, 6), "ret_includes_cost": status == "closed", "hold_days": hold,
             "origin": "replay"}
 
 

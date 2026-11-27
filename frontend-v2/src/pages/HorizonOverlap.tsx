@@ -146,7 +146,7 @@ const diff = (a?: number | null, b?: number | null) => (a == null || b == null ?
 export function OverlapPortfolioSection({ d }: { d: HorizonOverlapPortfolios }) {
   const months = useMemo(() => pairMonths(d.A.by_month, d.B.by_month), [d]);
   const rw = d.rolling_window;
-  const note = `口径：资金分 ${d.slots} 份（最长设计持有期），每个信号日用 1 份买入当天出票，持有期走完收回再用；没有信号的交易日和批内已卖出的部分按现金计，按交易日复利，一直走到最后一笔卖出。每笔收益在自己的持有窗口（入场日之后到卖出日）几何均摊成日收益。成本统一按 ${d.cost_pct}% 往返税费（上面的核心 KPI 和按策略表用 0.3%）。平均仓位、在手份数、持有票数、有效持仓数、单票最大权重只统计滚动期 ${rw.start} ~ ${rw.end}（${rw.days} 个交易日），${rw.ramped ? "去掉首尾建仓和清仓爬坡" : `当前筛选的信号日跨度不足 ${d.slots} 个交易日，滚动期从第一个持有日算起、含建仓爬坡，仓位类数字偏低`}；单票权重按占全部资金算。逐月按持仓所在的交易日归月，不是信号月，各月连乘等于全期。`;
+  const note = `口径：资金分 ${d.slots} 份（最长设计持有期），每个信号日用 1 份买入当天出票，持有期走完收回再用；没有信号的交易日和批内已卖出的部分按现金计，按交易日复利，一直走到最后一笔卖出。每笔收益在自己的持有窗口（入场日之后到卖出日）几何均摊成日收益。成本统一按 ${d.cost_pct}% 往返税费（上面的核心 KPI 和按策略表用 0.27%，即税费加 0.2% 滑点）。平均仓位、在手份数、持有票数、有效持仓数、单票最大权重只统计滚动期 ${rw.start} ~ ${rw.end}（${rw.days} 个交易日），${rw.ramped ? "去掉首尾建仓和清仓爬坡" : `当前筛选的信号日跨度不足 ${d.slots} 个交易日，滚动期从第一个持有日算起、含建仓爬坡，仓位类数字偏低`}；单票权重按占全部资金算。逐月按持仓所在的交易日归月，不是信号月，各月连乘等于全期。`;
   return (
     <section className="panel hz-pad hz-ov">
       <div className="hz-sechead"><b>组合视图 · 多策略同推的票怎么买</b><span className="hz-muted">

@@ -51,7 +51,7 @@ def test_holding_benchmark_return_window_and_cost():
     pct = {d: 1.0 for d in dates}
     # 信号日 T=01-05，hold=3：用 T+2..T+4（01-07/08/09）三根复利，扣 0.3
     r = mb.holding_benchmark_return(dates, pct, "2026-01-05", 3)
-    assert abs(r - ((1.01 ** 3 - 1) * 100 - 0.3)) < 0.011
+    assert abs(r - ((1.01 ** 3 - 1) * 100 - mb.MIDTERM_ROUND_TRIP_COST_PCT)) < 0.011
     assert mb.holding_benchmark_return(dates, pct, "2026-01-05", 3, cost_pct=0) == round((1.01 ** 3 - 1) * 100, 2)
     # 持有期未走完 / 信号日不在曲线里 → None
     assert mb.holding_benchmark_return(dates, pct, "2026-01-09", 3) is None

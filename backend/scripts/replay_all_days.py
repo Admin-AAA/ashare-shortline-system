@@ -379,7 +379,6 @@ def main() -> int:
     # 主进程在预留 run 时也必须使用与 Prefect worker 相同的部署 revision；
     # 否则 execution_version 会在入队和执行时产生不同身份。
     os.environ.setdefault("ASHARE_APPLICATION_REVISION", _resolve_code_revision())
-    _assert_worker_revision_matches()
 
     db = SessionLocal()
     try:
@@ -397,6 +396,7 @@ def main() -> int:
             print(f"交易日: 0 个 ({window})")
             return 0
         print(f"交易日: {len(dates)} 个 ({dates[0]} ~ {dates[-1]})")
+        _assert_worker_revision_matches()
 
         base = _base_payload(db)
         if args.single_skill:

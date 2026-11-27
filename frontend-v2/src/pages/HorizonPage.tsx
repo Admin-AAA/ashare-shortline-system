@@ -140,7 +140,7 @@ function Hero({ horizon, view, list, batches, onRun }: { horizon: H; view: View;
       <div>
         <div className="panel__kicker">{hz} · {sub}</div>
         <h2 className="hz-hero__title">{hz}策略{horizon === "mid" ? "（持有 20 个交易日，约 4 周）" : "（持有 60 个交易日，约 3 个月）"}</h2>
-        <div className="hz-muted">规则打分、固定持有期出场；回测含 0.3%/笔成本，开盘涨停取消买入、停牌顺延买入、跌停封死顺延卖出。</div>
+        <div className="hz-muted">规则打分、固定持有期出场；回测含 0.27%/笔成本（税费 0.07% + 双边滑点 0.2%，与短线执行政策同源），开盘涨停取消买入、停牌顺延买入、跌停封死顺延卖出。</div>
         <button className="hz-btn" style={{ marginTop: 10 }} onClick={onRun}>手动出票 / 补跑</button>
       </div>
       <div className="hz-hero__kpis">
@@ -332,7 +332,7 @@ function ReviewView({ horizon, list, rz, onPick }: { horizon: H; list: HorizonSt
         </div>
         {sid !== "all" && <QualityStrip quality={list.find((x) => x.id === sid)?.metrics.quality} realized={rz.of(sid)} realizedKind={rz.kind} realizedWindow={rz.window} style={{ marginTop: 0 }} />}
         <div className="qs__hint">{rz.liveN === 0 ? `真实前瞻已平仓 0 笔。画像条「回放已平仓」只统计近12个月（按信号日${rz.window?.start ? `，自 ${rz.window.start}` : ""}）；下方批次列表仍是全部已落盘回放。` : ""}每个批次展开后可看该策略的彩票型/稳健型标签与每笔收益。</div>
-        <div className="hz-muted" style={{ marginBottom: 8 }}>以下统计仅针对本页{filtered ? "筛选后" : ""}的 {shown.length} 个批次；已平仓收益含 0.3% 成本。</div>
+        <div className="hz-muted" style={{ marginBottom: 8 }}>以下统计仅针对本页{filtered ? "筛选后" : ""}的 {shown.length} 个批次；已平仓收益含 0.27% 成本。</div>
         <div className="hz-metrics">
           <Kpi label="已平仓批次" value={String(closed.length)} />
           <Kpi label="批次等权平均" value={pct(avgBatch)} cls={pnl(avgBatch)} />
@@ -372,7 +372,7 @@ function BatchCard({ b, defaultOpen, list, highlight, rz, onPick }: { b: Horizon
   const markDate = b.picks.find((p) => p.status === "holding" && p.mark_date)?.mark_date;
   // 表头只留短标签，口径说明放 title 悬浮提示，避免列头过长
   const retHead = b.status === "closed" ? "收益（含成本）" : hasHolding ? "浮动收益" : "收益";
-  const retTitle = b.status === "closed" || !hasHolding ? undefined : intraday ? "盘中实时价，未扣 0.3% 成本" : `按 ${markDate ?? "最新"} 收盘，未扣 0.3% 成本`;
+  const retTitle = b.status === "closed" || !hasHolding ? undefined : intraday ? "盘中实时价，未扣 0.27% 成本" : `按 ${markDate ?? "最新"} 收盘，未扣 0.27% 成本`;
   // 同一批次只有一个策略，规则分单位一致；按批内排名排序，不跨策略比较
   const picks = [...b.picks].sort((x, y) => (x.selection_rank ?? 999) - (y.selection_rank ?? 999));
   return (

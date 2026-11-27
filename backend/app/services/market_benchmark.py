@@ -26,8 +26,8 @@ MIN_SAMPLE = 4000
 MAX_FILL_DAYS = 40
 # 初次建点位的起点：daily_kbars 2022 年起才有全市场（2021 年只有 5 只），再早的日子样本不足。
 EW_START_DATE = "2022-01-04"
-# 中长线结算口径：次日开盘买、第 hold 个交易日开盘卖、0.3% 成本（midterm_service._realize_rows）。
-MIDTERM_ROUND_TRIP_COST_PCT = 0.3
+# 中长线结算口径：次日开盘买、第 hold 个交易日开盘卖，扣与结算同源的往返成本（midterm_service._realize_rows）。
+from app.engine.trading_costs import TOTAL_ROUND_TRIP_COST_PCT as MIDTERM_ROUND_TRIP_COST_PCT  # noqa: E402
 
 _CURVE_TTL_SECONDS = 600.0
 _curve_cache: tuple[float, list[str], dict[str, float]] | None = None

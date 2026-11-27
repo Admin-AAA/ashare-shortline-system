@@ -112,7 +112,7 @@ export function PickDrawer({ horizon, target, onClose, onOpen }: { horizon: H; t
             <div className="hz-card__sec">入选原因</div><p className="hz-note">{p.selection_reason ?? "—"}</p>
             <TextEventBlock data={labels} />
             {d.strategy_summary && (<><div className="hz-card__sec">策略规则</div><p className="hz-note">{d.strategy_summary}</p></>)}
-            <div className="hz-muted">价格为不复权价{p.ret_includes_cost === true ? "；已平仓收益已扣 0.3% 成本" : p.intraday ? "；浮动收益按盘中实时价，未扣 0.3% 成本（日K入库后转正式结算）" : p.ret_includes_cost === false ? `；浮动收益按 ${p.mark_date ?? "最新"} 收盘，未扣 0.3% 成本` : ""}</div>
+            <div className="hz-muted">价格为不复权价{p.ret_includes_cost === true ? "；已平仓收益已扣 0.27% 成本（税费 0.07% + 滑点 0.2%）" : p.intraday ? "；浮动收益按盘中实时价，未扣 0.27% 成本（日K入库后转正式结算）" : p.ret_includes_cost === false ? `；浮动收益按 ${p.mark_date ?? "最新"} 收盘，未扣 0.27% 成本` : ""}</div>
             {(d.other_signals ?? []).length > 0 && (<>
               <div className="hz-card__sec">该股其他入选记录</div>
               <ul className="hz-other">{d.other_signals!.map((o) => (
