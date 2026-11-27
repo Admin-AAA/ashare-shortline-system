@@ -6,14 +6,14 @@
 
 ---
 
-## 一、现役策略（2026-11-26）
+## 一、现役策略（2026-11-27）
 
 上线不靠感觉：先在 `docs/strategy-research.md` 预注册规则，回测扣成本后证据充分才上线，不达标就进淘汰列表，不事后放宽。
 
 | 周期 | 持有 | 现役策略 | 代码位置 |
 |---|---|---|---|
 | 短线 | T+1 起按策略离场 | 炒股养家、超跌资金反包、主线相对强度龙头、恐慌出清 RSI6+QVIX（观察），共 4 个 | `backend/skills/*/strategy.yaml`，参与名单与退役名单见 `backend/app/services/standalone_strategies.py` |
-| 中线 | 多为 20 日（弱反应/深跌类 5–10 日） | 25 个：小市值系 4 个周度策略、回购预案弱反应、业绩加速放量、预告弱反应、期权激励及放量版、大宗溢价、费用率下降放量、分红增加、流动资产占比放量、SUE 盈余加速系列及其组合 | `backend/app/services/midterm_service.py` 的 `STRATEGIES` |
+| 中线 | 多为 20 日（弱反应/深跌类 5–10 日） | 23 个：小市值系 4 个周度策略、回购预案弱反应、业绩加速放量、预告弱反应、期权激励及放量版、大宗溢价、费用率下降放量、分红增加、分红预案深跌、流动资产占比放量、SUE 盈余加速系列及其组合 | `backend/app/services/midterm_service.py` 的 `STRATEGIES` |
 | 长线 | 60 日 | 红利低波 | 同上 |
 
 - 策略上线与去留按全期扣费净收益（减 0.07% 往返税费）、同期同持有期全市场等权基准的超额、跨月符号一致性和样本量综合判断，没有固定数字门槛。
@@ -224,7 +224,7 @@ cd backend && .venv/bin/python -m pytest -q tests/<某个测试文件>.py
 ```
 
 - 测试自动连 `ashare_test` 库，不会碰生产库。
-- 全量回归 `cd backend && .venv/bin/python -m pytest -q tests`，最近一次 4286 passed / 24 skipped（约 4300 个用例）。
+- 全量回归 `cd backend && .venv/bin/python -m pytest -q tests`，最近一次 4293 passed / 24 skipped（约 4300 个用例）。
 - 提交前至少跑一次 `.venv/bin/python -c "import app.main"`。
 
 ---
