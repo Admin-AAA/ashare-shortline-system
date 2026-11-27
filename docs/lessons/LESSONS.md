@@ -2489,3 +2489,17 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 复现：`output/healthcheck-20261126/replay_live_diff.py`（结果 .txt 同目录）；过滤审计 `recommendation_run_filter_audits.payload_z`（zlib）里每票的 `trace` 与 `rule_gate`。
 - 吸收位置：`data_quality_monitor.check_short_replay_version`、`rolling_r12.short_replay_coverage_end_by_strategy`、`tests/test_short_replay_version_check.py`；重建脚本 `output/healthcheck-20261126/rebuild_short_replay.sh`。
 - 相关：L-224（短线 live 样本不足以下规则结论）、L-096（证据不得跨 evidence_class 汇总）、L-002（口径变化后旧 champion 失效）、L-068（跨进程 revision 一致）。
+
+## L-226 短线出场参数单策略复验：止损收到 4.5% 与关闭 trailing 在四个现役策略上都没有三窗同向改善，出场方向关闭
+
+- 状态：active（研究 FINDING，无代码变更；2026-11-27）。
+- 适用：任何想按单个短线策略调止损距离、trailing 开关来「修」跳空止损或熊市段亏损的提议。
+- 证据（formal 已结算 318 笔：replay 280 + live 38，信号日 2025-10-01～2026-11；canonical `_simulate_card` + 现行 `execution_policy.v5` + 各策略 YAML 出场覆盖；扣 0.07% 往返费；基准 = EWALL.A 同持有期链；窗口 W1 2025-10～2026-03、W2 2026-04～07、W3 2026-08～11）：
+  - 当前参数的重放与库内 `executed_return` 一致性：炒股养家 89/104、超跌反包 60/69、RSI6 37/57 在 0.01pp 内（中位差 <0.005pp）；主线相对强度龙头只有 25/88 一致、中位差 0.46pp（MA5/entry-low 出场未完全复现），该策略的 Δ 只作参考。
+  - 超额（W1/W2/W3，pp/笔）：炒股养家 current +1.42/+2.10/−1.42，stop 4.5 +1.37/+1.96/−1.16，trail off +2.43/+1.46/−2.97；超跌反包 current +1.66/+3.56/−1.85，stop 4.5 +1.79/+3.60/−2.41，trail off +0.69/+2.66/−1.59；主线龙头 current −0.33/−1.15/−0.62，stop 4.5 −0.42/−1.25/−0.36，trail off −0.02/−0.75/−1.64。没有一个「策略×候选」三窗同向优于 current；差值都在信号日 block bootstrap 95% 区间之内。
+  - RSI6+QVIX 三个候选结果完全相同（自带止损 4.5%/止盈 5%/trailing 激活 99%），且样本集中在 3 个信号日（单日占比 94%～100%），不可评估。
+- 永久规则：
+  - **(a) L-061「跳空止损不能靠止损距离修」在单策略口径下同样成立；短线止损距离与 trailing 开关方向关闭，不再按策略重挖。**
+  - **(b) 单策略出场候选只有在三个时间窗超额同向改善、且当前参数重放能与库内结算对齐时才可采纳；对不齐的策略（本轮主线龙头）先修重放再谈候选。**
+- 复现：`output/research/strategy_exit_revalidation.py`（结果 `.json`/`.log` 同目录）；交接记录 `docs/handoff/short-exit-per-strategy.md`。
+- 相关：L-061、L-113（三窗出场重算需匹配基线）、L-224（短线 live 样本不足）。
