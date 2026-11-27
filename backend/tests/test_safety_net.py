@@ -266,7 +266,7 @@ def test_safety_net_midlong_repairs_only_data_error_or_unrecorded(monkeypatch, t
     status = ms._status_dir()
     status.mkdir(parents=True, exist_ok=True)
     rows = {sid: {"status": "ok"} for sid in ms.STRATEGIES}
-    rows["mid-sue-accel-vol"] = {"status": "data_error"}  # 用现役策略举例（§1069 起 long-growth-streak 已下线）
+    rows["mid-curr-sue-vol"] = {"status": "data_error"}  # 用现役策略举例（§1069 起 long-growth-streak 已下线）
     rows["mid-incentive-option"] = {"status": "no_signal"}
     rows.pop("long-dividend-lowvol", None)  # 从未记录（用现役策略举例）
     (status / "2026-10-26.json").write_text(json.dumps(rows))
@@ -275,14 +275,14 @@ def test_safety_net_midlong_repairs_only_data_error_or_unrecorded(monkeypatch, t
     def fake_generate(db, as_of, force=False, horizon=None, strategy_ids=None, apply_daily_cap=False, data_gate=False):
         assert data_gate is True  # 盘前补跑是实盘入口，要开出票前数据闸门
         seen.update(as_of=as_of, ids=sorted(strategy_ids), cap=apply_daily_cap)
-        return {"mid-sue-accel-vol": "no_data", "long-dividend-lowvol": 3}
+        return {"mid-curr-sue-vol": "no_data", "long-dividend-lowvol": 3}
 
     monkeypatch.setattr(ms, "generate_picks", fake_generate)
     emitted = []
     monkeypatch.setattr("app.core.alerts.emit_alert", lambda kind, key, msg, **k: emitted.append((kind, key, msg)) or True)
     out = scheduler_service._safety_net_midlong_repair(None)
-    assert seen == {"as_of": "2026-10-26", "ids": ["long-dividend-lowvol", "mid-sue-accel-vol"], "cap": True}
-    assert out["still_error"] == ["mid-sue-accel-vol"] and out["picks"] == {"long-dividend-lowvol": 3}
+    assert seen == {"as_of": "2026-10-26", "ids": ["long-dividend-lowvol", "mid-curr-sue-vol"], "cap": True}
+    assert out["still_error"] == ["mid-curr-sue-vol"] and out["picks"] == {"long-dividend-lowvol": 3}
     assert emitted and emitted[0][0] == "midlong_repair_data_error"
 
 
