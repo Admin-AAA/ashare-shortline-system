@@ -2573,3 +2573,20 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
 - 复现：`output/research/mid-opt-20261127/`：`snapshot.py`、`fetch_bars.py`（只读库）、`engine.py`（结算重放）、`align.py`（对齐断言）、`q1.py`/`q1.txt`、`q2.py`/`q2.txt`/`q2_sorts.csv`、`q3.py`/`q3.txt`、`q3_hist.py`/`q3_hist.txt`。
 - 吸收位置：`CLAUDE.md` 已证伪方向（中线持有期/止盈止损/回撤离场、中线跨策略排序挑票）。
 - 相关：L-229（独有信号退役）、L-201（右尾驱动，止盈止损只改路径）、L-221（持有期调整已证伪）、L-224（beta 归因、逐月观察项）、L-226（出场须走生产结算路径）、L-227（每票一份计量）、L-096（replay 与 live 分开）。
+
+## L-228 中线事件当晚可见性、开盘价滑点、成本口径、worker 版本钉死、短线未成交机会成本：五项体检结论
+
+- 状态：encoded（2026-11-27；D2/D3/D4 已落地，D1/D5 为 FINDING）。
+- 适用：解读中线实盘与回放的差距、评估 alpha 数字要不要打折、改短线入场方式、维护 Prefect worker。
+- **D1 中线事件当晚可见性**（`output/healthcheck-20261126/mid_live_vs_recompute.py`，用当前库重算 10-19～11-26 共 28 个交易日 25 条策略的出票并与实盘落盘逐票比对）：实盘 346 票，重算 374 票；去掉周度策略非信号日后实盘漏 15 票、多 7 票，其中 10-20/10-29/11-02 三个三季报集中日漏 9 票（`fina_indicator_vip` 当晚未入全）、回购预案漏 3 票（上游 11-24/11-25 事后补了 40/1223 条公告）、大宗溢价多 3 票（上游后来修正了成交数据）。**实盘与现行代码重算 96% 一致，入场晚一天的只占约 4%**，不是中线实盘 17 笔 −11.3% 的来源（那是 10 月熊市段的样本，L-224）。
+- **D2 入场价真实性**（`entry_slippage.py`，5min 数据）：中线次日开盘价对首 5 分钟 VWAP 的滑点均值 −0.02%（n=1629，中位 −0.04%，p95 +2.4%），各市值桶 −0.10%～+0.14%，信号日涨 3～6% 的票 +0.27%，出场 −0.05%；首 5 分钟成交额占全天中位 11%。短线执行价对 VWAP +0.13%，`sector-relative-strength-leader` +0.96%（目标价触碰买在盘中拉升里）。**开盘价结算是诚实的，alpha 不需要再打折。**
+- **D3 成本口径**：短线 = 成交价含双边 10bps 滑点 + 0.07% 税费；中线 = 平扣 0.3%。两边实际总成本只差 0.03pp，但页面并排看像两套标准。现在 `trading_costs.TOTAL_ROUND_TRIP_COST_PCT`（0.07 + 0.20 = 0.27）从同一个 `DEFAULT_EXECUTION_POLICY` 推导，中线结算、EWALL.A 基准、组合视图、前端说明全部同源。
+- **D4 worker 版本钉死**：Prefect worker 启动时钉住 `ASHARE_APPLICATION_REVISION`，白天合进 main 的提交不会改变它声明的身份，当晚所有重建 run 都以「reconstruction worker revision does not match its batch manifest」失败（11-27 三条策略各 1 个 failed run）。落地：worker 启动写 `data/runtime/prefect_worker_identity.json`；`replay_all_days` 确认有待跑日期后先比对，不一致直接退出并给出修法；launchd `ashare-sync-revision` 工作日 15:10 若 worker revision 落后 HEAD 且无任务在跑，重启 worker 与后端。
+- **D5 短线未成交机会成本**（`short_missed_counterfactual.py`、`sector_entry_mode_cf.py`）：库里 `missed` 标签只在 `sector-relative-strength-leader`（39/127）和 `chen-xiaoqun-skill`（20/248）有量；粗算「开盘直买」这些票 5 日收益 +6.6% / +5.4%。但用生产 `_simulate_outcome` 对 sector 全部 132 笔推荐分别按 `target_touch` 与 `next_open` 重算，两者逐月逐笔完全相同（成交 130 笔，净均 +1.16%）：现行结算规则 r20261027 下该策略的入场政策已是 `backtest_open_window_v1`（开盘窗口，不再按目标价触碰），库里的 38 笔 missed 全部来自旧规则 r20261019 的 `causal_strategy_entry_v1`，按 2026-10-27 的版本口径决定保留原版本不重算。**现行规则下不存在「触碰型入场筛掉赢家」的问题；库里 missed 是历史版本的遗留，不能当现行表现读。**
+- 永久规则：
+  - **(a) 「实盘不如回放」先用当前库重算实盘日的出票逐票比对（本条脚本），一致率 ≥95% 时数据可见性不是原因，去看样本所在的市场段。**
+  - **(b) 开盘价是可成交价：中线以开盘价结算不需要额外滑点折扣；短线执行政策 10bps 双边滑点在实测范围内。**
+  - **(c) 两个周期的成本必须从同一个 ExecutionPolicy 推导，页面上并排的数字才可比；改任何一边先改 `DEFAULT_EXECUTION_POLICY`。**
+  - **(d) 读 `outcome_label=missed` 必须先看 `rule_version`/`entry_policy_id`：旧版本的 missed 不代表现行入场规则会错过这只票。**
+  - **(e) 改代码后当晚要跑的重建/补跑，先确认 worker 的 revision 已对齐（`prefect_worker_identity.json`），否则等 15:10 的自动重启。**
+- 相关：L-224（中线亏损归因）、L-225（短线回放版本）、L-133（入场方式由策略声明）、L-068（跨进程 revision 一致）、L-163（辅助数据可见性按入库时刻核对）。
