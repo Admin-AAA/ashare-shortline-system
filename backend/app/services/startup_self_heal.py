@@ -3,7 +3,7 @@
 根因
 ----
 这套系统跑在个人 Mac 上，机器不常在线。全部日更任务都挂在墙钟时刻
-（17:35 盘后同步 / 18:40 健康快照 / 21:00 晚间补数 / 22:20 研究缓存），
+（21:00 晚间补数 / 21:30 盘后出票 / 22:55 健康快照 / 23:30 研究缓存），
 机器没开机就整批漏掉。下次开机时没有任何机制按「本该跑的那个交易日」回补，
 于是日K、指数、涨停板、daily_basic、两融、派生指标、研究 parquet、正式出票
 成片滞后，健康分每隔一两天就掉一次（2026-11-13 实测 43 分、11-14 页面 67 分）。
@@ -488,13 +488,18 @@ _ACTIONS: tuple[tuple[str, Callable[[Session, list[str], dict[str, list[str]]], 
 
 def _archive_output_gaps(db: Session, days: list[str], now: datetime) -> dict[str, Any]:
     """把漏出票的交易日归档。**不补票、不改口径**：实盘出票错过无法事后补记为
-    live_forward，但必须留下可复盘的记录，而不是只靠健康分红项事后猜。"""
+    live_forward，但必须留下可复盘的记录，而不是只靠健康分红项事后猜。
+
+    当天没过出票截止（daily_output_check.OUTPUT_DEADLINE）不归档：21:30 出票和 22:15 watchdog
+    补跑还没轮完，此时缺票只是还没跑（2026-11-26 18:36 / 20:42 两轮都把当天记成了漏票）。"""
     try:
-        from app.services.daily_output_check import daily_output_status
+        from app.services.daily_output_check import daily_output_status, output_due
     except Exception:  # noqa: BLE001
         return {}
     out: dict[str, Any] = {}
     for day in days:
+        if not output_due(day, now):
+            continue
         try:
             st = daily_output_status(db, day, now=now.replace(tzinfo=None))
             if not st.get("ok"):
@@ -521,9 +526,12 @@ def _try_repick_missed_output(db: Session, days: list[str], now: datetime,
                                remaining_gaps: dict[str, list[str]]) -> dict[str, Any]:
     """库表补齐后，重试一次正式出票补跑。只读判定 + 复用既有幂等流程，不新造出票口径。
 
-    前置条件全部满足才调用 ``scheduler_service._late_repair_repick``：最近交易日仍缺票、
+    前置条件全部满足才调用 ``scheduler_service._late_repair_repick``：最近交易日已过出票截止仍缺票、
     还在入场日 09:15 之前、核心表缺口已清零、没有在途 formal run、健康闸门通过
     （后三项由被复用的流程自己再查一遍）。pytest 下直接跳过，避免单测误触发生产出票。
+
+    出票截止之前不补跑当天：当天的票归 21:00 补数 / 21:30 出票 / 22:15 watchdog。2026-11-25 20:52
+    守护轮把还没到点的当天判成漏票，抢在 21:00 补数和 21:30 出票之前自己出了 4 个策略的票。
     """
     if not days:
         return {"status": "skipped", "reason": "no_trade_day"}
@@ -535,9 +543,11 @@ def _try_repick_missed_output(db: Session, days: list[str], now: datetime,
         return {"status": "skipped", "reason": "data_gaps_remain", "gaps": sorted(remaining_gaps)}
     trade_date = days[-1]
     try:
-        from app.services.daily_output_check import daily_output_status
+        from app.services.daily_output_check import daily_output_status, output_due
         from app.services.midterm_live_seal import generated_before_entry_open
 
+        if not output_due(trade_date, now):
+            return {"status": "skipped", "reason": "before_output_deadline", "trade_date": trade_date}
         if not generated_before_entry_open(trade_date, datetime.now(timezone.utc)):
             return {"status": "skipped", "reason": "past_entry_open", "trade_date": trade_date}
         st = daily_output_status(db, trade_date, now=now.replace(tzinfo=None))

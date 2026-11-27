@@ -1090,14 +1090,15 @@ def check_health_diagnosis(db) -> dict[str, Any]:
 
 
 def check_daily_output(db, open_days: list[str], now: datetime | None = None) -> dict[str, Any]:
-    """盘后出票是否成功（短线实盘 run + 中长线运行记录），过了当天 18:35 仍没出来 = 红项。
+    """盘后出票是否成功（短线实盘 run + 中长线运行记录），过了当天出票截止（OUTPUT_DEADLINE，22:50）
+    仍没出来 = 红项；没到截止时判上一个交易日，21:30 出票还在跑的当天不会被判成失败。
 
-    任务状态（job:post_sync_formal_recommendation）只说明 17:35 那一次跑没跑成；这里看结果：
+    任务状态（job:post_sync_formal_recommendation）只说明 21:30 那一次跑没跑成；这里看结果：
     事后用正式流程补跑成功也算出票成功，带历史日期参数的补跑（记为回放）不算。"""
     from app.services.daily_output_check import daily_output_status, output_target_date
 
     now = now or _now()
-    target = output_target_date(open_days, now.replace(tzinfo=None))
+    target = output_target_date(open_days, now)
     if not target:
         return _item("formal:daily_output", "盘后出票", "盘后出票", GREEN, kind="job", detail="没有可核对的交易日")
     st = daily_output_status(db, target, now=now.astimezone(_CST).replace(tzinfo=None))

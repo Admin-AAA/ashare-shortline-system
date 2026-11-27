@@ -1,13 +1,14 @@
-"""数据健康分每日快照：每个交易日 18:40 存一份原始记录，用来看近 20 个交易日的均值和出票成功率。
+"""数据健康分每日快照：每个交易日 22:55 存一份原始记录，用来看近 20 个交易日的均值和出票成功率。
 
 健康分本身是"请求那一刻"现算的，同一天上午 50、晚上 79 都可能，单看一次没法跟踪。这里固定时刻取样：
 
-- 原始记录（original）：只由 18:40 定时那次写入（当天 18:40–19:40、还没有原始记录），写入后不可覆盖；
-  超过 19:40 才跑到（机器休眠后补跑等）只记复核。文件读写用文件锁（跨进程）。
+- 原始记录（original）：只由 22:55 定时那次写入（当天 22:55–23:55、还没有原始记录），写入后不可覆盖；
+  超过 23:55 才跑到（机器休眠后补跑等）只记复核。文件读写用文件锁（跨进程）。
+  22:55 排在 21:30 出票、22:15 watchdog 补跑和 22:50 出票截止之后，原始记录判的就是当天的最终出票。
   先重跑一次统一巡检，再按页面同一公式算分，连同红/黄项和当天盘后出票结果一起存。
 - 复核（rechecks）：之后的任何重跑（次日 08:55 复核、手动触发）只追加到 rechecks，带时间，不改原始记录。
   定时复核过了 09:15 就跳过。
-  大宗交易这类 21:00 才发布的数据，18:40 时只记「待数据、未到点」，次日复核的结果写在这里。
+  大宗交易这类 21:00 才发布的数据，22:55 时还没出票只记「待数据、未到点」，次日复核的结果写在这里。
 - 巡检本身失败：这一次标 quality_ok=false、score 为空，不拿旧报告凑分；不计入均值，单独计数显示。
 
 均值和出票成功率只用原始记录。文件：data/runtime/data_health_snapshots.jsonl（每个交易日一行）。
@@ -27,8 +28,10 @@ from app.services.data_quality_monitor import DATA_DIR
 logger = logging.getLogger(__name__)
 
 SNAPSHOT_PATH = DATA_DIR / "runtime" / "data_health_snapshots.jsonl"
-ORIGINAL_TIME = _dt.time(18, 40)
-ORIGINAL_WINDOW_END = _dt.time(19, 40)  # 原始记录只允许 18:40–19:40 写入；超时（机器休眠后补跑等）只记复核
+# 原始记录时点 = scheduler_pure.DATA_HEALTH_SNAPSHOT_CRON（22:55）。2026-11-24 定时挪到 22:55 时这里还留着 18:40–19:40，
+# 之后每天的 22:55 取样都落进复核，原始记录一条没写，均值和出票成功率漏掉这些天；test_original_slot_follows_cron 校验两边一致。
+ORIGINAL_TIME = _dt.time(22, 55)
+ORIGINAL_WINDOW_END = _dt.time(23, 55)  # 原始记录只允许 22:55–23:55 写入；超时（机器休眠后补跑等）只记复核
 RECHECK_LATEST = _dt.time(9, 15)  # 次日复核过了 09:15（开盘集合竞价）就跳过，不和交易时段抢资源
 MODE_ORIGINAL = "original"
 MODE_RECHECK = "recheck"
@@ -118,14 +121,14 @@ def _lock_path(path: Path) -> Path:
 
 def take_snapshot(db, *, mode: str = MODE_ORIGINAL, now: _dt.datetime | None = None,
                   path: Path | None = None) -> dict[str, Any]:
-    """mode=original（18:40 定时）：当天还没有原始记录且已过 18:40 才写原始记录，否则记为复核。
+    """mode=original（22:55 定时）：当天还没有原始记录且在 22:55–23:55 内才写原始记录，否则记为复核。
     mode=recheck（次日 08:55 / 手动）：只追加复核。返回 {"trade_date", "written": original|recheck, "sample"}。"""
     from app.services.daily_output_check import output_target_date
     from app.services.data_quality_monitor import _now, load_open_days
 
     now = now or _now()
     open_days = load_open_days(db)
-    trade_date = output_target_date(open_days, now.replace(tzinfo=None)) or now.date().isoformat()
+    trade_date = output_target_date(open_days, now) or now.date().isoformat()
     sample = measure(db, now=now, trade_date=trade_date)
     from app.governance.locking import file_lock
 
@@ -172,11 +175,11 @@ def summarize(days: int = 20, path: Path | None = None) -> dict[str, Any]:
 
     - 均值只用巡检成功的原始记录；巡检失败的天数单独计数（quality_failed_days）。
     - 出票成功率按**每个交易日的最终出票结论**算：有复核就用最后一次复核，没有复核才用
-      原始记录。18:40 取样时当日盘后出票还没跑（短线 formal 在 21:40 之后），原始记录的
-      ``failed`` 只代表「那一刻还没有」，不是当日结论——此前按原始记录算，导致成功率
-      恒为 0、failure 日期天天全红（2026-11-22 体检发现）。
-    - 没有原始记录（18:40 没跑上）的天数单独计数，不补。
-    - 原始记录时点的状态另存 ``output_failed_at_original_dates``，用于排查「18:40 时还没出票」。
+      原始记录。次日 08:55 复核能看到 08:03 盘前备份补上的大宗交易等晚发布数据；旧的 18:40
+      取样早于出票，原始记录的 ``failed`` 只代表「那一刻还没有」，按原始记录算曾让成功率
+      恒为 0（2026-11-22 体检发现）。
+    - 没有原始记录（22:55 没跑上）的天数单独计数，不补。
+    - 原始记录时点的状态另存 ``output_failed_at_original_dates``，用于排查「22:55 时还没出齐」。
     """
     rows = sorted(load_snapshots(path), key=lambda r: str(r.get("trade_date")))[-days:]
     originals = [r for r in rows if r.get("original")]
@@ -209,7 +212,7 @@ def summarize(days: int = 20, path: Path | None = None) -> dict[str, Any]:
         "min_score": min(scores) if scores else None,
         "output_success_rate": round(sum(out_ok) / len(out_ok), 3) if out_ok else None,
         "output_success_rate_rule": "按每个交易日最新一条记录（复核优先，其次原始）判定；"
-                                    "18:40 原始记录时点尚未出票不计入失败",
+                                    "22:55 原始记录时点尚未出齐、次日复核已出齐的不计入失败",
         "output_failed_dates": [r["trade_date"] for r, status in zip(originals, final_statuses)
                                 if status == "failed"],
         "output_pending_dates": [r["trade_date"] for r, status in zip(originals, final_statuses)

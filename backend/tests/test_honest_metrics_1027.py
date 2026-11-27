@@ -124,7 +124,8 @@ def test_output_target_date():
 
     days = ["2026-10-22", "2026-10-23", "2026-10-26", "2026-10-27"]
     assert output_target_date(days, dt.datetime(2026, 10, 26, 18, 30)) == "2026-10-23"
-    assert output_target_date(days, dt.datetime(2026, 10, 26, 18, 40)) == "2026-10-26"
+    assert output_target_date(days, dt.datetime(2026, 10, 26, 22, 49)) == "2026-10-23"
+    assert output_target_date(days, dt.datetime(2026, 10, 26, 22, 50)) == "2026-10-26"
     assert output_target_date(days, dt.datetime(2026, 10, 25, 12, 0)) == "2026-10-23"  # 周末
 
 
@@ -138,11 +139,11 @@ def test_daily_output_red_when_short_strategy_missing(monkeypatch):
     monkeypatch.setattr(doc, "_live_short_runs", lambda db, d: {"a": {"run_id": "r1", "recommended_count": 0}})
     all_ok = {sid: {"status": "no_signal"} for sid in ms.STRATEGIES}
     monkeypatch.setattr(doc, "_midlong_status", lambda d: {"status_file": True, "stored": all_ok})
-    item = dqm.check_daily_output(None, ["2026-10-23", "2026-10-26"], dt.datetime(2026, 10, 26, 19, 0, tzinfo=dqm._CST))
+    item = dqm.check_daily_output(None, ["2026-10-23", "2026-10-26"], dt.datetime(2026, 10, 26, 22, 50, tzinfo=dqm._CST))
     assert item["severity"] == dqm.RED and "b" in item["detail"]
     monkeypatch.setattr(doc, "_live_short_runs", lambda db, d: {"a": {"run_id": "r1", "recommended_count": 0},
                                                                "b": {"run_id": "r2", "recommended_count": 1}})
-    item = dqm.check_daily_output(None, ["2026-10-23", "2026-10-26"], dt.datetime(2026, 10, 26, 19, 0, tzinfo=dqm._CST))
+    item = dqm.check_daily_output(None, ["2026-10-23", "2026-10-26"], dt.datetime(2026, 10, 26, 22, 50, tzinfo=dqm._CST))
     assert item["severity"] == dqm.GREEN  # 0 只推荐也算出票成功
 
 
@@ -169,11 +170,11 @@ def _sample(score, status="ok", quality_ok=True, red=()):
 def test_snapshot_original_is_immutable_and_rechecks_append(monkeypatch, tmp_path):
     p = tmp_path / "snap.jsonl"
     hs = _patch_snapshot(monkeypatch, [_sample(90), _sample(60, "failed"), _sample(85)])
-    d = dt.datetime(2026, 10, 26, 18, 40, tzinfo=CN)
+    d = dt.datetime(2026, 10, 26, 22, 55, tzinfo=CN)
     assert hs.take_snapshot(None, mode="original", now=d, path=p)["written"] == "original"
-    # 18:40 之后同一天再跑一次 original 模式：不覆盖，只记复核
-    assert hs.take_snapshot(None, mode="original", now=d.replace(hour=21), path=p)["written"] == "recheck"
-    # 次日 08:55 复核：目标仍是 10-26（10-27 还没过 18:35），只写复核
+    # 22:55 之后同一天再跑一次 original 模式：不覆盖，只记复核
+    assert hs.take_snapshot(None, mode="original", now=d.replace(hour=23), path=p)["written"] == "recheck"
+    # 次日 08:55 复核：目标仍是 10-26（10-27 还没过 22:50 出票截止），只写复核
     r = hs.take_snapshot(None, mode="recheck", now=dt.datetime(2026, 10, 27, 8, 55, tzinfo=CN), path=p)
     assert r["trade_date"] == "2026-10-26" and r["written"] == "recheck"
     rec = hs.load_snapshots(p)[0]
@@ -183,11 +184,14 @@ def test_snapshot_original_is_immutable_and_rechecks_append(monkeypatch, tmp_pat
     assert s["recheck_failed_dates"] == []  # 最后一次复核已恢复
 
 
-def test_snapshot_before_1840_is_not_original(monkeypatch, tmp_path):
+def test_snapshot_before_2255_is_not_original(monkeypatch, tmp_path):
     p = tmp_path / "snap.jsonl"
-    hs = _patch_snapshot(monkeypatch, [_sample(70)])
+    hs = _patch_snapshot(monkeypatch, [_sample(70), _sample(71)])
     r = hs.take_snapshot(None, mode="original", now=dt.datetime(2026, 10, 27, 17, 0, tzinfo=CN), path=p)
-    assert r["trade_date"] == "2026-10-26" and r["written"] == "recheck"  # 手动早跑不能占用 18:40 原始记录
+    assert r["trade_date"] == "2026-10-26" and r["written"] == "recheck"  # 手动早跑不能占用 22:55 原始记录
+    # 21:40（21:30 出票刚跑、还没到 22:50 截止）同样判上一交易日、只记复核
+    r = hs.take_snapshot(None, mode="original", now=dt.datetime(2026, 10, 27, 21, 40, tzinfo=CN), path=p)
+    assert r["trade_date"] == "2026-10-26" and r["written"] == "recheck"
 
 
 def test_snapshot_quality_failure_excluded_from_average(monkeypatch, tmp_path):
@@ -196,7 +200,7 @@ def test_snapshot_quality_failure_excluded_from_average(monkeypatch, tmp_path):
                                        _sample(60, "failed", red=["formal:daily_output"])])
     for day in ("2026-10-21", "2026-10-22", "2026-10-23", "2026-10-26"):
         y, m, dd = map(int, day.split("-"))
-        hs.take_snapshot(None, mode="original", now=dt.datetime(y, m, dd, 18, 40, tzinfo=CN), path=p)
+        hs.take_snapshot(None, mode="original", now=dt.datetime(y, m, dd, 22, 55, tzinfo=CN), path=p)
     s = hs.summarize(20, p)
     assert s["quality_failed_days"] == 1
     assert s["avg_score"] == pytest.approx(70.0)  # (80+70+60)/3，巡检失败那天不计入
@@ -214,7 +218,7 @@ def test_measure_does_not_use_stale_report_when_quality_fails(monkeypatch):
     monkeypatch.setattr(dqm, "load_report", lambda: pytest.fail("不能回退旧报告"))
     monkeypatch.setattr(hs, "combined_health", lambda *a, **k: pytest.fail("巡检失败时不算分"))
     monkeypatch.setattr(doc, "daily_output_status", lambda db, d, now=None: {"status": "ok", "ok": True, "reason": ""})
-    s = hs.measure(None, now=dt.datetime(2026, 10, 26, 18, 40, tzinfo=CN), trade_date="2026-10-26")
+    s = hs.measure(None, now=dt.datetime(2026, 10, 26, 22, 55, tzinfo=CN), trade_date="2026-10-26")
     assert s["quality_ok"] is False and s["score"] is None and s["output_status"] == "ok"
 
 
@@ -245,15 +249,15 @@ def test_block_trade_pending_until_next_morning():
 
     stored = {"mid-a": {"status": "ok"}}  # 大宗溢价还没有记录
     sids = ["mid-a", "mid-block-trade-premium"]
-    at_1840 = classify_midlong(stored, "2026-10-26", dt.datetime(2026, 10, 26, 18, 40), sids)
-    assert at_1840 == {"missing": [], "data_error": [], "data_not_ready": [], "pending": ["mid-block-trade-premium"]}
+    at_2255 = classify_midlong(stored, "2026-10-26", dt.datetime(2026, 10, 26, 22, 55), sids)
+    assert at_2255 == {"missing": [], "data_error": [], "data_not_ready": [], "pending": ["mid-block-trade-premium"]}
     nodata = {**stored, "mid-block-trade-premium": {"status": "data_error"}}
     assert classify_midlong(nodata, "2026-10-26", dt.datetime(2026, 10, 26, 21, 40), sids)["pending"] == \
         ["mid-block-trade-premium"]
     at_0855 = classify_midlong(nodata, "2026-10-26", dt.datetime(2026, 10, 27, 8, 55), sids)
     assert at_0855["data_error"] == ["mid-block-trade-premium"] and not at_0855["pending"]
     # 其它策略缺记录照常算失败
-    assert classify_midlong({}, "2026-10-26", dt.datetime(2026, 10, 26, 18, 40), sids)["missing"] == ["mid-a"]
+    assert classify_midlong({}, "2026-10-26", dt.datetime(2026, 10, 26, 22, 55), sids)["missing"] == ["mid-a"]
 
 
 def test_seal_fallback_not_cached_alerts_and_does_not_lock(monkeypatch):
@@ -403,18 +407,18 @@ def test_rolling_trade_stats_and_blackout():
 
 
 def test_snapshot_output_status_prefers_latest_recheck(monkeypatch, tmp_path):
-    """18:40 原始记录时当日还没出票（failed），次日复核 ok 才是当日结论。
+    """22:55 原始记录时当日还没出齐（failed，如中长线数据异常），次日复核 ok 才是当日结论。
 
     此前成功率只看原始记录 → 恒 0、failure 日期天天全红（2026-11-22 体检发现）。
     """
     p = tmp_path / "snap.jsonl"
     hs = _patch_snapshot(monkeypatch, [_sample(70, "failed"), _sample(80, "ok")])
-    hs.take_snapshot(None, mode="original", now=dt.datetime(2026, 10, 26, 18, 40, tzinfo=CN), path=p)
+    hs.take_snapshot(None, mode="original", now=dt.datetime(2026, 10, 26, 22, 55, tzinfo=CN), path=p)
     hs.take_snapshot(None, mode="recheck", now=dt.datetime(2026, 10, 27, 8, 55, tzinfo=CN), path=p)
 
     s = hs.summarize(20, p)
 
     assert s["output_success_rate"] == 1.0
     assert s["output_failed_dates"] == []
-    # 取样时点的真实状态仍可查，便于排查「18:40 时还没出票」
+    # 取样时点的真实状态仍可查，便于排查「22:55 时还没出齐」
     assert s["output_failed_at_original_dates"] == ["2026-10-26"]

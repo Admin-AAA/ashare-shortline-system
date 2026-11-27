@@ -1,4 +1,4 @@
-"""PR #10 审查小建议：复核过 09:15 跳过、原始记录只在 18:40–19:40 写、新告警自动解除、快照文件锁、短线回放终点从数据读。"""
+"""PR #10 审查小建议：复核过 09:15 跳过、原始记录只在 22:55–23:55 写、新告警自动解除、快照文件锁、短线回放终点从数据读。"""
 from __future__ import annotations
 
 import datetime as dt
@@ -22,15 +22,18 @@ def fake_measure(monkeypatch):
         "output_status": "ok", "output_ok": True, "output": {"reason": ""}})
 
 
-def test_original_only_between_1840_and_1940(fake_measure, tmp_path):
+def test_original_only_between_2255_and_2355(fake_measure, tmp_path):
     p = tmp_path / "s.jsonl"
-    late = hs.take_snapshot(None, mode="original", now=dt.datetime(2026, 10, 26, 19, 41, tzinfo=CN), path=p)
-    assert late["written"] == "recheck"  # 超过 19:40 只记复核
+    late = hs.take_snapshot(None, mode="original", now=dt.datetime(2026, 10, 26, 23, 56, tzinfo=CN), path=p)
+    assert late["written"] == "recheck"  # 超过 23:55 只记复核
     assert hs.load_snapshots(p)[0]["original"] is None
-    ok = hs.take_snapshot(None, mode="original", now=dt.datetime(2026, 10, 27, 19, 39, tzinfo=CN), path=p)
+    ok = hs.take_snapshot(None, mode="original", now=dt.datetime(2026, 10, 27, 23, 54, tzinfo=CN), path=p)
     assert ok["written"] == "original"
-    assert hs.is_original_slot("2026-10-27", dt.datetime(2026, 10, 27, 18, 40, tzinfo=CN))
-    assert not hs.is_original_slot("2026-10-27", dt.datetime(2026, 10, 27, 19, 40, tzinfo=CN))
+    assert hs.is_original_slot("2026-10-27", dt.datetime(2026, 10, 27, 22, 55, tzinfo=CN))
+    assert not hs.is_original_slot("2026-10-27", dt.datetime(2026, 10, 27, 22, 54, tzinfo=CN))
+    assert not hs.is_original_slot("2026-10-27", dt.datetime(2026, 10, 27, 23, 55, tzinfo=CN))
+    # 旧窗口 18:40 不再写原始记录（那时 21:30 出票还没跑）
+    assert not hs.is_original_slot("2026-10-27", dt.datetime(2026, 10, 27, 18, 40, tzinfo=CN))
 
 
 def test_scheduled_recheck_skipped_after_0915(monkeypatch):

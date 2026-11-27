@@ -10,6 +10,9 @@
    例外：晚发布数据的策略（LATE_DATA_STRATEGIES，大宗交易约 21:00 发布）在次日 08:30 之前没有结果只记「待数据、未到点」，
    不算失败；次日 08:50 复核时仍没有才算失败。
 
+什么时候判：某个交易日要过了当天 OUTPUT_DEADLINE 才判它（output_due / output_target_date）；
+没到点时巡检、健康快照判上一个交易日，自愈也不归档、不补跑当天，缺票只代表「还没跑完」。
+
 只读：查 recommendation_runs、skill_registry 和 status 文件，不写库、不调上游。
 """
 from __future__ import annotations
@@ -22,9 +25,15 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select, text
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
-OUTPUT_DEADLINE = _dt.time(18, 35)  # 17:35 盘后日更 + 1 小时：过了这个点还没出票，就算当天出票失败
-# 晚发布数据的策略：大宗交易约 21:00 才发布（21:00 晚间补数出票，次日 08:03 盘前备份再补一次）。
-# 17:35 / 18:40 时没有结果只记「待数据、未到点」；到次日 LATE_DATA_READY_TIME 仍没有才算失败（08:50 复核）。
+# 出票截止：过了当天这个点还没出票，才算当天出票失败。取 22:50 晚间数据质量验收的时点（scheduler_pure.DATA_QUALITY_CHECKS），
+# 排在全部自动出票路径之后：21:00 晚间补数（闸门通过即 late_repick）→ 21:30 盘后出票流水线
+# → 22:15 daily_run_watchdog 缺票时自动补跑一次。流水线单次实测 16–22 分钟（11-25 21:30 那次 982 秒，
+# 11-25 watchdog 补跑 1300 秒），22:15 补跑约 22:37 结束。22:50 验收与 22:55 健康快照都要判当天，截止不能晚于它们；
+# test_output_deadline_follows_schedule 校验这条顺序。
+# 旧值 18:35（17:35 日更 + 1 小时）在 2026-11-24 出票挪到 21:30 后没跟着改，18:35–21:30 会把当天误报为出票失败。
+OUTPUT_DEADLINE = _dt.time(22, 50)
+# 晚发布数据的策略：大宗交易约 21:00 才发布（21:30 出票时可能还没有，次日 08:03 盘前备份再补一次）。
+# 当晚 22:50 验收 / 22:55 快照时没有结果只记「待数据、未到点」；到次日 LATE_DATA_READY_TIME 仍没有才算失败（08:50 巡检）。
 LATE_DATA_STRATEGIES: dict[str, str] = {"mid-block-trade-premium": "大宗交易约 21:00 发布"}
 LATE_DATA_READY_TIME = _dt.time(8, 30)
 
@@ -149,10 +158,16 @@ def daily_output_status(db, trade_date: str, now: _dt.datetime | None = None) ->
     }
 
 
+def _cn_naive(now: _dt.datetime) -> _dt.datetime:
+    return now.astimezone(CN_TZ).replace(tzinfo=None) if now.tzinfo is not None else now
+
+
+def output_due(trade_date: str, now: _dt.datetime) -> bool:
+    """trade_date 是否已过出票截止（当天 OUTPUT_DEADLINE）。now 为北京时间 naive；带时区的先换成北京时间。"""
+    return _cn_naive(now) >= _dt.datetime.combine(_dt.date.fromisoformat(trade_date), OUTPUT_DEADLINE)
+
+
 def output_target_date(open_days: list[str], now: _dt.datetime) -> str | None:
-    """已过出票截止（当天 18:35）的最近一个交易日。open_days 为升序 YYYY-MM-DD。"""
-    today = now.date().isoformat()
-    past = [d for d in open_days if d < today]
-    if today in open_days and now.time() >= OUTPUT_DEADLINE:
-        return today
-    return past[-1] if past else None
+    """已过出票截止的最近一个交易日（当天过了 OUTPUT_DEADLINE 才轮到当天）。open_days 为升序 YYYY-MM-DD。"""
+    due = [d for d in open_days if output_due(d, now)]
+    return due[-1] if due else None
