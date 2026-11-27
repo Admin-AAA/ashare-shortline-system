@@ -1,6 +1,6 @@
 {
- "probed_at": "2026-11-25T12:25:38+0800",
- "last_trade_date": "20261124",
+ "probed_at": "2026-11-28T02:06:52+0800",
+ "last_trade_date": "20261127",
  "rows": [
   {
    "provider": "promax",
@@ -11,20 +11,18 @@
    "message": "promax daily failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 597,
+   "latency_ms": 4761,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "daily",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata daily failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 1530,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -32,8 +30,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 623,
+   "latest": "20261127",
+   "latency_ms": 481,
    "field_completeness": 1.0
   },
   {
@@ -45,20 +43,18 @@
    "message": "promax adj_factor failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 664,
+   "latency_ms": 3638,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "adj_factor",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata adj_factor failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 611,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -66,8 +62,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 237,
+   "latest": "20261127",
+   "latency_ms": 192,
    "field_completeness": 1.0
   },
   {
@@ -79,20 +75,18 @@
    "message": "promax daily_basic failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 587,
+   "latency_ms": 4023,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "daily_basic",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata daily_basic failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 1039,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -100,8 +94,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 565,
+   "latest": "20261127",
+   "latency_ms": 523,
    "field_completeness": 1.0
   },
   {
@@ -113,20 +107,18 @@
    "message": "promax stk_limit failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 691,
+   "latency_ms": 3762,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "stk_limit",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata stk_limit failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 586,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -134,8 +126,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 234,
+   "latest": "20261127",
+   "latency_ms": 197,
    "field_completeness": 1.0
   },
   {
@@ -147,20 +139,18 @@
    "message": "promax trade_cal failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 621,
+   "latency_ms": 3627,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "trade_cal",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata trade_cal failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 623,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -168,8 +158,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 30,
-   "latest": "20261124",
-   "latency_ms": 244,
+   "latest": "20261127",
+   "latency_ms": 208,
    "field_completeness": 1.0
   },
   {
@@ -181,20 +171,18 @@
    "message": "promax stock_basic failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 712,
+   "latency_ms": 3499,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "stock_basic",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata stock_basic failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
+   "status": "ok",
+   "rows": 1,
    "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "latency_ms": 588,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -203,7 +191,7 @@
    "status": "ok",
    "rows": 1,
    "latest": null,
-   "latency_ms": 246,
+   "latency_ms": 231,
    "field_completeness": 1.0
   },
   {
@@ -215,20 +203,18 @@
    "message": "promax namechange failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 628,
+   "latency_ms": 3619,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "namechange",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata namechange failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 4,
+   "latest": "20120120",
+   "latency_ms": 598,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -249,29 +235,27 @@
    "message": "promax suspend_d failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 738,
+   "latency_ms": 4013,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "suspend_d",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata suspend_d failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 67,
+   "latest": "20261127",
+   "latency_ms": 595,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
    "api": "suspend_d",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 63,
-   "latest": "20261124",
-   "latency_ms": 229,
+   "rows": 67,
+   "latest": "20261127",
+   "latency_ms": 197,
    "field_completeness": 1.0
   },
   {
@@ -283,20 +267,18 @@
    "message": "promax moneyflow failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 760,
+   "latency_ms": 3645,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "moneyflow",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata moneyflow failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 637,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -304,8 +286,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 306,
+   "latest": "20261127",
+   "latency_ms": 270,
    "field_completeness": 1.0
   },
   {
@@ -317,20 +299,18 @@
    "message": "promax moneyflow_hsgt failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 768,
+   "latency_ms": 3644,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "moneyflow_hsgt",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata moneyflow_hsgt failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 944,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -338,8 +318,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 240,
+   "latest": "20261127",
+   "latency_ms": 198,
    "field_completeness": 1.0
   },
   {
@@ -351,20 +331,18 @@
    "message": "promax hsgt_top10 failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 580,
+   "latency_ms": 3606,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "hsgt_top10",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata hsgt_top10 failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 80,
+   "latest": "20261127",
+   "latency_ms": 570,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -375,7 +353,7 @@
    "message": "teajoin hsgt_top10 failed (invalid_request, upstream=-1: bad request: 以下参数至少传一个: ts_code, trade_date)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 222,
+   "latency_ms": 192,
    "field_completeness": 0.0
   },
   {
@@ -387,20 +365,18 @@
    "message": "promax hk_hold failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 657,
+   "latency_ms": 3512,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "hk_hold",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata hk_hold failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
+   "status": "empty",
    "rows": 0,
    "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "latency_ms": 579,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -409,7 +385,7 @@
    "status": "empty",
    "rows": 0,
    "latest": null,
-   "latency_ms": 243,
+   "latency_ms": 194,
    "field_completeness": 1.0
   },
   {
@@ -421,29 +397,27 @@
    "message": "promax top_list failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 5704,
+   "latency_ms": 4142,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "top_list",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata top_list failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 86,
+   "latest": "20261127",
+   "latency_ms": 703,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
    "api": "top_list",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 72,
-   "latest": "20261124",
-   "latency_ms": 247,
+   "rows": 86,
+   "latest": "20261127",
+   "latency_ms": 198,
    "field_completeness": 1.0
   },
   {
@@ -455,29 +429,27 @@
    "message": "promax top_inst failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 654,
+   "latency_ms": 3467,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "top_inst",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata top_inst failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 860,
+   "latest": "20261127",
+   "latency_ms": 622,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
    "api": "top_inst",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 720,
-   "latest": "20261124",
-   "latency_ms": 405,
+   "rows": 860,
+   "latest": "20261127",
+   "latency_ms": 248,
    "field_completeness": 1.0
   },
   {
@@ -489,29 +461,27 @@
    "message": "promax limit_list_d failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 651,
+   "latency_ms": 7142,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "limit_list_d",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata limit_list_d failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 459,
+   "latest": "20261127",
+   "latency_ms": 825,
+   "field_completeness": 0.947
   },
   {
    "provider": "teajoin",
    "api": "limit_list_d",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 125,
-   "latest": "20261124",
-   "latency_ms": 236,
+   "rows": 459,
+   "latest": "20261127",
+   "latency_ms": 248,
    "field_completeness": 1.0
   },
   {
@@ -523,29 +493,27 @@
    "message": "promax block_trade failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 41110,
+   "latency_ms": 3507,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "block_trade",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata block_trade failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 523,
+   "latest": "20261127",
+   "latency_ms": 950,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
    "api": "block_trade",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 428,
-   "latest": "20261124",
-   "latency_ms": 289,
+   "rows": 523,
+   "latest": "20261127",
+   "latency_ms": 207,
    "field_completeness": 1.0
   },
   {
@@ -557,20 +525,18 @@
    "message": "promax margin failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 1007,
+   "latency_ms": 3719,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "margin",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata margin failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 21,
+   "latest": "20261126",
+   "latency_ms": 580,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -578,8 +544,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 21,
-   "latest": "20261124",
-   "latency_ms": 229,
+   "latest": "20261126",
+   "latency_ms": 184,
    "field_completeness": 1.0
   },
   {
@@ -591,29 +557,27 @@
    "message": "promax margin_detail failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 723,
+   "latency_ms": 3608,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "margin_detail",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata margin_detail failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 21,
+   "latest": "20261126",
+   "latency_ms": 712,
+   "field_completeness": 0.909
   },
   {
    "provider": "teajoin",
    "api": "margin_detail",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 251,
+   "rows": 21,
+   "latest": "20261126",
+   "latency_ms": 233,
    "field_completeness": 1.0
   },
   {
@@ -625,20 +589,18 @@
    "message": "promax ths_index failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 836,
+   "latency_ms": 3602,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "ths_index",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata ths_index failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
+   "status": "ok",
+   "rows": 395,
    "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "latency_ms": 704,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -647,7 +609,7 @@
    "status": "ok",
    "rows": 412,
    "latest": null,
-   "latency_ms": 416,
+   "latency_ms": 199,
    "field_completeness": 1.0
   },
   {
@@ -659,29 +621,27 @@
    "message": "promax ths_member failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 712,
+   "latency_ms": 3839,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "ths_member",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata ths_member failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
+   "status": "ok",
+   "rows": 283,
    "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "latency_ms": 716,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
    "api": "ths_member",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 282,
+   "rows": 283,
    "latest": null,
-   "latency_ms": 260,
+   "latency_ms": 218,
    "field_completeness": 1.0
   },
   {
@@ -693,7 +653,7 @@
    "message": "promax stk_mins failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 713,
+   "latency_ms": 3525,
    "field_completeness": 0.0
   },
   {
@@ -701,11 +661,11 @@
    "api": "stk_mins",
    "rate_limit_per_minute": 90,
    "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata stk_mins failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
+   "error": "provider_error",
+   "message": "quantdata stk_mins failed (provider_error, upstream=2003: api not purchased)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 0,
+   "latency_ms": 361,
    "field_completeness": 0.0
   },
   {
@@ -713,11 +673,11 @@
    "api": "stk_mins",
    "rate_limit_per_minute": 480,
    "status": "error",
-   "error": "provider_error",
-   "message": "teajoin stk_mins failed (provider_error, upstream=-1: start_date/end_date 格式错误，请使用 YYYY-MM-DD HH:MM:SS，且起始时间不能晚于结束时间)",
+   "error": "circuit_open",
+   "message": "teajoin stk_mins failed (circuit_open)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 221,
+   "latency_ms": 1,
    "field_completeness": 0.0
   },
   {
@@ -729,7 +689,7 @@
    "message": "promax rt_k failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 652,
+   "latency_ms": 3618,
    "field_completeness": 0.0
   },
   {
@@ -737,11 +697,11 @@
    "api": "rt_k",
    "rate_limit_per_minute": 90,
    "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata rt_k failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
+   "error": "http_rate_limit",
+   "message": "quantdata rt_k failed (http_rate_limit, upstream=50302: realtime daily snapshot unavailable)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 0,
+   "latency_ms": 36839,
    "field_completeness": 0.0
   },
   {
@@ -753,20 +713,18 @@
    "message": "promax rt_min failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 713,
+   "latency_ms": 3630,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "rt_min",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata rt_min failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
+   "status": "ok",
+   "rows": 1,
    "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "latency_ms": 596,
+   "field_completeness": 1.0
   },
   {
    "provider": "promax",
@@ -777,29 +735,27 @@
    "message": "promax stk_auction failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 963,
+   "latency_ms": 3714,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "stk_auction",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata stk_auction failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 8,
+   "latest": "20261127",
+   "latency_ms": 1485,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
    "api": "stk_auction",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 7,
-   "latest": "20261124",
-   "latency_ms": 249,
+   "rows": 8,
+   "latest": "20261127",
+   "latency_ms": 672,
    "field_completeness": 1.0
   },
   {
@@ -811,20 +767,18 @@
    "message": "promax stk_factor failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 824,
+   "latency_ms": 3580,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "stk_factor",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata stk_factor failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 704,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -832,8 +786,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 384,
+   "latest": "20261127",
+   "latency_ms": 325,
    "field_completeness": 1.0
   },
   {
@@ -845,20 +799,18 @@
    "message": "promax stk_factor_pro failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 613,
+   "latency_ms": 3818,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "stk_factor_pro",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata stk_factor_pro failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 1043,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -866,8 +818,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 1502,
+   "latest": "20261127",
+   "latency_ms": 223,
    "field_completeness": 1.0
   },
   {
@@ -879,20 +831,18 @@
    "message": "promax cyq_perf failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 561,
+   "latency_ms": 3522,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "cyq_perf",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata cyq_perf failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 679,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -900,8 +850,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 243,
+   "latest": "20261127",
+   "latency_ms": 189,
    "field_completeness": 1.0
   },
   {
@@ -913,20 +863,18 @@
    "message": "promax index_daily failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 4335,
+   "latency_ms": 3542,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "index_daily",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata index_daily failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 22,
+   "latest": "20261127",
+   "latency_ms": 647,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -934,8 +882,8 @@
    "rate_limit_per_minute": 480,
    "status": "ok",
    "rows": 22,
-   "latest": "20261124",
-   "latency_ms": 1476,
+   "latest": "20261127",
+   "latency_ms": 213,
    "field_completeness": 1.0
   },
   {
@@ -947,20 +895,18 @@
    "message": "promax fina_indicator failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 717,
+   "latency_ms": 3717,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "fina_indicator",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata fina_indicator failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 100,
+   "latest": "20261024",
+   "latency_ms": 713,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -969,7 +915,7 @@
    "status": "ok",
    "rows": 236,
    "latest": "20261024",
-   "latency_ms": 1340,
+   "latency_ms": 1399,
    "field_completeness": 1.0
   },
   {
@@ -981,20 +927,18 @@
    "message": "promax fina_indicator_vip failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 747,
+   "latency_ms": 3676,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "fina_indicator_vip",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata fina_indicator_vip failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 8123,
+   "latest": "20261031",
+   "latency_ms": 15805,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -1003,8 +947,8 @@
    "status": "ok",
    "rows": 8047,
    "latest": "20260325",
-   "latency_ms": 8816,
-   "field_completeness": 1.0
+   "latency_ms": 1296,
+   "field_completeness": 0.991
   },
   {
    "provider": "promax",
@@ -1015,20 +959,18 @@
    "message": "promax broker_recommend failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 30273,
+   "latency_ms": 3610,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "broker_recommend",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata broker_recommend failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 1,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 265,
+   "latest": "202611",
+   "latency_ms": 688,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -1037,7 +979,7 @@
    "status": "ok",
    "rows": 265,
    "latest": "202611",
-   "latency_ms": 251,
+   "latency_ms": 185,
    "field_completeness": 1.0
   },
   {
@@ -1049,7 +991,7 @@
    "message": "promax anns_d failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 980,
+   "latency_ms": 3686,
    "field_completeness": 0.0
   },
   {
@@ -1057,11 +999,11 @@
    "api": "anns_d",
    "rate_limit_per_minute": 90,
    "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata anns_d failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
+   "error": "provider_error",
+   "message": "quantdata anns_d failed (provider_error, upstream=2003: api not purchased)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 0,
+   "latency_ms": 381,
    "field_completeness": 0.0
   },
   {
@@ -1073,20 +1015,18 @@
    "message": "promax share_float failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 954,
+   "latency_ms": 3622,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "share_float",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata share_float failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 106,
+   "latest": "20150520",
+   "latency_ms": 633,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -1095,7 +1035,7 @@
    "status": "ok",
    "rows": 109,
    "latest": "20150520",
-   "latency_ms": 375,
+   "latency_ms": 194,
    "field_completeness": 1.0
   },
   {
@@ -1107,20 +1047,18 @@
    "message": "promax stk_holdernumber failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 706,
+   "latency_ms": 3451,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "stk_holdernumber",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata stk_holdernumber failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 150,
+   "latest": "20261024",
+   "latency_ms": 619,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
@@ -1129,7 +1067,7 @@
    "status": "ok",
    "rows": 156,
    "latest": "20260815",
-   "latency_ms": 707,
+   "latency_ms": 200,
    "field_completeness": 1.0
   },
   {
@@ -1141,29 +1079,27 @@
    "message": "promax stk_holdertrade failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 657,
+   "latency_ms": 3578,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "stk_holdertrade",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata stk_holdertrade failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 1336,
+   "latest": "20261127",
+   "latency_ms": 827,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
    "api": "stk_holdertrade",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 1180,
-   "latest": "20261124",
-   "latency_ms": 532,
+   "rows": 1198,
+   "latest": "20261127",
+   "latency_ms": 216,
    "field_completeness": 1.0
   },
   {
@@ -1175,29 +1111,27 @@
    "message": "promax pledge_stat failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 658,
+   "latency_ms": 3460,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "pledge_stat",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata pledge_stat failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 654,
+   "latest": "20261120",
+   "latency_ms": 625,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
    "api": "pledge_stat",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 652,
-   "latest": "20261106",
-   "latency_ms": 1075,
+   "rows": 654,
+   "latest": "20261120",
+   "latency_ms": 1021,
    "field_completeness": 1.0
   },
   {
@@ -1209,29 +1143,27 @@
    "message": "promax repurchase failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 636,
+   "latency_ms": 3965,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "repurchase",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata repurchase failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
-   "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "status": "ok",
+   "rows": 1438,
+   "latest": "20261127",
+   "latency_ms": 1424,
+   "field_completeness": 1.0
   },
   {
    "provider": "teajoin",
    "api": "repurchase",
    "rate_limit_per_minute": 480,
    "status": "ok",
-   "rows": 1027,
-   "latest": "20261124",
-   "latency_ms": 504,
+   "rows": 1221,
+   "latest": "20261127",
+   "latency_ms": 298,
    "field_completeness": 1.0
   },
   {
@@ -1243,20 +1175,18 @@
    "message": "promax stk_surv failed (network)",
    "rows": 0,
    "latest": null,
-   "latency_ms": 611,
+   "latency_ms": 3608,
    "field_completeness": 0.0
   },
   {
    "provider": "quantdata",
    "api": "stk_surv",
    "rate_limit_per_minute": 90,
-   "status": "error",
-   "error": "quota_exhausted",
-   "message": "quantdata stk_surv failed (quota_exhausted, upstream=skipped: daily quota exhausted today)",
-   "rows": 0,
+   "status": "ok",
+   "rows": 400,
    "latest": null,
-   "latency_ms": 0,
-   "field_completeness": 0.0
+   "latency_ms": 1127,
+   "field_completeness": 0.9
   },
   {
    "provider": "teajoin",
@@ -1265,7 +1195,7 @@
    "status": "ok",
    "rows": 10000,
    "latest": null,
-   "latency_ms": 7184,
+   "latency_ms": 2366,
    "field_completeness": 1.0
   }
  ]
