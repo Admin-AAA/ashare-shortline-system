@@ -128,6 +128,8 @@ MID_KIND_DEPS: dict[str, tuple[Dep, ...]] = {
     "earnings_accel": _EVENT, "earnings_accel_vol": _EVENT, "ea_td_vol": _EVENT, "ea_cas_vol": _EVENT,
     "sue_accel": _SUE, "sue_accel_vol": _SUE, "sue_td_vol": _SUE, "sexp_sue_vol": _SUE, "ocfs_sue_vol": _SUE,
     "qn_sue_vol": _SUE, "curr_sue_vol": _SUE,
+    # 2026-11-28 全期复核恢复（L-240）
+    "udp_sue_vol": _SUE, "ocf_sue_vol": _SUE, "ocsd_sue_vol": _SUE, "roa_sue_vol": _SUE, "trps_sue_vol": _SUE,
     "forecast_beat": _FORECAST, "forecast_beat_underreact": _FORECAST, "forecast_turnaround": _FORECAST,
     "forecast_preincrease": _FORECAST, "forecast_preincrease_underreact": _FORECAST,
     "forecast_preincrease_vol": _FORECAST, "forecast_preincrease_underreact_vol": _FORECAST,
@@ -137,6 +139,7 @@ MID_KIND_DEPS: dict[str, tuple[Dep, ...]] = {
     "sexp_yoy": _EVENT, "sexp_vol": _EVENT, "fina_yoy": _EVENT, "fina_vol": _EVENT,
     "dinc_yoy": _DIVIDEND, "dinc_vol": _DIVIDEND,
     "td_vol": _EVENT, "cas_vol": _EVENT, "cg_streak": _EVENT, "ncs_switch": _EVENT,
+    "ncs_td_vol": _EVENT, "tad_etd_vol": _EVENT,  # L-240 恢复，与 td_vol/cas_vol 同为财报事件放量
     # §1011 深跌×行业热点×企稳（mid-sector-dip-stabilize）：日K+行业缓存，不读财报/预告
     "sector_dip_stabilize": _EVENT,
 }

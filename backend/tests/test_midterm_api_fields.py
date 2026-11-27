@@ -127,11 +127,12 @@ def test_retired_strategies_not_live():
 
 
 def test_sue_ladder_daily_pool_is_baseline_only(tmp_path, monkeypatch):
-    """日频留 SUE 基线 mid-sue-accel-vol 和五条质量轴冠军（L-235 全期复核）；其余 35 条不进 STRATEGIES / generate_picks / /mid 列表。历史标注仍走 RETIRED。"""
+    """日频留 SUE 基线 mid-sue-accel-vol 和十条质量轴变体（L-235、L-240 全期复核）；其余 30 条不进 STRATEGIES / generate_picks / /mid 列表。历史标注仍走 RETIRED。"""
     champs = set(ms.SUE_LADDER_CHAMPIONS)
     demoted = set(ms.SUE_LADDER_DEMOTED)
     assert champs == {"mid-sue-accel-vol", "mid-sexp-sue-vol", "mid-ocfs-sue-vol", "mid-qn-sue-vol",
-                      "mid-curr-sue-vol", "mid-sue-td-vol"} and len(demoted) == 35
+                      "mid-curr-sue-vol", "mid-sue-td-vol", "mid-udp-sue-vol", "mid-ocf-sue-vol",
+                      "mid-ocsd-sue-vol", "mid-roa-sue-vol", "mid-trps-sue-vol"} and len(demoted) == 30
     assert not champs & demoted
     live_sue = {sid for sid in ms.STRATEGIES if "sue" in sid}
     assert live_sue == champs
@@ -139,7 +140,7 @@ def test_sue_ladder_daily_pool_is_baseline_only(tmp_path, monkeypatch):
     assert set(ms.SUE_LADDER_DEMOTE_REASONS) == demoted
     for sid in ("mid-forecast-beat-underreact", "mid-repurchase-plan-underreact", "mid-ea-td-vol"):
         assert sid in ms.STRATEGIES
-    for sid in ("mid-repurchase-plan", "mid-ncs-td-vol", "mid-turn-days-vol"):
+    for sid in ("mid-repurchase-plan", "mid-tad-vol", "mid-turn-days-vol"):
         assert sid not in ms.STRATEGIES and sid in ms.RETIRED_STRATEGIES
     overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
     assert champs <= overview and not demoted & overview
@@ -166,9 +167,14 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     protected = set(ms.NON_SUE_CULL_PROTECTED)
     sue = set(ms.SUE_LADDER_CHAMPIONS)
     restored = {"mid-repurchase-incentive-dip", "mid-earnings-accel-dip", "mid-forecast-beat", "mid-sales-exp-drop",
-                "mid-dividend-increase-vol", "mid-forecast-preincrease-underreact-vol"}
-    assert len(demoted) == 22 and len(champs) == 5
-    assert {"mid-ea-cas-vol", "mid-turn-days-vol", "mid-earnings-accel", "mid-fina-exp-drop"} <= demoted
+                "mid-dividend-increase-vol", "mid-forecast-preincrease-underreact-vol",
+                # 2026-11-28 第二轮全期复核（L-240）
+                "mid-forecast-slight", "mid-forecast-turnaround", "mid-forecast-slight-vol",
+                "mid-forecast-slight-underreact", "mid-forecast-preincrease-vol", "mid-ncs-td-vol",
+                "mid-repurchase-underreact", "mid-tad-etd-vol", "mid-smallcap-dividend-weekly"}
+    assert len(demoted) == 13 and len(champs) == 5
+    assert {"mid-ea-cas-vol", "mid-turn-days-vol", "mid-earnings-accel", "mid-fina-exp-drop",
+            "mid-repurchase-plan", "mid-forecast-preincrease", "mid-tad-vol", "mid-etd-vol"} <= demoted
     assert restored <= protected and not restored & demoted
     assert not demoted & champs and not demoted & protected and not demoted & sue
     assert demoted <= set(ms.RETIRED_STRATEGIES)
@@ -186,7 +192,8 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     # 2026-11-27 夜全期（2022-04 起）复核：SUE 五条与 mid-repurchase-incentive-dip / mid-earnings-accel-dip /
     # mid-forecast-beat / mid-sales-exp-drop / mid-dividend-increase-vol / mid-forecast-preincrease-underreact-vol
     # 的独有信号扣费合计为正，去掉会少赚，恢复（L-238）：18 → 29。
-    assert len(live_mid) == 29
+    # 2026-11-28 更早退役的 57 条按同一口径（相对现役、0.27% 费用下仍为正）复核，再恢复 14 条（L-240）：29 → 43。
+    assert len(live_mid) == 43
     assert restored <= live_mid
     assert live_mid & sue == sue
     overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
@@ -194,10 +201,10 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     assert not demoted & overview
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path / "picks")
     assert ms.generate_picks(None, "2026-11-03", strategy_ids=["mid-repurchase-plan"]) == {}
-    assert ms.generate_picks(None, "2026-11-03", strategy_ids=["mid-repurchase-underreact"]) == {}
+    assert ms.generate_picks(None, "2026-11-03", strategy_ids=["mid-tad-vol"]) == {}
     rows = ms.non_sue_near_dup_rejected_rows()
     assert rows[0]["name"].startswith("非 SUE 近重复")
-    assert "47→29" in rows[0]["name"]
+    assert "47→43" in rows[0]["name"]
     assert "仓位" in rows[0]["reason"]
     assert {r["name"] for r in rows[1:]} == {
         f"{ms.RETIRED_STRATEGIES[sid]['name']}（{sid}）" for sid in demoted
