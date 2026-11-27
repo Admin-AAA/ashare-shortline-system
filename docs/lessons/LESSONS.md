@@ -2379,3 +2379,23 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(b) 复核只用现行指纹回放 + 同指纹实盘；累积到 20 个信号日（按近一年频率约需再等 12～18 个月）后再评估去留。**
 - 吸收位置：`rolling_r12.short_replay_coverage_end_by_strategy`（巡检 `formal:short_replay_version` 对 rsi6 应转绿）；`output/healthcheck-20261126/goal_loop_state.md` 队列 2。
 - 相关：L-236、L-237（同批重建）、L-225、L-226。
+
+## L-246 中线推票覆盖去重：推的票 ≥95% 已被其余现役推过的 9 条按重复退役（44→35），账户净收益不变、超额略升
+
+- 状态：active（DECISION，2026-11-28；王奥要求「推票基本重复的策略不要留」）。
+- 适用：中线现役名单的重复判断；以后新上线或恢复中线策略时的重复检查。
+- 口径：`output/research/fullhist-retire-20261127/all_ext.pkl`（2022-04 起研究逐笔 + 2025-10 起生产结算），同信号日同代码算同一只票。账户按每票一份，同一票多策略同推时取各策略收益的平均；净收益 = `executed_return` − 0.07%，另报 0.27%；超额对同信号日同持有期 EWALL.A。mid-unlock-dip 不在该数据里，账户数字是 43→34 条。
+- 做法（`output/research/dedup-20261128/greedy.py`，复核 `dedup-20261128/mine/verify.py`）：每轮算每条现役「推的票被其余现役推过的比例」，去掉比例最高且 ≥95% 的一条，重算，直到没有 ≥95% 的。
+- 证据：
+  - 退役 9 条：mid-incentive-vol（覆盖 100%，被 mid-incentive-option 覆盖 99%）、mid-forecast-beat-underreact（97.4%）、mid-sexp-sue-vol、mid-ocfs-sue-vol、mid-qn-sue-vol、mid-sue-td-vol、mid-ocsd-sue-vol、mid-roa-sue-vol、mid-trps-sue-vol（SUE 质量轴，95.4%～98.2%，主要被 mid-sue-accel-vol、mid-curr-sue-vol、mid-ocf-sue-vol 覆盖）。每条覆盖来源和独有笔数写在 `midterm_service.py` 的退役理由里。
+  - 9 条合计独有（相对去重后的现役）只有 31 笔：扣 0.07% 净 +12.7%、超额 −72.1%、0.27% 下 +6.5%，其中 14 笔在生产段。
+  - 账户合计（0.07%）：43 条 9578 笔，净 +16641%、超额 +834%、0.27% 下 +14726%；34 条 9547 笔，净 +16639%、超额 +913%、0.27% 下 +14729%。
+  - 三段净收益/超额：2022-23 +307/−3083 → +245/−3065；2024-25 +12233/+1491 → +12244/+1508；2026 +4102/+2426 → +4149/+2471。
+  - 同票的收益改取「先到的一条」而不是平均时，结论不变：净 +16919 → +16907，超额 +859 → +931。
+- 例外：mid-repurchase-plan-underreact（持 20 日）推的票 100% 被 mid-repurchase-underreact（持 5 日）推过，但卖出时间不同，共同的 460 笔持 20 日净 +1417%、持 5 日 +530%，两条都保留。
+- 永久规则：
+  - **(a) 推的票 ≥95% 已被其余现役推过、且独有部分很小（笔数个位到十几、合计接近 0）的策略，按重复退役；逐轮去掉覆盖率最高的一条再重算，不一次性按两两重合删。**
+  - **(b) 同一批票但持有期或卖出规则不同的两条，比较共同票在两种卖法下的收益，不按重复处理。**
+  - **(c) 这条规则和 L-240「独有扣费合计为正就保留」一起用：独有部分小到对账户合计没有影响时按重复退役，否则仍按 L-240 判断。**
+- 吸收位置：`midterm_service.py` 的 `SUE_LADDER_CHAMPIONS`、`_SUE_DEDUP_REASONS`、`NON_SUE_NEAR_DUP_CHAMPIONS` / `NON_SUE_NEAR_DUP_DEMOTE_REASONS`；`tests/test_midterm_api_fields.py`；README 中线数量；CLAUDE.md 策略治理。
+- 相关：L-227（每票一份）、L-235、L-238、L-240、L-244。

@@ -959,20 +959,22 @@ for _m in STRATEGIES.values():
 # 日推重叠来自 2026-08-14～2026-11-02 选股文件的两两 Jaccard（主人侧实盘/回放票）。
 SUE_LADDER_CHAMPIONS: tuple[str, ...] = (
     "mid-sue-accel-vol",   # 无额外质量轴的 SUEG∩放量基线
-    # 下面五条质量轴冠军：全期（2022-04 起）只有它们推的票 84 笔、扣费净收益合计 +254%（L-235），去掉会少赚，保留现役。
-    "mid-sexp-sue-vol",    # 销售费用率
-    "mid-ocfs-sue-vol",    # 经营现金流/营收
-    "mid-qn-sue-vol",      # 单季总资产净利率
-    "mid-curr-sue-vol",    # 流动比率
-    "mid-sue-td-vol",      # 营业周期
-    # 2026-11-28 全期复核恢复（L-240）：相对其余现役的独有信号全期扣费合计为正、0.27% 费用下仍为正，去掉会少赚。
-    # 独有票都很少（1–4 笔，全在 2022-04~2025-09 研究段），列为观察项。
+    "mid-curr-sue-vol",    # 流动比率（L-235 质量轴冠军）
+    # 2026-11-28 全期复核恢复（L-240），推票覆盖去重（L-246）后仍留：
     "mid-udp-sue-vol",     # 每股未分配利润
     "mid-ocf-sue-vol",     # 经营现金流同比
-    "mid-ocsd-sue-vol",    # 经营现金流/短期债务
-    "mid-roa-sue-vol",     # 全年 ROA
-    "mid-trps-sue-vol",    # 每股营业总收入
 )
+# 2026-11-28 推票覆盖去重（L-246；output/research/dedup-20261128/）：下面七条推的票 ≥95% 已被其余现役推过，
+# 按重复退役。覆盖比例相对去重后的 35 条现役，口径为 2022-04 起研究逐笔 + 2025-10 起生产结算、同信号日同代码。
+_SUE_DEDUP_REASONS: dict[str, str] = {
+    "mid-sexp-sue-vol": "推票覆盖去重（L-246）：全期 163 笔中 97.5% 已被现役推过（主要是 mid-sue-accel-vol 71%、mid-curr-sue-vol 58%、mid-earnings-accel-vol 42%），独有 4 笔扣费合计 +4.6%，按重复退役。",
+    "mid-ocfs-sue-vol": "推票覆盖去重（L-246）：全期 228 笔中 98.2% 已被现役推过（mid-sue-accel-vol 71%、mid-curr-sue-vol 60%、mid-ocf-sue-vol 50%），独有 4 笔 +12.8%，按重复退役。",
+    "mid-qn-sue-vol": "推票覆盖去重（L-246）：全期 262 笔中 98.1% 已被现役推过（mid-sue-accel-vol 77%、mid-curr-sue-vol 57%、mid-earnings-accel-vol 44%），独有 5 笔 −12.2%，按重复退役。",
+    "mid-sue-td-vol": "推票覆盖去重（L-246）：全期 174 笔中 95.4% 已被现役推过（mid-sue-accel-vol 68%、mid-curr-sue-vol 62%、mid-ea-td-vol 56%），独有 8 笔 +26.2%，按重复退役。",
+    "mid-ocsd-sue-vol": "推票覆盖去重（L-246）：全期 127 笔中 96.9% 已被现役推过（mid-ocf-sue-vol 80%、mid-sue-accel-vol 68%、mid-curr-sue-vol 54%），独有 4 笔 +14.9%，按重复退役。",
+    "mid-roa-sue-vol": "推票覆盖去重（L-246）：全期 179 笔中 97.8% 已被现役推过（mid-sue-accel-vol 77%、mid-curr-sue-vol 65%、mid-ocf-sue-vol 50%），独有 4 笔 +19.8%，按重复退役。",
+    "mid-trps-sue-vol": "推票覆盖去重（L-246）：全期 207 笔中 97.6% 已被现役推过（mid-sue-accel-vol 82%、mid-curr-sue-vol 58%、mid-ocf-sue-vol 49%），独有 5 笔 +18.2%，按重复退役。",
+}
 SUE_LADDER_DEMOTE_REASONS: dict[str, str] = {
     "mid-qsexp-sue-vol": "与冠军 mid-sexp-sue-vol 同为销售费用率轴，日推 Jaccard≈0.91，近窗几乎同票。R12 +12.68/PF5.72/n36 仍高，单季口径阶段更稳，但同轴只留累计版。",
     "mid-fcfe-sue-vol": "股权自由现金流近亲。R12 +9.50/PF3.27/n42，但 2022-04~2023-03 段为负、回撤 −7.2，日推窗口极稀且常与现金比率/销售费用完全重合。现金流边已由 mid-ocfs-sue-vol 代表。",
@@ -1004,6 +1006,7 @@ SUE_LADDER_DEMOTE_REASONS: dict[str, str] = {
     "mid-eps-sue-vol": "每股收益绝对扩张。R12 +2.77/PF1.54/n68、胜率 39.7%、回撤 −10.9，与留存/npta 高重叠。",
     "mid-npm-sue-vol": "净利率改善。R12 +2.71/PF1.58/n67，盈利簇下游。",
     "mid-qop-sue-vol": "单季营业利润环比加速。R12 +1.78/PF1.35/n62，本库 SUE 家族 recent_12m 每笔最低。",
+    **_SUE_DEDUP_REASONS,
 }
 SUE_LADDER_DEMOTED: tuple[str, ...] = tuple(SUE_LADDER_DEMOTE_REASONS)
 
@@ -1012,12 +1015,13 @@ def sue_ladder_rejected_rows() -> list[dict[str, str]]:
     """/mid 淘汰清单顶部：家族收敛说明 + 每条已退出日频的策略。"""
     champs = "、".join(SUE_LADDER_CHAMPIONS)
     rows = [{
-        "name": "SUE∩质量家族日频收敛（41→11）",
+        "name": "SUE∩质量家族日频收敛（41→4）",
         "reason": (
             f"日频只留 {champs}。"
             "其余同骨架策略（SUE≥2.2∩业绩加速∩放量，再叠一条财务轴）退出 21:30 盘后出票与 /mid 现役列表；"
             "定义、回测指标与历史选股保留，按策略 id 仍可查旧批次。"
-            "去留按全期（2022-04 起）独有信号扣费合计判断（L-235、L-240）：下面各条的独有票与现役冠军重叠后为 0～1 笔或合计不为正，"
+            "去留按全期（2022-04 起）独有信号扣费合计判断（L-235、L-240）：下面各条的独有票与现役冠军重叠后为 0～1 笔或合计不为正；"
+            "推的票 ≥95% 已被其余现役推过、独有部分很小的，按重复退役（L-246）。"
             "单条原因里的近 12 个月数字只是当初的退役记录。"
         ),
     }]
@@ -1052,9 +1056,7 @@ _retire_sue_ladder()
 NON_SUE_NEAR_DUP_CHAMPIONS: tuple[str, ...] = (
     "mid-repurchase-plan-underreact",           # 回购：弱反应持 20
     "mid-forecast-preincrease-underreact",      # 预增：弱反应宽池（R12 仍强，不是弱母集）
-    "mid-forecast-beat-underreact",             # 预喜合集：弱反应
-    "mid-incentive-vol",                        # 激励：期权∩放量
-    "mid-incentive-option",                     # 激励：期权草案宽池（n 约为放量版 3 倍，R12 仍强）
+    "mid-incentive-option",                     # 激励：期权草案宽池（覆盖放量版 99% 的票）
 )
 # 明确不因本轮近重复退出的策略。不在冠军元组里，但退役函数必须看见它们仍在 STRATEGIES。
 NON_SUE_CULL_PROTECTED: tuple[str, ...] = (
@@ -1109,6 +1111,9 @@ NON_SUE_NEAR_DUP_DEMOTE_REASONS: dict[str, str] = {
     "mid-fa-td-vol": "固定资产周转∩营业周期∩放量。全期独有 253 笔扣费合计 −188%，去掉不少赚，维持退出。",
     "mid-etd-fa-vol": "股东权益/负债∩固定资产周转∩放量。全期独有 251 笔扣费合计 −118%，去掉不少赚，维持退出。",
     "mid-fa-turn-vol": "固定资产周转扩张∩放量。全期独有 413 笔扣费合计 −394%，去掉不少赚，维持退出。",
+    # 2026-11-28 推票覆盖去重（L-246；output/research/dedup-20261128/）：推的票 ≥95% 已被其余现役推过，按重复退役。
+    "mid-incentive-vol": "推票覆盖去重（L-246）：期权激励∩放量。全期 128 笔 100% 已被现役推过（mid-incentive-option 99%、mid-dividend-increase-vol 66%），独有 0 笔，按重复退役。",
+    "mid-forecast-beat-underreact": "推票覆盖去重（L-246）：预喜合集弱反应。全期 546 笔中 97.4% 已被现役推过（mid-forecast-preincrease-underreact 65%、mid-forecast-beat 43%、mid-forecast-preincrease-underreact-vol 23%），独有 14 笔扣费合计 −60.1%，按重复退役。",
 }
 NON_SUE_NEAR_DUP_DEMOTED: tuple[str, ...] = tuple(NON_SUE_NEAR_DUP_DEMOTE_REASONS)
 
@@ -1117,7 +1122,7 @@ def non_sue_near_dup_rejected_rows() -> list[dict[str, str]]:
     """/mid 淘汰清单：非 SUE 近重复收敛说明 + 每条已退出日频的策略。"""
     champs = "、".join(NON_SUE_NEAR_DUP_CHAMPIONS)
     rows = [{
-        "name": "非 SUE 近重复与零 alpha 策略日频收敛（中线现役 47→43）",
+        "name": "非 SUE 近重复与零 alpha 策略日频收敛（中线现役 44→35）",
         "reason": (
             f"回购、预告、激励和资产负债表近重复，以及独有信号没有超额的宽池和嵌套变体，退出 21:30 盘后出票与 /mid 现役列表。各簇保留 {champs}。"
             "同一事件源只改持有期、弱反应带或放量门槛，做成参数或过滤器，不再新开 strategy_id。"
