@@ -3,7 +3,7 @@
 §519 上线 mid-forecast-slight-vol 时，把过滤和落盘插进了 forecast_slight_underreact
 分支的 continue 之后。弱反应有候选（fb 不是 None）时不再 continue，掉进
 _universe(db, as_of, meta["top_n"])。这两条策略的 meta 没有 top_n，于是 KeyError。
-实盘 17:35 与 rebuild_replay_picks 都会走到同一段。
+实盘盘后出票（现 21:30）与 rebuild_replay_picks 都会走到同一段。
 """
 from __future__ import annotations
 

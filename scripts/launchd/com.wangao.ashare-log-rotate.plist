@@ -8,7 +8,7 @@
 		<string>/bin/bash</string>
 		<string>/Users/wangao/Desktop/ashare-shortline-system/scripts/launchd/rotate_ashare_logs.sh</string>
 	</array>
-	<!-- 每周日 03:30（交易时段与 17:35 日更之外） -->
+	<!-- 每周日 03:30（交易时段与 21:00–23:35 晚间补数/出票之外） -->
 	<key>StartCalendarInterval</key><dict><key>Weekday</key><integer>0</integer><key>Hour</key><integer>3</integer><key>Minute</key><integer>30</integer></dict>
 	<key>StandardOutPath</key><string>/Users/wangao/Library/Logs/ashare-log-rotate.out.log</string>
 	<key>StandardErrorPath</key><string>/Users/wangao/Library/Logs/ashare-log-rotate.out.log</string>
