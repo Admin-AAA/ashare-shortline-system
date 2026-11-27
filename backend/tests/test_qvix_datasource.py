@@ -14,7 +14,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from app.db.session import Base
-from app.models.tables import IndexDaily
+from app.models.tables import IndexDaily, TradeCalendar
 from app.services.datasource import qvix
 
 
@@ -52,6 +52,8 @@ def fake_ak(monkeypatch):
 def sqlite_db():
     engine = create_engine("sqlite://")
     IndexDaily.__table__.create(engine)
+    # 交易日历为空：期权日行情计算补数没有交易日可补，这里只测 optbbs 路径
+    TradeCalendar.__table__.create(engine)
     session = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)()
     try:
         yield session

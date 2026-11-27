@@ -11,8 +11,11 @@
 * ``index_option_50etf_qvix``    2015-02-09 起，末行 2026-11-13 ✅
 * ``index_option_300etf_qvix``   2849 行，末行 2026-11-13 close=17.17 ✅
 * ``index_option_300index_qvix`` 同族 ✅
-数据落在 ``options.qvix`` 上游（非 push2his.eastmoney.com），与东财分钟那种反复重置的
-主机不同，连接稳定。
+akshare 这几个函数读的是 http://1.optbbs.com/d/csv/d/k.csv。该文件 2026-11-19 07:00
+之后不再更新（最后一行 2026-11-19 全空），optbbs 网页自己也读这个文件，没有新地址。
+optbbs 没给到的交易日（QVIX50.SH / QVIX300.SH），由 ``_fill_from_option_chain`` 用 teajoin
+期权日行情按 CBOE VIX 方法计算补上，方法与误差见 ``qvix_calc.py``；QVIX300IDX.SH
+（中金所股指期权）没有计算来源，2026-05-29 起停在原值。
 
 落库
 ----
@@ -31,6 +34,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
+
+from app.services.datasource.qvix_calc import QVIX_UNDERLYING
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +157,62 @@ def ensure_qvix_daily(
             written += 1
         db.commit()
         counts[ts_code] = written
+    calc_codes = [c for c in targets if c in QVIX_UNDERLYING]
+    if calc_codes:
+        for ts_code, n in _fill_from_option_chain(db, calc_codes, since).items():
+            counts[ts_code] = counts.get(ts_code, 0) + n
+    return counts
+
+
+def _fill_from_option_chain(db: Any, ts_codes: Sequence[str], since: str | None) -> dict[str, int]:
+    """optbbs 没给到的交易日，用期权日行情按 CBOE 方法计算补上（见 qvix_calc.py）。
+
+    补数范围：每条序列库内最后一个有效日之后（since 更晚时从 since 起）到今天的全部交易日。
+    """
+    from datetime import date as _date
+
+    from sqlalchemy import func, select
+
+    from app.models.tables import IndexDaily, TradeCalendar
+    from app.services.datasource.qvix_calc import compute_qvix_rows
+
+    today = _date.today().isoformat()
+    last_by_code = {
+        code: db.execute(
+            select(func.max(IndexDaily.trade_date)).where(IndexDaily.ts_code == code, IndexDaily.close > 0)
+        ).scalar_one()
+        for code in ts_codes
+    }
+    starts = [max(str(last), since or "") for last in last_by_code.values()]
+    begin = min(starts)
+    open_days = [
+        f"{d[:4]}-{d[4:6]}-{d[6:]}"
+        for d in db.execute(
+            select(TradeCalendar.cal_date).where(
+                TradeCalendar.exchange == "SSE", TradeCalendar.is_open.is_(True),
+                TradeCalendar.cal_date > begin.replace("-", ""), TradeCalendar.cal_date <= today.replace("-", ""),
+            ).order_by(TradeCalendar.cal_date)
+        ).scalars()
+    ]
+    counts = {code: 0 for code in ts_codes}
+    if not open_days:
+        return counts
+    rows = compute_qvix_rows(ts_codes, open_days)
+    for ts_code in ts_codes:
+        mine = sorted((r for r in rows if r["ts_code"] == ts_code and r["trade_date"] > str(last_by_code[ts_code])),
+                      key=lambda r: r["trade_date"])
+        prev = db.execute(
+            select(IndexDaily.close).where(IndexDaily.ts_code == ts_code, IndexDaily.close > 0)
+            .order_by(IndexDaily.trade_date.desc()).limit(1)
+        ).scalar_one_or_none()
+        for r in mine:
+            if prev:
+                r["pct_chg"] = round((r["close"] / float(prev) - 1.0) * 100.0, 4)
+            prev = r["close"]
+            db.add(IndexDaily(**r))
+            counts[ts_code] += 1
+        db.commit()
+        logger.info("QVIX %s 用期权日行情计算补入 %d 行", ts_code, counts[ts_code])
     return counts
 
 

@@ -2280,3 +2280,19 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(d) 恢复只需移出 `*_DEMOTE_REASONS`：定义、回测指标与历史选股一直保留，replay 历史已在。**
 - 吸收位置：`backend/app/services/midterm_service.py`（`SUE_LADDER_CHAMPIONS` 6 条；`NON_SUE_CULL_PROTECTED` 加入恢复的 6 条；`NON_SUE_NEAR_DUP_DEMOTE_REASONS` 里 `mid-turn-days-vol`、`mid-ea-cas-vol` 改为全期理由）、`backend/tests/test_midterm_api_fields.py`、`test_midterm_event_dip.py`、`test_midterm_forecast.py`、`test_earnings_accel_sort.py`、`README.md`、`CLAUDE.md`。
 - 相关：L-224（规则 (b) 按本条改写）、L-229、L-235、L-227、L-096。
+
+## L-239 QVIX 上游 optbbs 2026-11-19 起停止更新；QVIX50/QVIX300 改用 teajoin 期权日行情按 CBOE VIX 方法计算，断档期间恐慌出清没有漏掉或错出推荐
+
+- 状态：active（FIX，2026-11-28 凌晨）。
+- 适用：`index_daily` 的 QVIX* 序列、`market_trend.mkt_qvix50_chg5`、`rsi6-capitulation` 的 QVIX 尖峰门。
+- 证据（`output/qvix_probe/`）：
+  - AkShare `index_option_*_qvix` 全部读 `http://1.optbbs.com/d/csv/d/k.csv`。该文件 Last-Modified 停在 2026-11-19 00:50（北京时间 08:50），最后一行 2026-11-19 全空；分钟文件 `vix50.csv` 等停在 11-19 15:00（北京时间），只有 9:30 一个值。optbbs 网页自己读的也是这些文件，没有新地址或新接口。
+  - 计算口径对照 optbbs 原值（2025-09-15 至 2026-11-18，teajoin `opt_daily` 结算价、含分红调整合约、剩余 ≥1 天的两个到期月插值到 30 天、SHIBOR 1 个月）：QVIX50 近半年平均绝对误差 0.36 点、相关系数 0.965、五日涨幅相关系数 0.87；QVIX300 误差 0.53 点、相关系数 0.92。全期最大误差在到期周（2026-03-23 原值 42.16、计算 23.15），原值的到期周尖峰日频结算价算不出来。五日涨幅 >25% 的尖峰日：原值 8 天，计算 7 天，重合 4 天。
+  - 补数后 QVIX50 五日涨幅：11-19 +5.3%、11-20 +21.0%、11-23 +13.2%、11-24 +5.9%、11-25 +8.9%、11-26 +2.7%、11-27 +15.0%，没有一天超过 25%。
+  - 断档期间（11-19～11-27）当天 QVIX 不在库里，`qvix_chg5_by_dates` 不返回该日，`mkt_qvix50_chg5` 记 0，尖峰门不触发，策略只按价格门出票（与代码注释一致，不用旧值）。7 个交易日的 formal run 只有 11-19 出票 5 只，全部来自价格门（RSI6=19.50，「RSI6超卖+跌停家数占优」），用补后的值重算结论不变。没有漏掉或错出的推荐。
+- 永久规则：
+  - **(a) QVIX50.SH / QVIX300.SH 每天先取 optbbs，optbbs 没有的交易日由 `qvix_calc.py` 计算补上（`ensure_qvix_daily` 内完成，21:10 日更不用改）。计算值和原值不是同一序列，研究 QVIX 尖峰阈值时要知道 2026-11-19 起换了来源。**
+  - **(b) QVIX300IDX.SH（中金所股指期权）没有计算来源，停在 2026-05-29，不要用于生产。**
+  - **(c) 21:10 时 teajoin 当日 `opt_daily` 还没出的话当天不写，次日补上；这种情况下当天尖峰门不触发。**
+- 吸收位置：`backend/app/services/datasource/qvix_calc.py`、`backend/app/services/datasource/qvix.py`（`_fill_from_option_chain`）、`backend/tests/test_qvix_calc.py`、`backend/tests/test_qvix_datasource.py`、`README.md`。
+- 相关：L-205（QVIX 尖峰门的研究依据）。

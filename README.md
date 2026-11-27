@@ -94,6 +94,8 @@
 | 同花顺 thsdk | 实时行情、板块广度、市场快讯 | |
 | Baostock、东方财富、新浪、腾讯、通达信、巨潮、AkShare | 历史分钟、公告新闻、实时行情兜底、QVIX | 兜底 |
 
+QVIX（`index_daily` 的 QVIX50.SH / QVIX300.SH）：AkShare 读取的 optbbs 上游 2026-11-19 起停止更新，此后的交易日由 21:10 日更用 teajoin `opt_daily` 结算价按 CBOE VIX 方法计算补上（`datasource/qvix_calc.py`，L-239）。
+
 能力矩阵 `backend/docs/datasource_capability_matrix.md` 由 `backend/scripts/probe_datasource_capabilities.py` 生成。小石（xiaoshi）2026-11-15 永久退役（`datasource/retired.py`），不要重新接入。
 
 补数范围：最近 3 年，不补 2023 年 10 月以前。
