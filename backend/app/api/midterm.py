@@ -457,11 +457,12 @@ def horizon_metrics(horizon: str, origin: str = _ORIGIN, window_days: int | None
 
 @router.get("/mid/goal")
 def mid_goal(db: Session = Depends(get_db)):
-    """长远目标三指标（去重近 12 月滚动超额、逐月为正月份、每策略独有信号超额），口径见 services/goal_metrics.py。"""
+    """长远目标三指标（去重近 12 月滚动超额、逐月为正月份、每策略全期独有信号净合计），口径见 services/goal_metrics.py。"""
     from app.services import goal_metrics as gm
     from app.services import horizon_analytics as ha
 
-    g = gm.compute(ha.trades(db, "mid"), [k for k, v in svc.STRATEGIES.items() if v.get("horizon") == "mid"])
+    g = gm.compute(ha.trades(db, "mid"), [k for k, v in svc.STRATEGIES.items() if v.get("horizon") == "mid"],
+                   research_rows=gm.load_research_trades())
     g["summary"] = gm.summary_text(g)
     return g
 

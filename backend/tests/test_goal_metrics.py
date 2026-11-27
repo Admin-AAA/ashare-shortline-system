@@ -5,8 +5,12 @@ from app.services import goal_metrics as gm
 from app.services.data_quality_monitor import GREEN, YELLOW, goal_metrics_item
 
 
-def _row(sid, sd, code, ret, bench, status="closed"):
-    return {"strategy_id": sid, "signal_date": sd, "code": code, "ret": ret, "bench_ret": bench, "status": status}
+def _row(sid, sd, code, ret, bench, status="closed", origin="live_forward"):
+    return {"strategy_id": sid, "signal_date": sd, "code": code, "ret": ret, "bench_ret": bench, "status": status, "origin": origin}
+
+
+def _hist(sid, sd, code, net, bench):
+    return {"strategy_id": sid, "signal_date": sd, "code": code, "net": net, "bench": bench}
 
 
 def test_dedup_rolling_and_unique_verdicts():
@@ -24,9 +28,26 @@ def test_dedup_rolling_and_unique_verdicts():
     assert [(m["month"], m["n"]) for m in g["months"]] == [("2026-03", 1), ("2026-04", 2)]
     assert g["positive_months"] == 2 and not g["positive_months_pass"]
     per = {p["strategy_id"]: p for p in g["per_strategy"]}
-    assert per["a"]["unique_n"] == 1 and per["a"]["unique_excess"] == -1.0 and per["a"]["verdict"] == "insufficient"
-    assert per["b"]["unique_n"] == 1 and per["b"]["unique_excess"] == 1.5
-    assert per["a"]["n"] == 2 and per["a"]["excess"] == 0.5
+    # 第三项看全期：a 独有 = 04-01 一笔；2024 那笔早于生产段起点（研究段只从 research_rows 来）不算；同日同票的 03-02 不算独有
+    assert per["a"]["unique_n"] == 1 and per["a"]["unique_net_sum"] == -1.0 and per["a"]["verdict"] == "insufficient"
+    assert per["b"]["unique_n"] == 1 and per["b"]["unique_excess_sum"] == 1.5
+    assert per["a"]["n"] == 2
+
+
+def test_fullhist_unique_uses_research_and_prod_and_skips_historical_replay():
+    research = [_hist("a", "2023-05-10", f"{i:06d}", 2.0, 3.0) for i in range(20)]       # 研究段 20 笔，净正、超额负
+    research += [_hist("b", "2021-01-10", "900000", 50.0, 0.0)]                           # 2022-04 之前不算
+    prod = [_row("a", "2026-02-10", f"{100 + i:06d}", 1.0, 0.0) for i in range(12)]        # 生产段 12 笔
+    prod += [_row("a", "2026-02-11", "777777", 99.0, 0.0, origin="historical_replay")]     # 与研究段重叠的口径，不算
+    prod += [_row("c", "2026-02-10", "000100", 1.0, 0.0)]                                  # 与 a 同日同票 → a 该笔不独有
+    prod += [_row("b", "2026-03-01", f"{200 + i:06d}", -1.0, -2.0) for i in range(30)]     # b 独有 30 笔，净负、超额正 → fail
+    g = gm.compute(prod, ["a", "b", "c"], today=dt.date(2026, 11, 27), research_rows=research)
+    per = {p["strategy_id"]: p for p in g["per_strategy"]}
+    assert per["a"]["unique_n"] == 31 and per["a"]["unique_hist_n"] == 20 and per["a"]["unique_prod_n"] == 11
+    assert per["a"]["unique_net_sum"] == 51.0 and per["a"]["unique_excess_sum"] == -9.0 and per["a"]["verdict"] == "watch"
+    assert per["b"]["unique_n"] == 30 and per["b"]["unique_net_sum"] == -30.0 and per["b"]["verdict"] == "fail"
+    assert g["strategies_failing"] == ["b"] and g["strategies_watch"] == ["a"] and g["strategies_insufficient"] == ["c"]
+    assert "beta" in gm.summary_text(g)
 
 
 def test_item_turns_yellow_on_any_failure(monkeypatch):
@@ -39,4 +60,4 @@ def test_item_turns_yellow_on_any_failure(monkeypatch):
     g2 = gm.compute(bad, ["a", "b"], today=dt.date(2026, 11, 27))
     assert g2["strategies_failing"] == ["b"]
     item = goal_metrics_item(g2)
-    assert item["severity"] == YELLOW and "独有信号超额为负" in item["detail"]
+    assert item["severity"] == YELLOW and "净合计为负" in item["detail"]

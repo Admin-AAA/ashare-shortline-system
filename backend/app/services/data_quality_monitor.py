@@ -1515,7 +1515,7 @@ def check_short_replay_version(db) -> dict[str, Any]:
     return short_replay_version_item(short_replay_version_rows(db))
 
 
-# 长远目标三指标（goal_metrics）：去重近 12 月滚动超额 > 0、逐月为正 ≥ 8/12、每策略独有信号超额 > 0。
+# 长远目标三指标（goal_metrics）：去重近 12 月滚动超额 > 0、逐月为正 ≥ 8/12、每策略全期独有信号扣费净合计 > 0（L-238）。
 GOAL_METRICS_KEY = "formal:goal_metrics_mid"
 
 
@@ -1528,11 +1528,11 @@ def goal_metrics_item(g: dict[str, Any]) -> dict[str, Any]:
     if not g["positive_months_pass"]:
         fails.append(f"逐月为正 {g['positive_months']}/{g['month_count']}")
     if g["strategies_failing"]:
-        fails.append(f"{len(g['strategies_failing'])} 个策略独有信号超额为负")
+        fails.append(f"{len(g['strategies_failing'])} 个策略全期独有信号净合计为负")
     sev = GREEN if not fails else YELLOW
     detail = summary_text(g) + ("" if sev == GREEN else "。未达标：" + "、".join(fails))
     return _item(GOAL_METRICS_KEY, "中线长远目标三指标", "盘后出票", sev, kind="job", latest=g["window_end"], detail=detail,
-                 impact="去重口径下系统是否稳定跑赢买全市场；独有信号超额为负的策略只贡献敞口不贡献收益（L-224/L-229）")
+                 impact="去重口径下系统是否稳定跑赢买全市场；全期独有信号扣费净合计为负的策略去掉会多赚（L-238）；净正超额负的只列观察")
 
 
 def check_goal_metrics(db) -> dict[str, Any]:
@@ -1540,7 +1540,8 @@ def check_goal_metrics(db) -> dict[str, Any]:
     from app.services import horizon_analytics as ha
     from app.services import midterm_service as ms
 
-    g = gm.compute(ha.trades(db, "mid"), [k for k, v in ms.STRATEGIES.items() if v.get("horizon") == "mid"])
+    g = gm.compute(ha.trades(db, "mid"), [k for k, v in ms.STRATEGIES.items() if v.get("horizon") == "mid"],
+                   research_rows=gm.load_research_trades())
     return goal_metrics_item(g)
 
 
