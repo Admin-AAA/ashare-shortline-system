@@ -2279,7 +2279,7 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(c) 单条独有票只有个位数时按家族合起来判断，不逐条判。**
   - **(d) 恢复只需移出 `*_DEMOTE_REASONS`：定义、回测指标与历史选股一直保留，replay 历史已在。**
 - 吸收位置：`backend/app/services/midterm_service.py`（`SUE_LADDER_CHAMPIONS` 6 条；`NON_SUE_CULL_PROTECTED` 加入恢复的 6 条；`NON_SUE_NEAR_DUP_DEMOTE_REASONS` 里 `mid-turn-days-vol`、`mid-ea-cas-vol` 改为全期理由）、`backend/tests/test_midterm_api_fields.py`、`test_midterm_event_dip.py`、`test_midterm_forecast.py`、`test_earnings_accel_sort.py`、`README.md`、`CLAUDE.md`。
-- 相关：L-224（规则 (b) 按本条改写）、L-229、L-235、L-227、L-096。
+- 相关：L-224（规则 (b) 按本条改写）、L-229、L-235、L-227、L-096、L-240（更早退役的 57 条按同一口径复核）。
 
 ## L-239 QVIX 上游 optbbs 2026-11-19 起停止更新；QVIX50/QVIX300 改用 teajoin 期权日行情按 CBOE VIX 方法计算，断档期间恐慌出清没有漏掉或错出推荐
 
@@ -2296,3 +2296,69 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(c) 21:10 时 teajoin 当日 `opt_daily` 还没出的话当天不写，次日补上；这种情况下当天尖峰门不触发。**
 - 吸收位置：`backend/app/services/datasource/qvix_calc.py`、`backend/app/services/datasource/qvix.py`（`_fill_from_option_chain`）、`backend/tests/test_qvix_calc.py`、`backend/tests/test_qvix_datasource.py`、`README.md`。
 - 相关：L-205（QVIX 尖峰门的研究依据）。
+
+## L-240 更早退役的 57 条中线按全期独有信号复核：14 条去掉会少赚，恢复现役（29→43）；候选之间互相重叠，要迭代判断
+
+- 状态：active（DECISION，2026-11-28 凌晨执行；中线现役 29→43）。
+- 适用：任何「一批退役策略按独有信号复核、批量恢复」的判断；中线现役集合扩大后复核独有贡献。
+- 口径（`output/research/fullhist-retire-20261127/`：`build_ext.py` 生成 `all_ext.pkl`，`audit2.py`/`audit2.txt`/`audit2.json`、`retired57_table.md`、`audit3.py`/`audit3.txt`）：同 L-238，信号日 2022-04 起，研究逐笔 + 生产选股文件，扣 0.07% 往返税费，基准 EWALL.A 同持有期。另报按生产结算 0.27% 总成本的净收益（每笔再减 0.20%）。范围是 `RETIRED_STRATEGIES` 里全部 57 条中线（SUE∩质量 35 条 + 非 SUE 近重复/弱尾 22 条）。
+- 退役原因核对：57 条当初都是收益或近重复比较（近 12 个月 R12、PF、Jaccard、LIVE 均值），没有数据源不可用或未来数据原因。`mid-incentive-underreact` 独有 0 笔，按「与现役信号完全重复」不恢复。
+- 恢复规则：收益原因退役，独有净合计 >0，且 0.27% 费用下仍 >0。候选之间互相重叠（略增三兄弟、资产负债表三兄弟、SUE 质量轴几十条几乎同票），逐条相对现役 29 条算会重复计入同一批票。做法是先把全部合格候选放进去，每轮去掉「相对其余现役+候选」0.27% 下独有合计最差且 ≤0 的一条，直到剩下的每条都为正。剔除顺序：tad-vol、etd-vol、itc-sue、forecast-preincrease，之后是 24 条独有 0～1 笔的 SUE 变体。
+- 证据（单独相对 29 条的独有票 → 迭代后相对 43 条其余的独有票）：
+  - 恢复：`mid-forecast-slight` 290 笔 +803%（超额 −319%）→ 119 笔 +240%；`mid-forecast-turnaround` 222 笔 +623%（超额 −199%，生产段 23 笔 −5%）；`mid-forecast-slight-vol` 221 笔 +557% → 89 笔 +232%；`mid-forecast-slight-underreact` 205 笔 +433% → 107 笔 +46%（超额 −372%，0.27% 下 +24%，最弱）；`mid-forecast-preincrease-vol` 200 笔 +421%（超额 −81%）；`mid-ncs-td-vol` 122 笔 +272% → 111 笔 +255%；`mid-repurchase-underreact` 55 笔 +244%（超额 +56%）；`mid-tad-etd-vol` 325 笔 +134% → 315 笔 +121%（研究段 +210%、生产段 139 笔 −76%，0.27% 下 +58%）；`mid-smallcap-dividend-weekly` 68 笔 +63%（超额 +48%，全在生产段）；SUE 五条 `mid-udp-sue-vol`、`mid-ocf-sue-vol`、`mid-ocsd-sue-vol`、`mid-roa-sue-vol`、`mid-trps-sue-vol` 各 1～4 笔，合起来相对其余 38 条 18 笔 +161%、超额 +48%，全在研究段（按 L-238 (c) 家族合起来判断为正）。
+  - 不恢复：`mid-repurchase-plan` 153 笔 +24%，0.27% 下 −6%；`mid-forecast-preincrease` 89 笔 +111%，与预增放量版重叠后 36 笔、0.27% 下 −0.3%；`mid-tad-vol`、`mid-etd-vol` 单独 +103%/+132%（生产段都为负），与 tad-etd-vol 重叠后 −64%/−10%；其余 25 条 SUE 变体重叠后独有 0～1 笔；独有合计本来就为负的有 `mid-fina-exp-drop` −488%、`mid-earnings-accel` −410%、`mid-fa-turn-vol` −394%、`mid-fa-td-vol` −188%、`mid-turn-days-vol` −176%、`mid-etd-fa-vol` −118%、`mid-sue-accel` −90%、`mid-ea-cas-vol` −40% 等。仍退役的 43 条合起来相对现役 43 条：1903 笔，净 −1826%。
+  - 去重总账（每票一份，0.07% / 0.27%）：29 条 8071 笔，净 +14182% / +12567%，超额 +2070%；43 条 9578 笔，净 +17220% / +15305%，超额 +1030%。分段（笔数、净、超额）：2022-23 年 29 条 2623 笔 −106%、−2404%，43 条 3164 笔 +426%、−3099%；2024-25 年 2922 笔 +10149%、+1656% → 3521 笔 +12465%、+1433%；2026 年 2526 笔 +4138%、+2818% → 2893 笔 +4330%、+2696%。
+  - 代价：净收益合计多 +3038%，超额合计少 1040%，每笔超额从 +0.26% 降到 +0.11%。多出来的票主要是 beta，2022-23 年熊市的超额更差。新恢复的大头（略增、扭亏、预增放量）收益集中在研究段，生产段每条只有 1～67 笔、合计接近 0。
+  - 恢复后现役 43 条里，有 10 条相对其余 42 条的独有合计 ≤0 或为 0 笔（如 `mid-sue-accel-vol` 19 笔 −80%、`mid-forecast-beat-underreact` 14 笔 −60%、`mid-fina-exp-vol` 0.27% 下 −24%、`mid-sexp-sue-vol`/`mid-incentive-vol`/`mid-repurchase-plan-underreact` 0 笔）。这是同簇互相覆盖，不是这些策略本身亏；按「去掉会不会少赚」本轮不据此退役，见规则 (c)。
+- 永久规则：
+  - **(a) 批量复核退役策略时，候选之间的重叠必须迭代处理：所有恢复项都要满足「相对其余现役 + 其他恢复项」独有合计在 0.27% 费用下为正，不能只相对旧现役集合逐条判。**
+  - **(b) 恢复门槛同时看 0.07% 和 0.27% 两种成本；扣真实成本后不赚的（如 `mid-repurchase-plan`）不恢复。**
+  - **(c) 现役集合扩大后，老现役的留一法独有贡献会因同簇覆盖变成 ≤0，这只说明它与新成员重叠，不是退役依据。同簇要缩减时，比较的是「留哪一条」的组合总账，不能对每条单独做留一法后一起删。**
+  - **(d) 汇报必须同时给去重总账的净收益和超额，以及 2022-23 熊市段；净收益涨、超额跌时写明多出的是 beta。**
+- 吸收位置：`backend/app/services/midterm_service.py`（`SUE_LADDER_CHAMPIONS` 11 条；`NON_SUE_CULL_PROTECTED` 加 9 条；仍退役的 `mid-repurchase-plan`、`mid-forecast-preincrease`、`mid-incentive-underreact`、`mid-tad-vol`、`mid-etd-vol`、`mid-fa-td-vol`、`mid-etd-fa-vol`、`mid-fa-turn-vol` 改为全期理由）、`backend/app/services/strategy_data_readiness.py`（7 个恢复 kind 声明数据依赖）、`backend/tests/test_midterm_api_fields.py`、`backend/tests/test_forecast_slight_pick_flow.py`、`README.md`、`CLAUDE.md`。
+- 相关：L-238、L-235、L-224、L-227。
+
+## L-241 新中线 mid-unlock-dip：大比例解禁落地且解禁前已跌，独有信号全期扣费为正，上线（43→44）
+
+- 状态：encoded（DECISION，2026-11-28 上线）。
+- 适用：中线新增独有信号；任何读 `share_floats` 出信号的策略。
+- 定义（预注册，参数未调）：解禁日落在（上一交易日, 信号日] 的票，同一解禁日全部股东合计占总股本 ≥5%（按代码、解禁日、股东、解禁股数去重后合计），且信号日收盘前 20 日复权跌幅 ≥10%；流动性同 `_liq_ok`，剔除北交所；按解禁比例降序，每日前 5，次日开盘买，持 20 日。
+- 证据（`output/mid-newsignal-20261127/`：`cands4.py`、`n1_sens.py`、`n1_detail.py`、`ev2.py`、`summary_newbase.csv`、`报告v2_新基线复算与新方向.md`；基线为中线研究员的 `output/research/fullhist-retire-20261127/all_ext.pkl`，现役 29 条）：
+  - 全期 511 笔，相对现役独有 504 笔；独有部分扣 0.07% 净合计 +1503%，0.27% 下 +1402%；每笔超额（EWALL.A）+1.16%，区间 [+0.01, +2.29]；三段 2022-23 +0.65、2024-25 +1.84、2026 +1.18。扣同日同跌幅（r20 ±5 个百分点）对照后剩 +1.13% [+0.08, +2.15]，三段 +0.74/+1.74/+0.98。
+  - 对照：同样解禁但不要求先跌 −0.03；解禁前上涨 −0.67。12 组敏感性（比例 3/5/10% × 跌幅 5/10/15/20%）超额与剩余超额全为正，跌得越深越强。
+  - 风险：胜率约 46%，中位超额 −0.89%，去掉最好的 5 个信号日每笔超额降到 +0.51%；最差一笔 −46.8%；2026 段绝对净合计 −43%。§282 绝对收益卡不达标（近 12 个月 PF 1.15，且 2022-04 前无数据只有 5 段），卡片如实写 `pass: false`。
+- 可见性核对（生产库 `share_floats.created_at`，2026-10-18 起至 11-27 每个解禁日）：已过解禁日的 254 行解禁记录全部在解禁日 21:30 前入库；其中合计 ≥5% 的 84 个事件最短提前 35 小时、中位 464 小时入库。历史段公告日中位早于解禁日 12 天，只保留「公告严格早于解禁日」的 491 笔结果不变（超额 +1.28、剩余 +1.18）。
+- 生产段回放（`origin=replay`，2025-10-20～2026-11-27，271 个交易日 0 失败，`output/mid-newsignal-20261127/deploy/prod_seg.py`）：出票 113 笔，已平仓 99 笔，生产 0.27% 费用下净合计 +78.7%、每笔 +0.79%、胜率 43%，每笔超额（EWALL.A）+1.39%；相对生产 picks 目录其他中线策略独有 98 笔，净合计 +90.6%、每笔超额 +1.44%。与研究逐笔对比：研究同期 103 笔，回放平仓 99 笔全部在研究名单内（差的 4 笔里 600961、300547 是同一只票前一次推荐仍在持有、被生产「已持有剔除」去掉；002309、002217 两笔原因未查），同票收益差中位 −0.2 个百分点。月度波动大：2026-09 −94%、2026-10 −153%（合计）。
+- 永久规则：
+  - **(a) 解禁日历是未来日期表，数据就绪不能按 MAX(日期) 判（有排到 2035 年的长期限售）。改看信号日后 30 天内的解禁条数（平常 165～340 条，少于 30 条视为停更）。**
+  - **(b) `share_floats` 同一笔解禁会因公告日不同重复入库，合计比例前必须按（代码、解禁日、股东、解禁股数）去重。**
+  - **(c) 本策略收益靠少数大涨票，不能因为近期几笔亏损或胜率低单独退役；去留按 L-238 全期独有口径。**
+- 吸收位置：`backend/app/services/midterm_service.py`（`STRATEGIES["mid-unlock-dip"]`、`unlock_dip_candidates`、`generate_picks` 分支、`annotate_pick`、`NON_SUE_CULL_PROTECTED`）、`backend/app/services/strategy_data_readiness.py`（`share_float_calendar`）、`backend/scripts/midterm/unlock_dip_onboard_metrics.py`、`backend/app/services/midterm_backtest_metrics.json`、`backend/tests/test_midterm_unlock_dip.py`、`README.md`、`CLAUDE.md`。
+- 相关：L-238、L-240、L-231、L-228、L-242。
+
+## L-242 「已知的供给压力」事件只在事件前已被打下来时有超额，必须按「事件 × 前 20 日涨跌」两维评估并报同跌幅对照
+
+- 状态：active（研究规则，2026-11-28）。
+- 适用：解禁、减持、坏消息预告这类提前可知的利空事件做买入信号的研究。
+- 证据（`output/mid-newsignal-20261127/summary_newbase.csv`、`cands4.py`、`cands5.py`、`n3_sens.py`，独有笔、0.07% 费用、EWALL.A 超额）：解禁 ≥5%：不先跌 −0.03，先跌 ≥10% +1.16，同跌幅对照后剩 +1.13；减持 ≥1%：先跌 ≥10% +0.71，剩 +0.54（2001 笔，区间下沿贴 0）；坏消息预告：不先跌 −2.12，先跌 ≥15% +2.31，剩 +1.23（区间跨 0）。
+- 永久规则：**这类事件不单看事件本身；必须同时给「不先跌」「先跌」两组以及同日同跌幅对照后的剩余超额，剩余超额区间跨 0 的只做观察。L-231 的「减持/解禁/质押回避过滤」结论不变，这里是买入方向，二者不矛盾。**
+- 吸收位置：本条；`mid-unlock-dip`（L-241）。减持先跌、坏消息预告先跌两条仍为观察项。
+- 相关：L-231、L-241、L-222。
+
+## L-243 回购预案叠加内部人增持没有增量超额，三段全负
+
+- 状态：active（已证伪方向，2026-11-28）。
+- 适用：回购、增持类「内部人双重确认」组合信号。
+- 证据（`output/mid-newsignal-20261127/cands4.py` N2，`summary_newbase.csv`）：回购预案公告且前 60 天内重要股东/高管增持，独有 230 笔，每笔超额 −1.53% [−2.80, −0.34]，三段全负，同跌幅对照后 −1.15。
+- 永久规则：**不再挖「回购 + 增持」双重确认；回购相关的独有信号只剩回购上限 ≥2 倍市值一档在观察。**
+- 吸收位置：`CLAUDE.md` 已证伪方向。
+- 相关：L-222、L-223。
+
+## L-244 独有信号判定必须用生产逐笔基线，不能用研究脚本重建的现役名单
+
+- 状态：active（研究规则，2026-11-28）。
+- 适用：任何「相对现役独有」的新策略或退役复核。
+- 证据：研究脚本重建的中线现役推荐与生产推荐重合度很低（分红增长一条约 1%）。换成 `output/research/fullhist-retire-20261127/all_ext.pkl`（研究逐笔 2022-04～2025-09 + 生产结算 2025-10 起）后，回购上限 ≥2 倍档独有笔数从 114 降到 92，2026 段从 18 笔降到 7 笔。
+- 永久规则：**独有判定的基线一律用现役策略的生产逐笔（生产段）加中线研究员维护的研究逐笔（研究段），并写明基线文件和现役条数；自己重建现役名单的结果不能用于去留。**
+- 吸收位置：本条。
+- 相关：L-238、L-240、L-241。
