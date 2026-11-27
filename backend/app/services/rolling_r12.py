@@ -335,23 +335,27 @@ def short_window_stats(db, window_start: str, cutoff: str) -> dict[str, Any]:
 
     expected = expected_short_strategies(db)
     boundary, boundary_source = short_replay_coverage_end(db)
-    segments = short_segments(window_start, cutoff, boundary)
-    replay_rets = short_segment_returns(db, segments["replay"], cutoff, expected)
-    live_rets = short_segment_returns(db, segments["live"], cutoff, expected)
+    per_sid = short_replay_coverage_end_by_strategy(db)
     out: dict[str, Any] = {}
     for sid in expected:
-        r_in, r_late = replay_rets.get(sid, ([], []))
-        l_in, l_late = live_rets.get(sid, ([], []))
+        # 每个策略用自己最新已验证回放批次的终点切段：策略 yaml 改版后只重建该策略时，
+        # 别的策略的实盘段不能被全局 MAX 吞掉（L-225）。没有自己批次的策略退回全局终点。
+        b = per_sid.get(sid, boundary)
+        segments = short_segments(window_start, cutoff, b)
+        r_in, r_late = short_segment_returns(db, segments["replay"], cutoff, [sid]).get(sid, ([], []))
+        l_in, l_late = short_segment_returns(db, segments["live"], cutoff, [sid]).get(sid, ([], []))
         tot = r_in + l_in
         avg = sum(tot) / len(tot) if tot else None
         verdict = "insufficient_sample" if len(tot) < MIN_TRADES else ("positive" if (avg or 0) > 0 else "negative")
         out[sid] = {
             "n": len(tot), "avg": round(avg, 2) if avg is not None else None, "verdict": verdict,
             "open": len(r_late) + len(l_late),
+            "replay_coverage_end": b,
             "replay_segment": _seg_summary(segments["replay"], r_in, r_late),
             "live_segment": _seg_summary(segments["live"], l_in, l_late),
         }
-    return {"strategies": out, "replay_coverage_end": boundary, "replay_coverage_end_source": boundary_source}
+    return {"strategies": out, "replay_coverage_end": boundary, "replay_coverage_end_source": boundary_source,
+            "replay_coverage_end_by_strategy": per_sid}
 
 
 def short_replay_coverage_end(db) -> tuple[str, str]:
@@ -369,6 +373,30 @@ def short_replay_coverage_end(db) -> tuple[str, str]:
     if len(s) == 10 and s[4] == "-" and s[7] == "-":
         return s, "data"
     return SHORT_REPLAY_COVERAGE_END, "constant"
+
+
+def short_replay_coverage_end_by_strategy(db) -> dict[str, str]:
+    """每个短线策略自己的回放覆盖终点：该策略最新已验证重建批次（含被更新批次部分覆盖后保留的旧批次）里的最大交易日。
+
+    策略身份取 cohort 的 strategy_key（``skills:<skill_id>``，与 run_name / attempt-tag 无关）。
+    读不到批次时返回空 dict，调用方退回全局终点。"""
+    from app.services.evidence.reconstruction_batch import latest_validated_reconstruction_cohorts
+
+    try:
+        cohorts = latest_validated_reconstruction_cohorts(db)
+    except Exception:  # noqa: BLE001 - 读不到就退回全局终点
+        logger.warning("per-strategy short replay coverage end unreadable", exc_info=True)
+        return {}
+    out: dict[str, str] = {}
+    for c in cohorts:
+        key = str(c.strategy_key or "")
+        if not key.startswith("skills:") or "+" in key or not c.expected_trade_dates:
+            continue
+        sid = key[len("skills:"):]
+        end = max(c.expected_trade_dates)
+        if sid not in out or end > out[sid]:
+            out[sid] = end
+    return out
 
 
 def short_segments(window_start: str, cutoff: str, boundary: str | None = None) -> dict[str, dict[str, str] | None]:

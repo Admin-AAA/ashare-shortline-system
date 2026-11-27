@@ -1444,6 +1444,76 @@ def check_rolling_r12(db, open_days: list[str], now: datetime | None = None, pat
     return rolling_r12_item(latest, month, nights, streak, str(runs[0][1] or "") if runs and streak else "")
 
 
+# 短线回放版本 vs 实盘版本。回放（historical_reconstruction）是「现行规则在历史上会怎么做」，策略 yaml 一改版，
+# 旧批次就代表不了现行规则；而实盘每天只有几笔，评估现行规则靠的是回放。2026-11-26 复核：三条现役策略的回放
+# 停在 10-19 的版本，之后 yaml 改了 1~2 次（出场 EL_C、超跌 pct≥5 硬门槛），策略页近 12 个月数字算的是旧规则。
+# 判定键用 run 的 strategy_policy_fingerprint（单策略 run 下只随该策略实现 + 政策版本变）。
+SHORT_REPLAY_VERSION_KEY = "formal:short_replay_version"
+
+
+def short_replay_version_rows(db) -> list[dict[str, Any]]:
+    """每个现役短线策略：最新实盘 run 的指纹/日期 vs 最新已验证回放批次的指纹/完成日/覆盖终点。"""
+    from app.services.daily_output_check import expected_short_strategies
+    from app.services.evidence.reconstruction_batch import latest_validated_reconstruction_cohorts
+
+    expected = list(expected_short_strategies(db))
+    cohorts: dict[str, Any] = {}
+    for c in latest_validated_reconstruction_cohorts(db):
+        key = str(c.strategy_key or "")
+        if key.startswith("skills:") and "+" not in key:
+            sid = key[len("skills:"):]
+            if sid not in cohorts or c.completed_at > cohorts[sid].completed_at:
+                cohorts[sid] = c
+    live = db.execute(text(
+        "SELECT selected_skills_json, strategy_policy_fingerprint, trade_date FROM recommendation_runs "
+        "WHERE run_mode='formal' AND evaluation_scope='live_forward' AND status='completed' "
+        "AND trade_date >= DATE_SUB(CURDATE(), INTERVAL 20 DAY) ORDER BY trade_date DESC"
+    )).all()
+    latest_live: dict[str, tuple[str, str]] = {}
+    for sel, fp, td in live:
+        try:
+            ids = [str(x.get("skill_id")) for x in json.loads(sel or "[]")]
+        except (TypeError, ValueError):
+            continue
+        if len(ids) == 1 and ids[0] not in latest_live and fp:
+            latest_live[ids[0]] = (str(fp), str(td)[:10])
+    rows = []
+    for sid in expected:
+        c = cohorts.get(sid)
+        lv = latest_live.get(sid)
+        rows.append({
+            "strategy_id": sid,
+            "live_fingerprint": lv[0] if lv else None, "live_date": lv[1] if lv else None,
+            "replay_fingerprint": c.strategy_policy_fingerprint if c else None,
+            "replay_completed_at": c.completed_at.strftime("%Y-%m-%d") if c else None,
+            "replay_end": max(c.expected_trade_dates) if c else None,
+            "replay_days": len(c.expected_trade_dates) if c else 0,
+        })
+    return rows
+
+
+def short_replay_version_item(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    stale = [r for r in rows if r["live_fingerprint"] and r["replay_fingerprint"] and r["live_fingerprint"] != r["replay_fingerprint"]]
+    missing = [r for r in rows if not r["replay_fingerprint"]]
+    parts = []
+    if stale:
+        parts.append("回放版本落后于实盘：" + "；".join(
+            f"{r['strategy_id']}（回放 {r['replay_completed_at']} 建、覆盖到 {r['replay_end']}，实盘 {r['live_date']} 已是新版本）" for r in stale))
+    if missing:
+        parts.append("没有已验证回放批次：" + "、".join(r["strategy_id"] for r in missing))
+    sev = YELLOW if (stale or missing) else GREEN
+    detail = "；".join(parts) if parts else f"{len(rows)} 个现役短线策略的回放批次与实盘同版本"
+    if sev != GREEN:
+        detail += "。用现行代码重建：scripts/replay_all_days.py --single-skill <id> --start 2025-10-20 --end <昨日> --skip-existing"
+    return _item(SHORT_REPLAY_VERSION_KEY, "短线回放版本", "盘后出票", sev, kind="job",
+                 latest=min((r["replay_end"] for r in rows if r["replay_end"]), default=None), detail=detail,
+                 impact="策略页/近12个月滚动体检用回放评估现行规则；回放落后一个版本时，评估的是旧规则不是现在跑的规则")
+
+
+def check_short_replay_version(db) -> dict[str, Any]:
+    return short_replay_version_item(short_replay_version_rows(db))
+
+
 def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -> dict[str, Any]:
     now = now or _now()
     _CHECK_TIMINGS.clear()
@@ -1508,6 +1578,8 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     items += _safe("daily_output", "formal:daily_output", "盘后出票", "job", lambda: [check_daily_output(db, open_days, now)])
     _rollback(db)
     items += _safe("rolling_r12", ROLLING_R12_KEY, "盘后出票", "job", lambda: [check_rolling_r12(db, open_days, now)])
+    items += _safe("短线回放版本", SHORT_REPLAY_VERSION_KEY, "盘后出票", "job", lambda: [check_short_replay_version(db)])
+    _rollback(db)
     _rollback(db)
     items += _safe("log", "log:*", "静默失败", "log", lambda: check_log_signals(now))
     items += _safe("stale_alerts", "alerts:stale_active", "静默失败", "log", lambda: [check_stale_alerts(now)])
