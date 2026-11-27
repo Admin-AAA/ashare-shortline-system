@@ -2220,7 +2220,9 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(a) 任何「读某表当日数据」的任务，其 cron 必须晚于该表的实测入库时间**（看 `created_at` 分布，不看文档承诺的发布时间）。设计前先查 `SELECT trade_date, MAX(created_at) FROM <表> GROUP BY trade_date ORDER BY 1 DESC LIMIT 20`。
   - **(b) 验收类巡检必须排在被验收的修复动作之后**：晚补 21:00 → 出票补跑 → 巡检 → 快照，顺序不能颠倒。把「检查」排在「修复」前面，等于每天记录一次假故障。
   - **(c) 同一批检查项不要被多个作业各跑一遍**：`data_quality_check_morning` / `recheck` / `snapshot` / `evening` 跑同一份 report 时，只有最后一个时点应参与「当日结论」。
-- 吸收位置：`backend/app/services/scheduler_pure.py`（`POSTCLOSE_LATE_DATA_REPAIR_CRON` 保持 21:00；`DATA_FRESHNESS_CRON=30 21`、`DATA_QUALITY_CHECKS` 晚间 `50 22`、`DATA_HEALTH_SNAPSHOT_CRON=55 22`、`KPL_LIST_CRON=30 23`）。
+  - **(d) 挪 cron 时，凡是「按时刻决定判不判当天」的常量一起挪：出票截止 `daily_output_check.OUTPUT_DEADLINE`、健康快照原始记录时点 `data_health_snapshot.ORIGINAL_TIME`、开机自愈是否把当天算漏票、watchdog 时点、脚本与滚动重算的禁跑窗口。截止 = 最后一条自动出票路径（含 watchdog 补跑）跑完之后、第一次判当天的验收之前；`backend/tests/test_output_deadline_2130.py::test_output_deadline_follows_schedule` 把这条顺序钉成用例，改定时不改截止会直接失败。**
+- 修订证据（2026-11-27）：11-24 夜里出票挪到 21:30（4d6fca59，11-25 00:14 提交）时，`OUTPUT_DEADLINE` 还是 18:35（17:35 + 1 小时），快照原始窗口还是 18:40–19:40，watchdog 还在 18:30（11-26 才改到 22:15）。于是 18:35–21:30 之间巡检、快照、自愈都把还没开跑的当天判成漏票：11-26 自愈 18:36、20:42 两轮把当天归档成漏票；11-25 自愈 20:52 抢在 21:00 补数和 21:30 出票之前自己补出了当天的票（批次 20:53 建）；快照 cron 11-24 上午已改到 22:55（1a804077），原始窗口没跟着改，11-25、11-26 的 22:55 定时快照全部落进复核，原始记录一条没写（11-27 已把这两条提升为原始记录并带 `promoted_note`，改前文件备份在 `output/deadline_fix_20261127/`）；11-25、11-26 的 18:30 watchdog 都按「17:35 cron 未启动」告警 DAILY_RUN_MISSING 并自动补跑一次（11-25 被闸门拦下，11-26 报 `'TushareStateProvider' object has no attribute 'daily_basic'`）。截止改为 22:50（流水线单次 982～1300 秒，22:15 补跑约 22:37 结束），快照原始时点改为 22:55，自愈在截止前不判当天；旧的 16:35–18:35「日更窗口」禁跑守卫改为 21:00–23:35（滚动重算为 21:00–22:30，避开自己 22:30 的定时）。
+- 吸收位置：`backend/app/services/scheduler_pure.py`（`POSTCLOSE_LATE_DATA_REPAIR_CRON` 保持 21:00；`DATA_FRESHNESS_CRON=50 21`、`DATA_QUALITY_CHECKS` 晚间 `50 22`、`DATA_HEALTH_SNAPSHOT_CRON=55 22`、`KPL_LIST_CRON=30 23`）；(d) 落在 `backend/app/services/daily_output_check.py`（`OUTPUT_DEADLINE`、`output_due`）、`backend/app/services/data_health_snapshot.py`（`ORIGINAL_TIME`）、`backend/app/services/startup_self_heal.py`（截止前跳过当天）、`backend/app/services/rolling_r12.py`（`BLACKOUTS`）与 `backend/tests/test_output_deadline_2130.py`。
 - 相关：L-206（队列堵塞是另一层「盘后同步跑不动」的根因）、L-207（口径错误让黄项永久挂着）、L-209（同一时序问题在事务层面的表现）。
 
 ## L-209 同一任务内「刚补完数就要复查」必须换新连接：REPEATABLE-READ 的事务快照会读不到自己刚 commit 的行，force_refresh 跳不过它
@@ -2588,5 +2590,6 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(b) 开盘价是可成交价：中线以开盘价结算不需要额外滑点折扣；短线执行政策 10bps 双边滑点在实测范围内。**
   - **(c) 两个周期的成本必须从同一个 ExecutionPolicy 推导，页面上并排的数字才可比；改任何一边先改 `DEFAULT_EXECUTION_POLICY`。**
   - **(d) 读 `outcome_label=missed` 必须先看 `rule_version`/`entry_policy_id`：旧版本的 missed 不代表现行入场规则会错过这只票。**
-  - **(e) 改代码后当晚要跑的重建/补跑，先确认 worker 的 revision 已对齐（`prefect_worker_identity.json`），否则等 15:10 的自动重启。**
+  - **(e) 改代码后当晚要跑的重建/补跑，先确认 worker 的 revision 已对齐（`prefect_worker_identity.json`），否则等 15:10 的自动重启。15:10 之后才合进 main 的改动，在 15:05–21:00 内先跑 `active_work_check.py` 再重启，重启后跑 `backend/scripts/sync_worker_revision.py`，看到「worker 已是 HEAD」才算对齐。**
+- 吸收位置（D4）：`backend/app/core/deployment_identity.py`（`write_worker_identity` / `read_worker_identity`）、`backend/scripts/run_prefect_worker.py`（`_pin_application_revision` 启动时写身份文件）、`backend/scripts/replay_all_days.py`（`_assert_worker_revision_matches` 入队前拒绝）、`backend/scripts/sync_worker_revision.py` + `deploy/launchd/com.wangao.ashare-sync-revision.plist`（工作日 15:10）、`backend/tests/test_worker_identity_sync.py`；证据提交 b75ca659。D3 见 `backend/app/engine/trading_costs.py`（259fcc1e）。
 - 相关：L-224（中线亏损归因）、L-225（短线回放版本）、L-133（入场方式由策略声明）、L-068（跨进程 revision 一致）、L-163（辅助数据可见性按入库时刻核对）。
