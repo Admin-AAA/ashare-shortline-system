@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key><string>com.wangao.ashare-sync-revision</string>
+	<key>WorkingDirectory</key><string>/Users/wangao/Desktop/ashare-shortline-system/backend</string>
+	<key>EnvironmentVariables</key><dict><key>PYTHONPATH</key><string>/Users/wangao/Desktop/ashare-shortline-system/backend</string></dict>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/backend/.venv/bin/python</string>
+		<string>/Users/wangao/Desktop/ashare-shortline-system/backend/scripts/sync_worker_revision.py</string>
+	</array>
+	<!-- 每个工作日 15:10（收盘后、21:00 盘后流水线前）：worker 声明的 revision 落后于 HEAD 且无任务在跑时，
+	     重启 Prefect worker 与后端，让白天合进 main 的代码当晚生效（L-228）。 -->
+	<key>StartCalendarInterval</key>
+	<array>
+		<dict><key>Weekday</key><integer>1</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Weekday</key><integer>2</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Weekday</key><integer>3</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Weekday</key><integer>4</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>10</integer></dict>
+		<dict><key>Weekday</key><integer>5</integer><key>Hour</key><integer>15</integer><key>Minute</key><integer>10</integer></dict>
+	</array>
+	<key>StandardOutPath</key><string>/Users/wangao/Library/Logs/ashare-sync-revision.log</string>
+	<key>StandardErrorPath</key><string>/Users/wangao/Library/Logs/ashare-sync-revision.log</string>
+</dict>
+</plist>

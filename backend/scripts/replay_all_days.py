@@ -331,6 +331,27 @@ def _run_exists(db, identity, trade_date: str) -> bool:
     )
 
 
+def _assert_worker_revision_matches() -> None:
+    """重建 run 由 Prefect worker 执行，worker 的 revision 钉在它启动那一刻；本进程的 HEAD 若已前进，
+    每个策略都会在 worker 侧以「reconstruction worker revision does not match its batch manifest」失败。
+    入队前先比对，不一致就直接退出并给出修法（L-228）。"""
+    from app.core.deployment_identity import read_worker_identity
+
+    ident = read_worker_identity()
+    mine = os.environ.get("ASHARE_APPLICATION_REVISION", "")
+    if ident is None:
+        print("[warn] 没有 prefect_worker_identity.json（worker 尚未用新版启动脚本重启过），无法预检 revision", file=sys.stderr)
+        return
+    theirs = str(ident.get("revision") or "")
+    if theirs and mine and theirs != mine:
+        raise SystemExit(
+            f"Prefect worker 的代码版本 {theirs[:12]}（{ident.get('started_at')} 启动）与当前 HEAD {mine[:12]} 不一致，"
+            "重建会在 worker 侧全部失败。先在非交易时段重启 worker："
+            "launchctl kickstart -k gui/$(id -u)/com.wangao.ashare-prefect-worker，"
+            "或等 15:10 的 ashare-sync-revision 自动重启。"
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start", default="2026-05-22")
@@ -358,6 +379,7 @@ def main() -> int:
     # 主进程在预留 run 时也必须使用与 Prefect worker 相同的部署 revision；
     # 否则 execution_version 会在入队和执行时产生不同身份。
     os.environ.setdefault("ASHARE_APPLICATION_REVISION", _resolve_code_revision())
+    _assert_worker_revision_matches()
 
     db = SessionLocal()
     try:

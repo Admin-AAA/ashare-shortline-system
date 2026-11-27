@@ -996,7 +996,7 @@ def sue_ladder_rejected_rows() -> list[dict[str, str]]:
         "name": "SUE∩质量家族日频收敛（41→6）",
         "reason": (
             f"日频只留 {champs}。"
-            "其余同骨架策略（SUE≥2.2∩业绩加速∩放量，再叠一条财务轴）退出 17:35 出票与 /mid 现役列表；"
+            "其余同骨架策略（SUE≥2.2∩业绩加速∩放量，再叠一条财务轴）退出 21:30 盘后出票与 /mid 现役列表；"
             "定义、回测指标与历史选股保留，按策略 id 仍可查旧批次。"
             "以后新增财务质量轴改为参数或过滤器，不再新开 strategy_id。"
         ),
@@ -1031,8 +1031,7 @@ _retire_sue_ladder()
 # 近 12 个月数字来自 midterm_backtest_metrics.json 的 recent_12m / quality.R12。
 NON_SUE_NEAR_DUP_CHAMPIONS: tuple[str, ...] = (
     "mid-repurchase-plan-underreact",           # 回购：弱反应持 20
-    "mid-forecast-preincrease-underreact-vol",  # 预增：弱反应∩放量
-    "mid-forecast-preincrease-underreact",      # 预增：弱反应宽池（R12 仍强，不是弱母集）
+    "mid-forecast-preincrease-underreact",      # 预增：弱反应宽池（R12 仍强，不是弱母集；放量子集 2026-11-27 退出）
     "mid-forecast-beat-underreact",             # 预喜合集：弱反应
     "mid-incentive-vol",                        # 激励：期权∩放量
     "mid-incentive-option",                     # 激励：期权草案宽池（n 约为放量版 3 倍，R12 仍强）
@@ -1070,9 +1069,14 @@ NON_SUE_NEAR_DUP_DEMOTE_REASONS: dict[str, str] = {
     "mid-sales-exp-drop": "销售费用率同比下降宽池。LIVE 323 笔总超额 +0.62%，全部来自与放量版重叠的信号；独有信号 213 笔超额 -0.04%。正 alpha 全在放量过滤（mid-sales-exp-vol 独有 79 笔 +0.34%），宽池退出。",
     "mid-turn-days-vol": "营业周期缩短∩放量。LIVE 215 笔总超额 +0.48%；独有信号 97 笔超额 -0.28%，6 个月里 2 个月为正。原因「效率轴唯一代表」是覆盖论证，覆盖零 alpha 的信号只增加敞口，退出。",
     "mid-dividend-increase-vol": "现金分红同比增加∩放量。LIVE 157 笔总超额 +1.76% 全部来自与不放量母集重叠的信号；独有信号 47 笔超额 -1.92%，3 个月全部为负。此处放量过滤在减分，分红事件由 mid-dividend-increase（独有 120 笔 +0.61%）代表。",
+    # 2026-11-27 第三批（L-228，同一独有信号口径；output/healthcheck-20261127/midterm_retired_audit.txt：
+    # 信号日 2025-11-01~2026-11-10，扣 0.07% 往返税费，同期同持有期 EWALL.A 基准）。两条都是现役策略的嵌套变体，
+    # 逐笔超额好看全部来自同日已被其他现役策略推荐的票；用户每只票只买一份（L-227），这部分不带来新收益：
+    "mid-ea-cas-vol": "业绩加速∩流动资产占比上升∩放量。122 笔净均 +0.98%、超额 +2.61%，但其中 111 笔同一天已被其他现役策略推荐；只有它推荐的独有信号 11 笔，净均 −6.46%、超额 −3.08%，3 个月全部为负。同一只票只买一份时它没有新增收益，退出；业绩加速放量与流动资产占比放量仍各自出票。",
+    "mid-forecast-preincrease-underreact-vol": "预增弱反应∩放量（事件池是预增弱反应宽池的子集）。79 笔净均 +4.28%、超额 +3.04%，但其中 52 笔同一天已被其他现役策略推荐；独有信号 27 笔净均 −0.76%、超额 −2.47%，3 个月全部为负。同一只票只买一份时它没有新增收益，退出；预增弱反应由宽池 mid-forecast-preincrease-underreact 代表。",
     "mid-repurchase-plan": "回购预案全量母集（金额/市值≥0.5%，持20，按比例排序）。R12 +1.35/PF1.32/n194、回撤 −14.0，中位数 +0.05。同事件弱反应持20（mid-repurchase-plan-underreact）R12 +2.98/PF1.80/n118。全量预案是弱母集，日频只留弱反应持20。",
     "mid-repurchase-underreact": "与冠军 mid-repurchase-plan-underreact 同一预案池、同一弱反应带（信号日 −1%~+2%、未涨停）、同一信号日涨跌排序，只把持有期改成 5 日。R12 +1.20/PF1.56/n127，低于持20的 +2.98。2026-11-03 日推持5的三只（神开股份、无锡振华、紫光国微）也出现在同日全量预案里。持有期是参数，不是第二条日频策略。",
-    "mid-forecast-preincrease": "预增全量母集。R12 +1.73/PF1.36/n122、中位数 −0.65、彩票型。弱反应∩放量冠军 mid-forecast-preincrease-underreact-vol 为 R12 +5.90/PF3.31。全量预增退出日频。",
+    "mid-forecast-preincrease": "预增全量母集。R12 +1.73/PF1.36/n122、中位数 −0.65、彩票型。弱反应∩放量冠军 mid-forecast-preincrease-underreact-vol 为 R12 +5.90/PF3.31。全量预增退出日频。（该冠军 2026-11-27 也按独有信号退出，预增由弱反应宽池代表。）",
     "mid-forecast-preincrease-vol": "预增只加放量、没有弱反应。R12 +1.63/PF1.42/n104、彩票型，与全量母集同档。放量单独不够，日频不留这一档。",
     "mid-forecast-turnaround": "扭亏单拆。R12 +1.82/PF1.40/n71、彩票型、回撤 −16.2，近三年回撤 −25.0。弱于预喜弱反应冠军 mid-forecast-beat-underreact（R12 +4.44）。类型单拆不再单独出票。",
     "mid-forecast-slight": "略增全量。R12 +1.97/PF1.65/n79。略增家族整簇近窗都在 +1.5～+2.3，低于预增/预喜冠军。类型单拆退出。",
@@ -1095,9 +1099,9 @@ def non_sue_near_dup_rejected_rows() -> list[dict[str, str]]:
     """/mid 淘汰清单：非 SUE 近重复收敛说明 + 每条已退出日频的策略。"""
     champs = "、".join(NON_SUE_NEAR_DUP_CHAMPIONS)
     rows = [{
-        "name": "非 SUE 近重复与零 alpha 宽池日频收敛（中线现役 47→25）",
+        "name": "非 SUE 近重复与零 alpha 策略日频收敛（中线现役 47→23）",
         "reason": (
-            f"回购、预告、激励和资产负债表近重复退出 17:35 出票与 /mid 现役列表。各簇保留 {champs}。"
+            f"回购、预告、激励和资产负债表近重复，以及独有信号没有超额的宽池和嵌套变体，退出 21:30 盘后出票与 /mid 现役列表。各簇保留 {champs}。"
             "同一事件源只改持有期、弱反应带或放量门槛，做成参数或过滤器，不再新开 strategy_id。"
             "定义、回测指标与历史选股保留，按策略 id 仍可查旧批次。这不是仓位管理。"
         ),
@@ -1825,13 +1829,28 @@ def _quarter_ends(as_of: str, n: int = 3) -> list[str]:
     return out
 
 
+# 同一轮 generate_picks 里 11 条财报策略各自按 3 个报告期拉 fina_indicator_vip（每期 11694 行、翻 2 页），
+# 一个交易日拉 70 多次同样的数据（2026-11-27 实测）。按报告期缓存 10 分钟：盘后一轮出票只拉一次。
+_FINA_PERIOD_TTL_SECONDS = 600.0
+_fina_period_cache: dict[str, tuple[float, Any]] = {}
+
+
 def _fetch_fina_period(period: str):
+    import time as _time
+
     from app.services.tushare_client import get_pro
+
+    hit = _fina_period_cache.get(period)
+    if hit is not None and _time.monotonic() - hit[0] < _FINA_PERIOD_TTL_SECONDS:
+        return hit[1]
     try:
-        return get_pro().fina_indicator_vip(period=period, fields="ts_code,ann_date,end_date,dt_netprofit_yoy,or_yoy,profit_dedt")
+        frame = get_pro().fina_indicator_vip(period=period, fields="ts_code,ann_date,end_date,dt_netprofit_yoy,or_yoy,profit_dedt")
     except Exception as exc:  # noqa: BLE001
         logger.warning("fina_indicator_vip %s failed: %s", period, exc)
         return None
+    if frame is not None and not frame.empty:
+        _fina_period_cache[period] = (_time.monotonic(), frame)
+    return frame
 
 
 def _liq_ok(db, as_of: str, dates: list[str], codes: list[str]) -> dict[str, dict[str, Any]]:
@@ -4594,7 +4613,7 @@ def next_batch_note(strategy_id: str, db=None, *, today: _dt.date | None = None)
             base = "每月最后一个交易日收盘后选股，次日开盘买"
     else:
         # daily 及默认
-        base = "每个交易日盘后（17:35）选股，次日开盘买"
+        base = "每个交易日盘后（21:30）选股，次日开盘买"
     if not _strategy_has_batch(strategy_id):
         return f"尚未出票；{base}"
     return base

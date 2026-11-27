@@ -73,6 +73,33 @@ def resolve_application_revision(environ: Mapping[str, str] | None = None) -> st
     return resolved
 
 
+# Prefect worker 启动时把自己钉住的 revision 写到这里（L-228）。worker 是常驻进程，白天的提交不会改变它
+# 声明的身份；重建脚本入队前先读这个文件与 HEAD 比对，不一致就直接拒绝，而不是让每个策略都产生一个 failed run。
+WORKER_IDENTITY_PATH = _REPOSITORY_ROOT / "backend" / "data" / "runtime" / "prefect_worker_identity.json"
+
+
+def write_worker_identity(revision: str, *, path: Path | None = None) -> None:
+    import json
+    from datetime import datetime, timezone
+
+    target = path or WORKER_IDENTITY_PATH
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({
+        "revision": revision, "pid": os.getpid(),
+        "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def read_worker_identity(path: Path | None = None) -> dict[str, str] | None:
+    import json
+
+    target = path or WORKER_IDENTITY_PATH
+    if not target.exists():
+        return None
+    data = json.loads(target.read_text(encoding="utf-8"))
+    return data if isinstance(data, dict) else None
+
+
 def resolve_application_version(environ: Mapping[str, str] | None = None) -> str:
     """Resolve the coarse application version (never a credential/URL)."""
     source = os.environ if environ is None else environ

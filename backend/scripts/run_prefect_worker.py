@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-from app.core.deployment_identity import resolve_application_revision
+from app.core.deployment_identity import resolve_application_revision, write_worker_identity
 from app.orchestration import pause_disabled_task_deployments, schedule_all_enabled_tasks
 from app.orchestration.deployments import RECOMMENDATION_WORK_QUEUE, WORK_POOL_CONCURRENCY_LIMIT
 
@@ -29,7 +29,7 @@ def _pin_application_revision() -> None:
     enqueue side purely because of launch-path differences. Resolving here also
     mirrors the result into ``os.environ`` for the spawned worker subprocess.
     """
-    resolve_application_revision()
+    write_worker_identity(resolve_application_revision())
 
 
 def _prefect_api_base() -> str:
