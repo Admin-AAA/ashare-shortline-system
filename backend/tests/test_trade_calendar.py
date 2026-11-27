@@ -170,6 +170,8 @@ def test_allow_network_false_never_reaches_upstream(db, monkeypatch):
         "20261019", "20261020", "20261021"]
     # ② 未覆盖区间：按工作日兜底 + 告警，同样不联网
     far = date.today() + timedelta(days=400)
+    while far.weekday() >= 5:  # 兜底只给工作日；落在周末时顺延，否则用例随运行日期时好时坏
+        far += timedelta(days=1)
     assert far.strftime("%Y%m%d") in tc.open_dates_between(far, far, db=db, allow_network=False)
     # ③ strict 调用方拿异常，而不是等网络
     with pytest.raises(tc.TradeCalendarUnavailable):
