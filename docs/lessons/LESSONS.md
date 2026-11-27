@@ -2279,4 +2279,25 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(c) 单条独有票只有个位数时按家族合起来判断，不逐条判。**
   - **(d) 恢复只需移出 `*_DEMOTE_REASONS`：定义、回测指标与历史选股一直保留，replay 历史已在。**
 - 吸收位置：`backend/app/services/midterm_service.py`（`SUE_LADDER_CHAMPIONS` 6 条；`NON_SUE_CULL_PROTECTED` 加入恢复的 6 条；`NON_SUE_NEAR_DUP_DEMOTE_REASONS` 里 `mid-turn-days-vol`、`mid-ea-cas-vol` 改为全期理由）、`backend/tests/test_midterm_api_fields.py`、`test_midterm_event_dip.py`、`test_midterm_forecast.py`、`test_earnings_accel_sort.py`、`README.md`、`CLAUDE.md`。
-- 相关：L-224（规则 (b) 按本条改写）、L-229、L-235、L-227、L-096。
+- 相关：L-224（规则 (b) 按本条改写）、L-229、L-235、L-227、L-096、L-239（更早退役的 57 条按同一口径复核）。
+
+## L-239 更早退役的 57 条中线按全期独有信号复核：14 条去掉会少赚，恢复现役（29→43）；候选之间互相重叠，要迭代判断
+
+- 状态：active（DECISION，2026-11-28 凌晨执行；中线现役 29→43）。
+- 适用：任何「一批退役策略按独有信号复核、批量恢复」的判断；中线现役集合扩大后复核独有贡献。
+- 口径（`output/research/fullhist-retire-20261127/`：`build_ext.py` 生成 `all_ext.pkl`，`audit2.py`/`audit2.txt`/`audit2.json`、`retired57_table.md`、`audit3.py`/`audit3.txt`）：同 L-238，信号日 2022-04 起，研究逐笔 + 生产选股文件，扣 0.07% 往返税费，基准 EWALL.A 同持有期。另报按生产结算 0.27% 总成本的净收益（每笔再减 0.20%）。范围是 `RETIRED_STRATEGIES` 里全部 57 条中线（SUE∩质量 35 条 + 非 SUE 近重复/弱尾 22 条）。
+- 退役原因核对：57 条当初都是收益或近重复比较（近 12 个月 R12、PF、Jaccard、LIVE 均值），没有数据源不可用或未来数据原因。`mid-incentive-underreact` 独有 0 笔，按「与现役信号完全重复」不恢复。
+- 恢复规则：收益原因退役，独有净合计 >0，且 0.27% 费用下仍 >0。候选之间互相重叠（略增三兄弟、资产负债表三兄弟、SUE 质量轴几十条几乎同票），逐条相对现役 29 条算会重复计入同一批票。做法是先把全部合格候选放进去，每轮去掉「相对其余现役+候选」0.27% 下独有合计最差且 ≤0 的一条，直到剩下的每条都为正。剔除顺序：tad-vol、etd-vol、itc-sue、forecast-preincrease，之后是 24 条独有 0～1 笔的 SUE 变体。
+- 证据（单独相对 29 条的独有票 → 迭代后相对 43 条其余的独有票）：
+  - 恢复：`mid-forecast-slight` 290 笔 +803%（超额 −319%）→ 119 笔 +240%；`mid-forecast-turnaround` 222 笔 +623%（超额 −199%，生产段 23 笔 −5%）；`mid-forecast-slight-vol` 221 笔 +557% → 89 笔 +232%；`mid-forecast-slight-underreact` 205 笔 +433% → 107 笔 +46%（超额 −372%，0.27% 下 +24%，最弱）；`mid-forecast-preincrease-vol` 200 笔 +421%（超额 −81%）；`mid-ncs-td-vol` 122 笔 +272% → 111 笔 +255%；`mid-repurchase-underreact` 55 笔 +244%（超额 +56%）；`mid-tad-etd-vol` 325 笔 +134% → 315 笔 +121%（研究段 +210%、生产段 139 笔 −76%，0.27% 下 +58%）；`mid-smallcap-dividend-weekly` 68 笔 +63%（超额 +48%，全在生产段）；SUE 五条 `mid-udp-sue-vol`、`mid-ocf-sue-vol`、`mid-ocsd-sue-vol`、`mid-roa-sue-vol`、`mid-trps-sue-vol` 各 1～4 笔，合起来相对其余 38 条 18 笔 +161%、超额 +48%，全在研究段（按 L-238 (c) 家族合起来判断为正）。
+  - 不恢复：`mid-repurchase-plan` 153 笔 +24%，0.27% 下 −6%；`mid-forecast-preincrease` 89 笔 +111%，与预增放量版重叠后 36 笔、0.27% 下 −0.3%；`mid-tad-vol`、`mid-etd-vol` 单独 +103%/+132%（生产段都为负），与 tad-etd-vol 重叠后 −64%/−10%；其余 25 条 SUE 变体重叠后独有 0～1 笔；独有合计本来就为负的有 `mid-fina-exp-drop` −488%、`mid-earnings-accel` −410%、`mid-fa-turn-vol` −394%、`mid-fa-td-vol` −188%、`mid-turn-days-vol` −176%、`mid-etd-fa-vol` −118%、`mid-sue-accel` −90%、`mid-ea-cas-vol` −40% 等。仍退役的 43 条合起来相对现役 43 条：1903 笔，净 −1826%。
+  - 去重总账（每票一份，0.07% / 0.27%）：29 条 8071 笔，净 +14182% / +12567%，超额 +2070%；43 条 9578 笔，净 +17220% / +15305%，超额 +1030%。分段（笔数、净、超额）：2022-23 年 29 条 2623 笔 −106%、−2404%，43 条 3164 笔 +426%、−3099%；2024-25 年 2922 笔 +10149%、+1656% → 3521 笔 +12465%、+1433%；2026 年 2526 笔 +4138%、+2818% → 2893 笔 +4330%、+2696%。
+  - 代价：净收益合计多 +3038%，超额合计少 1040%，每笔超额从 +0.26% 降到 +0.11%。多出来的票主要是 beta，2022-23 年熊市的超额更差。新恢复的大头（略增、扭亏、预增放量）收益集中在研究段，生产段每条只有 1～67 笔、合计接近 0。
+  - 恢复后现役 43 条里，有 10 条相对其余 42 条的独有合计 ≤0 或为 0 笔（如 `mid-sue-accel-vol` 19 笔 −80%、`mid-forecast-beat-underreact` 14 笔 −60%、`mid-fina-exp-vol` 0.27% 下 −24%、`mid-sexp-sue-vol`/`mid-incentive-vol`/`mid-repurchase-plan-underreact` 0 笔）。这是同簇互相覆盖，不是这些策略本身亏；按「去掉会不会少赚」本轮不据此退役，见规则 (c)。
+- 永久规则：
+  - **(a) 批量复核退役策略时，候选之间的重叠必须迭代处理：所有恢复项都要满足「相对其余现役 + 其他恢复项」独有合计在 0.27% 费用下为正，不能只相对旧现役集合逐条判。**
+  - **(b) 恢复门槛同时看 0.07% 和 0.27% 两种成本；扣真实成本后不赚的（如 `mid-repurchase-plan`）不恢复。**
+  - **(c) 现役集合扩大后，老现役的留一法独有贡献会因同簇覆盖变成 ≤0，这只说明它与新成员重叠，不是退役依据。同簇要缩减时，比较的是「留哪一条」的组合总账，不能对每条单独做留一法后一起删。**
+  - **(d) 汇报必须同时给去重总账的净收益和超额，以及 2022-23 熊市段；净收益涨、超额跌时写明多出的是 beta。**
+- 吸收位置：`backend/app/services/midterm_service.py`（`SUE_LADDER_CHAMPIONS` 11 条；`NON_SUE_CULL_PROTECTED` 加 9 条；仍退役的 `mid-repurchase-plan`、`mid-forecast-preincrease`、`mid-incentive-underreact`、`mid-tad-vol`、`mid-etd-vol`、`mid-fa-td-vol`、`mid-etd-fa-vol`、`mid-fa-turn-vol` 改为全期理由）、`backend/app/services/strategy_data_readiness.py`（7 个恢复 kind 声明数据依赖）、`backend/tests/test_midterm_api_fields.py`、`backend/tests/test_forecast_slight_pick_flow.py`、`README.md`、`CLAUDE.md`。
+- 相关：L-238、L-235、L-224、L-227。
