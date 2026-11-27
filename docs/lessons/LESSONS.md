@@ -2470,3 +2470,22 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(d) 2026-08～10 连续三个月超额为负是观察项，不是结论：一年里 9 正 3 负，且 3 个负月里有 2 个是财报季叠加熊市。再出现连续负月时先按本条口径复算，不改选股公式。**
 - 复现：`output/healthcheck-20261126/{attr_now,beta_alpha,mid_gate_eval,mid_oct_decomp,mid_unique_alpha,short_by_strategy_month}.py` 及同名 .txt。
 - 相关：L-219（去留口径）、L-221（中线技术面证伪）、L-080（指数趋势门控证伪）、L-061（跳空止损结构性）、L-197/L-198（变体是参数不是策略）。
+
+## L-225 短线回放与实盘同日选票不同，全部来自规则版本而非数据可见性；回放必须随策略改版重建，评估现行规则只能用回放
+
+- 状态：encoded（分叉定位 + 版本巡检 + 每策略边界已落地，2026-11-27；3 条策略的回放重建见吸收位置）。
+- 适用：解读「回放 alpha 为正、实盘为负」、用实盘小样本否定或肯定现行策略、任何改短线 yaml 后的评估。
+- 证据（`output/healthcheck-20261126/replay_live_diff.py`，18 对同日同策略的 live_forward 与 historical_replay 过滤审计逐票比对）：
+  - 盘后正式 run（17:4x～18:4x）与回放在同一天的「技能预过滤通过集合」完全一致（10-14 chao-gu 61/61、10-15 49/49、各策略 36/36），价格/涨跌幅/成交额逐票一致，换手率只差第 2 位小数（实盘时刻 quote 源的临时换手率 vs 日K定稿）。数据可见性不是分叉来源。
+  - 出票不同全部对应规则门结论不同：10-14 chao-gu 实盘 7 票过门、回放 0 票（回放代码含 10-17 加的「弱市停出」硬否决，当日 up_ratio 17.6%<30%）；10-14/10-15 sector 实盘 9/8 过门、回放 0。live run 用当天的 yaml（09-23～10-16 三周内换了 7 个 code_revision），回放用 10-19 的 yaml。
+  - 09-23 的差异来自实盘 run 是 15:02 盘中手动触发（预过滤 331 vs 210），不是正式盘后 run。
+  - 回放本身也落后于现行版本：chao-gu / sector 的 yaml 在 10-25 加了 EL_C 出场，oversold 在 10-25、10-30 改了出场和 pct≥5 硬门槛；最新已验证回放批次仍是 10-19 的指纹（e703f60e / 336ab4dc / ded82db5），实盘自 10-26 起已是 7f3264cc / 96a2b6cf / 2d8bc3bd。策略页「近 12 个月」短线数字算的是旧规则。
+  - 短线 live_forward 37 笔横跨 3～4 个版本，每个版本 3～23 天；「实盘 alpha −2.1%」是已不存在的规则混合的结果，不能用来判现行规则。
+- 永久规则：
+  - **(a) 评估现行短线规则的唯一口径是用现行代码重建的回放；实盘只在其 `strategy_policy_fingerprint` 等于当前指纹的日子才是现行规则的前瞻证据，评估时必须按指纹分段。**
+  - **(b) 短线 yaml / 生产政策改版后，必须用现行代码重建该策略的回放（`scripts/replay_all_days.py --single-skill <id> --skip-existing`，新指纹自动生成新批次并成为最新已验证 cohort）；`formal:short_replay_version` 巡检落后即黄。**
+  - **(c) 回放与实盘的边界按策略各自取最新已验证批次的终点（`rolling_r12.short_replay_coverage_end_by_strategy`），不能用全表 MAX；否则只重建一条策略会把其他策略的实盘段吞掉。**
+  - **(d) 比对回放与实盘时只认 17:40 之后的正式盘后 run，盘中手动 run 看到的是盘中快照，不可比。**
+- 复现：`output/healthcheck-20261126/replay_live_diff.py`（结果 .txt 同目录）；过滤审计 `recommendation_run_filter_audits.payload_z`（zlib）里每票的 `trace` 与 `rule_gate`。
+- 吸收位置：`data_quality_monitor.check_short_replay_version`、`rolling_r12.short_replay_coverage_end_by_strategy`、`tests/test_short_replay_version_check.py`；重建脚本 `output/healthcheck-20261126/rebuild_short_replay.sh`。
+- 相关：L-224（短线 live 样本不足以下规则结论）、L-096（证据不得跨 evidence_class 汇总）、L-002（口径变化后旧 champion 失效）、L-068（跨进程 revision 一致）。
