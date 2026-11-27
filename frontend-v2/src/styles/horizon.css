@@ -1,4 +1,4 @@
-.hz { display: grid; gap: var(--space-4); font-size: 14px; }
+.hz { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4); font-size: 14px; } /* 列宽不随表格最小内容撑开：宽表在 .hz-tablewrap 里横向滚动，整页不出横向滚动条 */
 .hz-pad { padding: var(--space-5); }
 .hz-muted { color: var(--muted); font-size: 13px; }
 .hz-hint { padding: 0 var(--space-1); }
