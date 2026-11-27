@@ -286,11 +286,11 @@ def run_auxiliary_application(
     )
     feature_views = _feature_views(orchestrated, as_of_trade_date=effective_date)
     if "share_float" in requested and not feature_views.get("share_floats_upcoming"):
-        # Tushare share_float 快照 publish_blocked 时，回退读本地 xiaoshi 解禁日历（只读、PIT）。
+        # Tushare share_float 快照为空/publish_blocked 时，回退读本地东财解禁日历（只读、PIT）。
         try:
-            from app.services.xiaoshi_alt_data import xiaoshi_upcoming_floats
+            from app.services.datasource.eastmoney import upcoming_floats_from_calendar
 
-            fallback = xiaoshi_upcoming_floats(
+            fallback = upcoming_floats_from_calendar(
                 db,
                 [i.code for i in _instruments(instruments)],
                 effective_date.isoformat(),

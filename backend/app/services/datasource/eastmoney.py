@@ -204,27 +204,18 @@ def dragon_tiger(td: str) -> list[dict[str, Any]]:
 
 
 def sync_eastmoney_alt(db, trade_date: str) -> dict[str, Any]:
-    """Daily (flag ``eastmoney.alt``): fill margin_detail gaps + refresh future unlock calendar."""
+    """Daily: refresh the future unlock calendar (always) and fill margin_detail gaps (flag ``eastmoney.alt``).
+
+    解禁日历不受 eastmoney.alt 开关控制：Tushare share_float 上游 2026-11-10 起停更（teajoin 实测 ann_date
+    最大 20261110、float_date≥20261119 全部 0 行），东财 RPT_LIFT_STAGE 是唯一还在更新的未来解禁源，
+    短线评分的解禁上限/风险提示（aggregator_pure）只能靠它。
+    """
     from sqlalchemy import select, text
 
     from app.models.tables import MarginDetail, ShareFloat
     from app.services.datasource.gateway import is_cutover
 
     result: dict[str, Any] = {"margin_inserted": 0, "float_inserted": 0, "errors": []}
-    if not is_cutover("eastmoney.alt"):
-        result["skipped"] = "flag eastmoney.alt off"
-        return result
-    try:
-        margin = _call("margin.detail", fetch_margin_detail, trade_date)
-        have = {c for (c,) in db.execute(select(MarginDetail.code).where(MarginDetail.trade_date == _dash(trade_date)))}
-        new = [r for r in margin if r["code"] not in have]
-        if new:
-            db.bulk_insert_mappings(MarginDetail, new)
-            db.commit()
-        result.update(margin_inserted=len(new), margin_rows=len(margin))
-    except Exception as exc:  # noqa: BLE001 - non-blocking backup
-        db.rollback()
-        result["errors"].append(f"margin: {str(exc)[:120]}")
     try:
         floats = _call("float.unlock", fetch_float_future, trade_date)
         have_f = {tuple(r) for r in db.execute(text(
@@ -243,4 +234,54 @@ def sync_eastmoney_alt(db, trade_date: str) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         db.rollback()
         result["errors"].append(f"float: {str(exc)[:120]}")
+    if not is_cutover("eastmoney.alt"):
+        result["margin_skipped"] = "flag eastmoney.alt off"
+        return result
+    try:
+        margin = _call("margin.detail", fetch_margin_detail, trade_date)
+        have = {c for (c,) in db.execute(select(MarginDetail.code).where(MarginDetail.trade_date == _dash(trade_date)))}
+        new = [r for r in margin if r["code"] not in have]
+        if new:
+            db.bulk_insert_mappings(MarginDetail, new)
+            db.commit()
+        result.update(margin_inserted=len(new), margin_rows=len(margin))
+    except Exception as exc:  # noqa: BLE001 - non-blocking backup
+        db.rollback()
+        result["errors"].append(f"margin: {str(exc)[:120]}")
     return result
+
+
+def upcoming_floats_from_calendar(db, codes: list[str], trade_date: str, *, days: int = 30,
+                                  as_of: str | None = None) -> dict[str, list[dict[str, Any]]]:
+    """share_float 事件快照为空时的读回退：本地 share_floats 里东财日历行（holder_name 以 FLOAT_PREFIX 开头）。
+
+    只读本地表，不发请求。PIT：只用 created_at ≤ as_of 当日结束的行，回放不会看到之后采集的日历。
+    """
+    from datetime import date, timedelta
+
+    from sqlalchemy import select
+
+    from app.models.tables import ShareFloat
+
+    if not codes:
+        return {}
+    start = date.fromisoformat(trade_date[:10])
+    end = (start + timedelta(days=days)).isoformat()
+    cutoff = f"{(as_of or trade_date)[:10]} 23:59:59"
+    rows = db.execute(
+        select(ShareFloat).where(
+            ShareFloat.code.in_(list(codes)),
+            ShareFloat.holder_name.like(FLOAT_PREFIX + "%"),
+            ShareFloat.float_date >= start.isoformat().replace("-", ""),
+            ShareFloat.float_date <= end.replace("-", ""),
+            ShareFloat.created_at <= cutoff,
+        )
+    ).scalars().all()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for r in rows:
+        fd = str(r.float_date or "")
+        out.setdefault(r.code, []).append({
+            "ann_date": r.ann_date, "float_date": f"{fd[:4]}-{fd[4:6]}-{fd[6:8]}" if len(fd) == 8 else fd,
+            "float_share": r.float_share, "float_ratio": r.float_ratio, "holder_name": r.holder_name, "share_type": None,
+        })
+    return out
