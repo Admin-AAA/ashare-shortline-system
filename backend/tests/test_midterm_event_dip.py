@@ -70,11 +70,9 @@ def test_filter_threshold_limits_and_order():
 
 
 def test_registered_with_quality_card():
-    # 2026-11-26 退役（LIVE 仅 4 笔且 -7.54%，样本不足）：不再注册进 STRATEGIES，
-    # 但定义留在 RETIRED_STRATEGIES，历史 picks 与 annotate_pick 仍可读。
-    assert "mid-repurchase-incentive-dip" not in ms.STRATEGIES
-    assert "mid-repurchase-incentive-dip" in ms.RETIRED_STRATEGIES
-    meta = ms.RETIRED_STRATEGIES["mid-repurchase-incentive-dip"]
+    # 2026-11-27 全期复核恢复现役（L-238：全期独有信号扣费合计为正）。
+    assert "mid-repurchase-incentive-dip" in ms.STRATEGIES
+    meta = ms.STRATEGIES["mid-repurchase-incentive-dip"]
     assert meta["kind"] == "event_dip" and meta["hold_days"] == 10 and meta["max_r20"] == -0.15
     p = ms.annotate_pick("mid-repurchase-incentive-dip", {"code": "600001", "r20": -0.2, "event": "回购预案",
                                                           "ratio": 0.01, "repurchase_amount": 1e8, "signal_pct": 0.5})
@@ -84,8 +82,8 @@ def test_registered_with_quality_card():
 
 def test_dip_cards_registered_with_quality():
     data = json.loads(ms.METRICS_FILE.read_text())
-    # §1069 mid-earnings-accel-dip 已下线，定义留在 RETIRED_STRATEGIES，历史标注仍可读
-    assert "mid-earnings-accel-dip" not in ms.STRATEGIES
+    # §1069 曾下线 mid-earnings-accel-dip，2026-11-27 全期复核恢复现役（L-238）
+    assert "mid-earnings-accel-dip" in ms.STRATEGIES
     for sid, kind in (("mid-divplan-dip", "divplan_dip"), ("mid-earnings-accel-dip", "ea_dip")):
         meta = ms._strategy_meta(sid)
         assert meta["kind"] == kind and meta["hold_days"] == 5 and meta["max_r20"] == -0.15
