@@ -1545,6 +1545,35 @@ def check_goal_metrics(db) -> dict[str, Any]:
     return goal_metrics_item(g)
 
 
+GOAL_METRICS_SHORT_KEY = "formal:goal_metrics_short"
+
+
+def goal_metrics_short_item(g: dict[str, Any]) -> dict[str, Any]:
+    from app.services.goal_metrics import short_summary_text
+
+    fails = []
+    if not g["rolling_excess_pass"]:
+        fails.append("滚动超额未>0")
+    if not g["positive_months_pass"]:
+        fails.append(f"逐月为正 {g['positive_months']}/{g['month_count']}")
+    if g["strategies_failing"]:
+        fails.append(f"{len(g['strategies_failing'])} 个策略全期净合计为负")
+    sev = GREEN if not fails else YELLOW
+    detail = short_summary_text(g) + ("" if sev == GREEN else "。未达标：" + "、".join(fails))
+    return _item(GOAL_METRICS_SHORT_KEY, "短线长远目标三指标", "盘后出票", sev, kind="job", latest=g["window_end"], detail=detail,
+                 impact="短线按现行指纹回放 + 同指纹实盘（L-225）是否稳定跑赢买全市场；净合计为负的策略去掉会多赚")
+
+
+def check_goal_metrics_short(db) -> dict[str, Any]:
+    from app.services import goal_metrics as gm
+    from app.services import rolling_r12 as rr
+
+    cutoff = str(db.execute(text("SELECT MAX(trade_date) FROM daily_kbars WHERE code='000001'")).scalar())
+    start = (datetime.fromisoformat(cutoff) - timedelta(days=gm.GOAL_WINDOW_DAYS + 40)).strftime("%Y-%m-%d")
+    g = gm.compute_short(rr.short_trade_rows(db, start, cutoff))
+    return goal_metrics_short_item(g)
+
+
 def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -> dict[str, Any]:
     now = now or _now()
     _CHECK_TIMINGS.clear()
@@ -1612,6 +1641,7 @@ def run_checks(db, *, now: datetime | None = None, include_files: bool = True) -
     items += _safe("短线回放版本", SHORT_REPLAY_VERSION_KEY, "盘后出票", "job", lambda: [check_short_replay_version(db)])
     _rollback(db)
     items += _safe("中线长远目标三指标", GOAL_METRICS_KEY, "盘后出票", "job", lambda: [check_goal_metrics(db)])
+    items += _safe("短线长远目标三指标", GOAL_METRICS_SHORT_KEY, "盘后出票", "job", lambda: [check_goal_metrics_short(db)])
     _rollback(db)
     _rollback(db)
     items += _safe("log", "log:*", "静默失败", "log", lambda: check_log_signals(now))

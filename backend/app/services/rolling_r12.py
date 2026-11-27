@@ -324,6 +324,50 @@ def short_segment_returns(db, seg: dict[str, Any] | None, cutoff: str,
     return out
 
 
+def short_trade_rows(db, window_start: str, cutoff: str) -> list[dict[str, Any]]:
+    """短线逐笔（供长远目标 goal_metrics）：每条现役短线策略按自己的回放覆盖终点切段（L-225），
+    回放段只用 historical_replay、实盘段只用 live_forward，已成交、卖出日 ≤ cutoff 的笔。
+    返回 {strategy_id, signal_date, code, net, bench, scope}；bench = EWALL.A 同信号日、同实际持有日数、同成本。"""
+    from app.engine.trading_costs import TOTAL_ROUND_TRIP_COST_PCT
+    from app.services import outcome_service as os_
+    from app.services.daily_output_check import expected_short_strategies
+    from app.services.market_benchmark import equal_weight_curve, holding_benchmark_return
+
+    expected = set(expected_short_strategies(db))
+    boundary, _src = short_replay_coverage_end(db)
+    per_sid = short_replay_coverage_end_by_strategy(db)
+    dates, pct = equal_weight_curve(db)
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for sid in sorted(expected):
+        segments = short_segments(window_start, cutoff, per_sid.get(sid, boundary))
+        for seg in (segments["replay"], segments["live"]):
+            if seg is None:
+                continue
+            for rec in os_._scoped_recommendation_rows(db, seg["start"], seg["end"], sample_scope=seg["scope"]):
+                if os_.normalized_outcome_label(rec) in (os_.OUTCOME_PENDING, os_.OUTCOME_PROVISIONAL):
+                    continue
+                m = os_._metric_record_from_row(rec)
+                if not m["executed"]:
+                    continue
+                sold = str(getattr(rec, "exit_date", "") or "")[:10]
+                if not sold or sold > cutoff:
+                    continue
+                if sid not in {str(x.get("strategy_id")) for x in os_._loads(rec.skill_breakdown_json, [])}:
+                    continue
+                sd, code = str(rec.trade_date)[:10], str(rec.code)
+                if (sid, sd, code) in seen:
+                    continue
+                seen.add((sid, sd, code))
+                hold = max(1, int(round(m["holding_days"] or 1)))
+                b = holding_benchmark_return(dates, pct, sd, hold, cost_pct=TOTAL_ROUND_TRIP_COST_PCT)
+                if b is None:
+                    continue
+                out.append({"strategy_id": sid, "signal_date": sd, "code": code, "net": float(m["net_return_pct"]),
+                            "bench": b, "scope": seg["scope"]})
+    return out
+
+
 def _seg_summary(seg: dict[str, Any] | None, rets: list[float], late: list[float]) -> dict[str, Any]:
     return {**(seg or {}), "n": len(rets), "avg": round(sum(rets) / len(rets), 2) if rets else None,
             "sold_after_cutoff": {"n": len(late), "avg": round(sum(late) / len(late), 2) if late else None}}

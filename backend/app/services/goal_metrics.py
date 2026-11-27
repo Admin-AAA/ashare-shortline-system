@@ -8,7 +8,8 @@
    研究段重叠）。合计为正即去掉会少赚，不退役；超额为负只列观察项（收益主要来自 beta）。单看近 12 个月不算数。
 
 前两项每天由数据质量巡检算一次，达不到的项标黄；第三项为负的策略标黄。只统计已平仓且能算出基准的笔；持有中不计。
-短线（recommendations）暂不并入：实盘按版本分段后样本太少（L-225），等现行版本回放重建完成后再接。
+短线（compute_short）：每条现役短线策略 = 现行指��回放段 + 同指纹实盘段（rolling_r12.short_trade_rows，L-225），
+近 12 个月去重滚动超额、逐月为正月份、每策略全期（回放+实盘）扣费净合计；短线策略互相很少同日同票，不做独有信号判定。
 """
 from __future__ import annotations
 
@@ -134,4 +135,65 @@ def summary_text(g: dict[str, Any]) -> str:
         parts.append(f"净为正但超额为负（收益主要是 beta）的观察项 {len(g['strategies_watch'])} 个：{'、'.join(g['strategies_watch'])}")
     if g["strategies_insufficient"]:
         parts.append(f"独有信号不足 {GOAL_MIN_UNIQUE_TRADES} 笔未判 {len(g['strategies_insufficient'])} 个")
+    return "；".join(parts)
+
+
+def compute_short(short_rows: Iterable[dict[str, Any]], *, today: _dt.date | None = None) -> dict[str, Any]:
+    """short_rows：rolling_r12.short_trade_rows 的输出（已含 net/bench/scope）。
+    近 12 个月：同日同票去重后的滚动超额与逐月为正；每策略：全期笔数、净合计、超额合计、回放/实盘分段。"""
+    today = today or _dt.date.today()
+    start = (today - _dt.timedelta(days=GOAL_WINDOW_DAYS)).isoformat()
+    rows = list(short_rows)
+    recent: dict[tuple[str, str], dict[str, Any]] = {}
+    for r in rows:
+        if r["signal_date"] >= start:
+            recent.setdefault((r["signal_date"], r["code"]), r)
+    excess = [r["net"] - r["bench"] for r in recent.values()]
+    by_month: dict[str, list[float]] = collections.defaultdict(list)
+    for r in recent.values():
+        by_month[r["signal_date"][:7]].append(r["net"] - r["bench"])
+    months = [{"month": m, "n": len(v), "excess": round(statistics.mean(v), 2)} for m, v in sorted(by_month.items())]
+    per: list[dict[str, Any]] = []
+    for sid in sorted({r["strategy_id"] for r in rows}):
+        mine = [r for r in rows if r["strategy_id"] == sid]
+        rep = [r for r in mine if r["scope"] == "historical_replay"]
+        live = [r for r in mine if r["scope"] == "live_forward"]
+        net_sum = sum(r["net"] for r in mine); ex_sum = sum(r["net"] - r["bench"] for r in mine)
+        if len(mine) < GOAL_MIN_UNIQUE_TRADES:
+            verdict = "insufficient"
+        elif net_sum > 0:
+            verdict = "pass" if ex_sum > 0 else "watch"
+        else:
+            verdict = "fail"
+        per.append({"strategy_id": sid, "n": len(mine), "replay_n": len(rep), "live_n": len(live),
+                    "net_sum": round(net_sum, 1), "excess_sum": round(ex_sum, 1),
+                    "net_avg": round(net_sum / len(mine), 2) if mine else None,
+                    "excess_avg": round(ex_sum / len(mine), 2) if mine else None,
+                    "live_excess_avg": round(statistics.mean(r["net"] - r["bench"] for r in live), 2) if live else None,
+                    "signal_days": len({r["signal_date"] for r in mine}), "verdict": verdict})
+    rolling = statistics.mean(excess) if excess else None
+    positive_months = sum(1 for m in months if m["excess"] > 0)
+    return {
+        "window_start": start, "window_end": today.isoformat(), "basis": "current-fingerprint replay + same-fingerprint live (L-225)",
+        "dedup_n": len(recent), "rolling_excess": round(rolling, 2) if rolling is not None else None,
+        "rolling_excess_pass": (rolling is not None and rolling > 0),
+        "months": months, "positive_months": positive_months, "month_count": len(months),
+        "positive_months_pass": positive_months >= GOAL_POSITIVE_MONTHS,
+        "per_strategy": per,
+        "strategies_failing": [p["strategy_id"] for p in per if p["verdict"] == "fail"],
+        "strategies_watch": [p["strategy_id"] for p in per if p["verdict"] == "watch"],
+        "strategies_insufficient": [p["strategy_id"] for p in per if p["verdict"] == "insufficient"],
+    }
+
+
+def short_summary_text(g: dict[str, Any]) -> str:
+    parts = [
+        f"短线去重近12月滚动超额 {g['rolling_excess']:+.2f}%" if g["rolling_excess"] is not None else "短线去重近12月滚动超额 无样本",
+        f"逐月为正 {g['positive_months']}/{g['month_count']}",
+        f"全期扣费净合计为负的策略 {len(g['strategies_failing'])} 个" + (f"：{'、'.join(g['strategies_failing'])}" if g["strategies_failing"] else ""),
+    ]
+    if g.get("strategies_watch"):
+        parts.append(f"净正超额负观察项 {len(g['strategies_watch'])} 个：{'、'.join(g['strategies_watch'])}")
+    if g["strategies_insufficient"]:
+        parts.append(f"不足 {GOAL_MIN_UNIQUE_TRADES} 笔未判 {len(g['strategies_insufficient'])} 个：{'、'.join(g['strategies_insufficient'])}")
     return "；".join(parts)

@@ -467,6 +467,21 @@ def mid_goal(db: Session = Depends(get_db)):
     return g
 
 
+@router.get("/short/goal")
+def short_goal(db: Session = Depends(get_db)):
+    """短线长远目标三指标：每条现役短线策略 = 现行指纹回放 + 同指纹实盘（L-225），口径见 services/goal_metrics.compute_short。"""
+    from sqlalchemy import text as _text
+
+    from app.services import goal_metrics as gm
+    from app.services import rolling_r12 as rr
+
+    cutoff = str(db.execute(_text("SELECT MAX(trade_date) FROM daily_kbars WHERE code='000001'")).scalar())
+    start = (_dt.date.fromisoformat(cutoff) - _dt.timedelta(days=gm.GOAL_WINDOW_DAYS + 40)).isoformat()
+    g = gm.compute_short(rr.short_trade_rows(db, start, cutoff))
+    g["summary"] = gm.short_summary_text(g)
+    return g
+
+
 @router.get("/{horizon}/runs")
 def horizon_runs(horizon: str, limit: int = Query(60, ge=1, le=400)):
     """运行记录：每日盘后各策略的出票结果（出票/无信号/仓位已满/非选股日/数据异常）。"""

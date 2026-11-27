@@ -61,3 +61,24 @@ def test_item_turns_yellow_on_any_failure(monkeypatch):
     assert g2["strategies_failing"] == ["b"]
     item = goal_metrics_item(g2)
     assert item["severity"] == YELLOW and "净合计为负" in item["detail"]
+
+
+def _short(sid, sd, code, net, bench, scope="historical_replay"):
+    return {"strategy_id": sid, "signal_date": sd, "code": code, "net": net, "bench": bench, "scope": scope}
+
+
+def test_compute_short_dedups_recent_and_judges_fullperiod_net_sum():
+    rows = [_short("s1", f"2026-{m:02d}-10", f"{i:06d}", 2.0, 1.0) for m in range(1, 11) for i in range(3)]   # 30 笔，净正超额正
+    rows += [_short("s2", "2026-06-10", "000000", 2.0, 1.0, scope="live_forward")]                           # 与 s1 同日同票：近 12 月去重一份
+    rows += [_short("s2", f"2026-0{m}-15", f"{900 + i:06d}", -0.5, -1.0) for m in range(1, 7) for i in range(5)]  # 30 笔净负超额正 → fail
+    rows += [_short("s3", "2024-01-05", "111111", 9.0, 0.0)]                                                    # 全期算、近 12 月不算
+    g = gm.compute_short(rows, today=dt.date(2026, 11, 27))
+    assert g["dedup_n"] == 60
+    per = {p["strategy_id"]: p for p in g["per_strategy"]}
+    assert per["s1"]["verdict"] == "pass" and per["s1"]["n"] == 30 and per["s1"]["signal_days"] == 10
+    assert per["s2"]["verdict"] == "fail" and per["s2"]["live_n"] == 1 and per["s2"]["net_sum"] == -13.0
+    assert per["s3"]["verdict"] == "insufficient" and per["s3"]["net_sum"] == 9.0
+    assert g["strategies_failing"] == ["s2"]
+    from app.services.data_quality_monitor import goal_metrics_short_item
+    item = goal_metrics_short_item(g)
+    assert item["severity"] == YELLOW and "s2" in item["detail"]
