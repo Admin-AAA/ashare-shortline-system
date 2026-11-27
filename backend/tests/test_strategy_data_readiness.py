@@ -354,9 +354,9 @@ def test_late_repick_midlong_includes_data_not_ready(monkeypatch, tmp_path):
     sd.mkdir(parents=True)
     rows = {sid: {"status": "no_signal"} for sid in ms.STRATEGIES}
     rows["mid-earnings-accel-vol"] = {"status": "data_not_ready"}
-    rows["mid-incentive-vol"] = {"status": "data_error"}
+    rows["mid-incentive-option"] = {"status": "data_error"}
     (sd / "2026-11-04.json").write_text(json.dumps(rows))
-    assert sorted(ss._midlong_error_strategies("2026-11-04")) == ["mid-earnings-accel-vol", "mid-incentive-vol"]
+    assert sorted(ss._midlong_error_strategies("2026-11-04")) == ["mid-earnings-accel-vol", "mid-incentive-option"]
     assert ss.MIDLONG_RETRY_STATUSES == (None, "data_error", "data_not_ready")
 
 
