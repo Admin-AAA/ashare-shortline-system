@@ -38,7 +38,7 @@ export function RunPanel({ horizon, list, onClose, onDone }: { horizon: H; list:
   return (
     <section className="panel hz-pad hz-run">
       <div className="hz-sechead"><Play size={16} /><b>手动出票 / 补跑（{horizon === "mid" ? "中线" : "长线"}）</b>
-        <span className="hz-muted">与每天 17:35 盘后同一流程；同一天重跑会覆盖当天的出票文件</span>
+        <span className="hz-muted">与每天 21:30 盘后同一流程；同一天重跑会覆盖当天的出票文件</span>
         <button className="hz-iconbtn" onClick={onClose} aria-label="关闭"><X size={16} /></button></div>
       <div className="hz-run__form">
         <label>信号日 <input type="date" className="hz-select" value={asOf} max={todayBj()} onChange={(e) => setAsOf(e.target.value)} /></label>

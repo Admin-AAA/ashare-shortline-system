@@ -40,7 +40,7 @@ export function RunConfirmPanel({ onClose }: { onClose: () => void }) {
       <div className="modal" role="dialog" aria-label="运行推荐">
         <div className="modal__hd"><h3>运行推荐（手动）</h3><button className="icon-button" onClick={onClose} aria-label="关闭"><X size={16} /></button></div>
         <div className="modal__bd">
-          <div className="note">会新增一次运行，今日页改为显示本次结果；17:35 的记录保留在运行记录里；已推荐过的票不会重复出。</div>
+          <div className="note">会新增一次运行，今日页改为显示本次结果；定时盘后运行（21:30）的记录保留在运行记录里；已推荐过的票不会重复出。</div>
           <div className="muted small" style={{ margin: "12px 0 6px" }}>今日已有运行</div>
           {todayRuns.length ? (
             <table className="tbl tbl--mini"><tbody>{todayRuns.map((r) => (

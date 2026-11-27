@@ -263,7 +263,7 @@ function TodayView({ horizon, batches, list, onPick }: { horizon: H; batches: Ho
       {anyDaily && (
         <section className="panel hz-pad">
           <div className="hz-sechead"><b>各策略今日状态</b></div>
-          <div className="hz-rej">{list.map((x) => (<div key={x.id} className="hz-rej__item hz-rej__item--wait"><div className="hz-rej__name">{x.name}</div><DailyChip s={x} />{!x.daily_status && <span className="hz-muted">今日状态待 17:35 盘后更新</span>}</div>))}</div>
+          <div className="hz-rej">{list.map((x) => (<div key={x.id} className="hz-rej__item hz-rej__item--wait"><div className="hz-rej__name">{x.name}</div><DailyChip s={x} />{!x.daily_status && <span className="hz-muted">今日状态待 21:30 盘后更新</span>}</div>))}</div>
         </section>)}
       {active.length ? <div className="hz-muted hz-hint">最近信号日 {latest} · 待买入的在下一交易日开盘买入；开盘涨停则取消买入，停牌顺延买入。</div>
         : <section className="panel hz-pad"><EmptyState title="当前没有待买入或持有中的批次" reason="到期平仓的批次在「复盘」里看。" /></section>}

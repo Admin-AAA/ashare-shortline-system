@@ -256,7 +256,7 @@ export type DataReadinessResponse = {
 export type HorizonMetrics = { n?: number; win?: number; avg?: number; pf?: number; days?: number; tot?: number; mdd?: number };
 export type HorizonStrategy = {
   id: string; name: string; horizon: string; summary: string; next_batch_note?: string | null;
-  /** 当日出票状态（17:35 盘后才有）；缺失则不显示 */
+  /** 当日出票状态（21:30 盘后才有）；缺失则不显示 */
   daily_status?: { status: "ok" | "no_signal" | "data_error" | "data_not_ready" | "slots_full" | "not_signal_day" | string; reason?: string | null; date?: string | null } | string | null;
   daily_status_reason?: string | null; schedule: string; hold_days: number; top_n: number | null;
   metrics: { recent_12m?: HorizonMetrics; phases?: Record<string, HorizonMetrics>; window?: string; note?: string; quality?: import("../components/ReturnSourceBlock").ReturnSourceQuality };

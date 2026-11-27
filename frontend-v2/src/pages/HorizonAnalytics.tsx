@@ -280,7 +280,7 @@ export function HorizonRunsPage({ horizon }: { horizon: H }) {
   return (
     <div className="hz">
       <section className="panel hz-pad">
-        <div className="hz-sechead"><b>{hzName(horizon)} · 运行记录</b><span className="hz-muted">每天 17:35 盘后（大宗约 21:00）各策略的出票结果；只记录真实盘后运行，不含历史回放</span></div>
+        <div className="hz-sechead"><b>{hzName(horizon)} · 运行记录</b><span className="hz-muted">每天 21:30 盘后各策略的出票结果；只记录真实盘后运行，不含历史回放</span></div>
         {days.length === 0 ? <EmptyState title="还没有运行记录" reason="盘后流程跑过一次后这里就有记录。" /> : (
           <div className="hz-tablewrap"><table className="hz-table">
             <thead><tr><th>日期</th><th>策略</th><th>结果</th><th className="r">出票</th><th>说明</th><th>记录时间</th></tr></thead>
