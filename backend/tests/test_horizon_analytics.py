@@ -67,6 +67,26 @@ def test_stats_definitions():
     assert empty["n"] == 0 and empty["win_rate"] is None and empty["profit_factor"] is None
 
 
+def test_metrics_overlap_portfolios_only_for_mid_with_benchmark(monkeypatch):
+    """组合视图只在中线、且拿得到 EWALL.A 日历时给出；口径细节见 test_overlap_portfolio。"""
+    from app.services import market_benchmark
+
+    cal = [f"2026-03-{d:02d}" for d in range(2, 31)]
+    monkeypatch.setattr(market_benchmark, "equal_weight_curve", lambda db: (cal, {d: 0.0 for d in cal}))
+    rows = [{"signal_date": cal[0], "code": c, "name": c, "strategy_id": sid, "strategy_name": sid, "status": "closed",
+             "entry_date": cal[1], "exit_date": cal[21], "ret": 1.0, "ret_includes_cost": True, "hold_days": 20,
+             "origin": "replay", "overlap_count": 2 if c == "A" else 1, "excess_ret": 0.5, "bench_ret": 0.5}
+            for c, sid in (("A", "s1"), ("A", "s2"), ("B", "s1"))]
+    db = object()
+    m = ha.metrics(db, "mid", rows=rows)
+    assert m["overlap_portfolios"]["eligible_picks"] == 3 and m["overlap_portfolios"]["eligible_signals"] == 2
+    assert m["overlap_portfolios"]["recent_days"][0]["shared"][0]["code"] == "A"
+    assert ha.metrics(db, "long", rows=rows)["overlap_portfolios"] is None
+    assert ha.metrics(None, "mid", rows=rows)["overlap_portfolios"] is None
+    monkeypatch.setattr(market_benchmark, "equal_weight_curve", lambda db: ([], {}))
+    assert ha.metrics(db, "mid", rows=rows)["overlap_portfolios"] is None
+
+
 def test_metrics_breakdowns(tmp_path, monkeypatch):
     _setup(tmp_path, monkeypatch, REALIZED)
     m = ha.metrics(None, "mid")

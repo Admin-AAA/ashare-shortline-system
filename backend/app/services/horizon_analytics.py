@@ -261,11 +261,20 @@ def metrics(db, horizon: str, *, origin: str = "all", window_days: int | None = 
     distinct = {(r["signal_date"], r["code"]) for r in sel}
 
     dates = [r["signal_date"] for r in sel]
+    # 中线组合视图（A 跟全部策略买 / B 去重每票一份）：按 EWALL.A 交易日历走完持有期，见 overlap_portfolio。
+    overlap_portfolios = None
+    if horizon == "mid" and db is not None:
+        from app.services import overlap_portfolio
+        from app.services.market_benchmark import equal_weight_curve
+
+        calendar, day_pct = equal_weight_curve(db)
+        overlap_portfolios = overlap_portfolio.build(sel, calendar, day_pct) if calendar else None
     return {
         "horizon": horizon, "origin": origin or "all", "window_days": window_days, "window_start": start,
         "date_range": {"first_signal": min(dates, default=None), "last_signal": max(dates, default=None)},
         "overview": stats(sel), "by_origin": by_origin, "by_strategy": by_strategy, "top_k": top_k,
         "by_month": by_month, "by_overlap": by_overlap, "distinct_signals": len(distinct),
+        "overlap_portfolios": overlap_portfolios,
         "portrait_realized_12m": portrait,
     }
 

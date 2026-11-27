@@ -289,6 +289,25 @@ export type HorizonStats = { n: number; win_rate: number | null; avg_ret: number
 export type HorizonStrategyStats = HorizonStats & { strategy_id: string; strategy_name: string; hold_days: number; first_signal: string | null; last_signal: string | null };
 /** 同一信号日同一只票被几个策略同时推荐；≥5 是组合里最大的集中度来源。 */
 export type HorizonOverlapStats = HorizonStats & { bucket: string };
+/** 中线组合视图（backend/app/services/overlap_portfolio.py）：A 跟全部策略买（每笔一份）/ B 去重每票一份。
+ * 资金分 slots 份、每个信号日用 1 份，空槽算现金，按交易日复利；成本统一 0.07%。逐月按持仓所在交易日归月。 */
+export type OverlapMonth = { month: string; days: number; net_ret: number | null; bench_ret: number | null;
+  excess_ret: number | null; max_drawdown: number | null };
+export type OverlapScheme = { net_ret: number | null; bench_ret: number | null; excess_ret: number | null;
+  max_drawdown: number | null; bench_max_drawdown: number | null; by_month: OverlapMonth[];
+  avg_invested_pct: number | null; avg_positions: number | null; avg_stocks: number | null; avg_effective_n: number | null;
+  max_single_weight: number | null; max_single_weight_code: string | null; max_single_weight_date: string | null;
+  avg_daily_max_weight: number | null };
+export type OverlapPerTrade = { n: number; net_ret: number | null; bench_ret: number | null; excess_ret: number | null };
+export type OverlapSharedPick = { code: string; name: string | null; overlap: number; strategies: string[];
+  weight_a_pct: number | null; weight_b_pct: number | null; status: string };
+export type HorizonOverlapPortfolios = { cost_pct: number; slots: number; eligible_picks: number; eligible_signals: number;
+  excluded_closed: number; signal_days: number; rolling_window: { start: string; end: string; days: number; ramped: boolean };
+  per_trade: { all: OverlapPerTrade; dedup: OverlapPerTrade }; A: OverlapScheme; B: OverlapScheme;
+  /** 累计收益（%）；bench 为 A 的同排期 EWALL.A。 */
+  curves: { dates: string[]; A: number[]; B: number[]; bench: number[] };
+  recent_signal_days: number;
+  recent_days: { signal_date: string; picks: number; stocks: number; shared: OverlapSharedPick[] }[] };
 /** 策略画像「回放已平仓」：后端按信号日截近 365 天，不随诊断页 window_days 改变。 */
 export type HorizonPortraitRealized = {
   window_days: number; window_basis: string; window_start: string; window_end: string; note?: string;
@@ -301,6 +320,7 @@ export type HorizonMetricsResponse = { horizon: string; origin: string; window_d
   by_strategy: HorizonStrategyStats[];
   top_k: (HorizonStats & { k: number })[]; by_month: (HorizonStats & { month: string })[];
   by_overlap?: HorizonOverlapStats[]; distinct_signals?: number;
+  overlap_portfolios?: HorizonOverlapPortfolios | null;
   portrait_realized_12m?: HorizonPortraitRealized };
 export type HorizonRunItem = { strategy_id: string; strategy_name: string; status: string; recorded_at?: string | null; picks: number | null; detail: string | null };
 export type HorizonRunsResponse = { horizon: string; days: { date: string; items: HorizonRunItem[] }[] };

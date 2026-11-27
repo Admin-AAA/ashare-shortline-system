@@ -94,3 +94,30 @@
 .hz-table th .hz-score-note, .hz-dl .hz-score-note { display: block; margin-top: 2px; font-size: 11px; font-weight: 400; line-height: 1.35; white-space: normal; max-width: 16em; color: var(--muted); }
 .hz-rej__item--wait { border-left-color: var(--info); }
 .hz-daily { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 8px; font-size: 12px; }
+
+/* 中线组合视图（HorizonOverlap.tsx）：A 蓝、B 青、同排期 EWALL.A 金色虚线。
+ * 两套主题各取一组，过了 dataviz 配色校验（亮度带、色弱分离、正常视觉分离、对比度）；暗色下 B 和基准比通用色略暗，进亮度带。 */
+:root[data-theme="dark"] .hz-ov { --ov-a: #3b82f6; --ov-b: #00b2c2; --ov-bench: #d48a0a; }
+:root[data-theme="light"] .hz-ov { --ov-a: #2563eb; --ov-b: #0891b2; --ov-bench: #d97706; }
+.hz-ov__chart { margin-top: var(--space-4); }
+.hz-ov__legend { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; font-size: 12px; }
+.hz-ov__key { display: inline-flex; align-items: center; gap: 5px; color: var(--ink-secondary); }
+.hz-ov__swatch { width: 14px; height: 3px; border-radius: 2px; display: inline-block; vertical-align: middle; background: var(--ov-a); }
+.hz-ov__swatch--b { background: var(--ov-b); }
+.hz-ov__swatch--bench { background: repeating-linear-gradient(90deg, var(--ov-bench) 0 5px, transparent 5px 8px); }
+.hz-ov__line { fill: none; stroke-width: 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+.hz-ov__line--a { stroke: var(--ov-a); }
+.hz-ov__line--b { stroke: var(--ov-b); }
+.hz-ov__line--bench { stroke: var(--ov-bench); stroke-dasharray: 5 3; }
+.hz-ov__dot { stroke: var(--surface); stroke-width: 2; }
+.hz-ov__dot--a { fill: var(--ov-a); }
+.hz-ov__dot--b { fill: var(--ov-b); }
+.hz-ov__dot--bench { fill: var(--ov-bench); }
+.hz-ov__endlab { fill: var(--ink-secondary); font-family: var(--font-mono); font-size: 11px; }
+.hz-ov__leader { stroke: var(--muted-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.hz-ov__sub { display: flex; align-items: baseline; gap: var(--space-2); flex-wrap: wrap; margin: var(--space-4) 0 var(--space-2); font-weight: 600; font-size: 13px; }
+.hz-ov__sub .hz-muted { font-weight: 400; font-size: 12px; }
+.hz-ov__scroll { max-height: 420px; overflow-y: auto; }
+.hz-table td.hz-ov__wrap { white-space: normal; min-width: 16em; max-width: 36em; line-height: 1.45; }
+.hz-ov__diff td, .hz-ov__total td { border-top: 1px solid var(--line-strong); font-weight: 600; }
+.hz-ov__note { margin-top: var(--space-3); font-size: 12px; line-height: 1.6; color: var(--muted); }

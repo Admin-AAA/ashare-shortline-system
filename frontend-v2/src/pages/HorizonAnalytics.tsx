@@ -4,6 +4,7 @@ import { EmptyState, ErrorPage, PageSkeleton } from "../components/StateViews";
 import { useApi } from "../app/useApi";
 import "../styles/horizon.css";
 import { PickDrawer, PickStatusLine } from "./HorizonExtras";
+import { OverlapPortfolioSection } from "./HorizonOverlap";
 
 /** 中线 / 长线的「诊断 / 研究」「持仓 / 待卖」「交易明细」「运行记录」四页。
  * 数据全部来自 /api/horizons/{h}/metrics|trades|runs，口径与「按批次复盘」一致：
@@ -106,6 +107,7 @@ export function HorizonMetricsPage({ horizon }: { horizon: H }) {
               </table></div>
             </section>
           )}
+          {horizon === "mid" && m.overlap_portfolios && <OverlapPortfolioSection d={m.overlap_portfolios} />}
           <section className="panel hz-pad">
             <div className="hz-sechead"><b>按策略</b><span className="hz-muted">PF &lt; 1 标绿 = 这段样本里亏钱</span></div>
             <div className="hz-tablewrap"><table className="hz-table">
