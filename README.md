@@ -8,16 +8,16 @@
 
 ## 一、现役策略（2026-11-26）
 
-上线不靠感觉：先在 `docs/strategy-research.md` 预注册规则，回测扣成本后达到上线标准才上线，不达标就进淘汰列表，不事后放宽。
+上线不靠感觉：先在 `docs/strategy-research.md` 预注册规则，回测扣成本后证据充分才上线，不达标就进淘汰列表，不事后放宽。
 
 | 周期 | 持有 | 现役策略 | 代码位置 |
 |---|---|---|---|
-| 短线 | T+1 起按策略离场 | 炒股养家、超跌资金反包、主线相对强度龙头、恐慌出清 RSI6+QVIX（观察） | `backend/skills/*/strategy.yaml`，参与名单与退役名单见 `backend/app/services/standalone_strategies.py` |
-| 中线 | 20 日（分红预案深跌 5 日） | 25 个：小市值系 4 个周度策略、回购预案弱反应、业绩加速放量、预告弱反应、期权激励及放量版、大宗溢价、费用率下降放量、分红增加、流动资产占比放量、SUE 盈余加速系列及其组合 | `backend/app/services/midterm_service.py` 的 `STRATEGIES` |
+| 短线 | T+1 起按策略离场 | 炒股养家、超跌资金反包、主线相对强度龙头、恐慌出清 RSI6+QVIX（观察），共 4 个 | `backend/skills/*/strategy.yaml`，参与名单与退役名单见 `backend/app/services/standalone_strategies.py` |
+| 中线 | 多为 20 日（弱反应/深跌类 5–10 日） | 25 个：小市值系 4 个周度策略、回购预案弱反应、业绩加速放量、预告弱反应、期权激励及放量版、大宗溢价、费用率下降放量、分红增加、流动资产占比放量、SUE 盈余加速系列及其组合 | `backend/app/services/midterm_service.py` 的 `STRATEGIES` |
 | 长线 | 60 日 | 红利低波 | 同上 |
 
 - 策略上线与去留按全期扣费净收益（减 0.07% 往返税费）、同期同持有期全市场等权基准的超额、跨月符号一致性和样本量综合判断，没有固定数字门槛。
-- 被拒策略：中线/长线写在 `backend/app/api/midterm.py` 的 `MID_REJECTED` / `LONG_REJECTED`，短线退役名单是 `standalone_strategies.py` 的 `RETIRED_STRATEGY_IDS`。退役策略的目录和代码保留，便于复现。
+- 被拒/退役策略：中线退役定义在 `midterm_service.py` 的 `RETIRED_STRATEGIES`（模块加载时从现役字典移出，定义与历史选股全部保留），长线/中线被拒清单见 `backend/app/api/midterm.py` 的 `MID_REJECTED` / `LONG_REJECTED`；短线退役名单是 `standalone_strategies.py` 的 `RETIRED_STRATEGY_IDS`。退役策略的目录和代码保留，便于复现。
 - 新上线策略会自动回补近 3 个月的回放记录，标记 `origin=replay`，不和实盘（`live_forward`）混在一起统计。
 - 长线研究目前暂停，已上线的长线策略照常运行。
 
@@ -27,14 +27,16 @@
 - 同分顺延：和第 5 名同分的一起出。例：100,100,90,90,90,80 → 5 只；10 只全满分 → 10 只。
 - 中长线的实盘出票和历史回放重建都套这个上限；短线只套在实盘 formal run，短线回测回放不受影响。
 - 这是当天新推荐数，不是持仓上限。已经落盘的旧回放文件不会自动变少，重跑步骤见 `docs/ops/daily-pick-cap-20261026.md`。
-- 短线还有一道更早的出票上限：每个策略每次 run 最多 3 张（`DEFAULT_OUTPUT_COUNT`，高潮日减半）。
+- 短线还有一道更早的出票上限：每个策略每次 run 最多 3 张（`DEFAULT_OUTPUT_COUNT`，高潮日减半；恐慌出清按研究口径一次 10 张）。
 - 详见 `docs/ops/daily-pick-cap-20261026.md`，实现在 `backend/app/services/daily_pick_cap.py`。
 
 ---
 
 ## 二、每日流程
 
-所有任务由 Prefect 调度（工作日，北京时间）：
+业务任务由 Prefect 调度（工作日，北京时间），守护类任务由 launchd 直接定时拉起。
+
+### Prefect 任务
 
 | 时间 | 任务 |
 |---|---|
@@ -54,7 +56,16 @@
 | 23:30 | 开盘啦涨停榜研究缓存日更 |
 | 周六 10:00 | 中长线周度基本面快照 |
 
-时间常量都在 `backend/app/services/scheduler_pure.py`。
+### launchd 守护任务
+
+| 时间 | 任务 |
+|---|---|
+| 工作日 04:00 / 07:50 / 16:35 | 后端安全重启（先检查无在跑任务，全部避开交易与出票窗口） |
+| 22:15 | 盘后出票 watchdog：回收 21:00 后卡住的 run（`backend/scripts/daily_run_watchdog.py`） |
+| 周六 10:00 | 数据源能力矩阵探测（`probe_datasource_capabilities.py`） |
+| 周日 03:30 | 日志轮转（`scripts/launchd/rotate_ashare_logs.sh`） |
+
+时间常量都在 `backend/app/services/scheduler_pure.py`，launchd 模板在 `deploy/launchd/`。
 
 运维窗口：09:15–15:05（交易时段）和 21:00–23:35（晚间补数与出票）不要重启服务。
 
@@ -83,15 +94,15 @@
 | 同花顺 thsdk | 实时行情、板块广度、市场快讯 | |
 | Baostock、东方财富、新浪、腾讯、通达信、巨潮、AkShare | 历史分钟、公告新闻、实时行情兜底、QVIX | 兜底 |
 
-能力矩阵 `backend/docs/datasource_capability_matrix.md` 由 `backend/scripts/probe_datasource_capabilities.py` 生成。小石（xiaoshi）2026-11-15 永久退役（`datasource/retired.py`）。
+能力矩阵 `backend/docs/datasource_capability_matrix.md` 由 `backend/scripts/probe_datasource_capabilities.py` 生成。小石（xiaoshi）2026-11-15 永久退役（`datasource/retired.py`），不要重新接入。
 
 补数范围：最近 3 年，不补 2023 年 10 月以前。
 
 ### 本地数据
 
-- MySQL：本机 `127.0.0.1:3306`，库 `ashare_workbench`；测试用 `ashare_test`。
+- MySQL：本机 Homebrew MySQL 9.6，`127.0.0.1:3306`，库 `ashare_workbench`；测试用 `ashare_test`。
 - 中长线 parquet 数据：`backend/data/midterm/`（预告、财报、事件、分红等）。
-- 运行时状态：`backend/data/runtime/`。
+- 运行时状态：`backend/data/runtime/`；策略指标 `backend/data/strategy_metrics/`；研究缓存 `backend/data/research_cache/`。
 
 ### 密钥
 
@@ -104,16 +115,19 @@
 ```
 ashare-shortline-system/
 ├── ashare                      # CLI 入口
-├── dev.sh                      # 前后端服务：重启 / 状态 / 停止 / 日志
+├── dev.sh                      # 前后端服务：status / start / stop / restart / logs
 ├── prefect.yaml                # Prefect 部署定义
+├── deploy/                     # launchd 模板与 syslog 配置
+├── scripts/                    # 架构检查、因子研究、launchd 运维脚本
 ├── backend/
 │   ├── app/
 │   │   ├── main.py             # FastAPI 入口（端口 8765）
-│   │   ├── api/                # 路由：runs、recommendations、strategies、midterm（/api/horizons）、metrics、records、data_sources、admin ...
+│   │   ├── api/                # 路由：runs、recommendations、strategies、horizons（/api/horizons）、metrics、records、data_sources、admin ...
 │   │   ├── core/               # 配置（ASHARE_ 前缀）、日志、告警、熔断、额度
 │   │   ├── engine/             # 短线打分、聚合、选股政策
 │   │   ├── policies/           # 版本化选股政策 JSON
 │   │   ├── orchestration/      # Prefect flows / deployments
+│   │   ├── governance/         # 生产治理：状态机、门控执行、注册与不可变产物
 │   │   ├── services/
 │   │   │   ├── datasource/     # 数据网关与各数据源适配
 │   │   │   ├── runs/           # 短线正式 run 管线（stages/adapters.py）
@@ -122,10 +136,17 @@ ashare-shortline-system/
 │   │   │   ├── daily_pick_cap.py         # 每策略每日上限
 │   │   │   ├── scheduler_service.py / scheduler_pure.py  # 调度
 │   │   │   └── outcome_*.py    # 结算
+│   │   ├── agents/             # 研究 agent、评审 runner、会话注册
+│   │   ├── adapters/           # 市场源适配
+│   │   ├── domain/             # 领域计算与因子分析
+│   │   ├── skills_impl/        # 策略的 Python 实现（恐慌出清、滞涨预警）
+│   │   ├── db/                 # 会话、迁移与生产加固
+│   │   ├── schemas/            # Pydantic 模型
 │   │   └── models/             # ORM 模型
 │   ├── skills/                 # 短线策略（strategy.yaml + SKILL.md + manifest.json）
 │   ├── research_skills/        # 研究原型，不参与出票
 │   ├── scripts/                # 运维、补数、研究脚本（midterm/ 下是中长线研究）
+│   ├── data/                   # 本地数据池（midterm parquet、runtime、指标与缓存）
 │   ├── tests/
 │   └── logs/                   # app.log、access.log
 ├── frontend-v2/                # React 19 + TypeScript + Vite（端口 5174）
@@ -133,6 +154,8 @@ ashare-shortline-system/
     ├── strategy-research.md    # 策略研究与预注册记录（§编号）
     ├── lessons/LESSONS.md      # 教训注册表（L-### 编号）
     ├── ops/                    # 运维与产品规则说明
+    ├── design/ specs/ research/  # 设计、规格与研究归档
+    ├── bugs/ reviews/          # 缺陷证据与评审报告
     └── datasource-*.md         # 数据源评估与接入
 ```
 
@@ -143,9 +166,9 @@ ashare-shortline-system/
 前端 5174、后端 8765、Prefect server / worker 都由 launchd 托管，开机自启、崩溃自重启。
 
 ```bash
-./dev.sh status      # 查看状态
-./dev.sh restart     # 重启前后端
-./dev.sh logs backend   # 看日志（frontend / backend）
+./dev.sh status       # 查看状态
+./dev.sh restart      # 重启前后端（也可 start / stop）
+./dev.sh logs backend # 看日志（frontend / backend）
 ```
 
 后端安全重启（会先检查有没有正在跑的任务）：
@@ -178,17 +201,20 @@ cd ../frontend-v2 && npm install
 | 今日 | 今日出票、持仓 / 待卖、驾驶舱（短线）、运行详情（短线） |
 | 复盘 | 按批次、交易明细、运行记录 |
 | 策略 | 策略列表（按综合分排序）、策略详情（含收益来源：去尾均值、中位数、稳健型/彩票型） |
-| 系统 | 配置（数据源开关与熔断状态）、诊断 / 研究 |
+| 系统 | 配置（数据源开关与熔断状态）、诊断 / 研究（中长线诊断含全市场等权基准 EWALL.A、超额/笔、按同推策略数分桶） |
 
 ### CLI
 
 ```bash
 ./ashare runs --limit 10 --pretty
 ./ashare recommendations <run_id> --pretty
+./ashare explain <recommendation_id> --pretty   # 分数、技能审查、漏斗轨迹、交易计划
+./ashare funnel <run_id> --pretty               # 候选过滤审计
 ./ashare data-health --pretty
+./ashare data-sources --pretty
+./ashare alerts --pretty
 ./ashare readiness --pretty
 ./ashare pool-status --summary-only --pretty
-./ashare registry-diagnostics --pretty
 ```
 
 ### 测试
@@ -198,7 +224,7 @@ cd backend && .venv/bin/python -m pytest -q tests/<某个测试文件>.py
 ```
 
 - 测试自动连 `ashare_test` 库，不会碰生产库。
-- 全量回归 `cd backend && .venv/bin/python -m pytest -q tests`，约 4300 个用例。
+- 全量回归 `cd backend && .venv/bin/python -m pytest -q tests`，最近一次 4286 passed / 24 skipped（约 4300 个用例）。
 - 提交前至少跑一次 `.venv/bin/python -c "import app.main"`。
 
 ---
@@ -246,6 +272,7 @@ cd backend && .venv/bin/python -m pytest -q tests/<某个测试文件>.py
 
 | 任务 | 做什么 |
 |---|---|
+| Python lint | Ruff 检查与异常吞没门禁 |
 | Python compile + import | 编译 `app` 并 `import app.main` 冒烟 |
 | Python unit tests | `backend/app/` 下单测（不连 MySQL） |
 | Python regression (no db) | `backend/tests/` 非 `integration` 用例，`sqlite://` |
@@ -254,6 +281,8 @@ cd backend && .venv/bin/python -m pytest -q tests/<某个测试文件>.py
 | Governance store check | `backend/scripts/check_governance_store.py` 不可变治理产物布局 |
 | Git diff check | `git diff --check` 查行尾/冲突标记 |
 | Frontend v2 build | `npm ci && npm run build` |
+
+仓库另配 pre-commit（`.pre-commit-config.yaml`），提交前自动跑 Ruff 等检查。
 
 本地想先验证，不必等 CI：
 
