@@ -2594,3 +2594,15 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - **(f) 回放批次（`replay_all_days`）进行中不要重启 worker，只重启后端可以。** 批次里两条 run 之间有几秒空档，`active_work_check` 会报空闲：11-27 16:35 的定时安全重启在回放进行中等到 16:42:10，就落进空档重启了后端。worker 在批次中途换版本，批次后面的 run 会全部因 manifest revision 不一致失败。后端重启不影响回放（11-27 16:38、16:42 两次后端重启，回放 run 0 失败，启动恢复按心跳保留在跑的 run）。`sync_worker_revision.py` 看到 `replay_all_days` 进程就跳过；等批次换策略或跑完再对齐。
 - 吸收位置（D4）：`backend/app/core/deployment_identity.py`（`write_worker_identity` / `read_worker_identity`）、`backend/scripts/run_prefect_worker.py`（`_pin_application_revision` 启动时写身份文件）、`backend/scripts/replay_all_days.py`（`_assert_worker_revision_matches` 入队前拒绝）、`backend/scripts/sync_worker_revision.py`（`_replay_campaign_pids` 回放在跑时跳过）+ `deploy/launchd/com.wangao.ashare-sync-revision.plist`（工作日 15:10）、`backend/tests/test_worker_identity_sync.py`；证据提交 b75ca659。D3 见 `backend/app/engine/trading_costs.py`（259fcc1e）。
 - 相关：L-224（中线亏损归因）、L-225（短线回放版本）、L-133（入场方式由策略声明）、L-068（跨进程 revision 一致）、L-163（辅助数据可见性按入库时刻核对）。
+
+## L-231 负面事件回避过滤（减持/解禁/高质押）在中线选中池无稳定减亏效果；选中池 33 笔的「高质押毒区」被全市场对照否定
+
+- 状态：active（否定性 FINDING，2026-11-27；长远目标 G1 关闭）。
+- 适用：任何想给中线策略加「有减持公告就不买」「持有期内有解禁就不买」「质押比例高就不买」类回避过滤的想法。
+- 口径：现役 25 条中线策略已平仓笔，同日同票去重（1784 笔，2025-11～2026-10），基准 EWALL.A 同持有期同成本；暴露用全市场 `holdertrade_de` parquet（2025-26 共 61407 条）、`share_floats.float_date`、`pledge_stats` 周频。
+- 证据（`output/healthcheck-20261126/g1_negative_event_filter.py`）：
+  - 减持：信号日前 30 天有任何减持公告的 329 笔超额 +2.07% vs 其余 +1.81%；前 90 天有 ≥0.5% 总股本减持的 373 笔 +3.41% vs +1.45%。命中组反而更好，逐月只有 6/11～6/12 个月更差（掷币）。剔除会让整体超额从 +1.86% 降到 +1.45%。
+  - 解禁：持有窗口内有 ≥1% 解禁的只有 25 笔（1.4%），超额 +5.29%；≥5% 的 11 笔样本不足。
+  - 质押：选中池里质押比例 ≥30% 的 33 笔超额 −1.5%、胜率 32%，分桶看 30-40 与 ≥40 两档都为负，逐月 4/4 更差，形态像毒区。但全市场对照（51 个周频快照、质押 ≥30 的 5079 个股票日 vs <5 的 49269 个，T+1 开盘买持 20 日）：高质押超额 −0.11% vs 低质押 −0.43%，高质押跑输低质押的月份 8/13。全市场不成立的「毒区」只在选中池 33 笔上成立，是小样本加选择效应（L-064 同一机理），不加过滤。
+- 永久规则：**(a) 减持公告、解禁、质押比例三类「负面事件」对现役中线策略的票没有可用的回避价值，不要再以 30/60/90 天、0.5%/1%/5%、30%/50% 等阈值换参重测。(b) 选中池分桶出现「毒区」时，必须先做同一特征的全市场对照（同持有期、同基准）；全市场不成立的，一律判选择效应，不得落地为过滤器。**
+- 相关：L-064（选中池 vs 全市场口径反转）、L-224（中线亏损是 beta）、L-230（去重后排序挑票不胜随机）、L-091（小样本 veto 翻案）。
