@@ -10,6 +10,7 @@ OUT = Path(__file__).resolve().parents[2] / "data/research_cache/kpl_list"
 OUT.mkdir(parents=True, exist_ok=True)
 start = sys.argv[1] if len(sys.argv) > 1 else "20190101"
 end = sys.argv[2] if len(sys.argv) > 2 else pd.Timestamp.now().strftime("%Y%m%d")
+EMPTY_GRACE_DAYS = 14
 
 
 def _alarm(*_):
@@ -66,9 +67,9 @@ for i, d in enumerate(todo):
         df["trade_date"] = df["trade_date"].astype(str)
         buf.append(df.astype({c: "string" for c in df.columns if df[c].dtype == object}))
     else:
-        # 当日榜单发布很晚（实测 22:00 之后偶尔仍未出）：空结果不能记成「该日无数据」，
-        # 否则第二天断点逻辑会永久跳过这一天。只有历史日期才写空日标记。
-        if d >= pd.Timestamp.now().strftime("%Y%m%d"):
+        # 榜单上游发布晚且会补发（2026-11-18～11-26 连续数日在次日仍为空，之后才补出）：
+        # 近 EMPTY_GRACE_DAYS 个自然日内的空结果不记成「该日无数据」，否则断点逻辑会永久跳过这些天。
+        if d >= (pd.Timestamp.now() - pd.Timedelta(days=EMPTY_GRACE_DAYS)).strftime("%Y%m%d"):
             print(d, "empty（尚未发布，不记空日，下次重试）", flush=True)
         else:
             with open(done_file, "a") as fh:
