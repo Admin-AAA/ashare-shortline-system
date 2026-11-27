@@ -947,14 +947,18 @@ for _m in STRATEGIES.values():
 # 近 12 个月数字来自 midterm_backtest_metrics.json 的 recent_12m；
 # 日推重叠来自 2026-08-14～2026-11-02 选股文件的两两 Jaccard（主人侧实盘/回放票）。
 SUE_LADDER_CHAMPIONS: tuple[str, ...] = (
-    "mid-sexp-sue-vol",    # 费用率：累计销售费用率
-    "mid-ocfs-sue-vol",    # 现金流：经营现金流/营收
-    "mid-sue-td-vol",      # 骨架变体：盈余加速∩营业周期
-    "mid-qn-sue-vol",      # 盈利质量：单季总资产净利率
-    "mid-curr-sue-vol",    # 营运流动性：流动比率
-    "mid-sue-accel-vol",   # 无额外质量轴的 SUEG∩放量基线
+    "mid-sue-accel-vol",   # 无额外质量轴的 SUEG∩放量基线，SUE 家族唯一日频代表
 )
 SUE_LADDER_DEMOTE_REASONS: dict[str, str] = {
+    # 2026-11-27（L-235，output/healthcheck-20261126/g5_sue_merge.txt）：五条质量轴冠军在近 12 个月去重口径下
+    # 70%~80% 的信号与基线 mid-sue-accel-vol 同日同票，其余几乎都被别的现役策略同日推荐，各自独有信号 0～4 笔。
+    # 把五条整体从现役拿掉，去重近 12 个月滚动超额 +1.86% → +1.81%、逐月为正 7/12 不变、独有信号为负的策略集合不变；
+    # 基线的独有信号从 11 笔升到 31 笔（超额 +4.11%）、从「不足」变成可判定。质量轴是基线的参数，不再各占一个 strategy_id。
+    "mid-sexp-sue-vol": "销售费用率∩盈余加速∩放量。近 12 个月去重 48 笔，34 笔（71%）与基线 mid-sue-accel-vol 同日同票，其余 14 笔全部被别的现役策略同日推荐，独有 0 笔。同一只票只买一份时没有新增收益，退出；SUE 家族由基线代表。",
+    "mid-ocfs-sue-vol": "经营现金流/营收∩盈余加速∩放量。近 12 个月去重 59 笔，46 笔（78%）与基线同日同票，12 笔被别的现役策略同日推荐，独有 1 笔（−9.99%）。退出，SUE 家族由基线代表。",
+    "mid-qn-sue-vol": "单季总资产净利率∩盈余加速∩放量。近 12 个月去重 75 笔，60 笔（80%）与基线同日同票，14 笔被别的现役策略同日推荐，独有 1 笔（−18.06%）。退出，SUE 家族由基线代表。",
+    "mid-curr-sue-vol": "流动比率∩盈余加速∩放量。近 12 个月去重 77 笔，57 笔（74%）与基线同日同票，16 笔被别的现役策略同日推荐，独有 4 笔超额 −1.51%。退出，SUE 家族由基线代表。",
+    "mid-sue-td-vol": "盈余加速∩营业周期∩放量。近 12 个月去重 53 笔，37 笔（70%）与基线同日同票，15 笔被别的现役策略同日推荐，独有 1 笔（+4.33%）。退出，SUE 家族由基线代表。",
     "mid-qsexp-sue-vol": "与冠军 mid-sexp-sue-vol 同为销售费用率轴，日推 Jaccard≈0.91，近窗几乎同票。R12 +12.68/PF5.72/n36 仍高，单季口径阶段更稳，但同轴只留累计版。",
     "mid-fcfe-sue-vol": "股权自由现金流近亲。R12 +9.50/PF3.27/n42，但 2022-04~2023-03 段为负、回撤 −7.2，日推窗口极稀且常与现金比率/销售费用完全重合。现金流边已由 mid-ocfs-sue-vol 代表。",
     "mid-cashr-sue-vol": "现金比率与冠军 mid-curr-sue-vol 日推 Jaccard≈0.79。R12 +7.39/PF3.06/n50，2019 与 2020 段为负。流动性只留流动比率。",
@@ -998,7 +1002,7 @@ def sue_ladder_rejected_rows() -> list[dict[str, str]]:
     """/mid 淘汰清单顶部：家族收敛说明 + 每条已退出日频的策略。"""
     champs = "、".join(SUE_LADDER_CHAMPIONS)
     rows = [{
-        "name": "SUE∩质量家族日频收敛（41→6）",
+        "name": "SUE∩质量家族日频收敛（41→1）",
         "reason": (
             f"日频只留 {champs}。"
             "其余同骨架策略（SUE≥2.2∩业绩加速∩放量，再叠一条财务轴）退出 21:30 盘后出票与 /mid 现役列表；"
@@ -1032,7 +1036,7 @@ _retire_sue_ladder()
 # 2026-11-04 非 SUE 近重复日频收敛。定义仍留在上面的 STRATEGIES 字面量里
 # （候选函数、历史 picks、回测指标都不删）；加载后把近重复和弱尾挪进 RETIRED_STRATEGIES。
 # 同一事件源只改持有期、弱反应带或放量门槛，是家族内部的参数或过滤器，不得再新开 strategy_id。
-# 这不是仓位管理，也不改选股公式。SUE 六冠军不在这张表里。
+# 这不是仓位管理，也不改选股公式。SUE 基线 mid-sue-accel-vol 不在这张表里。
 # 近 12 个月数字来自 midterm_backtest_metrics.json 的 recent_12m / quality.R12。
 NON_SUE_NEAR_DUP_CHAMPIONS: tuple[str, ...] = (
     "mid-repurchase-plan-underreact",           # 回购：弱反应持 20
@@ -1104,7 +1108,7 @@ def non_sue_near_dup_rejected_rows() -> list[dict[str, str]]:
     """/mid 淘汰清单：非 SUE 近重复收敛说明 + 每条已退出日频的策略。"""
     champs = "、".join(NON_SUE_NEAR_DUP_CHAMPIONS)
     rows = [{
-        "name": "非 SUE 近重复与零 alpha 策略日频收敛（中线现役 47→23）",
+        "name": "非 SUE 近重复与零 alpha 策略日频收敛（中线现役 47→18）",
         "reason": (
             f"回购、预告、激励和资产负债表近重复，以及独有信号没有超额的宽池和嵌套变体，退出 21:30 盘后出票与 /mid 现役列表。各簇保留 {champs}。"
             "同一事件源只改持有期、弱反应带或放量门槛，做成参数或过滤器，不再新开 strategy_id。"
