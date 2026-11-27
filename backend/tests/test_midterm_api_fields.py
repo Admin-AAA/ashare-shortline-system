@@ -164,7 +164,8 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     champs = set(ms.NON_SUE_NEAR_DUP_CHAMPIONS)
     protected = set(ms.NON_SUE_CULL_PROTECTED)
     sue = set(ms.SUE_LADDER_CHAMPIONS)
-    assert len(demoted) == 26 and len(champs) == 6
+    assert len(demoted) == 28 and len(champs) == 5
+    assert {"mid-ea-cas-vol", "mid-forecast-preincrease-underreact-vol"} <= demoted
     assert not demoted & champs and not demoted & protected and not demoted & sue
     assert demoted <= set(ms.RETIRED_STRATEGIES)
     assert not demoted & set(ms.STRATEGIES)
@@ -176,7 +177,8 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     # §1069 再退役 mid-earnings-accel-dip（生产滚动 R12 每笔 −3.28%）：30 → 29。
     # 2026-11-26 第二批按独有信号 alpha 退役 mid-forecast-beat / mid-sales-exp-drop / mid-turn-days-vol /
     # mid-dividend-increase-vol：29 → 25。
-    assert len(live_mid) == 25
+    # 2026-11-27 第三批按独有信号退役 mid-ea-cas-vol / mid-forecast-preincrease-underreact-vol（L-229）：25 → 23。
+    assert len(live_mid) == 23
     assert "mid-earnings-accel-dip" in demoted
     assert live_mid & sue == sue
     overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
@@ -187,7 +189,7 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     assert ms.generate_picks(None, "2026-11-03", strategy_ids=["mid-repurchase-underreact"]) == {}
     rows = ms.non_sue_near_dup_rejected_rows()
     assert rows[0]["name"].startswith("非 SUE 近重复")
-    assert "47→25" in rows[0]["name"]
+    assert "47→23" in rows[0]["name"]
     assert "仓位" in rows[0]["reason"]
     assert {r["name"] for r in rows[1:]} == {
         f"{ms.RETIRED_STRATEGIES[sid]['name']}（{sid}）" for sid in demoted
@@ -201,7 +203,7 @@ def test_next_batch_note(tmp_path, monkeypatch):
     # 无批次：全部前缀尚未出票
     notes = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("mid", db=None)}
     assert "mid-repurchase-plan" not in notes
-    assert notes["mid-repurchase-plan-underreact"] == "尚未出票；每个交易日盘后（17:35）选股，次日开盘买"
+    assert notes["mid-repurchase-plan-underreact"] == "尚未出票；每个交易日盘后（21:30）选股，次日开盘买"
     assert notes["mid-small-cap-weekly"] == "尚未出票；每个周五收盘后选股，次日开盘买"
     assert notes["mid-block-trade-premium"] == "尚未出票；每晚约 21:00 大宗数据发布后选股，次日开盘买"
     long_notes = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("long", db=None)}
@@ -212,7 +214,7 @@ def test_next_batch_note(tmp_path, monkeypatch):
     (tmp_path / "2026-10-16_mid-repurchase-plan-underreact.json").write_text(
         json.dumps({"strategy_id": "mid-repurchase-plan-underreact", "signal_date": "2026-10-16", "picks": []}))
     notes2 = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("mid", db=None)}
-    assert notes2["mid-repurchase-plan-underreact"] == "每个交易日盘后（17:35）选股，次日开盘买"
+    assert notes2["mid-repurchase-plan-underreact"] == "每个交易日盘后（21:30）选股，次日开盘买"
     assert notes2["mid-incentive-option"].startswith("尚未出票；")
 
 
