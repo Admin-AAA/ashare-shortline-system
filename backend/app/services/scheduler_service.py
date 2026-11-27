@@ -1025,6 +1025,10 @@ def _run_stock_identity_refresh(db) -> dict:
         return {"status": "failed", "error": f"{type(exc).__name__}: {exc}", "summary_text": f"股票身份刷新失败: {exc}"}
     rec = reconcile_stock_identity(db)
     out["reconcile"] = rec
+    # 研究用 st_hist.parquet 以 stock_metadata_history.is_st 为唯一权威，刷新后随手重导，否则文件会与库漂移
+    from scripts.midterm.export_data import OUT as ST_HIST_DIR, write_st_hist
+
+    out["st_hist"] = write_st_hist(db.connection(), ST_HIST_DIR)
     for warning in out.get("warnings") or []:
         emit_alert("stock_identity_refresh_warning", datetime.now().strftime("%Y-%m-%d %H"), warning)
     # key 不带日期，与 run_freshness_check 的「每表一条」一致；对账恢复正常自动解除
