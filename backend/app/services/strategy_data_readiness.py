@@ -55,7 +55,13 @@ PLAIN_LABELS: dict[str, str] = {
     "fina_hist": "历年财报（本地）",
     "forecast_hist": "历史业绩预告（本地）",
     "dividend_hist": "历史分红（本地）",
+    "share_float_calendar": "限售解禁日历",
 }
+# 解禁日历是「未来日期」表，不能按 MAX(日期) 判（有排到 2035 年的长期限售，永远「最新」）。
+# 改看 as_of 之后 SHARE_FLOAT_AHEAD_DAYS 天里排了多少条解禁：东财日历每天刷新时平常有数百条
+# （2026-11-28 实测 12 月 338 条），日历停更后这个窗口会逐日变空。
+SHARE_FLOAT_AHEAD_DAYS = 30
+SHARE_FLOAT_MIN_AHEAD_ROWS = 30
 _DB_KEYS = {"daily_kbars": "db:daily_kbars", "daily_basic": "db:daily_basic", "capital_flow": "db:capital_flow",
             "stock_quotes": "db:stock_quotes", "concept_sector": "db:concept_sector",
             "concept_sector_stock": "db:concept_sector_stock", "limit_up_board": "db:limit_up_board",
@@ -142,6 +148,8 @@ MID_KIND_DEPS: dict[str, tuple[Dep, ...]] = {
     "ncs_td_vol": _EVENT, "tad_etd_vol": _EVENT,  # L-240 恢复，与 td_vol/cas_vol 同为财报事件放量
     # §1011 深跌×行业热点×企稳（mid-sector-dip-stabilize）：日K+行业缓存，不读财报/预告
     "sector_dip_stabilize": _EVENT,
+    # L-241 大比例解禁×解禁前已跌（mid-unlock-dip）：r20 用当天日K，事件读本地解禁日历 share_floats
+    "unlock_dip": _EVENT + (("share_float_calendar", 0),),
 }
 MID_DEFAULT: tuple[Dep, ...] = _EVENT
 
@@ -220,6 +228,20 @@ def check_dir_dataset(key: str, as_of: str, now: _dt.datetime | None = None, bas
                                      f"（超过 {red_days} 天没更新）" if latest else f"{label} 本地没有文件")}
 
 
+def check_share_float_calendar(db, as_of: str) -> dict[str, Any]:
+    """L-241：as_of 之后 SHARE_FLOAT_AHEAD_DAYS 天内排了不少于 SHARE_FLOAT_MIN_AHEAD_ROWS 条解禁才算续上。"""
+    label = PLAIN_LABELS["share_float_calendar"]
+    d0 = _dt.date.fromisoformat(as_of)
+    end = d0 + _dt.timedelta(days=SHARE_FLOAT_AHEAD_DAYS)
+    n = int(db.execute(text("SELECT COUNT(*) FROM share_floats WHERE float_date>:a AND float_date<=:b"),
+                       {"a": d0.strftime("%Y%m%d"), "b": end.strftime("%Y%m%d")}).scalar() or 0)
+    ok = n >= SHARE_FLOAT_MIN_AHEAD_ROWS
+    return {"key": "share_float_calendar", "label": label, "table": "share_floats", "latest": as_of,
+            "expected": end.isoformat(), "latest_count": n, "ok": ok,
+            "reason": "" if ok else (f"{label} 未来 {SHARE_FLOAT_AHEAD_DAYS} 天只排了 {n} 条解禁"
+                                     f"（平常数百条，至少应有 {SHARE_FLOAT_MIN_AHEAD_ROWS} 条），日历可能停更")}
+
+
 class ReadinessGate:
     """一次出票（同一 as_of）里共用的数据集检查结果；每个数据集只查一次。"""
 
@@ -237,6 +259,8 @@ class ReadinessGate:
         if ck not in self._cache:
             if key in _DIR_KEYS:
                 self._cache[ck] = check_dir_dataset(key, self.as_of, now=self.now, base=self.data_dir)
+            elif key == "share_float_calendar":
+                self._cache[ck] = check_share_float_calendar(self.db, self.as_of)
             else:
                 if self._open_days is None:
                     self._open_days = _open_days_with(self.db, self.as_of)

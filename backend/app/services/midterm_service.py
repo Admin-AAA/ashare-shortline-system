@@ -128,6 +128,17 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "hold_days": 10,
         "schedule": "daily",
     },
+    # L-241 大比例解禁落地×解禁前已跌（output/mid-newsignal-20261127/cands4.py N1；预注册参数，2026-11-28 上线）
+    "mid-unlock-dip": {
+        "name": "大比例解禁落地×解禁前已跌（持20日）",
+        "horizon": "mid",
+        "summary": "每个交易日盘后，找当天（含上一交易日收盘后到当天之间的非交易日）解禁的票：同一天所有解禁股东合计占总股本≥5%，且解禁日收盘前20个交易日复权跌幅≥10%。剔除ST、北交所、上市不足250个交易日、20日均成交额<5000万；按解禁占总股本比例从高到低，次日开盘买入，各持有20个交易日。每天新推荐数量有上限（默认5只）。思路：解禁抛压在解禁前已被提前卖出，落地后卖压出尽。解禁日通常提前约两周公告（解禁日历），当晚可见。回测里解禁前没跌的同类事件没有超额，解禁前上涨的为负。",
+        "kind": "unlock_dip",
+        "min_float_ratio": 5.0,
+        "max_r20": -0.10,
+        "hold_days": 20,
+        "schedule": "daily",
+    },
     # §997 现金分红预案 × 公告前深跌（scripts/shortline_research/evdip_s996.py DIVP_DIP_h5；预注册 4b2cf0fd；§282 短线达标）
     "mid-divplan-dip": {
         "name": "分红预案×公告前深跌（持5日）",
@@ -1055,6 +1066,8 @@ NON_SUE_CULL_PROTECTED: tuple[str, ...] = (
     # 2026-11-27 全期复核恢复（L-238）：全期（2022-04 起）独有信号扣费净收益合计为正，去掉会少赚。
     "mid-repurchase-incentive-dip",
     "mid-earnings-accel-dip",
+    # 2026-11-28 新增（L-241）：大比例解禁落地×解禁前已跌，相对现役 29 条的独有信号全期扣费合计为正。
+    "mid-unlock-dip",
     "mid-forecast-beat",
     "mid-sales-exp-drop",
     "mid-dividend-increase-vol",
@@ -1602,6 +1615,56 @@ def _filter_event_dip(db, as_of: str, pool: list[dict[str, Any]], max_r20: float
         q["score"] = round(-rv, 6)
         out.append(q)
     return sorted(out, key=lambda x: (x["r20"], x["code"]))
+
+
+def unlock_dip_candidates(db, as_of: str, min_float_ratio: float, max_r20: float,
+                          held: set[str]) -> list[dict[str, Any]] | None:
+    """L-241 mid-unlock-dip：解禁日落在 (上一交易日, as_of] 的票，同一解禁日全部股东合计 float_ratio（占总股本 %）
+    ≥ min_float_ratio，且 as_of 收盘前 20 日复权涨幅 r20 ≤ max_r20；流动性口径同 _liq_ok，另剔除北交所。
+    share_floats 同一笔解禁可能因公告日不同重复入库，按 (代码, 解禁日, 股东, 解禁股数) 去重后再合计；
+    窗口里有多个解禁日（周末/节假日）时取比例最大的一天。按比例降序、代码升序。交易日不足返回 None。
+    可见性：解禁日历通常提前约 12 个交易日入库（2026-10-18 起逐日核对，≥5% 事件全部在解禁日 21:30 前入库）。"""
+    from app.services.midterm_incentive import _r20
+    dates = [r[0] for r in db.execute(text(
+        "SELECT DISTINCT trade_date FROM daily_kbars WHERE code='000001' AND trade_date<=:d "
+        "ORDER BY trade_date DESC LIMIT 251"), {"d": as_of})]
+    if len(dates) < 251 or dates[0] != as_of:
+        return None
+    lo, hi = dates[1].replace("-", ""), as_of.replace("-", "")
+    rows = db.execute(text(
+        "SELECT code, float_date, holder_name, float_share, float_ratio FROM share_floats "
+        "WHERE float_date>:lo AND float_date<=:hi AND float_ratio IS NOT NULL"), {"lo": lo, "hi": hi}).all()
+    seen: set[tuple] = set()
+    per_day: dict[tuple[str, str], float] = {}
+    for code, fd, holder, fs, ratio in rows:
+        code = str(code)
+        if code.startswith(("4", "8", "9")) or code in held:
+            continue
+        k = (code, fd, holder, None if fs is None else round(float(fs)))
+        if k in seen:
+            continue
+        seen.add(k)
+        per_day[(code, fd)] = per_day.get((code, fd), 0.0) + float(ratio)
+    best: dict[str, tuple[float, str]] = {}
+    for (code, fd), r in per_day.items():
+        if r >= min_float_ratio and (code not in best or r > best[code][0]):
+            best[code] = (r, fd)
+    if not best:
+        return []
+    codes = sorted(best)
+    liq = _liq_ok(db, as_of, dates, codes)
+    r20 = _r20(db, as_of, dates, [c for c in codes if c in liq])
+    names = dict(db.execute(text("SELECT code,name FROM stocks WHERE code IN :codes").bindparams(
+        bindparam("codes", expanding=True)), {"codes": codes}).all())
+    out = []
+    for code in codes:
+        rv = r20.get(code)
+        if code not in liq or rv is None or rv > max_r20:
+            continue
+        ratio, fd = best[code]
+        out.append({"code": code, "name": names.get(code, ""), "float_date": f"{fd[:4]}-{fd[4:6]}-{fd[6:8]}",
+                    "float_ratio": round(ratio, 4), "r20": round(rv, 4), "score": round(ratio, 4)})
+    return sorted(out, key=lambda x: (-x["float_ratio"], x["code"]))
 
 
 # ── §1011 行业热点×深跌×企稳×量能确认 ──────────────────────────────────────────────
@@ -3426,6 +3489,17 @@ def _generate_picks_loop(db, as_of: str, d, force: bool, horizon, strategy_ids, 
                 continue
             result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
             continue
+        if meta.get("kind") == "unlock_dip":
+            picks = unlock_dip_candidates(db, as_of, meta["min_float_ratio"], meta["max_r20"],
+                                          _held_codes(db, sid, as_of))
+            if picks is None:
+                result[sid] = "no_data"
+                continue
+            if not picks:
+                result[sid] = 0
+                continue
+            result[sid] = _save_picks(sid, as_of, picks, apply_daily_cap)
+            continue
         if meta.get("kind") == "sector_dip_stabilize":
             held = _held_codes(db, sid, as_of)
             pool = sector_dip_stabilize_candidates(db, as_of)
@@ -3815,6 +3889,10 @@ def annotate_pick(sid: str, p: dict[str, Any], rank: int | None = None) -> dict[
             reason = (f"{p.get('ann_date', '')} 披露 {p.get('end_date', '')} 定期报告：扣非净利同比 {_f(p.get('dt_netprofit_yoy'), 1)}%"
                       f"（上期 {_f(p.get('prev_dt_netprofit_yoy'), 1)}%，加速），营收同比 {_f(p.get('or_yoy'), 1)}%；"
                       f"公告前20日涨幅 {_f(score)}%（≤−15%），信号日涨跌 {_f(p.get('signal_pct'), 2)}%")
+        elif kind == "unlock_dip":
+            score, label, better = round(float(p["float_ratio"]), 2), "解禁占总股本(%)", "higher"
+            reason = (f"{p.get('float_date', '')} 限售股解禁，合计占总股本 {_f(score)}%（≥5%）；"
+                      f"解禁日前20日涨幅 {_f(float(p.get('r20') or 0) * 100)}%（≤−10%，抛压已提前释放）")
         elif kind == "sector_dip_stabilize":
             score, label, better = round(float(p["r20"]) * 100, 2), "近20日涨幅(%)", "lower"
             reason = (f"行业「{p.get('industry', '')}」近5日等权收益 {_f(float(p.get('ind_r5', 0)) * 100, 2)}%（前5热点）；"

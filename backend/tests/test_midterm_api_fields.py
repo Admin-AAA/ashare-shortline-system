@@ -193,7 +193,8 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     # mid-forecast-beat / mid-sales-exp-drop / mid-dividend-increase-vol / mid-forecast-preincrease-underreact-vol
     # 的独有信号扣费合计为正，去掉会少赚，恢复（L-238）：18 → 29。
     # 2026-11-28 更早退役的 57 条按同一口径（相对现役、0.27% 费用下仍为正）复核，再恢复 14 条（L-240）：29 → 43。
-    assert len(live_mid) == 43
+    # 2026-11-28 新增 mid-unlock-dip（大比例解禁×解禁前已跌，L-241）：43 → 44。
+    assert len(live_mid) == 44
     assert restored <= live_mid
     assert live_mid & sue == sue
     overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
