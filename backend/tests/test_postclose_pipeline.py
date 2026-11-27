@@ -449,7 +449,7 @@ def test_postclose_refreshes_recoverable_aux_gap_then_continues(monkeypatch):
     assert result["status"] == "completed"
     assert result["recommended_count"] == 2
     assert refreshes == [("2026-07-16", ["limit_up_board"])]
-    # 纯观测：流水线阶段计时写入结果，供 17:35 profile。
+    # 纯观测：流水线阶段计时写入结果，供盘后流水线 profile。
     timings = result["pipeline_timings_seconds"]
     for stage in ("sync", "readiness", "aux_refresh", "readiness_recheck", "outcome", "kbar_cache_refresh", "recommendation", "total"):
         assert timings[stage] >= 0, stage

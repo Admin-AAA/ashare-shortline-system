@@ -97,7 +97,7 @@ def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
     # 健康评分原本只反映数据库表的结构性指标（95 分时 data/ 下分钟K缓存也可能已停更两个月）。
     # 2026-10-26 起：把统一数据质量巡检（data_quality_monitor）的红/黄项折算成扣分——
     # score = 原库表评分(score_db) − 巡检扣分(score_penalty)，规则见 score_detail.rule。
-    # 公式只在 data_health_snapshot.combined_health 一处定义（每日 18:40 快照用同一个）。
+    # 公式只在 data_health_snapshot.combined_health 一处定义（每日 22:55 快照用同一个）。
     try:
         from app.services.data_health_snapshot import combined_health
 
@@ -108,7 +108,7 @@ def get_data_health(force_refresh: bool = False, db: Session = Depends(get_db)):
 
 @router.get("/data-health/snapshots")
 def get_data_health_snapshots(days: int = Query(20, ge=1, le=250)):
-    """每日 18:40 健康快照：近 N 个交易日健康分均值、盘后出票成功率、有红项的天数（只读文件）。"""
+    """每日健康快照（22:55 原始记录、次日 08:55 复核）：近 N 个交易日健康分均值、盘后出票成功率、有红项的天数（只读文件）。"""
     from app.services.data_health_snapshot import summarize
 
     return summarize(days)
@@ -118,7 +118,7 @@ def get_data_health_snapshots(days: int = Query(20, ge=1, le=250)):
 def get_data_quality(refresh: bool = False, db: Session = Depends(get_db)):
     """统一数据新鲜度与质量巡检结果（数据库表 + 文件数据集 + research 静态文件 + 调度任务 + 日志静默失败）。
 
-    默认读最近一次巡检落盘的报告（盘前 08:50 / 18:00 / 21:40 定时跑）；refresh=true 立即重跑一次（只读、不改告警登记）。
+    默认读最近一次巡检落盘的报告（盘前 08:50 / 晚间 22:50 定时跑）；refresh=true 立即重跑一次（只读、不改告警登记）。
     """
     from app.services.data_quality_monitor import load_report, run_data_quality_check
 

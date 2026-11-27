@@ -467,9 +467,10 @@ def _current_projection(outcome: RecommendationOutcome | None) -> CurrentProject
 
 
 # 2026-10-19 owner ruling: outcomes are final only once every holding bar up to the exit day
-# has been written by the post-close daily update (17:35 CST = 09:35 UTC). Bars written earlier
-# (intraday/realtime pre-fill) can be revised later, so such outcomes stay provisional and are
-# re-settled by label_pending_outcomes on the next run.
+# has been written by the post-close daily update, i.e. at or after 17:30 CST (09:30 UTC) on the bar's
+# own day (DAILY_BAR_FINAL_UTC_OFFSET; the post-close sync now runs with the 21:00 late repair / 21:30
+# pipeline, both past that cutoff). Bars written earlier (intraday/realtime pre-fill) can be revised later,
+# so such outcomes stay provisional and are re-settled by label_pending_outcomes on the next run.
 # 2026-10-27（PR #15）：结算规则升到 r20261027（板块龙头回测开盘窗口入场、一字涨停按日期取 ST、
 # 止损按买入成交价 −5.5%）。新规则只用于此后首次结算的记录；已按旧版本结算的记录，K 线改写触发的
 # 自动重算仍按记录自己的 rule_version 算（见 settlement_ruleset_for），算不了就跳过并告警，绝不悄悄改历史。

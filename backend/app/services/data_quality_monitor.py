@@ -658,7 +658,7 @@ FILE_DATASETS: list[dict[str, Any]] = [
      "impact": "研究用（季度快照）"},
     {"key": "file:research_cache/kpl_list", "label": "开盘啦涨停榜缓存(kpl)", "mode": "daily",
      "glob": "research_cache/kpl_list/kpl_20[0-9][0-9].parquet", "cols": ("trade_date",), "max": YELLOW,
-     "impact": "热点题材/龙头类研究；由 research_kpl_list_daily 每交易日 22:20 增量补齐，开机自愈也会补最近窗口"},
+     "impact": "热点题材/龙头类研究；由 research_kpl_list_daily 每交易日 23:30 增量补齐，开机自愈也会补最近窗口"},
     {"key": "file:research_cache/limit_list_d", "label": "涨停榜 limit_list_d 缓存（回补范围：2023-10-27 起 + 2020 早期片段）", "mode": "daily",
      "glob": "research_cache/limit_list_d/limit_list_d_20[0-9][0-9].parquet", "cols": ("trade_date",), "max": YELLOW,
      "provisional": True, "expected_start": "20231027",

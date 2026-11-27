@@ -7,7 +7,7 @@ FLUSH_EVERY requests / FLUSH_SECONDS, plus at exit, so the store is touched rare
 Backfill scripts call ``backfill_budget_check`` before each unit of work and stop once a provider has
 used BACKFILL_BUDGET_FRACTION (default 0.6) of its configured daily quota
 (env ASHARE_TUSHARE_<PROVIDER>_DAILY_QUOTA), or once the provider reported its daily limit as
-exhausted today — leaving the rest of the quota for the 17:35 formal run.
+exhausted today — leaving the rest of the quota for the evening pipeline (21:00 late repair + 21:30 formal run).
 If the store is unavailable (pytest, ASHARE_METRICS_DB=off) counting is a no-op and the check passes
 on quota grounds (the exhausted flag then lives only in this process).
 """

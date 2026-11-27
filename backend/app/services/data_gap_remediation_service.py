@@ -453,7 +453,7 @@ def remediate_data_health_gaps(
     post_diagnosis: bool = True,
 ) -> dict[str, Any]:
     requested_tables = _normalize_target_tables(target_tables)
-    # 子步计时（仅观测，不改行为）：供 17:35 profile 判断 health_remediation 内部哪步最慢。
+    # 子步计时（仅观测，不改行为）：供盘后流水线 profile 判断 health_remediation 内部哪步最慢。
     _t0 = time.perf_counter()
     timings: dict[str, Any] = {}
     try:
@@ -492,7 +492,7 @@ def remediate_data_health_gaps(
             by_table[key] = round(by_table.get(key, 0.0) + elapsed, 2)
             per_action.append(_action_timing_entry(item, executed, elapsed))
         timings["actions_by_table"] = by_table
-        # 逐动作计时（minute_kbar 按交易日、limit_up_board 按日等）：定位 17:35 准点慢在哪一天/哪张表。
+        # 逐动作计时（minute_kbar 按交易日、limit_up_board 按日等）：定位盘后流水线慢在哪一天/哪张表。
         timings["actions"] = per_action
     timings["actions_total"] = round(time.perf_counter() - _t0 - timings["pre_diagnosis_and_plan"], 2)
     _tp = time.perf_counter()

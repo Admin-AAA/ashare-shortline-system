@@ -147,7 +147,7 @@ def main() -> int:
     if intra:
         print(f"\n盘中推荐 {intra['n']} 笔（recommended_at 落在交易时段，手动盘中触发）")
     if post:
-        print(f"盘后推荐 {post['n']} 笔（17:35 cron 生成）")
+        print(f"盘后推荐 {post['n']} 笔（盘后 cron 生成）")
     print(f"\n标签翻转: 整体 {overall['label_flips']}/{overall['n']} 笔 vs 库里旧口径")
     return 0
 

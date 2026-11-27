@@ -947,10 +947,11 @@ class _StateViews:
         return request.trade_date.isoformat()
 
     def _decision_visible_date(self, model: Any, request: AuxiliaryDatasetRequest) -> str | None:
-        """盘后 17:35 决策时刻可见的最近交易日（L-163/L-167）。
+        """盘后决策时刻可见的最近交易日（L-163/L-167）。
 
-        龙虎榜约 21:00 入库、两融明细次日披露，17:35 正式推荐时拿不到当日数据。实盘与回放
-        统一只读取严格早于信号日的最近一个有数据交易日，避免回放看到实盘看不到的信息。
+        龙虎榜约 21:00 入库、两融明细次日披露；L-163/L-167 定口径时出票在 17:35，拿不到当日数据。
+        2026-11-24 出票挪到 21:30 后口径不变：实盘与回放统一只读取严格早于信号日的最近一个有数据交易日，
+        避免回放看到实盘看不到的信息。
         """
         latest = self._session.scalar(
             select(func.max(model.trade_date)).where(model.trade_date < self._target(request))
@@ -1051,7 +1052,7 @@ class _StateViews:
             "_coverage": {
                 "trade_date_covered": bool(rows),
                 "covered_trade_date": target if rows else None,
-                # 读的是前一交易日（17:35 决策时刻可见的最新一期），覆盖校验要按「为哪个信号日
+                # 读的是前一交易日（按 L-163/L-167 口径盘后决策时刻可见的最新一期），覆盖校验要按「为哪个信号日
                 # 服务」判定；只有恰好是前一交易日才算覆盖，入库断档时仍判缺失（L-170）。
                 "decision_visible_for": (
                     self._target(request) if rows and target == self._previous_trading_day(request) else None
@@ -1144,7 +1145,7 @@ class _StateViews:
     def daily_basic(self, request: AuxiliaryDatasetRequest) -> Mapping[str, Any]:
         """当日估值/规模快照。total_mv/circ_mv 单位万元（与 Tushare 一致）。
 
-        与 capital_flow 同样按当日取：这两个数据集都在盘前入库，17:35 正式推荐时
+        与 capital_flow 同样按当日取：这两个数据集都在盘前入库，21:30 正式推荐时
         当日数据已就绪；取不到时下游按缺失处理，不会写成 0。
         """
         rows = self._session.scalars(

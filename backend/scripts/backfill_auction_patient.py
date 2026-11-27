@@ -42,7 +42,7 @@ def main() -> None:
     ap.add_argument("--passes", type=int, default=8)
     ap.add_argument("--cooldown", type=float, default=75.0)
     ap.add_argument("--sleep", type=float, default=1.0)
-    ap.add_argument("--stop-at", help="HH:MM，到点在日边界退出（避开盘中/17:35 日更占用 promax），再跑可续")
+    ap.add_argument("--stop-at", help="HH:MM，到点在日边界退出（避开盘中与 21:00–23:35 晚间补数/出票），再跑可续")
     args = ap.parse_args()
     stop_at = dt.time.fromisoformat(args.stop_at) if args.stop_at else None
     deadline = None

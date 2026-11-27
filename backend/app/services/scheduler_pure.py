@@ -106,21 +106,22 @@ TASK_TYPE_STOCK_IDENTITY_REFRESH = "stock_identity_refresh"
 STOCK_IDENTITY_TASK_ID = "stock_identity_refresh_daily"
 STOCK_IDENTITY_CRON = "10 8,17 * * mon-fri"
 # 策略版本回测画像补跑：策略出新版本后 current_target 的 strategy_version 变了，旧版本画像不能跨版本复用，
-# 页面会一直 pending_backtest（2026-10-25 审计：5 个短线策略里 4 个）。每个交易日 19:40（18:35 日更窗口之后、
-# 21:00 晚间补数之前）只给「没有任何可用画像」的当前版本补跑，每次最多 1 个，避免 16GB 内存下批量回测。
+# 页面会一直 pending_backtest（2026-10-25 审计：5 个短线策略里 4 个）。每个交易日 19:40（收盘后、
+# 21:00 晚间补数之前的空档）只给「没有任何可用画像」的当前版本补跑，每次最多 1 个，避免 16GB 内存下批量回测。
 TASK_TYPE_STRATEGY_PROFILE_REFRESH = "strategy_profile_refresh"
 STRATEGY_PROFILE_TASK_ID = "strategy_profile_refresh_daily"
 STRATEGY_PROFILE_CRON = "40 19 * * mon-fri"
 DATA_FRESHNESS_CRON = "50 21 * * mon-fri"  # 周一到周五 21:50：晚于 21:00 补数与 21:30 出票，避免同刻抢队列
 # 统一数据质量巡检（data_quality_monitor：数据库表 + data/ 文件数据集 + research 静态文件 + 调度/日志静默失败，只读）：
-# 盘前 08:50（隔夜失败/停更在开盘前暴露）、22:50（22:43 自愈补跑之后验收）。
-# 21:30 的 data_freshness 已经覆盖「晚间补数是否到齐」，质量巡检再早于自愈跑只会把已修好的项记成红
+# 盘前 08:50（隔夜失败/停更在开盘前暴露）、22:50（21:00 补数、21:30 出票、22:15 watchdog 之后验收；
+# 22:50 也是 daily_output_check.OUTPUT_DEADLINE，从这一轮起当天没出齐票才报红）。
+# 21:50 的 data_freshness 已经覆盖「晚间补数是否到齐」，质量巡检再早于补跑只会把已修好的项记成红
 # （2026-11-23 实测：21:40 记红，22:43 自愈补跑后转绿，看板挂着一整夜）。
 DATA_QUALITY_CHECKS = (
     ("data_quality_check_morning", "盘前数据质量巡检（只读：文件数据集/research 文件/调度/日志）", "50 8 * * mon-fri"),
     ("data_quality_check_evening", "晚间补数后数据质量验收（只读）", "50 22 * * mon-fri"),
 )
-# 数据健康分每日快照：22:55（21:00 晚间补数 + 22:4x 自愈漏出票补跑之后）重跑一次统一巡检，按页面同一公式算分，
+# 数据健康分每日快照：22:55（21:00 晚间补数、21:30 出票、22:15 watchdog 与 22:50 出票截止之后）重跑一次统一巡检，按页面同一公式算分，
 # 连同红/黄项、当天盘后出票是否成功存一行，供近 20 个交易日均值 / 出票成功率（data_health_snapshot）。
 # 原 18:40 取样时当日指数日线/涨停板还没入库、出票也还没补跑，original 恒为失败项，快照只能靠次日
 # 08:55 的 recheck 修正（2026-11-22 审计 P0②；2026-11-23 体检确认数据入库在 21:02 之后）。
@@ -140,7 +141,7 @@ ROLLING_R12_CRON = "30 22 * * mon-fri"
 # 研究缓存日更（开盘啦涨停榜 kpl_list，data/research_cache/kpl_list/kpl_YYYY.parquet）。
 # 上游当日榜单发布时间不固定（实测 16:00 之后、常常 22:20 仍返回空、有时到 23:30 之后才出），此前没有任何
 # 定时任务调用 fetch_kpl_list.py，只能靠手工补，缓存一度停在 10-21（滞后 15 个交易日），巡检长期挂黄。
-# 23:30 跑（在 21:00 晚间补数、22:4x 出票补跑之后）。脚本自带断点：已有日期跳过、空日记 _empty_days.txt；
+# 23:30 跑（在 21:00 晚间补数、21:30 出票与 22:15 watchdog 补跑之后）。脚本自带断点：已有日期跳过、空日记 _empty_days.txt；
 # 任务层把「当日上游仍为空」记成 skipped_empty 而不是 completed，避免「成功但没数据」的静默失败。
 TASK_TYPE_RESEARCH_CACHE_REFRESH = "research_cache_refresh"
 KPL_LIST_TASK_ID = "research_kpl_list_daily"

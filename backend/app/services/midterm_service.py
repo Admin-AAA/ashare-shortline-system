@@ -323,7 +323,7 @@ STRATEGIES: dict[str, dict[str, Any]] = {
         "schedule": "daily",
     },
     # §114 大宗交易溢价成交后漂移（原 BT_prem_h20 按 ratio 排序；§388 改为按 premium 排序；§474 ratio 0.5%→0.45%；§490 prem≥0.5%；§498 prem≥1%；§512 prem≥1.2%；§514 prem≥1.35%；实盘候选 app/services/midterm_block_trade.py）
-    # Tushare 大宗交易约 21:00 发布：17:35 盘后流水线通常 no_data，需 21:00 后 / 次日开盘前调用 generate_block_trade_picks(db, T) 出票
+    # Tushare 大宗交易约 21:00 发布（发布前 no_data、不落盘）：21:00 晚间补数钩子调用 generate_block_trade_picks(db, T) 出当日票，08:03 盘前备份补跑上一交易日
     "mid-block-trade-premium": {
         "name": "大宗交易溢价成交（持20日）",
         "horizon": "mid",
@@ -942,7 +942,7 @@ for _m in STRATEGIES.values():
 
 # 2026-11-03 SUE∩质量家族日频收敛。上面 STRATEGIES 字面量仍保留全部定义（候选函数、
 # 历史 picks、回测指标都不删）；加载后把非冠军挪进 RETIRED_STRATEGIES。
-# 17:35 generate_picks 与 /mid 现役列表只遍历 STRATEGIES。
+# 盘后实盘 generate_picks 与 /mid 现役列表只遍历 STRATEGIES。
 # 新的财务质量轴是过滤器或参数，不得再新增 strategy_id。
 # 近 12 个月数字来自 midterm_backtest_metrics.json 的 recent_12m；
 # 日推重叠来自 2026-08-14～2026-11-02 选股文件的两两 Jaccard（主人侧实盘/回放票）。
@@ -2194,7 +2194,7 @@ def _save_picks(sid: str, as_of: str, picks: list[dict[str, Any]], apply_daily_c
 
     apply_daily_cap=True：picks 已是该策略自身排序（各 *_candidates 的排序键）并剔除已持有，
     这里只切前 N 只，与第 N 名同分的顺延（settings.max_daily_picks_per_strategy，默认 5，0=不限），被截断的数量与代码写入文件 daily_cap 审计字段。
-    实盘（17:35 / 手动补跑 / 晚间大宗）和中长线历史回放重建（scripts/rebuild_replay_picks.py）都传 True。
+    实盘（盘后定时任务 / 手动补跑 / 晚间大宗）和中长线历史回放重建（scripts/rebuild_replay_picks.py）都传 True。
     直接调用且不传时不截断，便于单测构造候选。不是持仓上限：20 仓位（回测口径）、持有 20/60 日与此无关。
 
     封签（midterm_live_seal）：每个批次写入 generated_at / entry_deadline（D+1 09:15）。
@@ -2244,15 +2244,15 @@ def generate_picks(db, as_of: str, force: bool = False, horizon: str | None = No
                    isolate_errors: bool = False, data_gate: bool = False) -> dict[str, Any]:
     """盘后调用：若是信号日，生成并落盘各中线策略的选股。非致命。
 
-    horizon / strategy_ids 只用于手动补跑（POST /api/horizons/{mid,long}/run），默认 None = 17:35 全部策略。
+    horizon / strategy_ids 只用于手动补跑（POST /api/horizons/{mid,long}/run），默认 None = 盘后定时任务跑的全部策略。
     幂等：同一 as_of 重跑覆盖同一文件；_held_codes 只看 as_of 之前的批次。
 
     apply_daily_cap：每策略每日新推荐上限（settings.max_daily_picks_per_strategy，默认 5，同分顺延）。
-    实盘（17:35 定时任务 / 手动补跑 API）与历史回放重建（scripts/rebuild_replay_picks.replay_midlong，默认 True）都传 True。
+    实盘（盘后定时任务 / 手动补跑 API）与历史回放重建（scripts/rebuild_replay_picks.replay_midlong，默认 True）都传 True。
     本函数默认仍是 False：不带开关的直接调用和既有单测不截断。回放必须包在 replay_pick_writes() 里，否则过了入场截止时间不会覆盖旧文件。
 
     data_gate：出票前按策略检查依赖数据（strategy_data_readiness）。信号日里依赖不是最新的策略记 data_not_ready、不落盘，
-    其它策略照常出。只有实盘入口（17:35 / 安全网补跑 / 手动补跑 API / 晚间大宗）传 True；历史回放、滚动重算不传，口径不变。"""
+    其它策略照常出。只有实盘入口（盘后定时任务 / 安全网补跑 / 手动补跑 API / 晚间大宗）传 True；历史回放、滚动重算不传，口径不变。"""
     d = _dt.date.fromisoformat(as_of)
     try:
         check_daily_basic_staleness(db, as_of)
@@ -2278,7 +2278,7 @@ def _generate_picks_inner(db, as_of: str, d, force: bool, horizon, strategy_ids,
                           apply_daily_cap: bool, isolate_errors: bool, gate) -> dict[str, Any]:
     if isolate_errors:
         # 滚动重算等批量回放用：某个策略抛异常只记它自己（{"error":..., "exception": True}），其余策略接着算。
-        # 实盘 17:35 不开这个开关，仍是出错就抛，避免悄悄少出票。
+        # 实盘盘后出票不开这个开关，仍是出错就抛，避免悄悄少出票。
         remaining = strategy_ids
         while True:
             try:

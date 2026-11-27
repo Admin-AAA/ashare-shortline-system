@@ -772,7 +772,7 @@ def _fetch_tushare_quotes(settings: Any) -> list[dict[str, Any]]:
         detail = "；".join(batch_quote_errors) if batch_quote_errors else "batch quote empty"
         raise MarketDataError(f"Tushare 批量行情拉取失败: {detail}")
 
-    # 17:35 盘后首跑时当日日线往往还没发布：批量回退到 T-1 后，快照仍会被当作
+    # 盘后首跑时当日日线若还没发布（2026-11-06 事故时首跑在 17:35）：批量回退到 T-1 后，快照仍会被当作
     # "最新"落库（stock_quotes 的 trade_date 取自行情行），健康门禁再把它判成
     # table_not_current，整条盘后流水线硬失败（2026-11-06 事故）。这里显式留痕，
     # 便于从日志直接看出快照滞后而不是误以为刷新成功。

@@ -190,15 +190,19 @@ def _formal_inflight_count(db, trade_date: str) -> int:
 
 
 async def _late_repair_repick(db, task_id: str) -> dict[str, Any]:
-    """21:00 晚间补数完成后，补跑当天正式出票（10-30/11-03/11-04：17:35 当天日K/涨停板未到，闸门硬阻断，
-    短线 0/4 出票；21:00 补数把日K补上后没人重跑，要等次日 08:30 安全网）。
+    """21:00 晚间补数完成后，补跑当天正式出票。
+
+    由来：10-30/11-03/11-04 出票还在 17:35，当天日K/涨停板未到，闸门硬阻断，短线 0/4 出票；21:00 补数把日K补上后
+    没人重跑，要等次日 08:30 安全网。2026-11-24 主流水线挪到 21:30 后，闸门一过这里就先出当天的票
+    （11-24 实测 21:04–21:08 出齐 5/5），21:30 主流水线见各策略已有 completed 批次就不再重复出票
+    （11-25 21:30 记「4/4 完成」、没有新建批次）；21:00 补数失败或闸门未过时，才轮到 21:30 主流水线和 22:15 watchdog。
 
     条件（全部满足才跑，否则只记原因跳过）：
     - 当天还有有效短线策略缺 completed formal 批次（含被出票前数据闸门拦下、没建 run 的），
       或中长线有 data_error / data_not_ready（已出齐就不动）；
     - 当天没有在途（queued/running）的 formal run；
     - 现在仍在入场日 09:15 之前（实盘判定规则不变：之后生成的不算实盘，交给 08:30 安全网也没意义）；
-    - 健康闸门现在已通过（与 17:35 同一个 _diagnose_postclose_readiness）。
+    - 健康闸门现在已通过（与 21:30 主流水线同一个 _diagnose_postclose_readiness）。
     复用入口：中长线走 _safety_net_midlong_repair（只补 data_error / data_not_ready / 未记录的策略），短线走
     _run_standalone_recommendations（已 completed 的策略自动跳过，不重复出票），payload 与安全网同口径
     （post_sync_formal_recommendation 的 payload + trade_date_override + 纯本地池）。非致命：异常只记录并告警。
@@ -232,7 +236,7 @@ async def _late_repair_repick(db, task_id: str) -> dict[str, Any]:
 
         logger.warning("晚间补数后健康闸门已通过，补跑 %s 当天出票：短线缺 %s，中长线待补（数据异常/未就绪/未记录） %s",
                        trade_date, missing or ("全部" if not done else "无"), midlong_todo)
-        # 与 17:35 闸门通过后的顺序一致：先结算到期推荐、刷新日K缓存，再出票。
+        # 与 21:30 主流水线闸门通过后的顺序一致：先结算到期推荐、刷新日K缓存，再出票。
         try:
             out["outcome"] = _run_outcome_label(db, {"horizon_days": 5})
         except Exception as exc:  # noqa: BLE001
@@ -301,7 +305,7 @@ async def _late_repair_repick(db, task_id: str) -> dict[str, Any]:
 
 
 # 研究/回测用的 data/midterm/*.parquet 由 scripts/midterm/export_data.py 从库导出，此前没有任何定时任务调用它，
-# 只靠手动跑：10-25 导出后 stk_limits.parquet 一直停在 2026-10-23（库里 stk_limits 每天 17:35 已补到当天），
+# 只靠手动跑：10-25 导出后 stk_limits.parquet 一直停在 2026-10-23（库里 stk_limits 每天盘后已补到当天），
 # daily_basic/index_daily/hk_holdings 同样停在 10-25。只读本地 MySQL、不调上游；增量（已有最大日期回看 7 天）+ 原子替换。
 RESEARCH_PARQUET_EXPORT_TABLES = ("stk_limits", "daily_basic", "index_daily", "hk_holdings")
 RESEARCH_PARQUET_EXPORT_TIMEOUT_SECONDS = 900
@@ -611,7 +615,7 @@ def _ensure_block_trade_backup_task() -> None:
     """注册 08:03 盘前大宗交易备份出票任务，并禁用已退役的策略曝光补跑旧行（幂等）。
 
     曝光补跑（strategy_exposure_run）于 2026-10-19 退役：它在盘前对近30天样本<20 的策略
-    额外跑 experiment 模式推荐，只为喂样本数；17:35 盘后流水线已为每个现役策略独立出 formal 票，
+    额外跑 experiment 模式推荐，只为喂样本数；盘后流水线已为每个现役策略独立出 formal 票，
     正式胜率/KPI 只认 formal（outcome_settlement.OFFICIAL_RUN_MODE），且同一信号日重复跑会制造
     相关性很强的重复样本。原 08:03 任务上挂的大宗交易备份钩子迁到本独立任务。
     """
@@ -1253,7 +1257,7 @@ def _execute_task(
             # 主：21:00 晚间全域数据补数完成后跑当日；备：08:03 midterm_block_trade_premarket 补跑上一交易日（幂等）。
             if task_id in BLOCK_TRADE_HOOK_TASK_IDS and isinstance(result, dict):
                 result["midterm_block_trade"] = _run_block_trade_picks_hook(db, task_id)
-            # 21:00 补数后：17:35 被闸门挡住的当天出票，闸门现已通过就补跑（幂等，不改补数任务自身状态）。
+            # 21:00 补数后：当天还缺出票且闸门已通过就出票（早于 21:30 主流水线，通常由这里先出齐；幂等，不改补数任务自身状态）。
             if task_id in LATE_REPICK_HOOK_TASK_IDS and isinstance(result, dict):
                 # QVIX 增量必须排在出票之前：rsi6-capitulation 的「价格恐慌 OR QVIX 尖峰」
                 # 在 QVIX 缺数时静默降级成仅价格门。独立的 21:10 定时任务晚于这里的出票，
@@ -2277,7 +2281,7 @@ async def _run_postclose_pipeline(db, payload: dict) -> dict[str, Any]:
     有界退避。任何行情、诊断、历史覆盖或混合缺口均立即硬失败。
     """
     # 纯观测：流水线各阶段耗时（秒），写入 result_json.pipeline_timings_seconds，
-    # 用于 17:35 准点 profile（同步之外的闸门/补刷/outcome/缓存/推荐）。不改任何逻辑。
+    # 用于盘后流水线准点 profile（同步之外的闸门/补刷/outcome/缓存/推荐）。不改任何逻辑。
     _pt_start = time.perf_counter()
     _pt_last = _pt_start
     pipeline_timings: dict[str, float] = {}
