@@ -958,7 +958,6 @@ for _m in STRATEGIES.values():
 # 近 12 个月数字来自 midterm_backtest_metrics.json 的 recent_12m；
 # 日推重叠来自 2026-08-14～2026-11-02 选股文件的两两 Jaccard（主人侧实盘/回放票）。
 SUE_LADDER_CHAMPIONS: tuple[str, ...] = (
-    "mid-sue-accel-vol",   # 无额外质量轴的 SUEG∩放量基线
     "mid-curr-sue-vol",    # 流动比率（L-235 质量轴冠军）
     # 2026-11-28 全期复核恢复（L-240），推票覆盖去重（L-246）后仍留：
     "mid-udp-sue-vol",     # 每股未分配利润
@@ -973,6 +972,9 @@ _SUE_DEDUP_REASONS: dict[str, str] = {
     "mid-sue-td-vol": "推票覆盖去重（L-246）：全期 174 笔中 95.4% 已被现役推过（mid-sue-accel-vol 68%、mid-curr-sue-vol 62%、mid-ea-td-vol 56%），独有 8 笔 +26.2%，按重复退役。",
     "mid-ocsd-sue-vol": "推票覆盖去重（L-246）：全期 127 笔中 96.9% 已被现役推过（mid-ocf-sue-vol 80%、mid-sue-accel-vol 68%、mid-curr-sue-vol 54%），独有 4 笔 +14.9%，按重复退役。",
     "mid-roa-sue-vol": "推票覆盖去重（L-246）：全期 179 笔中 97.8% 已被现役推过（mid-sue-accel-vol 77%、mid-curr-sue-vol 65%、mid-ocf-sue-vol 50%），独有 4 笔 +19.8%，按重复退役。",
+    # 2026-11-28 第二轮（L-247；output/research/dedup-20261128/qr/）：基线推的票 90.3% 已被三条质量轴变体和其余现役推过，
+    # 去掉后账户净收益与超额不降，三条变体各自去掉都会少赚，所以退基线、留变体。
+    "mid-sue-accel-vol": "推票覆盖去重第二轮（L-247）：SUE∩加速∩放量基线。全期 370 笔中 90.3% 已被现役推过（mid-curr-sue-vol、mid-ocf-sue-vol、mid-udp-sue-vol 等），独有 36 笔扣费合计 −18.5%、超额 −24.1%；去掉后账户（每票一份）净 +16639%→+16656%、超额 +913%→+938%，三条变体任意去掉一条都会少赚 44～155pp，按重复退役基线。",
     "mid-trps-sue-vol": "推票覆盖去重（L-246）：全期 207 笔中 97.6% 已被现役推过（mid-sue-accel-vol 82%、mid-curr-sue-vol 58%、mid-ocf-sue-vol 49%），独有 5 笔 +18.2%，按重复退役。",
 }
 SUE_LADDER_DEMOTE_REASONS: dict[str, str] = {
@@ -1015,7 +1017,7 @@ def sue_ladder_rejected_rows() -> list[dict[str, str]]:
     """/mid 淘汰清单顶部：家族收敛说明 + 每条已退出日频的策略。"""
     champs = "、".join(SUE_LADDER_CHAMPIONS)
     rows = [{
-        "name": "SUE∩质量家族日频收敛（41→4）",
+        "name": "SUE∩质量家族日频收敛（41→3）",
         "reason": (
             f"日频只留 {champs}。"
             "其余同骨架策略（SUE≥2.2∩业绩加速∩放量，再叠一条财务轴）退出 21:30 盘后出票与 /mid 现役列表；"
@@ -1051,7 +1053,7 @@ _retire_sue_ladder()
 # 2026-11-04 非 SUE 近重复日频收敛。定义仍留在上面的 STRATEGIES 字面量里
 # （候选函数、历史 picks、回测指标都不删）；加载后把近重复和弱尾挪进 RETIRED_STRATEGIES。
 # 同一事件源只改持有期、弱反应带或放量门槛，是家族内部的参数或过滤器，不得再新开 strategy_id。
-# 这不是仓位管理，也不改选股公式。SUE 基线 mid-sue-accel-vol 不在这张表里。
+# 这不是仓位管理，也不改选股公式。SUE 家族（含已退役的基线 mid-sue-accel-vol）不在这张表里。
 # 近 12 个月数字来自 midterm_backtest_metrics.json 的 recent_12m / quality.R12。
 NON_SUE_NEAR_DUP_CHAMPIONS: tuple[str, ...] = (
     "mid-repurchase-plan-underreact",           # 回购：弱反应持 20
@@ -1082,7 +1084,6 @@ NON_SUE_CULL_PROTECTED: tuple[str, ...] = (
     "mid-forecast-slight-underreact",
     "mid-forecast-preincrease-vol",
     "mid-ncs-td-vol",
-    "mid-repurchase-underreact",
     "mid-tad-etd-vol",
     "mid-smallcap-dividend-weekly",
 )
@@ -1113,6 +1114,8 @@ NON_SUE_NEAR_DUP_DEMOTE_REASONS: dict[str, str] = {
     "mid-fa-turn-vol": "固定资产周转扩张∩放量。全期独有 413 笔扣费合计 −394%，去掉不少赚，维持退出。",
     # 2026-11-28 推票覆盖去重（L-246；output/research/dedup-20261128/）：推的票 ≥95% 已被其余现役推过，按重复退役。
     "mid-incentive-vol": "推票覆盖去重（L-246）：期权激励∩放量。全期 128 笔 100% 已被现役推过（mid-incentive-option 99%、mid-dividend-increase-vol 66%），独有 0 笔，按重复退役。",
+    # 2026-11-28 第二轮（L-247）：同一批回购票、只是卖得早。
+    "mid-repurchase-underreact": "推票覆盖去重第二轮（L-247）：回购预案弱反应持 5 日。全期 522 笔中 88% 与 mid-repurchase-plan-underreact（持 20 日）同日同票，共同 460 笔持 20 日净合计 +1417%、持 5 日 +530%；独有 55 笔 +244%。去掉后账户（每票一份）净 +16639%→+16753%、0.27% 费下 +14729%→+14855%、超额 +913%→+927%，按重复退役（同票留卖法更好的一条）。",
     "mid-forecast-beat-underreact": "推票覆盖去重（L-246）：预喜合集弱反应。全期 546 笔中 97.4% 已被现役推过（mid-forecast-preincrease-underreact 65%、mid-forecast-beat 43%、mid-forecast-preincrease-underreact-vol 23%），独有 14 笔扣费合计 −60.1%，按重复退役。",
 }
 NON_SUE_NEAR_DUP_DEMOTED: tuple[str, ...] = tuple(NON_SUE_NEAR_DUP_DEMOTE_REASONS)
@@ -1122,7 +1125,7 @@ def non_sue_near_dup_rejected_rows() -> list[dict[str, str]]:
     """/mid 淘汰清单：非 SUE 近重复收敛说明 + 每条已退出日频的策略。"""
     champs = "、".join(NON_SUE_NEAR_DUP_CHAMPIONS)
     rows = [{
-        "name": "非 SUE 近重复与零 alpha 策略日频收敛（中线现役 44→35）",
+        "name": "非 SUE 近重复与零 alpha 策略日频收敛（中线现役 44→33）",
         "reason": (
             f"回购、预告、激励和资产负债表近重复，以及独有信号没有超额的宽池和嵌套变体，退出 21:30 盘后出票与 /mid 现役列表。各簇保留 {champs}。"
             "同一事件源只改持有期、弱反应带或放量门槛，做成参数或过滤器，不再新开 strategy_id。"
