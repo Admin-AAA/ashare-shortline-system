@@ -112,7 +112,9 @@ def test_generate_picks_end_to_end_cap_only_when_flagged(monkeypatch, tmp_path):
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     _set_cap(monkeypatch, 5)
     monkeypatch.setattr(ms, "_held_codes", lambda db, sid, d: {"000001"})  # 已持有的先剔除，再取前 5
-    # 2026-11-26：mid-earnings-accel 退役，改用放量版（走 eavol_candidates）。
+    # 2026-11-26：mid-earnings-accel 退役，改用放量版（走 eavol_candidates）；2026-11-28 放量版也按超额门槛退役（L-250），
+    # 这里只测截断机制，临时放回 STRATEGIES。
+    monkeypatch.setitem(ms.STRATEGIES, "mid-earnings-accel-vol", ms.RETIRED_STRATEGIES["mid-earnings-accel-vol"])
     # ea_combo_rank 依赖 ann_pct_chg/total_mv 字段做排序，mock 数据里没有，
     # 同时把它 mock 成恒等，保持 _picks 的原始顺序以便断言。
     import app.services.midterm_eavol as eavol
@@ -135,8 +137,9 @@ def test_block_trade_picks_capped_when_flagged(monkeypatch, tmp_path):
 
     monkeypatch.setattr(bt, "block_trade_candidates", lambda db, d: _picks(7))
     sid = "mid-block-trade-premium"
-    assert ms._block_trade_picks(None, sid, ms.STRATEGIES[sid], "2026-10-26") == 7
-    assert ms._block_trade_picks(None, sid, ms.STRATEGIES[sid], "2026-10-26", True) == 5
+    meta = ms.RETIRED_STRATEGIES[sid]  # 2026-11-28 退役（L-250）；截断机制不变
+    assert ms._block_trade_picks(None, sid, meta, "2026-10-26") == 7
+    assert ms._block_trade_picks(None, sid, meta, "2026-10-26", True) == 5
 
 
 def test_live_callers_pass_flag():

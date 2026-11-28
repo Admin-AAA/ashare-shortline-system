@@ -75,7 +75,7 @@ def test_cancel_fields():
 def test_pagination_and_horizon(tmp_path, monkeypatch):
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)
     for d in ("2026-10-12", "2026-10-13", "2026-10-14"):
-        for sid in ("mid-earnings-accel-vol", "long-dividend-lowvol"):
+        for sid in ("mid-dividend-increase", "long-dividend-lowvol"):
             (tmp_path / f"{d}_{sid}.json").write_text(json.dumps(
                 {"strategy_id": sid, "signal_date": d, "picks": [{"code": "000001", "ratio": 0.02}]}))
     monkeypatch.setattr(ms, "_realize", lambda db, c, d, h: {"status": "pending"})
@@ -138,7 +138,7 @@ def test_sue_ladder_daily_pool_is_baseline_only(tmp_path, monkeypatch):
     assert live_sue == champs
     assert demoted <= set(ms.RETIRED_STRATEGIES)
     assert set(ms.SUE_LADDER_DEMOTE_REASONS) == demoted
-    for sid in ("mid-repurchase-plan-underreact", "mid-ea-td-vol"):
+    for sid in ("mid-repurchase-plan-underreact", "mid-incentive-option"):
         assert sid in ms.STRATEGIES
     for sid in ("mid-repurchase-plan", "mid-tad-vol", "mid-turn-days-vol", "mid-forecast-beat-underreact", "mid-incentive-vol",
                 "mid-repurchase-underreact", "mid-sue-accel-vol"):
@@ -167,13 +167,16 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     champs = set(ms.NON_SUE_NEAR_DUP_CHAMPIONS)
     protected = set(ms.NON_SUE_CULL_PROTECTED)
     sue = set(ms.SUE_LADDER_CHAMPIONS)
-    restored = {"mid-repurchase-incentive-dip", "mid-earnings-accel-dip", "mid-forecast-beat", "mid-sales-exp-drop",
-                "mid-dividend-increase-vol", "mid-forecast-preincrease-underreact-vol",
-                # 2026-11-28 第二轮全期复核（L-240）
-                "mid-forecast-slight", "mid-forecast-turnaround", "mid-forecast-slight-vol",
-                "mid-forecast-slight-underreact", "mid-forecast-preincrease-vol", "mid-ncs-td-vol",
-                "mid-tad-etd-vol", "mid-smallcap-dividend-weekly"}
-    assert len(demoted) == 16 and len(champs) == 3
+    # 2026-11-28 超额门槛（L-250）：全期独有信号超额合计为负的 16 条迭代退出日频
+    excess_cut = {"mid-forecast-preincrease-underreact", "mid-forecast-preincrease-underreact-vol",
+                  "mid-forecast-slight-underreact", "mid-forecast-beat", "mid-block-trade-premium", "mid-fina-exp-vol",
+                  "mid-forecast-turnaround", "mid-ncs-td-vol", "mid-forecast-slight-vol", "mid-forecast-slight",
+                  "mid-cas-vol", "mid-sales-exp-vol", "mid-sales-exp-drop", "mid-tad-etd-vol",
+                  "mid-earnings-accel-vol", "mid-ea-td-vol"}
+    restored = {"mid-repurchase-incentive-dip", "mid-earnings-accel-dip", "mid-dividend-increase-vol",
+                "mid-forecast-preincrease-vol", "mid-smallcap-dividend-weekly"}
+    assert len(demoted) == 32 and len(champs) == 2
+    assert excess_cut <= demoted
     assert {"mid-ea-cas-vol", "mid-turn-days-vol", "mid-earnings-accel", "mid-fina-exp-drop",
             "mid-repurchase-plan", "mid-forecast-preincrease", "mid-tad-vol", "mid-etd-vol",
             "mid-incentive-vol", "mid-forecast-beat-underreact"} <= demoted
@@ -198,7 +201,8 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     # 2026-11-28 新增 mid-unlock-dip（大比例解禁×解禁前已跌，L-241）：43 → 44。
     # 2026-11-28 推票覆盖去重：推的票 ≥95% 已被其余现役推过的 9 条按重复退役（L-246）：44 → 35。
     # 2026-11-28 第二轮：SUE 基线 mid-sue-accel-vol 与持 5 日的 mid-repurchase-underreact 按重复退役（L-247）：35 → 33。
-    assert len(live_mid) == 33
+    # 2026-11-28 用户定「超额为正才留」：全期独有信号超额合计为负的 16 条迭代退出（L-250）：33 → 17。
+    assert len(live_mid) == 17
     assert restored <= live_mid
     assert live_mid & sue == sue
     overview = {s["id"] for s in ms.strategies_overview("mid", db=None)}
@@ -209,7 +213,7 @@ def test_non_sue_near_dup_cull_leaves_champions(tmp_path, monkeypatch):
     assert ms.generate_picks(None, "2026-11-03", strategy_ids=["mid-tad-vol"]) == {}
     rows = ms.non_sue_near_dup_rejected_rows()
     assert rows[0]["name"].startswith("非 SUE 近重复")
-    assert "44→33" in rows[0]["name"]
+    assert "44→17" in rows[0]["name"]
     assert "仓位" in rows[0]["reason"]
     assert {r["name"] for r in rows[1:]} == {
         f"{ms.RETIRED_STRATEGIES[sid]['name']}（{sid}）" for sid in demoted
@@ -225,7 +229,7 @@ def test_next_batch_note(tmp_path, monkeypatch):
     assert "mid-repurchase-plan" not in notes
     assert notes["mid-repurchase-plan-underreact"] == "尚未出票；每个交易日盘后（21:30）选股，次日开盘买"
     assert notes["mid-small-cap-weekly"] == "尚未出票；每个周五收盘后选股，次日开盘买"
-    assert notes["mid-block-trade-premium"] == "尚未出票；每晚约 21:00 大宗数据发布后选股，次日开盘买"
+    assert "mid-block-trade-premium" not in notes  # 2026-11-28 超额门槛退出日频（L-250）
     long_notes = {s["id"]: s["next_batch_note"] for s in ms.strategies_overview("long", db=None)}
     assert "long-lowturn-lowvol" not in long_notes  # §338 已下线
     assert long_notes["long-dividend-lowvol"] == "尚未出票；每月最后一个交易日收盘后选股，下一批：2026-10-30，次日开盘买"

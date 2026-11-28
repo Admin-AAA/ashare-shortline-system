@@ -64,7 +64,9 @@ def test_replay_midlong_default_cap_writes_audit_and_overwrites(tmp_path, monkey
     monkeypatch.setattr("app.core.config.get_settings", lambda: SimpleNamespace(max_daily_picks_per_strategy=5))
     scores = [100, 90, 80, 70, 60, 60, 50]
     state = {"picks": [{"code": f"{i:06d}", "name": "n", "score": s} for i, s in enumerate(scores, 1)]}
-    # 2026-11-26：mid-earnings-accel 退役，改用放量版（走 eavol_candidates + ea_combo_rank）。
+    # 2026-11-26：mid-earnings-accel 退役，改用放量版（走 eavol_candidates + ea_combo_rank）；放量版 2026-11-28 按超额门槛退役
+    # （L-250），这里只测回放截断与审计，临时放回 STRATEGIES。
+    monkeypatch.setitem(ms.STRATEGIES, "mid-earnings-accel-vol", ms.RETIRED_STRATEGIES["mid-earnings-accel-vol"])
     # ea_combo_rank 依赖 ann_pct_chg/total_mv 字段，mock 数据里没有，mock 成恒等保持原序。
     import app.services.midterm_eavol as eavol
     monkeypatch.setattr(eavol, "eavol_candidates", lambda db, d: state["picks"])

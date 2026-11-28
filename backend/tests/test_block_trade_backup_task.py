@@ -33,5 +33,9 @@ def test_backup_hook_only_targets_block_trade_strategy(monkeypatch, tmp_path):
     monkeypatch.setattr(ss, "_latest_allowed_bar_date", lambda: "2026-10-16")
     out = {}
     monkeypatch.setattr(ms, "_block_trade_picks", lambda db, sid, meta, t, *a, **k: out.setdefault(sid, t) and 0)
+    # 2026-11-28 超额门槛退役（L-250）：大宗策略不在 STRATEGIES 时钩子照常空跑、不出票
+    assert "mid-block-trade-premium" not in ms.STRATEGIES
+    assert ms.generate_block_trade_picks(None, "2026-10-16") == {} and out == {}
+    monkeypatch.setitem(ms.STRATEGIES, "mid-block-trade-premium", ms.RETIRED_STRATEGIES["mid-block-trade-premium"])
     res = ms.generate_block_trade_picks(None, "2026-10-16")
     assert list(res) == ["mid-block-trade-premium"]

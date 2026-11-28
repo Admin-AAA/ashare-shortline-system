@@ -1057,14 +1057,10 @@ _retire_sue_ladder()
 # 近 12 个月数字来自 midterm_backtest_metrics.json 的 recent_12m / quality.R12。
 NON_SUE_NEAR_DUP_CHAMPIONS: tuple[str, ...] = (
     "mid-repurchase-plan-underreact",           # 回购：弱反应持 20
-    "mid-forecast-preincrease-underreact",      # 预增：弱反应宽池（R12 仍强，不是弱母集）
     "mid-incentive-option",                     # 激励：期权草案宽池（覆盖放量版 99% 的票）
 )
 # 明确不因本轮近重复退出的策略。不在冠军元组里，但退役函数必须看见它们仍在 STRATEGIES。
 NON_SUE_CULL_PROTECTED: tuple[str, ...] = (
-    "mid-sales-exp-vol",
-    "mid-earnings-accel-vol",
-    "mid-ea-td-vol",
     "mid-small-cap-weekly",
     "mid-smallcap-reversal-weekly",
     # 2026-11-27 全期复核恢复（L-238）：全期（2022-04 起）独有信号扣费净收益合计为正，去掉会少赚。
@@ -1072,22 +1068,31 @@ NON_SUE_CULL_PROTECTED: tuple[str, ...] = (
     "mid-earnings-accel-dip",
     # 2026-11-28 新增（L-241）：大比例解禁落地×解禁前已跌，相对现役 29 条的独有信号全期扣费合计为正。
     "mid-unlock-dip",
-    "mid-forecast-beat",
-    "mid-sales-exp-drop",
     "mid-dividend-increase-vol",
-    "mid-forecast-preincrease-underreact-vol",
     # 2026-11-28 全期复核恢复（L-240）：相对其余现役的独有信号全期扣费合计为正、0.27% 费用下仍为正。
     # 除 mid-repurchase-underreact 与 mid-smallcap-dividend-weekly 外超额合计为负，是观察项。
-    "mid-forecast-slight",
-    "mid-forecast-turnaround",
-    "mid-forecast-slight-vol",
-    "mid-forecast-slight-underreact",
     "mid-forecast-preincrease-vol",
-    "mid-ncs-td-vol",
-    "mid-tad-etd-vol",
     "mid-smallcap-dividend-weekly",
 )
 NON_SUE_NEAR_DUP_DEMOTE_REASONS: dict[str, str] = {
+    # 2026-11-28 超额门槛（L-250，output/healthcheck-20261126/m3_excess_cull.py）：现役 33 条按全期独有信号扣费超额合计迭代复核，
+    # 每轮去掉最负的一条后重算其余。下面 16 条净收益多为正但超额为负，收益来自市场 beta，退出日频。
+    "mid-forecast-preincrease-underreact": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 211 笔，扣费净合计 +147.2pp、超额合计 -385.3pp（-1.83%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 1 轮退出；去掉后去重总账净 -147.2pp、超额 +385.3pp。",
+    "mid-forecast-preincrease-underreact-vol": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 211 笔，扣费净合计 +374.1pp、超额合计 -474.2pp（-2.25%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 2 轮退出；去掉后去重总账净 -374.1pp、超额 +474.2pp。",
+    "mid-forecast-slight-underreact": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 109 笔，扣费净合计 +37.8pp、超额合计 -382.7pp（-3.51%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 3 轮退出；去掉后去重总账净 -37.8pp、超额 +382.7pp。",
+    "mid-forecast-beat": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 365 笔，扣费净合计 +271.9pp、超额合计 -304.0pp（-0.83%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 4 轮退出；去掉后去重总账净 -271.9pp、超额 +304.0pp。",
+    "mid-block-trade-premium": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 266 笔，扣费净合计 +301.0pp、超额合计 -240.5pp（-0.90%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 5 轮退出；去掉后去重总账净 -301.0pp、超额 +240.5pp。",
+    "mid-fina-exp-vol": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 293 笔，扣费净合计 +6.2pp、超额合计 -182.1pp（-0.62%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 6 轮退出；去掉后去重总账净 +2.8pp、超额 +188.2pp。",
+    "mid-forecast-turnaround": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 396 笔，扣费净合计 +925.2pp、超额合计 -180.1pp（-0.45%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 7 轮退出；去掉后去重总账净 -925.2pp、超额 +180.1pp。",
+    "mid-ncs-td-vol": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 117 笔，扣费净合计 +181.3pp、超额合计 -133.5pp（-1.14%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 8 轮退出；去掉后去重总账净 -181.3pp、超额 +133.5pp。",
+    "mid-forecast-slight-vol": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 112 笔，扣费净合计 +297.6pp、超额合计 -97.8pp（-0.87%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 9 轮退出；去掉后去重总账净 -297.6pp、超额 +97.8pp。",
+    "mid-forecast-slight": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 439 笔，扣费净合计 +879.2pp、超额合计 -315.6pp（-0.72%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 10 轮退出；去掉后去重总账净 -879.2pp、超额 +315.6pp。",
+    "mid-cas-vol": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 377 笔，扣费净合计 +187.7pp、超额合计 -9.0pp（-0.02%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 11 轮退出；去掉后去重总账净 -190.9pp、超额 +8.0pp。",
+    "mid-sales-exp-vol": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 284 笔，扣费净合计 +53.3pp、超额合计 -44.0pp（-0.16%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 12 轮退出；去掉后去重总账净 -51.6pp、超额 +36.6pp。",
+    "mid-sales-exp-drop": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 635 笔，扣费净合计 +419.5pp、超额合计 -88.1pp（-0.14%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 13 轮退出；去掉后去重总账净 -419.5pp、超额 +88.1pp。",
+    "mid-tad-etd-vol": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 486 笔，扣费净合计 +226.8pp、超额合计 -73.4pp（-0.15%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 14 轮退出；去掉后去重总账净 -226.8pp、超额 +73.4pp。",
+    "mid-earnings-accel-vol": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 278 笔，扣费净合计 -90.0pp、超额合计 -23.1pp（-0.08%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 15 轮退出；去掉后去重总账净 +71.8pp、超额 +25.3pp。",
+    "mid-ea-td-vol": "全期（2022-04 起研究逐笔 + 2025-10 起生产结算）独有信号 267 笔，扣费净合计 +374.1pp、超额合计 -118.4pp（-0.44%/笔）。2026-11-28 规则改为超额为正才留（L-250），按迭代第 16 轮退出；去掉后去重总账净 -409.4pp、超额 +108.6pp。",
     # 2026-11-26 新增（LIVE formal 5064 笔扣费净收益 + 同期同持有期全市场基准超额，L-219 口径）：
     # mid-earnings-accel 是唯一不放量的 EA 宽池，313 笔净均值 -1.30%/超额 -0.78%；
     # 其中 126 笔独有信号 -3.64%（全表最差），187 笔被放量版覆盖的只有 +0.28%——
@@ -1125,7 +1130,7 @@ def non_sue_near_dup_rejected_rows() -> list[dict[str, str]]:
     """/mid 淘汰清单：非 SUE 近重复收敛说明 + 每条已退出日频的策略。"""
     champs = "、".join(NON_SUE_NEAR_DUP_CHAMPIONS)
     rows = [{
-        "name": "非 SUE 近重复与零 alpha 策略日频收敛（中线现役 44→33）",
+        "name": "非 SUE 近重复与零 alpha 策略日频收敛（中线现役 44→17）",
         "reason": (
             f"回购、预告、激励和资产负债表近重复，以及独有信号没有超额的宽池和嵌套变体，退出 21:30 盘后出票与 /mid 现役列表。各簇保留 {champs}。"
             "同一事件源只改持有期、弱反应带或放量门槛，做成参数或过滤器，不再新开 strategy_id。"
@@ -3639,8 +3644,11 @@ def _block_trade_picks(db, sid: str, meta: dict[str, Any], as_of: str, apply_dai
 def generate_block_trade_picks(db, as_of: str, apply_daily_cap: bool = False, data_gate: bool = False) -> dict[str, Any]:
     """只跑 mid-block-trade-premium（as_of = 大宗交易日 T，YYYY-MM-DD）。供 21:00 后 / T+1 开盘前的晚间任务调用。
 
-    data_gate 同 generate_picks：依赖数据不是最新时记 data_not_ready、不落盘。"""
+    data_gate 同 generate_picks：依赖数据不是最新时记 data_not_ready、不落盘。
+    策略已退出日频（不在 STRATEGIES）时与 generate_picks 一样返回空 dict，晚间钩子与 08:03 备份任务照常空跑。"""
     sid = "mid-block-trade-premium"
+    if sid not in STRATEGIES:
+        return {}
     if data_gate:
         from app.services import strategy_data_readiness as sdr
 

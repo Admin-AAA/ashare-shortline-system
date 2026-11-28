@@ -139,8 +139,9 @@ def test_earnings_accel_sort_is_ea_combo_not_capped_yoy(monkeypatch):
 def test_earnings_accel_copy_keeps_hold_and_leaves_forecast():
     # 2026-11-26：mid-earnings-accel 退役，EA 冠军改为放量版 mid-earnings-accel-vol
     # （§975 EAVOL_combo 排序：信号日涨跌幅 + 事件反应平均秩百分位，等权）。
-    ea = ms.STRATEGIES["mid-earnings-accel-vol"]
-    fb = ms.STRATEGIES["mid-forecast-beat"]  # 2026-11-27 全期复核恢复现役（L-238）
+    # 2026-11-28 两条都按超额门槛退出日频（L-250），定义仍在 RETIRED_STRATEGIES
+    ea = ms.RETIRED_STRATEGIES["mid-earnings-accel-vol"]
+    fb = ms.RETIRED_STRATEGIES["mid-forecast-beat"]
     assert ea["hold_days"] == 20 and fb["hold_days"] == 20
     assert "EAVOL_combo" in ea["summary"] and "百分位" in ea["summary"]
     assert "放量" in ea["summary"]

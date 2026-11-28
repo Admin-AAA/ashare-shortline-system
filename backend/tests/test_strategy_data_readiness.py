@@ -172,15 +172,15 @@ def test_daily_output_reports_data_not_ready_reason(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sdr, "STORE_DIR", tmp_path)
     sdr.record("2026-10-26", {"b": {"ready": False, "reason": "缺数据：资金流向 最新 10-23，应为 10-26"},
-                              "mid-earnings-accel-vol": {"ready": False, "reason": "缺数据：日K行情 最新 10-23，应为 10-26"}})
+                              "mid-dividend-increase": {"ready": False, "reason": "缺数据：日K行情 最新 10-23，应为 10-26"}})
     monkeypatch.setattr(doc, "expected_short_strategies", lambda db: ["a", "b"])
     monkeypatch.setattr(doc, "_live_short_runs", lambda db, d: {"a": {"run_id": "r1", "recommended_count": 0}})
     stored = {sid: {"status": "no_signal"} for sid in ms.STRATEGIES}
-    stored["mid-earnings-accel-vol"] = {"status": "data_not_ready"}
+    stored["mid-dividend-increase"] = {"status": "data_not_ready"}
     monkeypatch.setattr(doc, "_midlong_status", lambda d: {"status_file": True, "stored": stored})
     st = doc.daily_output_status(None, "2026-10-26", now=dt.datetime(2026, 10, 26, 19, 0))
     assert not st["ok"] and st["status"] == "failed"
-    assert st["short_data_not_ready"] == ["b"] and st["midlong_data_not_ready"] == ["mid-earnings-accel-vol"]
+    assert st["short_data_not_ready"] == ["b"] and st["midlong_data_not_ready"] == ["mid-dividend-increase"]
     assert "数据未就绪" in st["reason"] and "资金流向 最新 10-23，应为 10-26" in st["reason"]
     assert "短线缺实盘出票" not in st["reason"]  # b 的原因已单列，不再笼统写「缺出票」
 
@@ -310,18 +310,18 @@ def test_safety_net_reruns_data_not_ready_midlong(monkeypatch, tmp_path):
     sd = ms._status_dir()
     sd.mkdir(parents=True)
     rows = {sid: {"status": "no_signal"} for sid in ms.STRATEGIES}
-    rows["mid-earnings-accel-vol"] = {"status": "data_not_ready"}
+    rows["mid-dividend-increase"] = {"status": "data_not_ready"}
     (sd / "2026-10-26.json").write_text(json.dumps(rows))
     seen = {}
 
     def fake_generate(db, as_of, strategy_ids=None, apply_daily_cap=False, data_gate=False, **k):
         seen.update(ids=strategy_ids, gate=data_gate)
-        return {"mid-earnings-accel-vol": 2}
+        return {"mid-dividend-increase": 2}
 
     monkeypatch.setattr(ms, "generate_picks", fake_generate)
     out = ss._safety_net_midlong_repair(None)
-    assert seen == {"ids": ["mid-earnings-accel-vol"], "gate": True}
-    assert out["still_error"] == [] and out["picks"] == {"mid-earnings-accel-vol": 2}
+    assert seen == {"ids": ["mid-dividend-increase"], "gate": True}
+    assert out["still_error"] == [] and out["picks"] == {"mid-dividend-increase": 2}
 
 
 def test_overview_marks_live_and_recorded(db, monkeypatch, tmp_path):
@@ -353,10 +353,10 @@ def test_late_repick_midlong_includes_data_not_ready(monkeypatch, tmp_path):
     sd = ms._status_dir()
     sd.mkdir(parents=True)
     rows = {sid: {"status": "no_signal"} for sid in ms.STRATEGIES}
-    rows["mid-earnings-accel-vol"] = {"status": "data_not_ready"}
+    rows["mid-dividend-increase"] = {"status": "data_not_ready"}
     rows["mid-incentive-option"] = {"status": "data_error"}
     (sd / "2026-11-04.json").write_text(json.dumps(rows))
-    assert sorted(ss._midlong_error_strategies("2026-11-04")) == ["mid-earnings-accel-vol", "mid-incentive-option"]
+    assert sorted(ss._midlong_error_strategies("2026-11-04")) == ["mid-dividend-increase", "mid-incentive-option"]
     assert ss.MIDLONG_RETRY_STATUSES == (None, "data_error", "data_not_ready")
 
 

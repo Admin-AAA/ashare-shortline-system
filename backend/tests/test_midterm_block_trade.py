@@ -80,7 +80,10 @@ def test_unpublished_or_failed_returns_none(monkeypatch):
 
 
 def test_strategy_registered_and_no_data_not_written(monkeypatch, tmp_path):
-    meta = ms.STRATEGIES["mid-block-trade-premium"]
+    # 2026-11-28 按超额门槛退出日频（L-250），定义保留；临时放回 STRATEGIES 测出票路径
+    assert "mid-block-trade-premium" not in ms.STRATEGIES
+    meta = ms.RETIRED_STRATEGIES["mid-block-trade-premium"]
+    monkeypatch.setitem(ms.STRATEGIES, "mid-block-trade-premium", meta)
     assert meta["horizon"] == "mid" and meta["kind"] == "block_trade_premium" and meta["hold_days"] == 20
     assert "k_slots" not in meta and "max_new" not in meta and meta["schedule"] == "daily"
     monkeypatch.setattr(ms, "OUT_DIR", tmp_path)

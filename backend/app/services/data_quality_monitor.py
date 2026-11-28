@@ -1515,7 +1515,7 @@ def check_short_replay_version(db) -> dict[str, Any]:
     return short_replay_version_item(short_replay_version_rows(db))
 
 
-# 长远目标三指标（goal_metrics）：去重近 12 月滚动超额 > 0、逐月为正 ≥ 8/12、每策略全期独有信号扣费净合计 > 0（L-238）。
+# 长远目标三指标（goal_metrics）：去重近 12 月滚动超额 > 0、逐月为正 ≥ 8/12、每策略全期独有信号扣费超额合计 > 0（L-250）。
 GOAL_METRICS_KEY = "formal:goal_metrics_mid"
 
 
@@ -1528,11 +1528,11 @@ def goal_metrics_item(g: dict[str, Any]) -> dict[str, Any]:
     if not g["positive_months_pass"]:
         fails.append(f"逐月为正 {g['positive_months']}/{g['month_count']}")
     if g["strategies_failing"]:
-        fails.append(f"{len(g['strategies_failing'])} 个策略全期独有信号净合计为负")
+        fails.append(f"{len(g['strategies_failing'])} 个策略全期独有信号超额合计为负")
     sev = GREEN if not fails else YELLOW
     detail = summary_text(g) + ("" if sev == GREEN else "。未达标：" + "、".join(fails))
     return _item(GOAL_METRICS_KEY, "中线长远目标三指标", "盘后出票", sev, kind="job", latest=g["window_end"], detail=detail,
-                 impact="去重口径下系统是否稳定跑赢买全市场；全期独有信号扣费净合计为负的策略去掉会多赚（L-238）；净正超额负的只列观察")
+                 impact="去重口径下系统是否稳定跑赢买全市场；全期独有信号扣费超额合计为负的策略收益来自 beta，不留（L-250）")
 
 
 def check_goal_metrics(db) -> dict[str, Any]:
@@ -1557,11 +1557,11 @@ def goal_metrics_short_item(g: dict[str, Any]) -> dict[str, Any]:
     if not g["positive_months_pass"]:
         fails.append(f"逐月为正 {g['positive_months']}/{g['month_count']}")
     if g["strategies_failing"]:
-        fails.append(f"{len(g['strategies_failing'])} 个策略全期净合计为负")
+        fails.append(f"{len(g['strategies_failing'])} 个策略全期超额合计为负")
     sev = GREEN if not fails else YELLOW
     detail = short_summary_text(g) + ("" if sev == GREEN else "。未达标：" + "、".join(fails))
     return _item(GOAL_METRICS_SHORT_KEY, "短线长远目标三指标", "盘后出票", sev, kind="job", latest=g["window_end"], detail=detail,
-                 impact="短线按现行指纹回放 + 同指纹实盘（L-225）是否稳定跑赢买全市场；净合计为负的策略去掉会多赚")
+                 impact="短线按现行指纹回放 + 同指纹实盘（L-225）是否稳定跑赢买全市场；超额合计为负的策略不留（L-250）")
 
 
 def check_goal_metrics_short(db) -> dict[str, Any]:

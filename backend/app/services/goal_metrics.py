@@ -2,10 +2,10 @@
 
 1. 去重口径近 12 个月滚动超额 > 0：同一信号日同一只票只算一份（账户买一次），净收益减同持有期全市场等权基准（EWALL.A）。
 2. 逐月超额为正的月份 ≥ 8/12：按信号月算去重后的平均超额。
-3. 每条现役策略「独有信号」全期扣费净收益合计 > 0（L-238）：同日同票没有被其他现役策略推的信号才算，这是该策略对账户的
+3. 每条现役策略「独有信号」全期扣费超额合计 > 0（L-250，2026-11-28 用户定「超额为正才留」；此前 L-238 只看净收益）：同日同票没有被其他现役策略推的信号才算，这是该策略对账户的
    边际贡献（L-224/L-229）。全期 = 2022-04 起研究回测逐笔（`data/midterm/fullhist_research_trades.parquet`，由
    `output/research/fullhist-retire-20261127/build.py` 导出，静态）+ 2025-10 起生产结算（replay/live，不含 historical_replay 以免与
-   研究段重叠）。合计为正即去掉会少赚，不退役；超额为负只列观察项（收益主要来自 beta）。单看近 12 个月不算数。
+   研究段重叠）。超额合计为负 = 收益来自市场 beta，判 fail。单看近 12 个月不算数。
 
 前两项每天由数据质量巡检算一次，达不到的项标黄；第三项为负的策略标黄。只统计已平仓且能算出基准的笔；持有中不计。
 短线（compute_short）：每条现役短线策略 = 现行指��回放段 + 同指纹实盘段（rolling_r12.short_trade_rows，L-225），
@@ -99,10 +99,8 @@ def compute(rows: Iterable[dict[str, Any]], active_strategy_ids: Iterable[str], 
         n_hist = sum(1 for r in uniq if r["signal_date"] < PROD_START)
         if len(uniq) < GOAL_MIN_UNIQUE_TRADES:
             verdict = "insufficient"
-        elif net_sum > 0:
-            verdict = "pass" if ex_sum > 0 else "watch"
         else:
-            verdict = "fail"
+            verdict = "pass" if ex_sum > 0 else "fail"
         per.append({"strategy_id": sid, "n": len(mine), "unique_n": len(uniq), "unique_hist_n": n_hist,
                     "unique_prod_n": len(uniq) - n_hist,
                     "unique_net_sum": round(net_sum, 1), "unique_excess_sum": round(ex_sum, 1),
@@ -129,7 +127,7 @@ def summary_text(g: dict[str, Any]) -> str:
     parts = [
         f"去重近12月滚动超额 {g['rolling_excess']:+.2f}%" if g["rolling_excess"] is not None else "去重近12月滚动超额 无样本",
         f"逐月为正 {g['positive_months']}/{g['month_count']}（目标 ≥{GOAL_POSITIVE_MONTHS}）",
-        f"全期独有信号扣费净合计为负的策略 {len(g['strategies_failing'])} 个" + (f"：{'、'.join(g['strategies_failing'])}" if g["strategies_failing"] else ""),
+        f"全期独有信号扣费超额合计为负的策略 {len(g['strategies_failing'])} 个" + (f"：{'、'.join(g['strategies_failing'])}" if g["strategies_failing"] else ""),
     ]
     if g.get("strategies_watch"):
         parts.append(f"净为正但超额为负（收益主要是 beta）的观察项 {len(g['strategies_watch'])} 个：{'、'.join(g['strategies_watch'])}")
@@ -161,10 +159,8 @@ def compute_short(short_rows: Iterable[dict[str, Any]], *, today: _dt.date | Non
         net_sum = sum(r["net"] for r in mine); ex_sum = sum(r["net"] - r["bench"] for r in mine)
         if len(mine) < GOAL_MIN_UNIQUE_TRADES:
             verdict = "insufficient"
-        elif net_sum > 0:
-            verdict = "pass" if ex_sum > 0 else "watch"
         else:
-            verdict = "fail"
+            verdict = "pass" if ex_sum > 0 else "fail"
         per.append({"strategy_id": sid, "n": len(mine), "replay_n": len(rep), "live_n": len(live),
                     "net_sum": round(net_sum, 1), "excess_sum": round(ex_sum, 1),
                     "net_avg": round(net_sum / len(mine), 2) if mine else None,
@@ -190,7 +186,7 @@ def short_summary_text(g: dict[str, Any]) -> str:
     parts = [
         f"短线去重近12月滚动超额 {g['rolling_excess']:+.2f}%" if g["rolling_excess"] is not None else "短线去重近12月滚动超额 无样本",
         f"逐月为正 {g['positive_months']}/{g['month_count']}",
-        f"全期扣费净合计为负的策略 {len(g['strategies_failing'])} 个" + (f"：{'、'.join(g['strategies_failing'])}" if g["strategies_failing"] else ""),
+        f"全期扣费超额合计为负的策略 {len(g['strategies_failing'])} 个" + (f"：{'、'.join(g['strategies_failing'])}" if g["strategies_failing"] else ""),
     ]
     if g.get("strategies_watch"):
         parts.append(f"净正超额负观察项 {len(g['strategies_watch'])} 个：{'、'.join(g['strategies_watch'])}")
