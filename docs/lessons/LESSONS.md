@@ -2450,3 +2450,22 @@ W3 45/**64.44%**/**PF2.158**/Σ+84.6/**MDD−7.16** —— 三窗仍全部达标
   - 逐月（名次 ≤5 新增）超额 12 个月里只有 4 个月为正。
 - 永久规则：**(a) 中线每日上限保留 5 只，不放宽，也不按策略单独放宽；各策略自己的排序前 5 名之后的票平均是亏的。(b) 小盘周度类截掉票为正但样本 < 75 张，不足以单独开口子。**
 - 相关：L-230（跨策略排序挑票不胜随机）、L-234（降权/上限不改逐月）、L-227（去重每票一份）。
+
+## L-250 中线去留改为「全期独有信号扣费超额合计为正才留」：迭代退出 16 条，现役 33→17，近 12 个月去重滚动超额 +1.07%→+2.18%
+
+- 状态：active（DECISION，2026-11-28；用户定规则，覆盖 L-238(a)(b) 与 L-240 的「净收益为正即留、超额为负列观察」）。
+- 适用：中线与短线所有现役策略的去留，以及新策略上线门槛。
+- 口径（`output/healthcheck-20261126/m3_excess_cull.py`，结果 `m3_excess_cull.txt` / `.json`）：与 `goal_metrics` 第三项相同。研究段 `backend/data/midterm/fullhist_research_trades.parquet`（2022-04～2025-09，由 `output/research/fullhist-retire-20261127/all_ext.pkl` 导出）+ 生产结算（2025-10 起，去掉 historical_replay）；净收益扣费，基准 EWALL.A 同信号日同持有期同成本。独有 = 同日同票不在其余现役里。每轮去掉独有 ≥30 笔、超额合计最负的一条，再按剩余名单重算，直到没有为负的。
+- 证据：
+  - 起点 33 条：去重 9401 笔，净合计 +16307pp，超额合计 +1451pp。
+  - 依次退出（独有笔数，净合计 / 超额合计）：forecast-preincrease-underreact（211，+147 / −385）、forecast-preincrease-underreact-vol（211，+374 / −474）、forecast-slight-underreact（109，+38 / −383）、forecast-beat（365，+272 / −304）、block-trade-premium（266，+301 / −241）、fina-exp-vol（293，+6 / −182）、forecast-turnaround（396，+925 / −180）、ncs-td-vol（117，+181 / −134）、forecast-slight-vol（112，+298 / −98）、forecast-slight（439，+879 / −316）、cas-vol（377，+188 / −9）、sales-exp-vol（284，+53 / −44）、sales-exp-drop（635，+420 / −88）、tad-etd-vol（486，+227 / −73）、earnings-accel-vol（278，−90 / −23）、ea-td-vol（267，+374 / −118）。
+  - 终点 17 条：去重 4555 笔，净合计 +11668pp（−4639），超额合计 +4494pp（+3042）。少赚的 4639pp 全部是市场 beta；超额翻了三倍。
+  - `goal_metrics` 读数：近 12 个月去重滚动超额 +1.07% → +2.18%，逐月为正 9/13 不变，超额为负的策略 0 条。
+  - 下跌月对照（`m2_watch_drawdown.txt`）：退出的这批在 24 个基准为负的月份里独有 897 笔超额 −793pp；留下的在同样月份超额 +648pp。
+- 永久规则：
+  - **(a) 中线与短线的去留、上线一律看全期独有信号扣费超额合计（不是净收益）是否为正；净收益为正但超额为负的不留。**
+  - **(b) 批量复核要迭代：每轮只去掉最负的一条，按剩余名单重算其余策略的独有票。**
+  - **(c) 独有 < 30 笔的按家族合并判（L-235(c)）；本轮只剩 mid-udp-sue-vol（29 笔，超额 +40.6），未动。**
+  - **(d) 退出只移进 `NON_SUE_NEAR_DUP_DEMOTE_REASONS`，定义、回测指标、历史选股保留；晚间大宗钩子在策略不在 STRATEGIES 时空跑。**
+- 吸收位置：`backend/app/services/midterm_service.py`（`NON_SUE_NEAR_DUP_CHAMPIONS`、`NON_SUE_CULL_PROTECTED`、`NON_SUE_NEAR_DUP_DEMOTE_REASONS`、`generate_block_trade_picks`）、`backend/app/services/goal_metrics.py`（第三项与短线判定改为超额）、`backend/app/services/data_quality_monitor.py`、相关测试、`CLAUDE.md` 策略治理。
+- 相关：L-238、L-240（本条覆盖其「净正即留」部分）、L-244、L-246、L-247、L-249。
